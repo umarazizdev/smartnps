@@ -32,6 +32,7 @@ class _WebViewShellState extends State<WebViewShell> {
   Uri? _currentUri;
   bool _webPrefersDark = false;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
+  bool _mockLocationDialogVisible = false;
 
   static final UserScript _smartNpsBridgeScript = UserScript(
     source: r'''
@@ -463,6 +464,7 @@ class _WebViewShellState extends State<WebViewShell> {
           args.isEmpty ? null : args.first,
         );
         debugPrint('[SmartNPS360] getCurrentLocation result=$result');
+        _maybeShowMockLocationDialog(result);
         return result;
       },
     );
@@ -503,6 +505,43 @@ class _WebViewShellState extends State<WebViewShell> {
         return {'ok': true};
       },
     );
+  }
+
+  void _maybeShowMockLocationDialog(Map<String, dynamic> result) {
+    if (!mounted) return;
+    if (_mockLocationDialogVisible) return;
+
+    final ok = result['ok'] == true;
+    if (!ok) return;
+
+    final location = result['location'];
+    if (location is! Map) return;
+
+    final isMocked = location['isMocked'] == true;
+    final isSimulatedBySoftware = location['isSimulatedBySoftware'] == true;
+    if (!isMocked && !isSimulatedBySoftware) return;
+
+    _mockLocationDialogVisible = true;
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Mock location detected'),
+        content: const Text(
+          'Your device appears to be using a fake/mock GPS location. '
+          'Please disable mock location and try again.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    ).whenComplete(() {
+      if (mounted) _mockLocationDialogVisible = false;
+    });
   }
 
   Future<void> _installThemeListener(InAppWebViewController controller) async {
