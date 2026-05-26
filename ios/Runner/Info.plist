@@ -27,15 +27,19 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Allow camera access to take photos for uploads.</string>
+	<string>Camera access is required to capture photos/videos for Daily Activity Reports, visit evidence, and profile/ID attachments.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Allow photo library access to select images for uploads.</string>
+	<string>Photo library access is required to select profile and ID images during registration and to attach images to reports.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Allow saving files to your library if needed.</string>
+	<string>Photo library access is required to save and attach registration images and report attachments.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Allow location access to use GPS features inside the website.</string>
+	<string>Location access is required to verify your attendance (clock-in, clock-out, breaks, log visits, and Daily Activity Reports). Your location is only used while you perform these actions within the app.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>This app does not track your location in the background. Location is only used when you perform actions such as clock-in, clock-out, breaks, logging visits, or creating reports while the app is open.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Allow microphone access if required by website features.</string>
+	<string>Microphone access is required to record audio when capturing visit videos. Audio is recorded only during video recording.</string>
+	<key>NSUserNotificationsUsageDescription</key>
+	<string>Enable notifications to receive timely reminders 10 minutes before your shift starts, shift ends, and break ends, helping you stay on top of your work schedule.</string>
 	<key>NSDownloadsFolderUsageDescription</key>
 	<string>Allow access to save downloaded files.</string>
 	<key>UIApplicationSceneManifest</key>

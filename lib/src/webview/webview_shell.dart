@@ -5,6 +5,7 @@ import 'dart:ui';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
@@ -15,6 +16,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'app_config.dart';
 import 'js_bridge.dart';
 import 'offline_screen.dart';
+import '../widgets/platform_bottom_bar.dart';
 
 class WebViewShell extends StatefulWidget {
   const WebViewShell({super.key});
@@ -787,116 +789,124 @@ class _WebViewShellState extends State<WebViewShell> {
               if (_showOffline)
                 OfflineScreen(onRetry: _retry)
               else
-                InAppWebView(
-                  initialUrlRequest: URLRequest(
-                    url: WebUri(AppConfig.initialUrl),
-                  ),
-                  initialUserScripts: UnmodifiableListView([
-                    _smartNpsBridgeScript,
-                    _geolocationScript,
-                  ]),
-                  pullToRefreshController: _pullToRefreshController,
-                  initialSettings: InAppWebViewSettings(
-                    javaScriptEnabled: true,
-                    allowsInlineMediaPlayback: true,
-                    mediaPlaybackRequiresUserGesture: false,
-                    useShouldOverrideUrlLoading: true,
-                    supportZoom: false,
-                    transparentBackground: false,
-                    thirdPartyCookiesEnabled: true,
-                    cacheEnabled: true,
-                    clearCache: false,
-                    sharedCookiesEnabled: true,
-                    userAgent:
-                        'SmartNPS360/1.0 (Flutter; InAppWebView) ${Platform.operatingSystem}',
-                    geolocationEnabled: false,
-                    allowsBackForwardNavigationGestures: true,
-                    verticalScrollBarEnabled: true,
-                    horizontalScrollBarEnabled: false,
-                  ),
-                  onWebViewCreated: (controller) {
-                    _controller = controller;
-                    _installJsHandlers(controller);
-                  },
-                  onConsoleMessage: (controller, message) {
-                    debugPrint(
-                      '[WebView][${message.messageLevel}] ${message.message}',
-                    );
-                  },
-                  shouldOverrideUrlLoading: (controller, action) async =>
-                      _handleNavigation(action),
-                  onLoadStart: (controller, url) {
-                    setState(() {
-                      _currentUri = url?.uriValue;
-                    });
-                  },
-                  onProgressChanged: (controller, progress) {
-                    if (progress == 100) {
-                      _pullToRefreshController?.endRefreshing();
-                    }
-                  },
-                  onLoadStop: (controller, url) async {
-                    _pullToRefreshController?.endRefreshing();
-                    final prefersDark = await _readWebPrefersDark(controller);
-                    await _installThemeListener(controller);
-                    setState(() {
-                      _currentUri = url?.uriValue;
-                      _firstPageLoaded = true;
-                      _webPrefersDark = prefersDark ?? _webPrefersDark;
-                    });
-                    _applySystemUi();
-                  },
-                  onReceivedError: (controller, request, error) async {
-                    _pullToRefreshController?.endRefreshing();
-                    if (!_firstPageLoaded) {
-                      final connectivity = await Connectivity()
-                          .checkConnectivity();
-                      if (!connectivity.any(
-                        (r) => r != ConnectivityResult.none,
-                      )) {
-                        if (mounted) setState(() => _showOffline = true);
+                Padding(
+                  padding: EdgeInsets.only(bottom: 0),
+                  child: InAppWebView(
+                    initialUrlRequest: URLRequest(
+                      url: WebUri(AppConfig.initialUrl),
+                    ),
+                    initialUserScripts: UnmodifiableListView([
+                      _smartNpsBridgeScript,
+                      _geolocationScript,
+                    ]),
+                    pullToRefreshController: _pullToRefreshController,
+                    initialSettings: InAppWebViewSettings(
+                      javaScriptEnabled: true,
+                      allowsInlineMediaPlayback: true,
+                      mediaPlaybackRequiresUserGesture: false,
+                      useShouldOverrideUrlLoading: true,
+                      supportZoom: false,
+                      transparentBackground: false,
+                      thirdPartyCookiesEnabled: true,
+                      cacheEnabled: true,
+                      clearCache: false,
+                      sharedCookiesEnabled: true,
+                      userAgent:
+                          'SmartNPS360/1.0 (Flutter; InAppWebView) ${Platform.operatingSystem}',
+                      geolocationEnabled: false,
+                      allowsBackForwardNavigationGestures: true,
+                      verticalScrollBarEnabled: true,
+                      horizontalScrollBarEnabled: false,
+                    ),
+                    onWebViewCreated: (controller) {
+                      _controller = controller;
+                      _installJsHandlers(controller);
+                    },
+                    onConsoleMessage: (controller, message) {
+                      debugPrint(
+                        '[WebView][${message.messageLevel}] ${message.message}',
+                      );
+                    },
+                    shouldOverrideUrlLoading: (controller, action) async =>
+                        _handleNavigation(action),
+                    onLoadStart: (controller, url) {
+                      setState(() {
+                        _currentUri = url?.uriValue;
+                      });
+                    },
+                    onProgressChanged: (controller, progress) {
+                      if (progress == 100) {
+                        _pullToRefreshController?.endRefreshing();
                       }
-                    }
-                  },
-                  onGeolocationPermissionsShowPrompt:
-                      (controller, origin) async {
-                        final uri = Uri.tryParse(origin);
-                        final allow = uri == null
-                            ? false
-                            : AppConfig.isAllowedHost(uri.host);
-                        if (!allow) {
+                    },
+                    onLoadStop: (controller, url) async {
+                      _pullToRefreshController?.endRefreshing();
+                      final prefersDark = await _readWebPrefersDark(controller);
+                      await _installThemeListener(controller);
+                      setState(() {
+                        _currentUri = url?.uriValue;
+                        _firstPageLoaded = true;
+                        _webPrefersDark = prefersDark ?? _webPrefersDark;
+                      });
+                      _applySystemUi();
+                    },
+                    onReceivedError: (controller, request, error) async {
+                      _pullToRefreshController?.endRefreshing();
+                      if (!_firstPageLoaded) {
+                        final connectivity = await Connectivity()
+                            .checkConnectivity();
+                        if (!connectivity.any(
+                          (r) => r != ConnectivityResult.none,
+                        )) {
+                          if (mounted) setState(() => _showOffline = true);
+                        }
+                      }
+                    },
+                    onGeolocationPermissionsShowPrompt:
+                        (controller, origin) async {
+                          final uri = Uri.tryParse(origin);
+                          final allow = uri == null
+                              ? false
+                              : AppConfig.isAllowedHost(uri.host);
+                          if (!allow) {
+                            return GeolocationPermissionShowPromptResponse(
+                              origin: origin,
+                              allow: false,
+                              retain: false,
+                            );
+                          }
+                          final status = await Permission.locationWhenInUse
+                              .request();
+                          final granted = status.isGranted;
                           return GeolocationPermissionShowPromptResponse(
                             origin: origin,
-                            allow: false,
-                            retain: false,
+                            allow: granted,
+                            retain: granted,
                           );
-                        }
-                        final status = await Permission.locationWhenInUse
-                            .request();
-                        final granted = status.isGranted;
-                        return GeolocationPermissionShowPromptResponse(
-                          origin: origin,
-                          allow: granted,
-                          retain: granted,
-                        );
-                      },
-                  onDownloadStartRequest: (controller, request) async {
-                    final uri = request.url.uriValue;
-                    await launchUrl(uri, mode: LaunchMode.externalApplication);
-                  },
+                        },
+                    onDownloadStartRequest: (controller, request) async {
+                      final uri = request.url.uriValue;
+                      await launchUrl(
+                        uri,
+                        mode: LaunchMode.externalApplication,
+                      );
+                    },
+                  ),
                 ),
               if (!_firstPageLoaded && !_showOffline)
                 _SplashOverlay(isDark: _webPrefersDark),
+              if (_shouldShowBottomBar())
+                Align(
+                  alignment: Alignment.bottomCenter,
+                  child: _BottomBar(
+                    currentUri: _currentUri,
+                    isDark: _webPrefersDark,
+                    onTap: _onBottomTap,
+                  ),
+                ),
             ],
           ),
         ),
-        bottomNavigationBar: _shouldShowBottomBar()
-            ? _BottomBar(
-                currentUri: _currentUri,
-                isDark: _webPrefersDark,
-                onTap: _onBottomTap,
-              )
-            : null,
       ),
     );
   }
@@ -1036,99 +1046,29 @@ class _BottomBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final selected = _indexFromUrl(currentUri);
-    final bg = isDark
-        ? const Color(AppConfig.cDarkCardColor)
-        : const Color(AppConfig.cSurface);
-    final fg = isDark ? Colors.white : const Color(0xFF111111);
-    final inactive = isDark
-        ? Colors.white.withValues(alpha: 0.55)
-        : const Color.fromARGB(255, 177, 175, 175);
-    final active = isDark ? Colors.white : const Color(AppConfig.cPrimary);
-
-    return SafeArea(
-      top: false,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: bg,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.08),
-              blurRadius: 14,
-              offset: const Offset(0, -2),
-            ),
-          ],
+    final tabs = <PlatformBottomTab>[
+      for (final item in _BottomItem.values)
+        PlatformBottomTab(
+          label: item.label,
+          index: item.index,
+          iosSymbolName: switch (item) {
+            _BottomItem.dashboard => 'house.fill',
+            _BottomItem.timesheet => 'calendar',
+            _BottomItem.dar => 'doc.text.image.fill',
+            _BottomItem.profile => 'person.crop.circle.fill',
+          },
+          activeAssetIcon: item.iconAssetSelected,
+          inactiveAssetIcon: item.iconAsset,
         ),
-        child: SizedBox(
-          height: 64,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              for (final item in _BottomItem.values)
-                _BottomBarItem(
-                  item: item,
-                  selected: selected == item.index,
-                  activeColor: active,
-                  inactiveColor: inactive,
-                  textColor: fg,
-                  onTap: () => onTap(item),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
+    ];
 
-class _BottomBarItem extends StatelessWidget {
-  const _BottomBarItem({
-    required this.item,
-    required this.selected,
-    required this.activeColor,
-    required this.inactiveColor,
-    required this.textColor,
-    required this.onTap,
-  });
-
-  final _BottomItem item;
-  final bool selected;
-  final Color activeColor;
-  final Color inactiveColor;
-  final Color textColor;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final iconColor = selected ? activeColor : inactiveColor;
-    final iconSize = item == _BottomItem.dashboard ? 26.0 : 22.0;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
-      child: SizedBox(
-        width: 76,
-        height: 56,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Image.asset(
-              selected ? item.iconAssetSelected : item.iconAsset,
-              width: iconSize,
-              height: iconSize,
-              color: iconColor,
-            ),
-            const SizedBox(height: 6),
-            Text(
-              item.label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: selected ? textColor : inactiveColor,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-              ),
-            ),
-          ],
-        ),
-      ),
+    return PlatformBottomBar(
+      tabs: tabs,
+      currentIndex: selected,
+      tint: const Color(AppConfig.cPrimary),
+      surface: const Color(AppConfig.cSurface),
+      darkSurface: const Color(AppConfig.cDarkCardColor),
+      onTap: (index) => onTap(_BottomItem.values[index]),
     );
   }
 }
