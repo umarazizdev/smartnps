@@ -9,8 +9,12 @@ class AppConfig {
     'www.smartnps360.com',
   };
 
-  static bool isAllowedHost(String? host) =>
-      host != null && allowedHosts.contains(host.toLowerCase());
+  static bool isAllowedHost(String? host) {
+    if (host == null) return false;
+    final h = host.toLowerCase();
+    if (allowedHosts.contains(h)) return true;
+    return h.endsWith('.$allowedHost');
+  }
 
   // UI colors aligned with your native app.
   static const int cPrimary = 0xFF022A67;

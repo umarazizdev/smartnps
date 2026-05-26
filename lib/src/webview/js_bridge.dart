@@ -107,7 +107,22 @@ class JsBridge {
 
     StreamSubscription<Position>? subscription;
 
+    double maxAllowedAccuracyMeters = 15.0;
+
     try {
+      final Map? argsMap = args is Map ? args : null;
+      final dynamic rawOptions = argsMap == null ? null : argsMap['options'];
+      final Map? options = rawOptions is Map ? rawOptions : null;
+
+      final int? timeoutMs =
+          options != null && options['timeout_ms'] is num
+              ? (options['timeout_ms'] as num).toInt()
+              : null;
+      final double? requiredAccuracyMeters =
+          options != null && options['required_accuracy_meters'] is num
+              ? (options['required_accuracy_meters'] as num).toDouble()
+              : null;
+
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
 
       if (!serviceEnabled) {
@@ -134,8 +149,13 @@ class JsBridge {
         );
       }
 
-      const maxAllowedAccuracyMeters = 15.0;
-      const requestTimeout = Duration(seconds: 30);
+      maxAllowedAccuracyMeters = (requiredAccuracyMeters ?? 15.0)
+          .clamp(5.0, 500.0)
+          .toDouble();
+
+      final Duration requestTimeout = Duration(
+        milliseconds: (timeoutMs ?? 30000).clamp(5000, 45000),
+      );
 
       final LocationSettings settings;
 
@@ -156,7 +176,7 @@ class JsBridge {
           showBackgroundLocationIndicator: false,
         );
       } else {
-        settings = const LocationSettings(
+        settings = LocationSettings(
           accuracy: LocationAccuracy.bestForNavigation,
           distanceFilter: 0,
           timeLimit: requestTimeout,
@@ -166,24 +186,10 @@ class JsBridge {
       final completer = Completer<Position>();
       final requestStopwatch = Stopwatch()..start();
 
-      bool firstStreamValueIgnored = false;
-
       subscription = Geolocator.getPositionStream(locationSettings: settings)
           .listen(
             (Position position) {
               if (completer.isCompleted) return;
-
-              // The first emitted position can be a previously cached value.
-              // Ignore it without checking any timestamp or timezone.
-              if (!firstStreamValueIgnored) {
-                firstStreamValueIgnored = true;
-
-                debugPrint(
-                  'Flutter GPS: initial stream value ignored. '
-                  'Accuracy: ${position.accuracy}m',
-                );
-                return;
-              }
 
               final hasRequiredAccuracy =
                   position.accuracy <= maxAllowedAccuracyMeters;
@@ -223,14 +229,17 @@ class JsBridge {
           'altitude': position.altitude,
           'speed': position.speed,
           'heading': position.heading,
+          'isMocked': position.isMocked,
+          'isSimulatedBySoftware': _isSimulatedBySoftware(position),
           'acceptedFromLiveStream': true,
-          'initialStreamValueIgnored': true,
+          'maxAllowedAccuracyMeters': maxAllowedAccuracyMeters,
+          'timeoutMs': requestTimeout.inMilliseconds,
         },
       });
     } on TimeoutException {
       return _err(
         'fresh_location_unavailable',
-        'Unable to get a live GPS location with accuracy <= 15 meters.',
+        'Unable to get a GPS location with accuracy <= ${maxAllowedAccuracyMeters.toStringAsFixed(0)} meters.',
       );
     } catch (e) {
       return _err('get_location_failed', e.toString());
@@ -346,6 +355,16 @@ class JsBridge {
   }
 
   String toJsonString(Map<String, dynamic> value) => jsonEncode(value);
+
+  bool _isSimulatedBySoftware(Position position) {
+    try {
+      final dynamic p = position;
+      final dynamic sourceInformation = p.sourceInformation;
+      return sourceInformation?.isSimulatedBySoftware == true;
+    } catch (_) {
+      return false;
+    }
+  }
 }
 
 extension<T> on List<T> {
