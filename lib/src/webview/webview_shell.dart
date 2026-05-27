@@ -117,9 +117,17 @@ class _WebViewShellState extends State<WebViewShell> {
                 latitude: Number(loc.latitude),
                 longitude: Number(loc.longitude),
                 accuracy: Number(loc.accuracy),
-                timestamp: Date.now(),
                 provider: 'flutter_geolocator',
-                is_mocked: false
+                timestamp: (typeof loc.timestampMs === 'number' && isFinite(loc.timestampMs)) ? Number(loc.timestampMs) : Date.now(),
+                timestamp_iso: (typeof loc.timestamp === 'string') ? String(loc.timestamp) : null,
+                altitude: Number(loc.altitude || 0),
+                speed: Number(loc.speed || 0),
+                heading: Number(loc.heading || 0),
+                is_mocked: loc.isMocked === true,
+                is_simulated_by_software: loc.isSimulatedBySoftware === true,
+                accepted_from_live_stream: loc.acceptedFromLiveStream === true,
+                max_allowed_accuracy_meters: Number(loc.maxAllowedAccuracyMeters || 0),
+                timeout_ms: Number(loc.timeoutMs || 0)
               });
             })
             .catch(function (e) {

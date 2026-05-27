@@ -226,6 +226,8 @@ class JsBridge {
           'latitude': position.latitude,
           'longitude': position.longitude,
           'accuracy': position.accuracy,
+          'timestamp': position.timestamp.toIso8601String(),
+          'timestampMs': position.timestamp.millisecondsSinceEpoch,
           'altitude': position.altitude,
           'speed': position.speed,
           'heading': position.heading,
