@@ -3,6 +3,8 @@ class AppConfig {
 
   static const String initialUrl = 'https://smartnps360.com/';
 
+  static const String locationUploadUrl = '';
+
   static const String allowedHost = 'smartnps360.com';
   static const Set<String> allowedHosts = {
     'smartnps360.com',

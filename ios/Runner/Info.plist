@@ -35,7 +35,11 @@
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Location access is required to verify your attendance (clock-in, clock-out, breaks, log visits, and Daily Activity Reports). Your location is only used while you perform these actions within the app.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>This app does not track your location in the background. Location is only used when you perform actions such as clock-in, clock-out, breaks, logging visits, or creating reports while the app is open.</string>
+	<string>Location access is required to verify attendance and visits. With your permission, the app may collect and upload location in the background to support compliance workflows.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Microphone access is required to record audio when capturing visit videos. Audio is recorded only during video recording.</string>
 	<key>NSUserNotificationsUsageDescription</key>
