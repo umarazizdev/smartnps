@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui';
 
@@ -9,6 +10,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -35,6 +37,68 @@ class _WebViewShellState extends State<WebViewShell> {
   bool _webPrefersDark = false;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
   bool _mockLocationDialogVisible = false;
+  final Map<int, StreamSubscription<Position>> _nativeGeoWatches = {};
+
+  bool _isSimulatedBySoftware(Position position) {
+    try {
+      final dynamic p = position;
+      final dynamic sourceInformation = p.sourceInformation;
+      return sourceInformation?.isSimulatedBySoftware == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Map<String, dynamic> _toWebGeolocationPayloadFromBridgeLocation(
+    Map<String, dynamic> location,
+  ) {
+    return {
+      'coords': {
+        'latitude': location['latitude'],
+        'longitude': location['longitude'],
+        'accuracy': location['accuracy'],
+        'altitude': location['altitude'] ?? 0,
+        'altitudeAccuracy': null,
+        'heading': location['heading'] ?? 0,
+        'speed': location['speed'] ?? 0,
+      },
+      'timestamp':
+          location['timestampMs'] ?? DateTime.now().millisecondsSinceEpoch,
+      'nativeSource': true,
+      // Pass through native verification fields (when present).
+      'provider': 'flutter_geolocator',
+      'is_mocked': location['isMocked'] == true,
+      'is_simulated_by_software': location['isSimulatedBySoftware'] == true,
+      'accepted_from_live_stream': location['acceptedFromLiveStream'] == true,
+      'max_allowed_accuracy_meters': location['maxAllowedAccuracyMeters'] ?? 0,
+      'timeout_ms': location['timeoutMs'] ?? 0,
+    };
+  }
+
+  Map<String, dynamic> _toWebGeolocationPayloadFromPosition(
+    Position position, {
+    required double requiredAccuracyMeters,
+  }) {
+    return {
+      'coords': {
+        'latitude': position.latitude,
+        'longitude': position.longitude,
+        'accuracy': position.accuracy,
+        'altitude': position.altitude,
+        'altitudeAccuracy': null,
+        'heading': position.heading,
+        'speed': position.speed,
+      },
+      'timestamp': position.timestamp.millisecondsSinceEpoch,
+      'nativeSource': true,
+      'provider': 'flutter_geolocator',
+      'is_mocked': position.isMocked,
+      'is_simulated_by_software': _isSimulatedBySoftware(position),
+      'accepted_from_live_stream': true,
+      'max_allowed_accuracy_meters': requiredAccuracyMeters,
+      'timeout_ms': 0,
+    };
+  }
 
   static final UserScript _smartNpsBridgeScript = UserScript(
     source: r'''
@@ -161,6 +225,7 @@ class _WebViewShellState extends State<WebViewShell> {
 
         var nativeWatchCounter = 900000;
         var nativeWatches = {};
+        var nativeWatchCallbacks = {};
 
         function log(message, data) {
           try {
@@ -287,6 +352,32 @@ class _WebViewShellState extends State<WebViewShell> {
             });
         }
 
+        function ensureWatchRegistry(watchId, success, error) {
+          nativeWatches[watchId] = true;
+          nativeWatchCallbacks[watchId] = {
+            success: (typeof success === 'function') ? success : null,
+            error: (typeof error === 'function') ? error : null
+          };
+        }
+
+        // Called by Flutter to emit watch updates.
+        window.__smartnps_native_geo_emit = function (watchId, payload) {
+          try {
+            var cb = nativeWatchCallbacks[watchId];
+            if (!cb || !nativeWatches[watchId]) return;
+            if (cb.success) cb.success(payload);
+          } catch (_) {}
+        };
+
+        // Called by Flutter to emit watch errors.
+        window.__smartnps_native_geo_error = function (watchId, payload) {
+          try {
+            var cb = nativeWatchCallbacks[watchId];
+            if (!cb || !nativeWatches[watchId]) return;
+            if (cb.error) cb.error(payload);
+          } catch (_) {}
+        };
+
         navigator.geolocation.getCurrentPosition = function (
           success,
           error,
@@ -304,40 +395,46 @@ class _WebViewShellState extends State<WebViewShell> {
           log('watchPosition intercepted');
 
           var watchId = ++nativeWatchCounter;
-          nativeWatches[watchId] = true;
+          ensureWatchRegistry(watchId, success, error);
 
-          function refreshPosition() {
-            if (!nativeWatches[watchId]) return;
-
-            requestNativePosition(
-              function (position) {
-                if (!nativeWatches[watchId]) return;
-
-                if (typeof success === 'function') {
-                  success(position);
+          waitForFlutterBridge()
+            .then(function () {
+              return window.flutter_inappwebview.callHandler(
+                'startLocationWatch',
+                {
+                  watchId: watchId,
+                  options: options || null,
+                  source: 'flutter_geolocation_watch_override',
+                  requestedAt: Date.now()
                 }
-
-                if (nativeWatches[watchId]) {
-                  setTimeout(refreshPosition, 1000);
-                }
-              },
-              function (gpsFailure) {
-                if (!nativeWatches[watchId]) return;
-
-                if (typeof error === 'function') {
-                  error(gpsFailure);
-                }
+              );
+            })
+            .catch(function (exception) {
+              log('startLocationWatch failed', exception.message);
+              if (typeof error === 'function') {
+                error(gpsError(exception.message));
               }
-            );
-          }
+            });
 
-          refreshPosition();
           return watchId;
         };
 
         navigator.geolocation.clearWatch = function (watchId) {
           log('clearWatch intercepted', watchId);
           delete nativeWatches[watchId];
+          delete nativeWatchCallbacks[watchId];
+          try {
+            if (
+              window.flutter_inappwebview &&
+              typeof window.flutter_inappwebview.callHandler === 'function'
+            ) {
+              window.flutter_inappwebview.callHandler('clearLocationWatch', {
+                watchId: watchId,
+                source: 'flutter_geolocation_watch_override',
+                requestedAt: Date.now()
+              });
+            }
+          } catch (_) {}
         };
 
         log('Flutter native GPS override installed successfully');
@@ -405,6 +502,10 @@ class _WebViewShellState extends State<WebViewShell> {
   @override
   void dispose() {
     _connectivitySub?.cancel();
+    for (final sub in _nativeGeoWatches.values) {
+      sub.cancel();
+    }
+    _nativeGeoWatches.clear();
     super.dispose();
   }
 
@@ -476,6 +577,121 @@ class _WebViewShellState extends State<WebViewShell> {
         debugPrint('[SmartNPS360] getCurrentLocation result=$result');
         _maybeShowMockLocationDialog(result);
         return result;
+      },
+    );
+    controller.addJavaScriptHandler(
+      handlerName: 'startLocationWatch',
+      callback: (args) async {
+        final Map? payload = args.isNotEmpty && args.first is Map
+            ? args.first as Map
+            : null;
+        if (payload == null) {
+          return {
+            'ok': false,
+            'error': {'code': 'invalid_args', 'message': 'Missing payload'},
+          };
+        }
+        final int? watchId =
+            payload['watchId'] is num
+                ? (payload['watchId'] as num).toInt()
+                : null;
+        if (watchId == null) {
+          return {'ok': false, 'error': {'code': 'invalid_args', 'message': 'Missing watchId'}};
+        }
+
+        await _nativeGeoWatches.remove(watchId)?.cancel();
+
+        // Use the same trust + permission checks as getCurrentLocation.
+        final Map<String, dynamic> initial =
+            await _bridge.getCurrentLocation(payload);
+        if (initial['ok'] != true) return initial;
+        final Map<String, dynamic>? initialLocation =
+            (initial['location'] is Map<String, dynamic>)
+                ? initial['location'] as Map<String, dynamic>
+                : null;
+        if (initialLocation != null) {
+          final initialPayload =
+              _toWebGeolocationPayloadFromBridgeLocation(initialLocation);
+          final js =
+              'window.__smartnps_native_geo_emit($watchId, ${jsonEncode(initialPayload)});';
+          await controller.evaluateJavascript(source: js);
+        }
+
+        final Map? options =
+            payload['options'] is Map ? payload['options'] as Map : null;
+        final int intervalMs =
+            options != null && options['interval_ms'] is num
+                ? (options['interval_ms'] as num).toInt().clamp(500, 5000)
+                : 1000;
+        final double requiredAccuracyMeters =
+            options != null && options['required_accuracy_meters'] is num
+                ? (options['required_accuracy_meters'] as num).toDouble().clamp(5.0, 500.0)
+                : 15.0;
+
+        final LocationSettings settings;
+        if (Platform.isAndroid) {
+          settings = AndroidSettings(
+            accuracy: LocationAccuracy.bestForNavigation,
+            distanceFilter: 0,
+            intervalDuration: Duration(milliseconds: intervalMs),
+            timeLimit: null,
+            forceLocationManager: false,
+          );
+        } else if (Platform.isIOS) {
+          settings = AppleSettings(
+            accuracy: LocationAccuracy.bestForNavigation,
+            distanceFilter: 0,
+            timeLimit: null,
+            pauseLocationUpdatesAutomatically: false,
+            showBackgroundLocationIndicator: false,
+          );
+        } else {
+          settings = LocationSettings(
+            accuracy: LocationAccuracy.bestForNavigation,
+            distanceFilter: 0,
+            timeLimit: null,
+          );
+        }
+
+        final sub = Geolocator.getPositionStream(locationSettings: settings)
+            .listen(
+          (position) async {
+            if (position.accuracy > requiredAccuracyMeters) return;
+            final payload = _toWebGeolocationPayloadFromPosition(
+              position,
+              requiredAccuracyMeters: requiredAccuracyMeters,
+            );
+            final js = 'window.__smartnps_native_geo_emit($watchId, ${jsonEncode(payload)});';
+            await controller.evaluateJavascript(source: js);
+          },
+          onError: (Object error) async {
+            final err = {
+              'code': 2,
+              'message': error.toString(),
+            };
+            final js =
+                'window.__smartnps_native_geo_error($watchId, ${jsonEncode(err)});';
+            await controller.evaluateJavascript(source: js);
+          },
+        );
+        _nativeGeoWatches[watchId] = sub;
+
+        return {'ok': true, 'watchId': watchId, 'intervalMs': intervalMs};
+      },
+    );
+    controller.addJavaScriptHandler(
+      handlerName: 'clearLocationWatch',
+      callback: (args) async {
+        final Map? payload = args.isNotEmpty && args.first is Map
+            ? args.first as Map
+            : null;
+        final int? watchId =
+            payload != null && payload['watchId'] is num
+                ? (payload['watchId'] as num).toInt()
+                : null;
+        if (watchId == null) return {'ok': false};
+        await _nativeGeoWatches.remove(watchId)?.cancel();
+        return {'ok': true, 'watchId': watchId};
       },
     );
     controller.addJavaScriptHandler(

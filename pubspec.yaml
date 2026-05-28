@@ -49,6 +49,8 @@ dependencies:
   share_plus: ^10.0.3
   path_provider: ^2.1.5
   dio: ^5.7.0
+  flutter_background_service: ^5.1.0
+  flutter_background_service_ios: ^5.0.3
 
 dev_dependencies:
   flutter_test:
