@@ -7,10 +7,12 @@ import 'package:geolocator/geolocator.dart';
 
 import 'background_location_uploader.dart';
 
+@pragma('vm:entry-point')
 class BackgroundLocationService {
   static const String _channelId = 'smartnps360_location';
   static const int _notificationId = 9911;
 
+  @pragma('vm:entry-point')
   static Future<void> configureAndStart() async {
     final service = FlutterBackgroundService();
 
@@ -21,6 +23,7 @@ class BackgroundLocationService {
         isForegroundMode: true,
         foregroundServiceNotificationId: _notificationId,
         notificationChannelId: _channelId,
+        foregroundServiceTypes: const [AndroidForegroundType.location],
         initialNotificationTitle: 'SmartNPS360',
         initialNotificationContent: 'Sharing live location',
       ),
@@ -39,6 +42,8 @@ class BackgroundLocationService {
   static void _onStart(ServiceInstance service) async {
     // Keep this isolate minimal: permissions must already be granted by UI.
     final uploader = BackgroundLocationUploader();
+    await uploader.init();
+    uploader.start();
 
     if (service is AndroidServiceInstance) {
       service.setAsForegroundService();
@@ -54,6 +59,7 @@ class BackgroundLocationService {
     Future<void> stop() async {
       await sub?.cancel();
       sub = null;
+      await uploader.stop();
       service.stopSelf();
     }
 
@@ -66,7 +72,7 @@ class BackgroundLocationService {
         ? AndroidSettings(
             accuracy: LocationAccuracy.bestForNavigation,
             distanceFilter: 0,
-            intervalDuration: const Duration(seconds: 1),
+            intervalDuration: const Duration(seconds: 5),
             timeLimit: null,
             forceLocationManager: false,
           )
@@ -78,18 +84,46 @@ class BackgroundLocationService {
             showBackgroundLocationIndicator: true,
           );
 
+    DateTime? lastUploadAt;
     sub = Geolocator.getPositionStream(locationSettings: settings).listen(
       (pos) async {
+        final now = DateTime.now();
+        final last = lastUploadAt;
+        if (last != null && now.difference(last) < const Duration(seconds: 5)) {
+          return;
+        }
+        lastUploadAt = now;
+
+        bool isSimulatedBySoftware = false;
+        try {
+          final dynamic p = pos;
+          final dynamic sourceInformation = p.sourceInformation;
+          isSimulatedBySoftware =
+              sourceInformation?.isSimulatedBySoftware == true;
+        } catch (_) {
+          isSimulatedBySoftware = false;
+        }
+
+        if (pos.isMocked || isSimulatedBySoftware) {
+          service.invoke('mock_location', {
+            'isMocked': pos.isMocked,
+            'isSimulatedBySoftware': isSimulatedBySoftware,
+            'timestamp': pos.timestamp.toIso8601String(),
+          });
+        }
+
         if (kDebugMode) {
           // ignore: avoid_print
           print(
             '[BackgroundLocationService] location '
             'lat=${pos.latitude} lng=${pos.longitude} acc=${pos.accuracy} '
-            'mocked=${pos.isMocked} ts=${pos.timestamp.toIso8601String()}',
+            'mocked=${pos.isMocked} simulated=$isSimulatedBySoftware '
+            'ts=${pos.timestamp.toIso8601String()}',
           );
         }
         try {
-          await uploader.upload(pos);
+          await uploader.pingNow(pos);
+          await uploader.add(pos);
         } catch (e) {
           if (kDebugMode) {
             // ignore: avoid_print
