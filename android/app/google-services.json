@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "569718802147",
+    "project_id": "smartnps360-d9937",
+    "storage_bucket": "smartnps360-d9937.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:569718802147:android:af9caa2c11df5c9e2727d6",
+        "android_client_info": {
+          "package_name": "com.smartnps360.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCDzmsP44t-kgOuPqQQVrqgv5eM50JKsac"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

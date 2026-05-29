@@ -3,7 +3,13 @@ class AppConfig {
 
   static const String initialUrl = 'https://smartnps360.com/';
 
-  static const String locationUploadUrl = '';
+  static const String login = '${initialUrl}api/gauth/login';
+  static const String gpsApiBaseUrl = '${initialUrl}api/gps/';
+  static const String gpsPointPath = 'point';
+  static const String gpsPingPath = 'ping';
+  static const String gpsBatchPath = 'batch';
+
+  static const String sanctumLoginUrl = '${initialUrl}api/auth/login';
 
   static const String allowedHost = 'smartnps360.com';
   static const Set<String> allowedHosts = {
@@ -18,7 +24,6 @@ class AppConfig {
     return h.endsWith('.$allowedHost');
   }
 
-  // UI colors aligned with your native app.
   static const int cPrimary = 0xFF022A67;
   static const int cSurface = 0xFFFBFBFD;
   static const int cDarkCardColor = 0xFF1A2332;

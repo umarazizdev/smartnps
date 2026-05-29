@@ -19,6 +19,10 @@ import 'app_config.dart';
 import 'js_bridge.dart';
 import 'offline_screen.dart';
 import '../widgets/platform_bottom_bar.dart';
+import '../widgets/mock_location_dialog.dart';
+import '../auth/auth_state.dart';
+import '../auth/auth_repository.dart';
+import '../api/api_client.dart';
 
 class WebViewShell extends StatefulWidget {
   const WebViewShell({super.key});
@@ -38,6 +42,22 @@ class _WebViewShellState extends State<WebViewShell> {
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
   bool _mockLocationDialogVisible = false;
   final Map<int, StreamSubscription<Position>> _nativeGeoWatches = {};
+
+  Map<String, dynamic> _safeBridgePayloadForLog(Map payload) {
+    final copy = <String, dynamic>{};
+    payload.forEach((key, value) {
+      final k = key.toString().toLowerCase();
+      if (k.contains('password')) return;
+      copy[key.toString()] = value;
+    });
+    return copy;
+  }
+
+  String _safeTextForLog(Object? value, {int max = 800}) {
+    final text = value?.toString() ?? '';
+    if (text.length <= max) return text;
+    return '${text.substring(0, max)}...';
+  }
 
   bool _isSimulatedBySoftware(Position position) {
     try {
@@ -150,6 +170,34 @@ class _WebViewShellState extends State<WebViewShell> {
             window.addEventListener('flutterInAppWebViewPlatformReady', onReady);
             setTimeout(finish, 4000);
           });
+        }
+
+        function postAuthEvent(payload) {
+          return ensureFlutterBridge()
+            .then(function () {
+              return window.flutter_inappwebview.callHandler('authEvent', payload);
+            });
+        }
+
+        if (!window.SmartNPSNativeAuth) window.SmartNPSNativeAuth = {};
+        if (typeof window.SmartNPSNativeAuth.login !== 'function') {
+          window.SmartNPSNativeAuth.login = function (user, session) {
+            return postAuthEvent({
+              action: 'login',
+              user: user || null,
+              session: session || null
+            });
+          };
+        }
+        if (typeof window.SmartNPSNativeAuth.setSession !== 'function') {
+          window.SmartNPSNativeAuth.setSession = function (session) {
+            return postAuthEvent({ action: 'session', session: session || null });
+          };
+        }
+        if (typeof window.SmartNPSNativeAuth.logout !== 'function') {
+          window.SmartNPSNativeAuth.logout = function () {
+            return postAuthEvent({ action: 'logout' });
+          };
         }
 
         function handleMessage(payload) {
@@ -731,6 +779,217 @@ class _WebViewShellState extends State<WebViewShell> {
         return {'ok': true};
       },
     );
+    controller.addJavaScriptHandler(
+      handlerName: 'loginWithSanctum',
+      callback: (args) async {
+        final currentHost = _currentUri?.host;
+        if (!AppConfig.isAllowedHost(currentHost)) {
+          debugPrint(
+            '[SmartNPS360][Auth] denied loginWithSanctum from host=$currentHost args=$args',
+          );
+          return {
+            'ok': false,
+            'error': {'code': 'untrusted_origin', 'message': 'Untrusted origin'},
+          };
+        }
+
+        final dynamic first = args.isNotEmpty ? args.first : null;
+        final Map? payload = first is Map ? first : null;
+        if (payload == null) {
+          return {
+            'ok': false,
+            'error': {'code': 'invalid_args', 'message': 'Missing payload'},
+          };
+        }
+
+        final username = payload['username']?.toString();
+        final password = payload['password']?.toString();
+        if (username == null ||
+            username.isEmpty ||
+            password == null ||
+            password.isEmpty) {
+          return {
+            'ok': false,
+            'error': {
+              'code': 'invalid_args',
+              'message': 'Missing username/password'
+            },
+          };
+        }
+
+        debugPrint(
+          '[SmartNPS360][Auth] loginWithSanctum payload=${_safeBridgePayloadForLog(payload)}',
+        );
+
+        ApiClient.instance.ensureAuthInterceptorInstalled();
+        final dio = ApiClient.instance.dio;
+        try {
+          final response = await dio.postUri(
+            Uri.parse(AppConfig.sanctumLoginUrl),
+            data: {
+              'employee_no': username,
+              'password': password,
+              'device_name': 'mobile-app',
+            },
+            options: Options(
+              headers: const {'Accept': 'application/json'},
+              contentType: Headers.jsonContentType,
+              sendTimeout: const Duration(seconds: 12),
+              receiveTimeout: const Duration(seconds: 12),
+            ),
+          );
+
+          debugPrint(
+            '[SmartNPS360][Auth] sanctum login status=${response.statusCode} body=${_safeTextForLog(response.data)}',
+          );
+
+          final dynamic body = response.data;
+          final Map<String, dynamic>? map =
+              body is Map ? Map<String, dynamic>.from(body) : null;
+          final token =
+              (map?['token'] ?? map?['access_token'] ?? map?['accessToken'])
+                  ?.toString();
+          if (token == null || token.isEmpty) {
+            return {
+              'ok': false,
+              'error': {
+                'code': 'missing_token',
+                'message': 'Login succeeded but token missing in response'
+              },
+            };
+          }
+
+          await AuthRepository.instance.saveAccessToken(token);
+          AuthState.instance.setSession({'accessToken': token});
+
+          return {'ok': true, 'hasToken': true};
+        } catch (e) {
+          debugPrint('[SmartNPS360][Auth] sanctum login failed: $e');
+          return {
+            'ok': false,
+            'error': {'code': 'request_failed', 'message': e.toString()},
+          };
+        }
+      },
+    );
+
+    controller.addJavaScriptHandler(
+      handlerName: 'authEvent',
+      callback: (args) async {
+        final currentHost = _currentUri?.host;
+        if (!AppConfig.isAllowedHost(currentHost)) {
+          debugPrint(
+            '[SmartNPS360][Auth] denied authEvent from host=$currentHost args=$args',
+          );
+          return {
+            'ok': false,
+            'error': {'code': 'untrusted_origin', 'message': 'Untrusted origin'},
+          };
+        }
+
+        final dynamic first = args.isNotEmpty ? args.first : null;
+        final Map? payload = first is Map ? first : null;
+        if (payload == null) {
+          return {
+            'ok': false,
+            'error': {'code': 'invalid_args', 'message': 'Missing payload'},
+          };
+        }
+
+        final action = (payload['action'] ?? payload['type'] ?? '').toString();
+        if (action == 'logout') {
+          AuthState.instance.clear();
+          await AuthRepository.instance.clear();
+          return {'ok': true, 'action': 'logout'};
+        }
+
+        if (action == 'login') {
+          final dynamic rawUser = payload['user'] ?? payload['profile'];
+          final Map<String, dynamic>? user =
+              rawUser is Map ? Map<String, dynamic>.from(rawUser) : null;
+          if (user == null) {
+            return {
+              'ok': false,
+              'error': {'code': 'invalid_args', 'message': 'Missing user'},
+            };
+          }
+          AuthState.instance.setLoggedInUser(user);
+          final dynamic rawSession =
+              payload['session'] ?? payload['auth'] ?? payload['tokens'];
+          final Map<String, dynamic>? session =
+              rawSession is Map ? Map<String, dynamic>.from(rawSession) : null;
+          if (session != null) {
+            AuthState.instance.setSession(session);
+          }
+          final accessToken =
+              (payload['accessToken'] ??
+                      payload['access_token'] ??
+                      payload['token'] ??
+                      payload['jwt'] ??
+                      session?['accessToken'] ??
+                      session?['access_token'] ??
+                      session?['token'] ??
+                      session?['jwt'])
+                  ?.toString();
+          final refreshToken =
+              (payload['refreshToken'] ??
+                      payload['refresh_token'] ??
+                      session?['refreshToken'] ??
+                      session?['refresh_token'])
+                  ?.toString();
+          await AuthRepository.instance.saveLogin(
+            user: user,
+            accessToken: accessToken,
+            refreshToken: refreshToken,
+          );
+          return {'ok': true, 'action': 'login'};
+        }
+
+        if (action == 'session') {
+          final dynamic rawSession =
+              payload['session'] ?? payload['auth'] ?? payload['tokens'];
+          final Map<String, dynamic>? session =
+              rawSession is Map ? Map<String, dynamic>.from(rawSession) : null;
+          if (session == null) {
+            return {
+              'ok': false,
+              'error': {'code': 'invalid_args', 'message': 'Missing session'},
+            };
+          }
+          AuthState.instance.setSession(session);
+          final accessToken =
+              (payload['accessToken'] ??
+                      payload['access_token'] ??
+                      payload['token'] ??
+                      payload['jwt'] ??
+                      session['accessToken'] ??
+                      session['access_token'] ??
+                      session['token'] ??
+                      session['jwt'])
+                  ?.toString();
+          final refreshToken =
+              (payload['refreshToken'] ??
+                      payload['refresh_token'] ??
+                      session['refreshToken'] ??
+                      session['refresh_token'])
+                  ?.toString();
+          await AuthRepository.instance.saveLogin(
+            user: AuthState.instance.user.value ?? <String, dynamic>{},
+            accessToken: accessToken,
+            refreshToken: refreshToken,
+          );
+          return {'ok': true, 'action': 'session'};
+        }
+
+        return {
+          'ok': false,
+          'error': {
+            'code': 'unsupported_action',
+            'message': 'Unsupported auth action: $action',
+          },
+        };
+      },
+    );
   }
 
   void _maybeShowMockLocationDialog(Map<String, dynamic> result) {
@@ -753,98 +1012,7 @@ class _WebViewShellState extends State<WebViewShell> {
       context: context,
       barrierDismissible: false,
       barrierColor: Colors.black.withValues(alpha: 0.32),
-      builder: (context) => Dialog(
-        elevation: 0,
-        backgroundColor: Colors.transparent,
-        insetPadding: const EdgeInsets.symmetric(horizontal: 28),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(26),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-            child: Container(
-              padding: const EdgeInsets.fromLTRB(22, 22, 22, 16),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.72),
-                borderRadius: BorderRadius.circular(26),
-                border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.62),
-                  width: 1.2,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.12),
-                    blurRadius: 28,
-                    offset: const Offset(0, 14),
-                  ),
-                ],
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    height: 52,
-                    width: 52,
-                    decoration: BoxDecoration(
-                      color: Colors.red.withValues(alpha: 0.10),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.location_off_rounded,
-                      color: Color(0xFFE53935),
-                      size: 27,
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Mock location detected',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: Color(0xFF171717),
-                      fontSize: 19,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 9),
-                  const Text(
-                    'Your device appears to be using a fake/mock GPS location. '
-                    'Please disable mock location and try again.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: Color(0xFF5D6168),
-                      fontSize: 14,
-                      height: 1.45,
-                      fontWeight: FontWeight.w400,
-                    ),
-                  ),
-                  const SizedBox(height: 22),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 48,
-                    child: FilledButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      style: FilledButton.styleFrom(
-                        elevation: 0,
-                        backgroundColor: const Color(0xFF111827),
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                      ),
-                      child: const Text(
-                        'OK',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
+      builder: (context) => const MockLocationDialog(),
     ).whenComplete(() {
       if (mounted) _mockLocationDialogVisible = false;
     });
@@ -1106,6 +1274,25 @@ class _WebViewShellState extends State<WebViewShell> {
                             origin: origin,
                             allow: granted,
                             retain: granted,
+                          );
+                        },
+                    onReceivedServerTrustAuthRequest:
+                        (controller, challenge) async {
+                          final host = challenge.protectionSpace.host;
+                          final isAllowed = AppConfig.isAllowedHost(host);
+
+                          // iOS often reports sslError code 4 even when evaluation succeeded
+                          // ("implicitly trusted, but user intent was not explicitly specified").
+                          // Proceed for allowed hosts to avoid resource loading issues.
+                          if (isAllowed) {
+                            return ServerTrustAuthResponse(
+                              action:
+                                  ServerTrustAuthResponseAction.PROCEED,
+                            );
+                          }
+
+                          return ServerTrustAuthResponse(
+                            action: ServerTrustAuthResponseAction.CANCEL,
                           );
                         },
                     onDownloadStartRequest: (controller, request) async {
