@@ -43,7 +43,7 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Microphone access is required to record audio when capturing visit videos. Audio is recorded only during video recording.</string>
 	<key>NSUserNotificationsUsageDescription</key>
-	<string>Enable notifications to receive timely reminders 10 minutes before your shift starts, shift ends, and break ends, helping you stay on top of your work schedule.</string>
+	<string>Enable notifications to receive important updates and messages related to your account and activity.</string>
 	<key>NSDownloadsFolderUsageDescription</key>
 	<string>Allow access to save downloaded files.</string>
 	<key>UIApplicationSceneManifest</key>
