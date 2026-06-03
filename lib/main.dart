@@ -4,8 +4,6 @@ import 'package:flutter/services.dart';
 
 import 'firebase_options.dart';
 import 'src/app/smart_nps_app.dart';
-import 'src/background/background_location_permissions.dart';
-import 'src/background/background_location_service.dart';
 import 'src/push/push_notification_service.dart';
 import 'src/api/api_client.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
@@ -18,10 +16,6 @@ Future<void> main() async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   ApiClient.instance.ensureAuthInterceptorInstalled();
   await PushNotificationService.instance.init();
-  final granted = await BackgroundLocationPermissions.ensureGranted();
-  if (granted) {
-    await BackgroundLocationService.configureAndStart();
-  }
 
   DateTime? lastMockDialogAt;
   FlutterBackgroundService().on('mock_location').listen((event) {

@@ -7,6 +7,21 @@ class MockLocationDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final surfaceColor = isDark
+        ? const Color(0xFF1A2332).withValues(alpha: 0.86)
+        : Colors.white.withValues(alpha: 0.72);
+    final borderColor = isDark
+        ? Colors.white.withValues(alpha: 0.10)
+        : Colors.white.withValues(alpha: 0.62);
+    final shadowColor = Colors.black.withValues(alpha: isDark ? 0.34 : 0.12);
+    final titleColor = isDark ? Colors.white : const Color(0xFF171717);
+    final bodyColor = isDark
+        ? Colors.white.withValues(alpha: 0.72)
+        : const Color(0xFF5D6168);
+    final buttonBgColor = isDark ? Colors.white : const Color(0xFF111827);
+    final buttonFgColor = isDark ? const Color(0xFF111827) : Colors.white;
+
     return Dialog(
       elevation: 0,
       backgroundColor: Colors.transparent,
@@ -18,15 +33,12 @@ class MockLocationDialog extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.fromLTRB(22, 22, 22, 16),
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.72),
+              color: surfaceColor,
               borderRadius: BorderRadius.circular(26),
-              border: Border.all(
-                color: Colors.white.withValues(alpha: 0.62),
-                width: 1.2,
-              ),
+              border: Border.all(color: borderColor, width: 1.2),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.12),
+                  color: shadowColor,
                   blurRadius: 28,
                   offset: const Offset(0, 14),
                 ),
@@ -49,22 +61,22 @@ class MockLocationDialog extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 16),
-                const Text(
+                Text(
                   'Mock location detected',
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    color: Color(0xFF171717),
+                    color: titleColor,
                     fontSize: 19,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
                 const SizedBox(height: 9),
-                const Text(
+                Text(
                   'Your device appears to be using a fake/mock GPS location. '
                   'Please disable mock location and try again.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    color: Color(0xFF5D6168),
+                    color: bodyColor,
                     fontSize: 14,
                     height: 1.45,
                     fontWeight: FontWeight.w400,
@@ -78,8 +90,8 @@ class MockLocationDialog extends StatelessWidget {
                     onPressed: () => Navigator.of(context).pop(),
                     style: FilledButton.styleFrom(
                       elevation: 0,
-                      backgroundColor: const Color(0xFF111827),
-                      foregroundColor: Colors.white,
+                      backgroundColor: buttonBgColor,
+                      foregroundColor: buttonFgColor,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(16),
                       ),
@@ -101,4 +113,3 @@ class MockLocationDialog extends StatelessWidget {
     );
   }
 }
-
