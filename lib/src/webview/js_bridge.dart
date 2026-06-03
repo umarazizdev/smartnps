@@ -12,6 +12,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'app_config.dart';
+import '../background/background_location_controller.dart';
 
 class JsBridge {
   JsBridge({
@@ -39,6 +40,72 @@ class JsBridge {
     'ok': false,
     'error': {'code': code, 'message': message},
   };
+
+  Map<String, dynamic> _locationPayload(
+    Position position, {
+    required bool acceptedFromLiveStream,
+    required bool isFreshLiveLocation,
+    required bool isCachedLocation,
+    required double maxAllowedAccuracyMeters,
+    required int timeoutMs,
+  }) {
+    final now = DateTime.now();
+    var ageMsWhenAccepted = 0;
+    try {
+      ageMsWhenAccepted = now.difference(position.timestamp).inMilliseconds;
+      if (ageMsWhenAccepted < 0) ageMsWhenAccepted = 0;
+    } catch (_) {
+      ageMsWhenAccepted = 0;
+    }
+
+    return {
+      'latitude': position.latitude,
+      'longitude': position.longitude,
+      'accuracy': position.accuracy,
+      'altitudeAccuracy': _numOrNull(() => position.altitudeAccuracy),
+      'timestampMs': position.timestamp.millisecondsSinceEpoch,
+      'timestamp': position.timestamp.toIso8601String(),
+      'altitude': position.altitude,
+      'speed': position.speed,
+      'speedAccuracy': _numOrNull(() => position.speedAccuracy),
+      'heading': position.heading,
+      'headingAccuracy': _numOrNull(() => position.headingAccuracy),
+      'isMocked': position.isMocked,
+      'isSimulatedBySoftware': _isSimulatedBySoftware(position),
+      'floor': _numOrNull(() => (position as dynamic).floor as num),
+      'acceptedFromLiveStream': acceptedFromLiveStream,
+      'isFreshLiveLocation': isFreshLiveLocation,
+      'isCachedLocation': isCachedLocation,
+      'ageMsWhenAccepted': ageMsWhenAccepted,
+      'maxAllowedAccuracyMeters': maxAllowedAccuracyMeters,
+      'timeoutMs': timeoutMs,
+    };
+  }
+
+  num? _numOrNull(num Function() read) {
+    try {
+      return read();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<Map<String, dynamic>> ensureBackgroundLocationStarted([
+    dynamic args,
+  ]) async {
+    if (!_isTrustedCaller()) return _deny();
+    return BackgroundLocationController.ensureStarted();
+  }
+
+  Future<Map<String, dynamic>> startDutyTracking([dynamic args]) async {
+    if (!_isTrustedCaller()) return _deny();
+    return BackgroundLocationController.ensureStarted();
+  }
+
+  Future<Map<String, dynamic>> stopDutyTracking([dynamic args]) async {
+    if (!_isTrustedCaller()) return _deny();
+    return BackgroundLocationController.stop();
+  }
 
   Future<Map<String, dynamic>> pickFile([dynamic args]) async {
     if (!_isTrustedCaller()) return _deny();
@@ -108,20 +175,22 @@ class JsBridge {
     StreamSubscription<Position>? subscription;
 
     double maxAllowedAccuracyMeters = 15.0;
+    final requestStopwatch = Stopwatch()..start();
+    Duration requestTimeout = const Duration(milliseconds: 30000);
+    Position? bestSeen;
 
     try {
       final Map? argsMap = args is Map ? args : null;
       final dynamic rawOptions = argsMap == null ? null : argsMap['options'];
       final Map? options = rawOptions is Map ? rawOptions : null;
 
-      final int? timeoutMs =
-          options != null && options['timeout_ms'] is num
-              ? (options['timeout_ms'] as num).toInt()
-              : null;
+      final int? timeoutMs = options != null && options['timeout_ms'] is num
+          ? (options['timeout_ms'] as num).toInt()
+          : null;
       final double? requiredAccuracyMeters =
           options != null && options['required_accuracy_meters'] is num
-              ? (options['required_accuracy_meters'] as num).toDouble()
-              : null;
+          ? (options['required_accuracy_meters'] as num).toDouble()
+          : null;
 
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
 
@@ -153,7 +222,7 @@ class JsBridge {
           .clamp(5.0, 500.0)
           .toDouble();
 
-      final Duration requestTimeout = Duration(
+      requestTimeout = Duration(
         milliseconds: (timeoutMs ?? 30000).clamp(5000, 45000),
       );
 
@@ -184,17 +253,32 @@ class JsBridge {
       }
 
       final completer = Completer<Position>();
-      final requestStopwatch = Stopwatch()..start();
 
       subscription = Geolocator.getPositionStream(locationSettings: settings)
           .listen(
             (Position position) {
               if (completer.isCompleted) return;
 
-              final hasRequiredAccuracy =
-                  position.accuracy <= maxAllowedAccuracyMeters;
+              if (bestSeen == null || position.accuracy < bestSeen!.accuracy) {
+                bestSeen = position;
+              }
 
-              if (!hasRequiredAccuracy) {
+              final elapsedMs = requestStopwatch.elapsedMilliseconds;
+              final relaxAfterMs = (requestTimeout.inMilliseconds * 0.6)
+                  .round()
+                  .clamp(1000, 60000);
+              final bool allowRelaxedAccuracy = elapsedMs >= relaxAfterMs;
+              final double relaxedAccuracyMeters = allowRelaxedAccuracy
+                  ? (maxAllowedAccuracyMeters * 2).clamp(
+                      maxAllowedAccuracyMeters,
+                      80.0,
+                    )
+                  : maxAllowedAccuracyMeters;
+
+              final hasAcceptableAccuracy =
+                  position.accuracy <= relaxedAccuracyMeters;
+
+              if (!hasAcceptableAccuracy) {
                 debugPrint(
                   'Flutter GPS: inaccurate live value ignored. '
                   'Accuracy: ${position.accuracy}m',
@@ -221,29 +305,42 @@ class JsBridge {
         'receivedAfter: ${requestStopwatch.elapsedMilliseconds}ms',
       );
 
+      final double effectiveMaxAllowedAccuracyMeters =
+          position.accuracy <= maxAllowedAccuracyMeters
+          ? maxAllowedAccuracyMeters
+          : (maxAllowedAccuracyMeters * 2).clamp(
+              maxAllowedAccuracyMeters,
+              80.0,
+            );
+
       return _ok({
         'location': {
-          'latitude': position.latitude,
-          'longitude': position.longitude,
-          'accuracy': position.accuracy,
-          'timestamp': position.timestamp.toIso8601String(),
-          'timestampMs': position.timestamp.millisecondsSinceEpoch,
-          'altitude': position.altitude,
-          'speed': position.speed,
-          'heading': position.heading,
-          'isMocked': position.isMocked,
-          'isSimulatedBySoftware': _isSimulatedBySoftware(position),
-          'acceptedFromLiveStream': true,
-          'maxAllowedAccuracyMeters': maxAllowedAccuracyMeters,
-          'timeoutMs': requestTimeout.inMilliseconds,
+          ..._locationPayload(
+            position,
+            acceptedFromLiveStream: true,
+            isFreshLiveLocation: true,
+            isCachedLocation: false,
+            maxAllowedAccuracyMeters: maxAllowedAccuracyMeters,
+            timeoutMs: requestTimeout.inMilliseconds,
+          ),
+          'effectiveMaxAllowedAccuracyMeters':
+              effectiveMaxAllowedAccuracyMeters,
+          'degradedAccuracyAccepted':
+              position.accuracy > maxAllowedAccuracyMeters,
         },
       });
     } on TimeoutException {
-      return _err(
-        'fresh_location_unavailable',
-        'Unable to get a GPS location with accuracy <= ${maxAllowedAccuracyMeters.toStringAsFixed(0)} meters.',
-      );
+      requestStopwatch.stop();
+      return {
+        ..._err(
+          'fresh_location_unavailable',
+          'Unable to get a GPS location with accuracy <= ${maxAllowedAccuracyMeters.toStringAsFixed(0)} meters.',
+        ),
+        if (bestSeen?.accuracy != null)
+          'bestAccuracySeenMeters': bestSeen!.accuracy,
+      };
     } catch (e) {
+      requestStopwatch.stop();
       return _err('get_location_failed', e.toString());
     } finally {
       await subscription?.cancel();

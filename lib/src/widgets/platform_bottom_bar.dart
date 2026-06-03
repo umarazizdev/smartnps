@@ -29,6 +29,7 @@ class PlatformBottomBar extends StatelessWidget {
     this.tint,
     this.surface,
     this.darkSurface,
+    this.isDark,
     this.heightIOS = 85,
   });
 
@@ -39,6 +40,7 @@ class PlatformBottomBar extends StatelessWidget {
   final Color? tint;
   final Color? surface;
   final Color? darkSurface;
+  final bool? isDark;
   final double heightIOS;
 
   @override
@@ -62,6 +64,7 @@ class PlatformBottomBar extends StatelessWidget {
             tint: tint ?? Theme.of(context).colorScheme.primary,
             surface: surface,
             darkSurface: darkSurface,
+            isDark: isDark,
           );
   }
 }
@@ -112,6 +115,7 @@ class _ClassicBottomBar extends StatelessWidget {
     required this.tint,
     this.surface,
     this.darkSurface,
+    this.isDark,
   });
 
   final List<PlatformBottomTab> tabs;
@@ -120,24 +124,26 @@ class _ClassicBottomBar extends StatelessWidget {
   final Color tint;
   final Color? surface;
   final Color? darkSurface;
+  final bool? isDark;
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final effectiveIsDark =
+        isDark ?? Theme.of(context).brightness == Brightness.dark;
     final bottomInset = MediaQuery.paddingOf(context).bottom;
 
-    final activeColor = isDark ? Colors.white : tint;
-    final inactiveColor = isDark
+    final activeColor = effectiveIsDark ? Colors.white : tint;
+    final inactiveColor = effectiveIsDark
         ? Colors.white.withAlpha(140)
         : const Color.fromARGB(255, 177, 175, 175);
 
-    final bgColor = isDark
+    final bgColor = effectiveIsDark
         ? (darkSurface ?? const Color(0xFF1A2332)).withAlpha(210)
         : (surface ?? const Color(0xFFFBFBFD)).withAlpha(245);
-    final borderColor = isDark
+    final borderColor = effectiveIsDark
         ? Colors.white.withAlpha(18)
         : Colors.black.withAlpha(10);
-    final activePill = isDark
+    final activePill = effectiveIsDark
         ? Colors.white.withAlpha(18)
         : const Color(0xFFE8EDF6);
 
@@ -155,7 +161,7 @@ class _ClassicBottomBar extends StatelessWidget {
               border: Border.all(color: borderColor),
               boxShadow: [
                 BoxShadow(
-                  color: isDark
+                  color: effectiveIsDark
                       ? Colors.black.withAlpha(90)
                       : Colors.black.withAlpha(18),
                   blurRadius: 22,

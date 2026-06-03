@@ -2,15 +2,14 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:ui';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:get/get.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -20,9 +19,12 @@ import 'js_bridge.dart';
 import 'offline_screen.dart';
 import '../widgets/platform_bottom_bar.dart';
 import '../widgets/mock_location_dialog.dart';
+import '../widgets/location_tracking_disclosure_dialog.dart';
 import '../auth/auth_state.dart';
 import '../auth/auth_repository.dart';
 import '../api/api_client.dart';
+import '../app/native_theme_controller.dart';
+import '../push/push_notification_service.dart';
 
 class WebViewShell extends StatefulWidget {
   const WebViewShell({super.key});
@@ -31,7 +33,13 @@ class WebViewShell extends StatefulWidget {
   State<WebViewShell> createState() => _WebViewShellState();
 }
 
+class _WebViewShellUiController extends GetxController {}
+
 class _WebViewShellState extends State<WebViewShell> {
+  static const MethodChannel _settingsChannel = MethodChannel(
+    'com.smartnps360.app/settings',
+  );
+
   InAppWebViewController? _controller;
   PullToRefreshController? _pullToRefreshController;
 
@@ -39,9 +47,18 @@ class _WebViewShellState extends State<WebViewShell> {
   bool _showOffline = false;
   Uri? _currentUri;
   bool _webPrefersDark = false;
+  bool _hasWebThemeSignal = false;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
   bool _mockLocationDialogVisible = false;
+  bool _dutyTrackingDisclosureAccepted = false;
+  bool _backgroundLocationSettingsDialogVisible = false;
+  bool _autoDutyTrackingStartAttempted = false;
   final Map<int, StreamSubscription<Position>> _nativeGeoWatches = {};
+  final _WebViewShellUiController _uiController = _WebViewShellUiController();
+
+  void _refreshUi() {
+    if (mounted) _uiController.update();
+  }
 
   Map<String, dynamic> _safeBridgePayloadForLog(Map payload) {
     final copy = <String, dynamic>{};
@@ -179,6 +196,15 @@ class _WebViewShellState extends State<WebViewShell> {
             });
         }
 
+        if (!window.SmartNPS360) window.SmartNPS360 = {};
+        window.SmartNPS360.notifyTheme = function (mode) {
+          var isDark = mode === 'dark' || mode === true;
+          return ensureFlutterBridge()
+            .then(function () {
+              return window.flutter_inappwebview.callHandler('themeChanged', isDark);
+            });
+        };
+
         if (!window.SmartNPSNativeAuth) window.SmartNPSNativeAuth = {};
         if (typeof window.SmartNPSNativeAuth.login !== 'function') {
           window.SmartNPSNativeAuth.login = function (user, session) {
@@ -200,6 +226,45 @@ class _WebViewShellState extends State<WebViewShell> {
           };
         }
 
+        function callNativeHandler(handlerName, payload) {
+          return ensureFlutterBridge()
+            .then(function () {
+              return window.flutter_inappwebview.callHandler(
+                handlerName,
+                payload || {}
+              );
+            });
+        }
+
+        if (!window.SmartNPSNativeDuty) window.SmartNPSNativeDuty = {};
+        if (typeof window.SmartNPSNativeDuty.start !== 'function') {
+          window.SmartNPSNativeDuty.start = function (payload) {
+            return callNativeHandler('startDutyTracking', payload);
+          };
+        }
+        if (typeof window.SmartNPSNativeDuty.ensureBackgroundLocationStarted !== 'function') {
+          window.SmartNPSNativeDuty.ensureBackgroundLocationStarted = function (payload) {
+            return callNativeHandler('ensureBackgroundLocationStarted', payload);
+          };
+        }
+        if (typeof window.SmartNPSNativeDuty.stop !== 'function') {
+          window.SmartNPSNativeDuty.stop = function (payload) {
+            return callNativeHandler('stopDutyTracking', payload);
+          };
+        }
+
+        if (!window.SmartNPSNative) window.SmartNPSNative = {};
+        if (typeof window.SmartNPSNative.startDutyTracking !== 'function') {
+          window.SmartNPSNative.startDutyTracking = window.SmartNPSNativeDuty.start;
+        }
+        if (typeof window.SmartNPSNative.ensureBackgroundLocationStarted !== 'function') {
+          window.SmartNPSNative.ensureBackgroundLocationStarted =
+            window.SmartNPSNativeDuty.ensureBackgroundLocationStarted;
+        }
+        if (typeof window.SmartNPSNative.stopDutyTracking !== 'function') {
+          window.SmartNPSNative.stopDutyTracking = window.SmartNPSNativeDuty.stop;
+        }
+
         function handleMessage(payload) {
           var data = safeJsonParse(payload);
           if (!data || typeof data !== 'object') {
@@ -208,6 +273,42 @@ class _WebViewShellState extends State<WebViewShell> {
           }
 
           var action = String(data.action || data.type || '');
+          if (action === 'start_duty_tracking' || action === 'clock_in') {
+            ensureFlutterBridge()
+              .then(function () {
+                return window.flutter_inappwebview.callHandler('startDutyTracking', data);
+              })
+              .then(function (result) {
+                try {
+                  if (window.SmartNPSWeb && typeof window.SmartNPSWeb.receiveNativeDutyResult === 'function') {
+                    window.SmartNPSWeb.receiveNativeDutyResult(result);
+                  }
+                } catch (_) {}
+              })
+              .catch(function (e) {
+                callbackErr({ code: 'NATIVE_DUTY_START_FAILED', message: (e && e.message) ? e.message : String(e) });
+              });
+            return;
+          }
+
+          if (action === 'stop_duty_tracking' || action === 'clock_out') {
+            ensureFlutterBridge()
+              .then(function () {
+                return window.flutter_inappwebview.callHandler('stopDutyTracking', data);
+              })
+              .then(function (result) {
+                try {
+                  if (window.SmartNPSWeb && typeof window.SmartNPSWeb.receiveNativeDutyResult === 'function') {
+                    window.SmartNPSWeb.receiveNativeDutyResult(result);
+                  }
+                } catch (_) {}
+              })
+              .catch(function (e) {
+                callbackErr({ code: 'NATIVE_DUTY_STOP_FAILED', message: (e && e.message) ? e.message : String(e) });
+              });
+            return;
+          }
+
           if (action !== 'request_current_location') {
             callbackErr({ code: 'UNSUPPORTED_ACTION', message: 'Unsupported action: ' + action });
             return;
@@ -504,16 +605,32 @@ class _WebViewShellState extends State<WebViewShell> {
   );
 
   void _applySystemUi() {
+    final style = _webPrefersDark
+        ? SystemUiOverlayStyle.light
+        : SystemUiOverlayStyle.dark;
     SystemChrome.setSystemUIOverlayStyle(
-      _webPrefersDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark,
+      style.copyWith(
+        systemNavigationBarColor: Colors.transparent,
+        statusBarColor: Colors.transparent,
+        systemNavigationBarContrastEnforced: false,
+      ),
     );
+  }
+
+  void _setNativeThemeFromWeb(bool isDark) {
+    _hasWebThemeSignal = true;
+    NativeThemeController.instance.setDark(isDark);
+    final shouldRefresh = _webPrefersDark != isDark;
+    _webPrefersDark = isDark;
+    if (shouldRefresh) _refreshUi();
+    _applySystemUi();
   }
 
   @override
   void initState() {
     super.initState();
-    _webPrefersDark =
-        PlatformDispatcher.instance.platformBrightness == Brightness.dark;
+    _webPrefersDark = false;
+    NativeThemeController.instance.setDark(_webPrefersDark);
     _applySystemUi();
 
     if (Platform.isAndroid || Platform.isIOS) {
@@ -541,7 +658,8 @@ class _WebViewShellState extends State<WebViewShell> {
     ) async {
       final hasInternet = results.any((r) => r != ConnectivityResult.none);
       if (hasInternet && _showOffline) {
-        setState(() => _showOffline = false);
+        _showOffline = false;
+        _refreshUi();
         unawaited(_controller?.reload());
       }
     });
@@ -558,7 +676,8 @@ class _WebViewShellState extends State<WebViewShell> {
   }
 
   Future<void> _retry() async {
-    setState(() => _showOffline = false);
+    _showOffline = false;
+    _refreshUi();
     await _controller?.loadUrl(
       urlRequest: URLRequest(url: WebUri(AppConfig.initialUrl)),
     );
@@ -600,6 +719,94 @@ class _WebViewShellState extends State<WebViewShell> {
     return true;
   }
 
+  Future<bool> _confirmDutyLocationTracking() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return true;
+    if (_dutyTrackingDisclosureAccepted) return true;
+    final allowed = await LocationTrackingDisclosureDialog.show(context);
+    if (allowed) _dutyTrackingDisclosureAccepted = true;
+    return allowed;
+  }
+
+  Future<void> _showAndroidBackgroundLocationSettingsDialogIfNeeded() async {
+    if (!Platform.isAndroid || !mounted) return;
+    if (_backgroundLocationSettingsDialogVisible) return;
+
+    final foreground = await Permission.location.status;
+    if (!foreground.isGranted || !mounted) return;
+
+    final permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.always || !mounted) return;
+
+    _backgroundLocationSettingsDialogVisible = true;
+    try {
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          title: const Text('Enable background location'),
+          content: const Text(
+            'SmartNPS360 needs “Allow all the time” location access to keep '
+            'tracking your live location during an active shift when the app is '
+            'closed or not on screen. Tracking stops when you clock out.\n\n'
+            'Open App Settings, tap Location, then choose “Allow all the time”.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Later'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                await _openAndroidAppSettings();
+              },
+              child: const Text('Open Settings'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      _backgroundLocationSettingsDialogVisible = false;
+    }
+  }
+
+  Future<void> _openAndroidAppSettings() async {
+    try {
+      await _settingsChannel.invokeMethod<bool>('openAppSettings');
+    } catch (error) {
+      debugPrint('[SmartNPS360] native openAppSettings failed: $error');
+      await openAppSettings();
+    }
+  }
+
+  Future<void> _startDutyTrackingAfterNativeLocationIfNeeded(
+    Map<String, dynamic> locationResult,
+  ) async {
+    if (_autoDutyTrackingStartAttempted) return;
+    if (locationResult['ok'] != true) return;
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+
+    _autoDutyTrackingStartAttempted = true;
+
+    debugPrint(
+      '[SmartNPS360] Auto-starting duty tracking after native GPS success',
+    );
+
+    final allowed = await _confirmDutyLocationTracking();
+    if (!allowed) {
+      debugPrint('[SmartNPS360] Auto duty tracking canceled by user');
+      return;
+    }
+
+    final result = await _bridge.startDutyTracking({
+      'source': 'native_location_auto_start',
+      'requestedAt': DateTime.now().millisecondsSinceEpoch,
+    });
+
+    debugPrint('[SmartNPS360] auto startDutyTracking result=$result');
+    await _showAndroidBackgroundLocationSettingsDialogIfNeeded();
+  }
+
   void _installJsHandlers(InAppWebViewController controller) {
     controller.addJavaScriptHandler(
       handlerName: 'pickFile',
@@ -624,6 +831,71 @@ class _WebViewShellState extends State<WebViewShell> {
         );
         debugPrint('[SmartNPS360] getCurrentLocation result=$result');
         _maybeShowMockLocationDialog(result);
+        unawaited(_startDutyTrackingAfterNativeLocationIfNeeded(result));
+        return result;
+      },
+    );
+    controller.addJavaScriptHandler(
+      handlerName: 'ensureBackgroundLocationStarted',
+      callback: (args) async {
+        debugPrint(
+          '[SmartNPS360] JS callHandler: ensureBackgroundLocationStarted args=$args',
+        );
+        final allowed = await _confirmDutyLocationTracking();
+        if (!allowed) {
+          return {
+            'ok': false,
+            'error': {
+              'code': 'canceled',
+              'message': 'User canceled location tracking enablement',
+            },
+          };
+        }
+        final result = await _bridge.ensureBackgroundLocationStarted(
+          args.isEmpty ? null : args.first,
+        );
+        debugPrint(
+          '[SmartNPS360] ensureBackgroundLocationStarted result=$result',
+        );
+        await _showAndroidBackgroundLocationSettingsDialogIfNeeded();
+        return result;
+      },
+    );
+    controller.addJavaScriptHandler(
+      handlerName: 'startDutyTracking',
+      callback: (args) async {
+        debugPrint(
+          '[SmartNPS360] JS callHandler: startDutyTracking args=$args',
+        );
+        final allowed = await _confirmDutyLocationTracking();
+        if (!allowed) {
+          return {
+            'ok': false,
+            'error': {
+              'code': 'canceled',
+              'message': 'User canceled location tracking enablement',
+            },
+          };
+        }
+        final result = await _bridge.startDutyTracking(
+          args.isEmpty ? null : args.first,
+        );
+        debugPrint('[SmartNPS360] startDutyTracking result=$result');
+        await _showAndroidBackgroundLocationSettingsDialogIfNeeded();
+        return result;
+      },
+    );
+    controller.addJavaScriptHandler(
+      handlerName: 'stopDutyTracking',
+      callback: (args) async {
+        debugPrint('[SmartNPS360] JS callHandler: stopDutyTracking args=$args');
+        final result = await _bridge.stopDutyTracking(
+          args.isEmpty ? null : args.first,
+        );
+        debugPrint('[SmartNPS360] stopDutyTracking result=$result');
+        if (result['ok'] == true) {
+          _autoDutyTrackingStartAttempted = false;
+        }
         return result;
       },
     );
@@ -639,42 +911,49 @@ class _WebViewShellState extends State<WebViewShell> {
             'error': {'code': 'invalid_args', 'message': 'Missing payload'},
           };
         }
-        final int? watchId =
-            payload['watchId'] is num
-                ? (payload['watchId'] as num).toInt()
-                : null;
+        final int? watchId = payload['watchId'] is num
+            ? (payload['watchId'] as num).toInt()
+            : null;
         if (watchId == null) {
-          return {'ok': false, 'error': {'code': 'invalid_args', 'message': 'Missing watchId'}};
+          return {
+            'ok': false,
+            'error': {'code': 'invalid_args', 'message': 'Missing watchId'},
+          };
         }
 
         await _nativeGeoWatches.remove(watchId)?.cancel();
 
         // Use the same trust + permission checks as getCurrentLocation.
-        final Map<String, dynamic> initial =
-            await _bridge.getCurrentLocation(payload);
+        final Map<String, dynamic> initial = await _bridge.getCurrentLocation(
+          payload,
+        );
         if (initial['ok'] != true) return initial;
         final Map<String, dynamic>? initialLocation =
             (initial['location'] is Map<String, dynamic>)
-                ? initial['location'] as Map<String, dynamic>
-                : null;
+            ? initial['location'] as Map<String, dynamic>
+            : null;
         if (initialLocation != null) {
-          final initialPayload =
-              _toWebGeolocationPayloadFromBridgeLocation(initialLocation);
+          final initialPayload = _toWebGeolocationPayloadFromBridgeLocation(
+            initialLocation,
+          );
           final js =
               'window.__smartnps_native_geo_emit($watchId, ${jsonEncode(initialPayload)});';
           await controller.evaluateJavascript(source: js);
         }
 
-        final Map? options =
-            payload['options'] is Map ? payload['options'] as Map : null;
-        final int intervalMs =
-            options != null && options['interval_ms'] is num
-                ? (options['interval_ms'] as num).toInt().clamp(500, 5000)
-                : 1000;
+        final Map? options = payload['options'] is Map
+            ? payload['options'] as Map
+            : null;
+        final int intervalMs = options != null && options['interval_ms'] is num
+            ? (options['interval_ms'] as num).toInt().clamp(500, 5000)
+            : 1000;
         final double requiredAccuracyMeters =
             options != null && options['required_accuracy_meters'] is num
-                ? (options['required_accuracy_meters'] as num).toDouble().clamp(5.0, 500.0)
-                : 15.0;
+            ? (options['required_accuracy_meters'] as num).toDouble().clamp(
+                5.0,
+                500.0,
+              )
+            : 15.0;
 
         final LocationSettings settings;
         if (Platform.isAndroid) {
@@ -701,22 +980,19 @@ class _WebViewShellState extends State<WebViewShell> {
           );
         }
 
-        final sub = Geolocator.getPositionStream(locationSettings: settings)
-            .listen(
+        final sub = Geolocator.getPositionStream(locationSettings: settings).listen(
           (position) async {
             if (position.accuracy > requiredAccuracyMeters) return;
             final payload = _toWebGeolocationPayloadFromPosition(
               position,
               requiredAccuracyMeters: requiredAccuracyMeters,
             );
-            final js = 'window.__smartnps_native_geo_emit($watchId, ${jsonEncode(payload)});';
+            final js =
+                'window.__smartnps_native_geo_emit($watchId, ${jsonEncode(payload)});';
             await controller.evaluateJavascript(source: js);
           },
           onError: (Object error) async {
-            final err = {
-              'code': 2,
-              'message': error.toString(),
-            };
+            final err = {'code': 2, 'message': error.toString()};
             final js =
                 'window.__smartnps_native_geo_error($watchId, ${jsonEncode(err)});';
             await controller.evaluateJavascript(source: js);
@@ -733,10 +1009,9 @@ class _WebViewShellState extends State<WebViewShell> {
         final Map? payload = args.isNotEmpty && args.first is Map
             ? args.first as Map
             : null;
-        final int? watchId =
-            payload != null && payload['watchId'] is num
-                ? (payload['watchId'] as num).toInt()
-                : null;
+        final int? watchId = payload != null && payload['watchId'] is num
+            ? (payload['watchId'] as num).toInt()
+            : null;
         if (watchId == null) return {'ok': false};
         await _nativeGeoWatches.remove(watchId)?.cancel();
         return {'ok': true, 'watchId': watchId};
@@ -771,12 +1046,18 @@ class _WebViewShellState extends State<WebViewShell> {
       handlerName: 'themeChanged',
       callback: (args) {
         final value = args.isNotEmpty ? args.first : null;
-        final next = value is bool ? value : null;
-        if (next != null && mounted) {
-          setState(() => _webPrefersDark = next);
-          _applySystemUi();
+        final next = _themeValueToDark(value);
+        if (next == null) {
+          return {
+            'ok': false,
+            'error': {
+              'code': 'invalid_theme',
+              'message': 'Expected dark/light, boolean, or {isDark/theme}',
+            },
+          };
         }
-        return {'ok': true};
+        _setNativeThemeFromWeb(next);
+        return {'ok': true, 'isDark': next};
       },
     );
     controller.addJavaScriptHandler(
@@ -789,7 +1070,10 @@ class _WebViewShellState extends State<WebViewShell> {
           );
           return {
             'ok': false,
-            'error': {'code': 'untrusted_origin', 'message': 'Untrusted origin'},
+            'error': {
+              'code': 'untrusted_origin',
+              'message': 'Untrusted origin',
+            },
           };
         }
 
@@ -812,7 +1096,7 @@ class _WebViewShellState extends State<WebViewShell> {
             'ok': false,
             'error': {
               'code': 'invalid_args',
-              'message': 'Missing username/password'
+              'message': 'Missing username/password',
             },
           };
         }
@@ -844,8 +1128,9 @@ class _WebViewShellState extends State<WebViewShell> {
           );
 
           final dynamic body = response.data;
-          final Map<String, dynamic>? map =
-              body is Map ? Map<String, dynamic>.from(body) : null;
+          final Map<String, dynamic>? map = body is Map
+              ? Map<String, dynamic>.from(body)
+              : null;
           final token =
               (map?['token'] ?? map?['access_token'] ?? map?['accessToken'])
                   ?.toString();
@@ -854,13 +1139,14 @@ class _WebViewShellState extends State<WebViewShell> {
               'ok': false,
               'error': {
                 'code': 'missing_token',
-                'message': 'Login succeeded but token missing in response'
+                'message': 'Login succeeded but token missing in response',
               },
             };
           }
 
           await AuthRepository.instance.saveAccessToken(token);
           AuthState.instance.setSession({'accessToken': token});
+          _requestNotificationPermissionAfterLogin();
 
           return {'ok': true, 'hasToken': true};
         } catch (e) {
@@ -883,7 +1169,10 @@ class _WebViewShellState extends State<WebViewShell> {
           );
           return {
             'ok': false,
-            'error': {'code': 'untrusted_origin', 'message': 'Untrusted origin'},
+            'error': {
+              'code': 'untrusted_origin',
+              'message': 'Untrusted origin',
+            },
           };
         }
 
@@ -905,8 +1194,9 @@ class _WebViewShellState extends State<WebViewShell> {
 
         if (action == 'login') {
           final dynamic rawUser = payload['user'] ?? payload['profile'];
-          final Map<String, dynamic>? user =
-              rawUser is Map ? Map<String, dynamic>.from(rawUser) : null;
+          final Map<String, dynamic>? user = rawUser is Map
+              ? Map<String, dynamic>.from(rawUser)
+              : null;
           if (user == null) {
             return {
               'ok': false,
@@ -916,8 +1206,9 @@ class _WebViewShellState extends State<WebViewShell> {
           AuthState.instance.setLoggedInUser(user);
           final dynamic rawSession =
               payload['session'] ?? payload['auth'] ?? payload['tokens'];
-          final Map<String, dynamic>? session =
-              rawSession is Map ? Map<String, dynamic>.from(rawSession) : null;
+          final Map<String, dynamic>? session = rawSession is Map
+              ? Map<String, dynamic>.from(rawSession)
+              : null;
           if (session != null) {
             AuthState.instance.setSession(session);
           }
@@ -942,14 +1233,16 @@ class _WebViewShellState extends State<WebViewShell> {
             accessToken: accessToken,
             refreshToken: refreshToken,
           );
+          _requestNotificationPermissionAfterLogin();
           return {'ok': true, 'action': 'login'};
         }
 
         if (action == 'session') {
           final dynamic rawSession =
               payload['session'] ?? payload['auth'] ?? payload['tokens'];
-          final Map<String, dynamic>? session =
-              rawSession is Map ? Map<String, dynamic>.from(rawSession) : null;
+          final Map<String, dynamic>? session = rawSession is Map
+              ? Map<String, dynamic>.from(rawSession)
+              : null;
           if (session == null) {
             return {
               'ok': false,
@@ -978,6 +1271,7 @@ class _WebViewShellState extends State<WebViewShell> {
             accessToken: accessToken,
             refreshToken: refreshToken,
           );
+          _requestNotificationPermissionAfterLogin();
           return {'ok': true, 'action': 'session'};
         }
 
@@ -990,6 +1284,17 @@ class _WebViewShellState extends State<WebViewShell> {
         };
       },
     );
+  }
+
+  void _requestNotificationPermissionAfterLogin() {
+    unawaited(PushNotificationService.instance.requestPermissionAfterLogin());
+  }
+
+  void _maybeRequestNotificationPermissionForRoute(Uri? uri) {
+    if (_showOffline) return;
+    if (!AppConfig.isAllowedHost(uri?.host)) return;
+    if (_isAuthRoute(uri)) return;
+    _requestNotificationPermissionAfterLogin();
   }
 
   void _maybeShowMockLocationDialog(Map<String, dynamic> result) {
@@ -1028,23 +1333,22 @@ class _WebViewShellState extends State<WebViewShell> {
 		          window.__smartnps_theme_last = null;
 		          function computeDark() {
 		            try {
-		              var mq = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)');
-		              var sysDark = mq && typeof mq.matches === 'boolean' ? !!mq.matches : null;
-
 	              var html = document.documentElement;
 	              var body = document.body;
 	              var htmlClass = (html && html.className ? String(html.className) : '').toLowerCase();
 	              var bodyClass = (body && body.className ? String(body.className) : '').toLowerCase();
-	              var dataTheme = (html && html.getAttribute ? (html.getAttribute('data-theme') || html.getAttribute('data-bs-theme')) : '') || '';
+	              var dataTheme = (html && html.getAttribute ? (html.getAttribute('data-theme') || html.getAttribute('data-bs-theme') || html.getAttribute('data-color-mode')) : '') || '';
 	              dataTheme = String(dataTheme).toLowerCase();
 
 	              var classDark = htmlClass.indexOf('dark') !== -1 || bodyClass.indexOf('dark') !== -1;
+	              var classLight = htmlClass.indexOf('light') !== -1 || bodyClass.indexOf('light') !== -1;
 	              var dataDark = dataTheme === 'dark';
 	              var dataLight = dataTheme === 'light';
 
 		              if (dataDark) return true;
 		              if (dataLight) return false;
 		              if (classDark) return true;
+		              if (classLight) return false;
 		              // Heuristic: infer from computed background color when the site toggles
 		              // theme without changing attributes/classes (CSS variables, inline styles).
 		              try {
@@ -1064,7 +1368,6 @@ class _WebViewShellState extends State<WebViewShell> {
 		                  }
 		                }
 		              } catch (e) {}
-		              if (sysDark !== null) return sysDark;
 		              return null;
 		            } catch (e) {}
 		            return null;
@@ -1083,28 +1386,22 @@ class _WebViewShellState extends State<WebViewShell> {
 
 	          notify();
 
-	          // System theme changes
-	          try {
-	            var mq = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)');
-	            if (mq) {
-	              if (typeof mq.addEventListener === 'function') mq.addEventListener('change', notify);
-	              else if (typeof mq.addListener === 'function') mq.addListener(notify);
-	            }
-	          } catch (e) {}
-
-		          // In-page theme toggles
+	          // In-page theme toggles
 		          try {
 	            var target1 = document.documentElement;
 	            var target2 = document.body;
 	            var obs = new MutationObserver(function() {
 	              if (window.__smartnps_theme_tick) return;
 	              window.__smartnps_theme_tick = true;
-	              setTimeout(function() {
+	              var run = function() {
 	                window.__smartnps_theme_tick = false;
 	                notify();
-	              }, 50);
+	              };
+	              if (window.queueMicrotask) window.queueMicrotask(run);
+	              else if (window.Promise) Promise.resolve().then(run);
+	              else run();
 	            });
-		            if (target1) obs.observe(target1, { attributes: true, attributeFilter: ['class','data-theme','data-bs-theme'] });
+		            if (target1) obs.observe(target1, { attributes: true, attributeFilter: ['class','data-theme','data-bs-theme','data-color-mode'] });
 		            if (target2) obs.observe(target2, { attributes: true, attributeFilter: ['class'] });
 		          } catch (e) {}
 
@@ -1163,121 +1460,128 @@ class _WebViewShellState extends State<WebViewShell> {
 
   @override
   Widget build(BuildContext context) {
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, result) async {
-        if (didPop) return;
-        final shouldPop = await _onWillPop();
-        if (shouldPop && mounted) {
-          SystemNavigator.pop();
-        }
-      },
-      child: Scaffold(
-        body: SafeArea(
-          top: true,
-          bottom: false,
-          child: Stack(
-            children: [
-              if (_showOffline)
-                OfflineScreen(onRetry: _retry)
-              else
-                Padding(
-                  padding: EdgeInsets.only(bottom: 0),
-                  child: InAppWebView(
-                    initialUrlRequest: URLRequest(
-                      url: WebUri(AppConfig.initialUrl),
-                    ),
-                    initialUserScripts: UnmodifiableListView([
-                      _smartNpsBridgeScript,
-                      _geolocationScript,
-                    ]),
-                    pullToRefreshController: _pullToRefreshController,
-                    initialSettings: InAppWebViewSettings(
-                      javaScriptEnabled: true,
-                      allowsInlineMediaPlayback: true,
-                      mediaPlaybackRequiresUserGesture: false,
-                      useShouldOverrideUrlLoading: true,
-                      supportZoom: false,
-                      transparentBackground: false,
-                      thirdPartyCookiesEnabled: true,
-                      cacheEnabled: true,
-                      clearCache: false,
-                      sharedCookiesEnabled: true,
-                      userAgent:
-                          'SmartNPS360/1.0 (Flutter; InAppWebView) ${Platform.operatingSystem}',
-                      geolocationEnabled: false,
-                      allowsBackForwardNavigationGestures: true,
-                      verticalScrollBarEnabled: true,
-                      horizontalScrollBarEnabled: false,
-                    ),
-                    onWebViewCreated: (controller) {
-                      _controller = controller;
-                      _installJsHandlers(controller);
-                    },
-                    onConsoleMessage: (controller, message) {
-                      debugPrint(
-                        '[WebView][${message.messageLevel}] ${message.message}',
-                      );
-                    },
-                    shouldOverrideUrlLoading: (controller, action) async =>
-                        _handleNavigation(action),
-                    onLoadStart: (controller, url) {
-                      setState(() {
-                        _currentUri = url?.uriValue;
-                      });
-                    },
-                    onProgressChanged: (controller, progress) {
-                      if (progress == 100) {
-                        _pullToRefreshController?.endRefreshing();
-                      }
-                    },
-                    onLoadStop: (controller, url) async {
-                      _pullToRefreshController?.endRefreshing();
-                      final prefersDark = await _readWebPrefersDark(controller);
-                      await _installThemeListener(controller);
-                      setState(() {
-                        _currentUri = url?.uriValue;
-                        _firstPageLoaded = true;
-                        _webPrefersDark = prefersDark ?? _webPrefersDark;
-                      });
-                      _applySystemUi();
-                    },
-                    onReceivedError: (controller, request, error) async {
-                      _pullToRefreshController?.endRefreshing();
-                      if (!_firstPageLoaded) {
-                        final connectivity = await Connectivity()
-                            .checkConnectivity();
-                        if (!connectivity.any(
-                          (r) => r != ConnectivityResult.none,
-                        )) {
-                          if (mounted) setState(() => _showOffline = true);
-                        }
-                      }
-                    },
-                    onGeolocationPermissionsShowPrompt:
-                        (controller, origin) async {
-                          final uri = Uri.tryParse(origin);
-                          final allow = uri == null
-                              ? false
-                              : AppConfig.isAllowedHost(uri.host);
-                          if (!allow) {
-                            return GeolocationPermissionShowPromptResponse(
-                              origin: origin,
-                              allow: false,
-                              retain: false,
-                            );
-                          }
-                          final status = await Permission.locationWhenInUse
-                              .request();
-                          final granted = status.isGranted;
-                          return GeolocationPermissionShowPromptResponse(
-                            origin: origin,
-                            allow: granted,
-                            retain: granted,
+    return GetBuilder<_WebViewShellUiController>(
+      init: _uiController,
+      global: false,
+      builder: (_) {
+        return PopScope(
+          canPop: false,
+          onPopInvokedWithResult: (didPop, result) async {
+            if (didPop) return;
+            final shouldPop = await _onWillPop();
+            if (shouldPop && mounted) {
+              SystemNavigator.pop();
+            }
+          },
+          child: Scaffold(
+            body: SafeArea(
+              top: true,
+              bottom: false,
+              child: Stack(
+                children: [
+                  if (_showOffline)
+                    OfflineScreen(onRetry: _retry)
+                  else
+                    Padding(
+                      padding: EdgeInsets.only(bottom: 0),
+                      child: InAppWebView(
+                        initialUrlRequest: URLRequest(
+                          url: WebUri(AppConfig.initialUrl),
+                        ),
+                        initialUserScripts: UnmodifiableListView([
+                          _smartNpsBridgeScript,
+                          _geolocationScript,
+                        ]),
+                        pullToRefreshController: _pullToRefreshController,
+                        initialSettings: InAppWebViewSettings(
+                          javaScriptEnabled: true,
+                          allowsInlineMediaPlayback: true,
+                          mediaPlaybackRequiresUserGesture: false,
+                          useShouldOverrideUrlLoading: true,
+                          supportZoom: false,
+                          transparentBackground: false,
+                          thirdPartyCookiesEnabled: true,
+                          cacheEnabled: true,
+                          clearCache: false,
+                          sharedCookiesEnabled: true,
+                          userAgent:
+                              'SmartNPS360/1.0 (Flutter; InAppWebView) ${Platform.operatingSystem}',
+                          geolocationEnabled: false,
+                          allowsBackForwardNavigationGestures: true,
+                          verticalScrollBarEnabled: true,
+                          horizontalScrollBarEnabled: false,
+                        ),
+                        onWebViewCreated: (controller) {
+                          _controller = controller;
+                          _installJsHandlers(controller);
+                        },
+                        onConsoleMessage: (controller, message) {
+                          debugPrint(
+                            '[WebView][${message.messageLevel}] ${message.message}',
                           );
                         },
-                    onReceivedServerTrustAuthRequest:
-                        (controller, challenge) async {
+                        shouldOverrideUrlLoading: (controller, action) async =>
+                            _handleNavigation(action),
+                        onLoadStart: (controller, url) {
+                          _currentUri = url?.uriValue;
+                          _refreshUi();
+                        },
+                        onProgressChanged: (controller, progress) {
+                          if (progress == 100) {
+                            _pullToRefreshController?.endRefreshing();
+                          }
+                        },
+                        onLoadStop: (controller, url) async {
+                          _pullToRefreshController?.endRefreshing();
+                          final webThemeIsDark = _hasWebThemeSignal
+                              ? null
+                              : await _readWebThemeIsDark(controller);
+                          await _installThemeListener(controller);
+                          _currentUri = url?.uriValue;
+                          _firstPageLoaded = true;
+                          _webPrefersDark = webThemeIsDark ?? _webPrefersDark;
+                          _refreshUi();
+                          _setNativeThemeFromWeb(_webPrefersDark);
+                          _maybeRequestNotificationPermissionForRoute(
+                            url?.uriValue,
+                          );
+                        },
+                        onReceivedError: (controller, request, error) async {
+                          _pullToRefreshController?.endRefreshing();
+                          if (!_firstPageLoaded) {
+                            final connectivity = await Connectivity()
+                                .checkConnectivity();
+                            if (!connectivity.any(
+                              (r) => r != ConnectivityResult.none,
+                            )) {
+                              _showOffline = true;
+                              _refreshUi();
+                            }
+                          }
+                        },
+                        onGeolocationPermissionsShowPrompt:
+                            (controller, origin) async {
+                              final uri = Uri.tryParse(origin);
+                              final allow = uri == null
+                                  ? false
+                                  : AppConfig.isAllowedHost(uri.host);
+                              if (!allow) {
+                                return GeolocationPermissionShowPromptResponse(
+                                  origin: origin,
+                                  allow: false,
+                                  retain: false,
+                                );
+                              }
+                              final status = await Permission.locationWhenInUse
+                                  .request();
+                              final granted = status.isGranted;
+                              return GeolocationPermissionShowPromptResponse(
+                                origin: origin,
+                                allow: granted,
+                                retain: granted,
+                              );
+                            },
+                        onReceivedServerTrustAuthRequest: (controller, challenge) async {
                           final host = challenge.protectionSpace.host;
                           final isAllowed = AppConfig.isAllowedHost(host);
 
@@ -1286,8 +1590,7 @@ class _WebViewShellState extends State<WebViewShell> {
                           // Proceed for allowed hosts to avoid resource loading issues.
                           if (isAllowed) {
                             return ServerTrustAuthResponse(
-                              action:
-                                  ServerTrustAuthResponseAction.PROCEED,
+                              action: ServerTrustAuthResponseAction.PROCEED,
                             );
                           }
 
@@ -1295,41 +1598,58 @@ class _WebViewShellState extends State<WebViewShell> {
                             action: ServerTrustAuthResponseAction.CANCEL,
                           );
                         },
-                    onDownloadStartRequest: (controller, request) async {
-                      final uri = request.url.uriValue;
-                      await launchUrl(
-                        uri,
-                        mode: LaunchMode.externalApplication,
-                      );
-                    },
+                        onDownloadStartRequest: (controller, request) async {
+                          final uri = request.url.uriValue;
+                          await launchUrl(
+                            uri,
+                            mode: LaunchMode.externalApplication,
+                          );
+                        },
+                      ),
+                    ),
+                  if (!_firstPageLoaded && !_showOffline)
+                    _SplashOverlay(isDark: _webPrefersDark),
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 160),
+                    switchInCurve: Curves.easeOut,
+                    switchOutCurve: Curves.easeIn,
+                    child: _shouldShowBottomBar(context)
+                        ? Align(
+                            key: const ValueKey('bottom-bar'),
+                            alignment: Alignment.bottomCenter,
+                            child: _BottomBar(
+                              currentUri: _currentUri,
+                              isDark: _webPrefersDark,
+                              onTap: _onBottomTap,
+                            ),
+                          )
+                        : const SizedBox.shrink(key: ValueKey('no-bottom-bar')),
                   ),
-                ),
-              if (!_firstPageLoaded && !_showOffline)
-                _SplashOverlay(isDark: _webPrefersDark),
-              if (_shouldShowBottomBar())
-                Align(
-                  alignment: Alignment.bottomCenter,
-                  child: _BottomBar(
-                    currentUri: _currentUri,
-                    isDark: _webPrefersDark,
-                    onTap: _onBottomTap,
-                  ),
-                ),
-            ],
+                ],
+              ),
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
-  Future<bool?> _readWebPrefersDark(InAppWebViewController controller) async {
+  Future<bool?> _readWebThemeIsDark(InAppWebViewController controller) async {
     try {
       final result = await controller.evaluateJavascript(
         source: '''
         (function () {
           try {
-            const mq = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)');
-            if (mq && typeof mq.matches === 'boolean') return mq.matches;
+            var html = document.documentElement;
+            var body = document.body;
+            var htmlClass = (html && html.className ? String(html.className) : '').toLowerCase();
+            var bodyClass = (body && body.className ? String(body.className) : '').toLowerCase();
+            var dataTheme = (html && html.getAttribute ? (html.getAttribute('data-theme') || html.getAttribute('data-bs-theme') || html.getAttribute('data-color-mode')) : '') || '';
+            dataTheme = String(dataTheme).toLowerCase();
+            if (dataTheme === 'dark') return true;
+            if (dataTheme === 'light') return false;
+            if (htmlClass.indexOf('dark') !== -1 || bodyClass.indexOf('dark') !== -1) return true;
+            if (htmlClass.indexOf('light') !== -1 || bodyClass.indexOf('light') !== -1) return false;
             return null;
           } catch (e) { return null; }
         })();
@@ -1340,6 +1660,28 @@ class _WebViewShellState extends State<WebViewShell> {
     } catch (_) {
       return null;
     }
+  }
+
+  bool? _themeValueToDark(dynamic value) {
+    if (value is bool) return value;
+    if (value is Map) {
+      return _themeValueToDark(
+        value['isDark'] ??
+            value['dark'] ??
+            value['theme'] ??
+            value['mode'] ??
+            value['value'],
+      );
+    }
+    final normalized = value?.toString().trim().toLowerCase();
+    if (normalized == null || normalized.isEmpty) return null;
+    if (normalized == 'dark' || normalized == 'true' || normalized == '1') {
+      return true;
+    }
+    if (normalized == 'light' || normalized == 'false' || normalized == '0') {
+      return false;
+    }
+    return null;
   }
 
   Future<void> _onBottomTap(_BottomItem item) async {
@@ -1364,10 +1706,11 @@ class _WebViewShellState extends State<WebViewShell> {
         s.contains('officer/register');
   }
 
-  bool _shouldShowBottomBar() {
+  bool _shouldShowBottomBar(BuildContext context) {
     if (_showOffline) return false;
     if (!_firstPageLoaded) return false; // never on splash
     if (_isAuthRoute(_currentUri)) return false;
+    if (MediaQuery.viewInsetsOf(context).bottom > 0) return false;
     return true;
   }
 }
@@ -1479,6 +1822,7 @@ class _BottomBar extends StatelessWidget {
       tint: const Color(AppConfig.cPrimary),
       surface: const Color(AppConfig.cSurface),
       darkSurface: const Color(AppConfig.cDarkCardColor),
+      isDark: isDark,
       onTap: (index) => onTap(_BottomItem.values[index]),
     );
   }

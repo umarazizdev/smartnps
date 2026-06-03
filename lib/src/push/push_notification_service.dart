@@ -16,6 +16,8 @@ class PushNotificationService {
       FlutterLocalNotificationsPlugin();
 
   String? _lastFcmToken;
+  bool _firebaseMessagingInitialized = false;
+  bool _permissionRequestStarted = false;
 
   static const String _androidChannelId = 'smartnps360_default';
   static const String _androidChannelName = 'SmartNPS360';
@@ -29,8 +31,10 @@ class PushNotificationService {
   Future<void> _initLocalNotifications() async {
     const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
     const iosInit = DarwinInitializationSettings();
-    const initSettings =
-        InitializationSettings(android: androidInit, iOS: iosInit);
+    const initSettings = InitializationSettings(
+      android: androidInit,
+      iOS: iosInit,
+    );
 
     await _local.initialize(
       settings: initSettings,
@@ -41,8 +45,10 @@ class PushNotificationService {
       },
     );
 
-    final android = _local.resolvePlatformSpecificImplementation<
-        AndroidFlutterLocalNotificationsPlugin>();
+    final android = _local
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
     if (android != null) {
       await android.createNotificationChannel(
         const AndroidNotificationChannel(
@@ -56,30 +62,16 @@ class PushNotificationService {
   }
 
   Future<void> _initFirebaseMessaging() async {
-    final messaging = FirebaseMessaging.instance;
+    if (_firebaseMessagingInitialized) return;
+    _firebaseMessagingInitialized = true;
 
-    final settings = await messaging.requestPermission(
-      alert: true,
-      badge: true,
-      sound: true,
-      provisional: false,
-    );
-    debugPrint('[SmartNPS360][Push] permission=${settings.authorizationStatus}');
+    final messaging = FirebaseMessaging.instance;
 
     await messaging.setForegroundNotificationPresentationOptions(
       alert: true,
       badge: true,
       sound: true,
     );
-
-    try {
-      final token = await messaging.getToken();
-      _lastFcmToken = token;
-      debugPrint('[SmartNPS360][Push] fcmToken=$token');
-      await _maybeUploadToken();
-    } catch (e) {
-      debugPrint('[SmartNPS360][Push] getToken failed: $e');
-    }
 
     FirebaseMessaging.instance.onTokenRefresh.listen((t) {
       _lastFcmToken = t;
@@ -95,12 +87,46 @@ class PushNotificationService {
     });
 
     FirebaseMessaging.onMessageOpenedApp.listen((message) {
-      debugPrint('[SmartNPS360][Push] onMessageOpenedApp id=${message.messageId}');
+      debugPrint(
+        '[SmartNPS360][Push] onMessageOpenedApp id=${message.messageId}',
+      );
     });
 
     final initial = await messaging.getInitialMessage();
     if (initial != null) {
       debugPrint('[SmartNPS360][Push] initialMessage id=${initial.messageId}');
+    }
+  }
+
+  Future<void> requestPermissionAfterLogin() async {
+    if (_permissionRequestStarted) {
+      await _maybeUploadToken();
+      return;
+    }
+    _permissionRequestStarted = true;
+
+    final messaging = FirebaseMessaging.instance;
+    final settings = await messaging.requestPermission(
+      alert: true,
+      badge: true,
+      sound: true,
+      provisional: false,
+    );
+    debugPrint(
+      '[SmartNPS360][Push] permission=${settings.authorizationStatus}',
+    );
+
+    if (settings.authorizationStatus == AuthorizationStatus.denied) {
+      return;
+    }
+
+    try {
+      final token = await messaging.getToken();
+      _lastFcmToken = token;
+      debugPrint('[SmartNPS360][Push] fcmToken=$token');
+      await _maybeUploadToken();
+    } catch (e) {
+      debugPrint('[SmartNPS360][Push] getToken failed: $e');
     }
   }
 
@@ -144,8 +170,10 @@ class PushNotificationService {
       id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
       title: title,
       body: body,
-      notificationDetails:
-          NotificationDetails(android: androidDetails, iOS: iosDetails),
+      notificationDetails: NotificationDetails(
+        android: androidDetails,
+        iOS: iosDetails,
+      ),
       payload: payload,
     );
   }

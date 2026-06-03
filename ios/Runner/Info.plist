@@ -33,9 +33,9 @@
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Photo library access is required to save and attach registration images and report attachments.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Location access is required to verify your attendance (clock-in, clock-out, breaks, log visits, and Daily Activity Reports). Your location is only used while you perform these actions within the app.</string>
+	<string>Location access is used only while you are on duty (shift active) to verify attendance, breaks, and visits.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>Location access is required to verify attendance and visits. With your permission, the app may collect and upload location in the background to support compliance workflows.</string>
+	<string>Location access is used only while you are on duty (shift active). If you allow background location, the app may collect and upload live location in the background during an active shift.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>
