@@ -49,6 +49,7 @@ class PlatformBottomBar extends StatelessWidget {
         !kIsWeb &&
         (defaultTargetPlatform == TargetPlatform.iOS ||
             defaultTargetPlatform == TargetPlatform.macOS);
+
     return isApplePlatform
         ? _CupertinoNativeBottomBar(
             tabs: tabs,
@@ -87,6 +88,7 @@ class _CupertinoNativeBottomBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.paddingOf(context).bottom;
+
     return Padding(
       padding: EdgeInsets.fromLTRB(12, 0, 12, bottomInset > 0 ? 6 : 10),
       child: CNTabBar(
@@ -131,29 +133,46 @@ class _ClassicBottomBar extends StatelessWidget {
     final effectiveIsDark =
         isDark ?? Theme.of(context).brightness == Brightness.dark;
     final bottomInset = MediaQuery.paddingOf(context).bottom;
+    final isAndroid =
+        !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
     final activeColor = effectiveIsDark ? Colors.white : tint;
+
     final inactiveColor = effectiveIsDark
-        ? Colors.white.withAlpha(140)
+        ? Colors.white.withAlpha(isAndroid ? 160 : 140)
+        : isAndroid
+        ? const Color(0xFF8D96A6)
         : const Color.fromARGB(255, 177, 175, 175);
 
     final bgColor = effectiveIsDark
-        ? (darkSurface ?? const Color(0xFF1A2332)).withAlpha(210)
-        : (surface ?? const Color(0xFFFBFBFD)).withAlpha(245);
+        ? (darkSurface ?? const Color(0xFF1A2332)).withAlpha(
+            isAndroid ? 225 : 210,
+          )
+        : (surface ??
+                  (isAndroid
+                      ? const Color(0xFFE6ECF4)
+                      : const Color(0xFFFBFBFD)))
+              .withAlpha(isAndroid ? 242 : 245);
+
     final borderColor = effectiveIsDark
-        ? Colors.white.withAlpha(18)
-        : Colors.black.withAlpha(10);
+        ? Colors.white.withAlpha(isAndroid ? 24 : 18)
+        : Colors.black.withAlpha(isAndroid ? 28 : 10);
+
     final activePill = effectiveIsDark
-        ? Colors.white.withAlpha(18)
+        ? Colors.white.withAlpha(isAndroid ? 28 : 18)
+        : isAndroid
+        ? const Color(0xFFD3E2F6)
         : const Color(0xFFE8EDF6);
 
     return Padding(
-      // Float above the bottom edge on Android (in addition to the system inset).
-      padding: EdgeInsets.fromLTRB(12, 0, 12, bottomInset + 25),
+      padding: EdgeInsets.fromLTRB(12, 0, 12, bottomInset + 14),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(28),
         child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+          filter: ImageFilter.blur(
+            sigmaX: isAndroid ? 22 : 20,
+            sigmaY: isAndroid ? 22 : 20,
+          ),
           child: DecoratedBox(
             decoration: BoxDecoration(
               color: bgColor,
@@ -162,15 +181,15 @@ class _ClassicBottomBar extends StatelessWidget {
               boxShadow: [
                 BoxShadow(
                   color: effectiveIsDark
-                      ? Colors.black.withAlpha(90)
-                      : Colors.black.withAlpha(18),
-                  blurRadius: 22,
+                      ? Colors.black.withAlpha(isAndroid ? 110 : 90)
+                      : Colors.black.withAlpha(isAndroid ? 24 : 18),
+                  blurRadius: isAndroid ? 24 : 22,
                   offset: const Offset(0, 10),
                 ),
               ],
             ),
             child: SizedBox(
-              height: 78,
+              height: isAndroid ? 72 : 78,
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceAround,
                 children: tabs.map((tab) {
@@ -182,8 +201,8 @@ class _ClassicBottomBar extends StatelessWidget {
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 180),
                       curve: Curves.easeOut,
-                      width: 70,
-                      height: 58,
+                      width: isAndroid ? 66 : 70,
+                      height: isAndroid ? 54 : 58,
                       padding: const EdgeInsets.symmetric(
                         horizontal: 10,
                         vertical: 6,
@@ -253,6 +272,7 @@ class _TabIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final asset = isActive ? tab.activeAssetIcon : tab.inactiveAssetIcon;
+
     if (asset == null || asset.isEmpty) {
       return Icon(
         isActive ? Icons.circle : Icons.circle_outlined,

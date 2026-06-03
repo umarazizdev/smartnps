@@ -608,11 +608,22 @@ class _WebViewShellState extends State<WebViewShell> {
     final style = _webPrefersDark
         ? SystemUiOverlayStyle.light
         : SystemUiOverlayStyle.dark;
+
+    final navColor = _webPrefersDark
+        ? const Color(0xFF0F1724)
+        : const Color(0xFFF8FAFC);
+
     SystemChrome.setSystemUIOverlayStyle(
       style.copyWith(
-        systemNavigationBarColor: Colors.transparent,
         statusBarColor: Colors.transparent,
-        systemNavigationBarContrastEnforced: false,
+        systemNavigationBarColor: Platform.isAndroid
+            ? navColor
+            : Colors.transparent,
+        systemNavigationBarDividerColor: Platform.isAndroid
+            ? navColor
+            : Colors.transparent,
+        systemNavigationBarContrastEnforced: Platform.isAndroid,
+        systemStatusBarContrastEnforced: false,
       ),
     );
   }
