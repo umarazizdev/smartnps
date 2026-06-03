@@ -1340,8 +1340,12 @@ class _WebViewShellState extends State<WebViewShell> {
 	              var dataTheme = (html && html.getAttribute ? (html.getAttribute('data-theme') || html.getAttribute('data-bs-theme') || html.getAttribute('data-color-mode')) : '') || '';
 	              dataTheme = String(dataTheme).toLowerCase();
 
-	              var classDark = htmlClass.indexOf('dark') !== -1 || bodyClass.indexOf('dark') !== -1;
-	              var classLight = htmlClass.indexOf('light') !== -1 || bodyClass.indexOf('light') !== -1;
+		              function hasClassToken(className, token) {
+		                return (' ' + className + ' ').indexOf(' ' + token + ' ') !== -1;
+		              }
+
+		              var classDark = hasClassToken(htmlClass, 'dark') || hasClassToken(bodyClass, 'dark');
+		              var classLight = hasClassToken(htmlClass, 'light') || hasClassToken(bodyClass, 'light');
 	              var dataDark = dataTheme === 'dark';
 	              var dataLight = dataTheme === 'light';
 
@@ -1349,26 +1353,7 @@ class _WebViewShellState extends State<WebViewShell> {
 		              if (dataLight) return false;
 		              if (classDark) return true;
 		              if (classLight) return false;
-		              // Heuristic: infer from computed background color when the site toggles
-		              // theme without changing attributes/classes (CSS variables, inline styles).
-		              try {
-		                var el = document.body || document.documentElement;
-		                if (el && window.getComputedStyle) {
-		                  var bg = getComputedStyle(el).backgroundColor;
-		                  if (bg && typeof bg === 'string' && bg.indexOf('rgb') === 0) {
-		                    var nums = bg.replace(/rgba?\\(|\\)|\\s/g,'').split(',');
-		                    if (nums.length >= 3) {
-		                      var r = parseFloat(nums[0]) || 0;
-		                      var g = parseFloat(nums[1]) || 0;
-		                      var b = parseFloat(nums[2]) || 0;
-		                      var lum = 0.2126*r + 0.7152*g + 0.0722*b;
-		                      if (lum <= 128) return true;
-		                      if (lum >= 180) return false;
-		                    }
-		                  }
-		                }
-		              } catch (e) {}
-		              return null;
+			              return null;
 		            } catch (e) {}
 		            return null;
 		          }
@@ -1405,9 +1390,7 @@ class _WebViewShellState extends State<WebViewShell> {
 		            if (target2) obs.observe(target2, { attributes: true, attributeFilter: ['class'] });
 		          } catch (e) {}
 
-		          // Fallback: periodic check for sites toggling via CSS variables/styles.
-		          try { setInterval(notify, 400); } catch (e) {}
-		        } catch (e) {}
+			        } catch (e) {}
 		      })();
 		    ''',
     );
@@ -1646,10 +1629,13 @@ class _WebViewShellState extends State<WebViewShell> {
             var bodyClass = (body && body.className ? String(body.className) : '').toLowerCase();
             var dataTheme = (html && html.getAttribute ? (html.getAttribute('data-theme') || html.getAttribute('data-bs-theme') || html.getAttribute('data-color-mode')) : '') || '';
             dataTheme = String(dataTheme).toLowerCase();
+            function hasClassToken(className, token) {
+              return (' ' + className + ' ').indexOf(' ' + token + ' ') !== -1;
+            }
             if (dataTheme === 'dark') return true;
             if (dataTheme === 'light') return false;
-            if (htmlClass.indexOf('dark') !== -1 || bodyClass.indexOf('dark') !== -1) return true;
-            if (htmlClass.indexOf('light') !== -1 || bodyClass.indexOf('light') !== -1) return false;
+            if (hasClassToken(htmlClass, 'dark') || hasClassToken(bodyClass, 'dark')) return true;
+            if (hasClassToken(htmlClass, 'light') || hasClassToken(bodyClass, 'light')) return false;
             return null;
           } catch (e) { return null; }
         })();
