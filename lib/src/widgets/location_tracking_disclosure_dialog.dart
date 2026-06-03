@@ -85,13 +85,9 @@ class LocationTrackingDisclosureDialog extends StatelessWidget {
                 ),
                 const SizedBox(height: 9),
                 Text(
-                  'SmartNPS360 uses your location only while you are on duty (shift active) '
-                  'to verify attendance, breaks, visits, and field activity.\n\n'
-                  'For active-shift tracking to continue when the app is closed or not on '
-                  'screen, Android may ask you to choose “Allow all the time” in Location '
-                  'settings.\n\n'
-                  'Your live location is collected and uploaded only during an active shift. '
-                  'Tracking stops when you clock out or end your shift.',
+                  'SmartNPS360 uses your location only during an active shift to verify attendance, breaks, visits, and field activity.\n\n'
+                  'Background location is required to start duty tracking. Please enable Allow all the time location access to continue your shift, even when the app is closed or not on screen.\n\n'
+                  'Your live location is collected and uploaded only while you are on duty. Tracking stops when you clock out or end your shift.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: bodyColor,
