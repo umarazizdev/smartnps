@@ -8,7 +8,7 @@ import 'package:hive/hive.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../api/api_client.dart';
-import '../webview/app_config.dart';
+import '../utilities/app_config.dart';
 
 class BackgroundLocationUploader {
   BackgroundLocationUploader({Dio? dio})
@@ -87,7 +87,9 @@ class BackgroundLocationUploader {
     try {
       if (kDebugMode) {
         debugPrint('[BackgroundLocationUploader] POST ${_pingUri()}');
-        debugPrint('[BackgroundLocationUploader] body=${_truncateForLog(point)}');
+        debugPrint(
+          '[BackgroundLocationUploader] body=${_truncateForLog(point)}',
+        );
       }
       final response = await _dio.postUri(
         _pingUri(),
@@ -182,7 +184,9 @@ class BackgroundLocationUploader {
     }
 
     if (kDebugMode) {
-      debugPrint('[BackgroundLocationUploader] flushBatch count=${batch.length}');
+      debugPrint(
+        '[BackgroundLocationUploader] flushBatch count=${batch.length}',
+      );
     }
 
     final Options options = Options(
@@ -213,7 +217,8 @@ class BackgroundLocationUploader {
         final status = response.statusCode;
         final body = response.data;
         var bodyText = body == null ? '' : body.toString();
-        if (bodyText.length > 800) bodyText = '${bodyText.substring(0, 800)}...';
+        if (bodyText.length > 800)
+          bodyText = '${bodyText.substring(0, 800)}...';
         debugPrint(
           '[BackgroundLocationUploader] batch upload ok status=$status body=$bodyText',
         );
@@ -222,7 +227,8 @@ class BackgroundLocationUploader {
       _consecutiveBatchFailures++;
       final seconds = 1 << (_consecutiveBatchFailures.clamp(0, 6));
       var delay = Duration(seconds: seconds);
-      if (delay < const Duration(seconds: 5)) delay = const Duration(seconds: 5);
+      if (delay < const Duration(seconds: 5))
+        delay = const Duration(seconds: 5);
       if (delay > _maxBackoff) delay = _maxBackoff;
 
       if (kDebugMode) {

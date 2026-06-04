@@ -14,9 +14,9 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import 'app_config.dart';
+import '../utilities/app_config.dart';
 import 'js_bridge.dart';
-import 'offline_screen.dart';
+import '../app/offline_screen.dart';
 import '../widgets/platform_bottom_bar.dart';
 import '../widgets/mock_location_dialog.dart';
 import '../widgets/location_tracking_disclosure_dialog.dart';
