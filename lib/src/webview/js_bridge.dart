@@ -174,9 +174,9 @@ class JsBridge {
 
     StreamSubscription<Position>? subscription;
 
-    double maxAllowedAccuracyMeters = 15.0;
+    double maxAllowedAccuracyMeters = 50.0;
     final requestStopwatch = Stopwatch()..start();
-    Duration requestTimeout = const Duration(milliseconds: 30000);
+    Duration requestTimeout = const Duration(milliseconds: 12000);
     Position? bestSeen;
 
     try {
@@ -218,12 +218,12 @@ class JsBridge {
         );
       }
 
-      maxAllowedAccuracyMeters = (requiredAccuracyMeters ?? 15.0)
+      maxAllowedAccuracyMeters = (requiredAccuracyMeters ?? 50.0)
           .clamp(5.0, 500.0)
           .toDouble();
 
       requestTimeout = Duration(
-        milliseconds: (timeoutMs ?? 30000).clamp(5000, 45000),
+        milliseconds: (timeoutMs ?? 12000).clamp(5000, 45000),
       );
 
       final LocationSettings settings;
@@ -263,22 +263,7 @@ class JsBridge {
                 bestSeen = position;
               }
 
-              final elapsedMs = requestStopwatch.elapsedMilliseconds;
-              final relaxAfterMs = (requestTimeout.inMilliseconds * 0.6)
-                  .round()
-                  .clamp(1000, 60000);
-              final bool allowRelaxedAccuracy = elapsedMs >= relaxAfterMs;
-              final double relaxedAccuracyMeters = allowRelaxedAccuracy
-                  ? (maxAllowedAccuracyMeters * 2).clamp(
-                      maxAllowedAccuracyMeters,
-                      80.0,
-                    )
-                  : maxAllowedAccuracyMeters;
-
-              final hasAcceptableAccuracy =
-                  position.accuracy <= relaxedAccuracyMeters;
-
-              if (!hasAcceptableAccuracy) {
+              if (position.accuracy > maxAllowedAccuracyMeters) {
                 debugPrint(
                   'Flutter GPS: inaccurate live value ignored. '
                   'Accuracy: ${position.accuracy}m',
@@ -305,14 +290,6 @@ class JsBridge {
         'receivedAfter: ${requestStopwatch.elapsedMilliseconds}ms',
       );
 
-      final double effectiveMaxAllowedAccuracyMeters =
-          position.accuracy <= maxAllowedAccuracyMeters
-          ? maxAllowedAccuracyMeters
-          : (maxAllowedAccuracyMeters * 2).clamp(
-              maxAllowedAccuracyMeters,
-              80.0,
-            );
-
       return _ok({
         'location': {
           ..._locationPayload(
@@ -323,10 +300,8 @@ class JsBridge {
             maxAllowedAccuracyMeters: maxAllowedAccuracyMeters,
             timeoutMs: requestTimeout.inMilliseconds,
           ),
-          'effectiveMaxAllowedAccuracyMeters':
-              effectiveMaxAllowedAccuracyMeters,
-          'degradedAccuracyAccepted':
-              position.accuracy > maxAllowedAccuracyMeters,
+          'effectiveMaxAllowedAccuracyMeters': maxAllowedAccuracyMeters,
+          'degradedAccuracyAccepted': false,
         },
       });
     } on TimeoutException {

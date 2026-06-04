@@ -470,7 +470,38 @@ class _WebViewShellState extends State<WebViewShell> {
           };
         }
 
-        function requestNativePosition(success, error) {
+        function toNativeOptions(options) {
+          var nativeOptions = {
+            required_accuracy_meters: 50,
+            timeout_ms: 12000
+          };
+
+          if (!options || typeof options !== 'object') {
+            return nativeOptions;
+          }
+
+          if (options.enableHighAccuracy === false) {
+            nativeOptions.required_accuracy_meters = 100;
+          }
+
+          if (typeof options.timeout === 'number' && isFinite(options.timeout)) {
+            nativeOptions.timeout_ms = Math.max(5000, Math.min(45000, Math.round(options.timeout)));
+          }
+
+          if (
+            typeof options.required_accuracy_meters === 'number' &&
+            isFinite(options.required_accuracy_meters)
+          ) {
+            nativeOptions.required_accuracy_meters = Math.max(
+              5,
+              Math.min(500, Number(options.required_accuracy_meters))
+            );
+          }
+
+          return nativeOptions;
+        }
+
+        function requestNativePosition(success, error, options) {
           log('Native location requested from webpage');
 
           waitForFlutterBridge()
@@ -478,6 +509,7 @@ class _WebViewShellState extends State<WebViewShell> {
               return window.flutter_inappwebview.callHandler(
                 'getCurrentLocation',
                 {
+                  options: toNativeOptions(options),
                   source: 'flutter_geolocation_override',
                   requestedAt: Date.now()
                 }
@@ -533,7 +565,7 @@ class _WebViewShellState extends State<WebViewShell> {
           options
         ) {
           log('getCurrentPosition intercepted');
-          requestNativePosition(success, error);
+          requestNativePosition(success, error, options);
         };
 
         navigator.geolocation.watchPosition = function (
@@ -552,7 +584,7 @@ class _WebViewShellState extends State<WebViewShell> {
                 'startLocationWatch',
                 {
                   watchId: watchId,
-                  options: options || null,
+                  options: toNativeOptions(options),
                   source: 'flutter_geolocation_watch_override',
                   requestedAt: Date.now()
                 }
@@ -964,7 +996,7 @@ class _WebViewShellState extends State<WebViewShell> {
                 5.0,
                 500.0,
               )
-            : 15.0;
+            : 50.0;
 
         final LocationSettings settings;
         if (Platform.isAndroid) {
