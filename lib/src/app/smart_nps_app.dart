@@ -4,16 +4,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
+import '../app/app_navigator.dart';
+import '../app/native_theme_controller.dart';
+import '../dev/location_test_screen.dart';
 import '../webview/webview_shell.dart';
 import 'unsupported_platform_screen.dart';
-import 'native_theme_controller.dart';
-import '../dev/location_test_screen.dart';
 
 class SmartNpsApp extends StatelessWidget {
   const SmartNpsApp({super.key});
-
-  static final GlobalKey<NavigatorState> navigatorKey =
-      GlobalKey<NavigatorState>();
 
   @override
   Widget build(BuildContext context) {
@@ -22,7 +20,7 @@ class SmartNpsApp extends StatelessWidget {
       return GetMaterialApp(
         title: 'SmartNPS360',
         debugShowCheckedModeBanner: false,
-        navigatorKey: navigatorKey,
+        navigatorKey: AppNavigator.key,
         themeMode: themeMode,
         theme: ThemeData(
           brightness: Brightness.light,

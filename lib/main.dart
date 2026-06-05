@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'firebase_options.dart';
+import 'src/app/app_navigator.dart';
 import 'src/app/smart_nps_app.dart';
 import 'src/push/push_notification_service.dart';
 import 'src/api/api_client.dart';
@@ -26,7 +27,7 @@ Future<void> main() async {
     }
     lastMockDialogAt = now;
 
-    final ctx = SmartNpsApp.navigatorKey.currentContext;
+    final ctx = AppNavigator.key.currentContext;
     if (ctx == null) return;
     showDialog<void>(
       // ignore: use_build_context_synchronously

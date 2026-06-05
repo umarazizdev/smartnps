@@ -19,10 +19,10 @@ import 'js_bridge.dart';
 import '../app/offline_screen.dart';
 import '../widgets/platform_bottom_bar.dart';
 import '../widgets/mock_location_dialog.dart';
-import '../widgets/location_tracking_disclosure_dialog.dart';
 import '../auth/auth_state.dart';
 import '../auth/auth_repository.dart';
 import '../api/api_client.dart';
+import '../background/duty_heartbeat_service.dart';
 import '../app/native_theme_controller.dart';
 import '../push/push_notification_service.dart';
 
@@ -36,10 +36,6 @@ class WebViewShell extends StatefulWidget {
 class _WebViewShellUiController extends GetxController {}
 
 class _WebViewShellState extends State<WebViewShell> {
-  static const MethodChannel _settingsChannel = MethodChannel(
-    'com.smartnps360.app/settings',
-  );
-
   InAppWebViewController? _controller;
   PullToRefreshController? _pullToRefreshController;
 
@@ -50,9 +46,6 @@ class _WebViewShellState extends State<WebViewShell> {
   bool _hasWebThemeSignal = false;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
   bool _mockLocationDialogVisible = false;
-  bool _dutyTrackingDisclosureAccepted = false;
-  bool _backgroundLocationSettingsDialogVisible = false;
-  bool _autoDutyTrackingStartAttempted = false;
   final Map<int, StreamSubscription<Position>> _nativeGeoWatches = {};
   final _WebViewShellUiController _uiController = _WebViewShellUiController();
 
@@ -226,45 +219,6 @@ class _WebViewShellState extends State<WebViewShell> {
           };
         }
 
-        function callNativeHandler(handlerName, payload) {
-          return ensureFlutterBridge()
-            .then(function () {
-              return window.flutter_inappwebview.callHandler(
-                handlerName,
-                payload || {}
-              );
-            });
-        }
-
-        if (!window.SmartNPSNativeDuty) window.SmartNPSNativeDuty = {};
-        if (typeof window.SmartNPSNativeDuty.start !== 'function') {
-          window.SmartNPSNativeDuty.start = function (payload) {
-            return callNativeHandler('startDutyTracking', payload);
-          };
-        }
-        if (typeof window.SmartNPSNativeDuty.ensureBackgroundLocationStarted !== 'function') {
-          window.SmartNPSNativeDuty.ensureBackgroundLocationStarted = function (payload) {
-            return callNativeHandler('ensureBackgroundLocationStarted', payload);
-          };
-        }
-        if (typeof window.SmartNPSNativeDuty.stop !== 'function') {
-          window.SmartNPSNativeDuty.stop = function (payload) {
-            return callNativeHandler('stopDutyTracking', payload);
-          };
-        }
-
-        if (!window.SmartNPSNative) window.SmartNPSNative = {};
-        if (typeof window.SmartNPSNative.startDutyTracking !== 'function') {
-          window.SmartNPSNative.startDutyTracking = window.SmartNPSNativeDuty.start;
-        }
-        if (typeof window.SmartNPSNative.ensureBackgroundLocationStarted !== 'function') {
-          window.SmartNPSNative.ensureBackgroundLocationStarted =
-            window.SmartNPSNativeDuty.ensureBackgroundLocationStarted;
-        }
-        if (typeof window.SmartNPSNative.stopDutyTracking !== 'function') {
-          window.SmartNPSNative.stopDutyTracking = window.SmartNPSNativeDuty.stop;
-        }
-
         function handleMessage(payload) {
           var data = safeJsonParse(payload);
           if (!data || typeof data !== 'object') {
@@ -273,42 +227,6 @@ class _WebViewShellState extends State<WebViewShell> {
           }
 
           var action = String(data.action || data.type || '');
-          if (action === 'start_duty_tracking' || action === 'clock_in') {
-            ensureFlutterBridge()
-              .then(function () {
-                return window.flutter_inappwebview.callHandler('startDutyTracking', data);
-              })
-              .then(function (result) {
-                try {
-                  if (window.SmartNPSWeb && typeof window.SmartNPSWeb.receiveNativeDutyResult === 'function') {
-                    window.SmartNPSWeb.receiveNativeDutyResult(result);
-                  }
-                } catch (_) {}
-              })
-              .catch(function (e) {
-                callbackErr({ code: 'NATIVE_DUTY_START_FAILED', message: (e && e.message) ? e.message : String(e) });
-              });
-            return;
-          }
-
-          if (action === 'stop_duty_tracking' || action === 'clock_out') {
-            ensureFlutterBridge()
-              .then(function () {
-                return window.flutter_inappwebview.callHandler('stopDutyTracking', data);
-              })
-              .then(function (result) {
-                try {
-                  if (window.SmartNPSWeb && typeof window.SmartNPSWeb.receiveNativeDutyResult === 'function') {
-                    window.SmartNPSWeb.receiveNativeDutyResult(result);
-                  }
-                } catch (_) {}
-              })
-              .catch(function (e) {
-                callbackErr({ code: 'NATIVE_DUTY_STOP_FAILED', message: (e && e.message) ? e.message : String(e) });
-              });
-            return;
-          }
-
           if (action !== 'request_current_location') {
             callbackErr({ code: 'UNSUPPORTED_ACTION', message: 'Unsupported action: ' + action });
             return;
@@ -706,11 +624,27 @@ class _WebViewShellState extends State<WebViewShell> {
         unawaited(_controller?.reload());
       }
     });
+
+    _maybeStartDutyHeartbeat();
+  }
+
+  Future<void> _maybeStartDutyHeartbeat() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+    final token = await AuthRepository.instance.getAccessToken();
+    if (token == null || token.isEmpty) return;
+    DutyHeartbeatService.instance.start();
+  }
+
+  void _stopDutyHeartbeat({bool stopBackgroundLocation = true}) {
+    DutyHeartbeatService.instance.stop(
+      stopBackgroundLocation: stopBackgroundLocation,
+    );
   }
 
   @override
   void dispose() {
     _connectivitySub?.cancel();
+    _stopDutyHeartbeat();
     for (final sub in _nativeGeoWatches.values) {
       sub.cancel();
     }
@@ -762,94 +696,6 @@ class _WebViewShellState extends State<WebViewShell> {
     return true;
   }
 
-  Future<bool> _confirmDutyLocationTracking() async {
-    if (!Platform.isAndroid && !Platform.isIOS) return true;
-    if (_dutyTrackingDisclosureAccepted) return true;
-    final allowed = await LocationTrackingDisclosureDialog.show(context);
-    if (allowed) _dutyTrackingDisclosureAccepted = true;
-    return allowed;
-  }
-
-  Future<void> _showAndroidBackgroundLocationSettingsDialogIfNeeded() async {
-    if (!Platform.isAndroid || !mounted) return;
-    if (_backgroundLocationSettingsDialogVisible) return;
-
-    final foreground = await Permission.location.status;
-    if (!foreground.isGranted || !mounted) return;
-
-    final permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.always || !mounted) return;
-
-    _backgroundLocationSettingsDialogVisible = true;
-    try {
-      await showDialog<void>(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => AlertDialog(
-          title: const Text('Enable background location'),
-          content: const Text(
-            'SmartNPS360 needs “Allow all the time” location access to keep '
-            'tracking your live location during an active shift when the app is '
-            'closed or not on screen. Tracking stops when you clock out.\n\n'
-            'Open App Settings, tap Location, then choose “Allow all the time”.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Later'),
-            ),
-            FilledButton(
-              onPressed: () async {
-                Navigator.of(context).pop();
-                await _openAndroidAppSettings();
-              },
-              child: const Text('Open Settings'),
-            ),
-          ],
-        ),
-      );
-    } finally {
-      _backgroundLocationSettingsDialogVisible = false;
-    }
-  }
-
-  Future<void> _openAndroidAppSettings() async {
-    try {
-      await _settingsChannel.invokeMethod<bool>('openAppSettings');
-    } catch (error) {
-      debugPrint('[SmartNPS360] native openAppSettings failed: $error');
-      await openAppSettings();
-    }
-  }
-
-  Future<void> _startDutyTrackingAfterNativeLocationIfNeeded(
-    Map<String, dynamic> locationResult,
-  ) async {
-    if (_autoDutyTrackingStartAttempted) return;
-    if (locationResult['ok'] != true) return;
-    if (!Platform.isAndroid && !Platform.isIOS) return;
-
-    _autoDutyTrackingStartAttempted = true;
-
-    debugPrint(
-      '[SmartNPS360] Auto-starting duty tracking after native GPS success',
-    );
-
-    final allowed = await _confirmDutyLocationTracking();
-    if (!allowed) {
-      debugPrint('[SmartNPS360] Auto duty tracking canceled by user');
-      return;
-    }
-
-    final result = await _bridge.startDutyTracking({
-      'source': 'native_location_auto_start',
-      'requestedAt': DateTime.now().millisecondsSinceEpoch,
-    });
-
-    debugPrint('[SmartNPS360] auto startDutyTracking result=$result');
-    await _showAndroidBackgroundLocationSettingsDialogIfNeeded();
-  }
-
   void _installJsHandlers(InAppWebViewController controller) {
     controller.addJavaScriptHandler(
       handlerName: 'pickFile',
@@ -874,71 +720,6 @@ class _WebViewShellState extends State<WebViewShell> {
         );
         debugPrint('[SmartNPS360] getCurrentLocation result=$result');
         _maybeShowMockLocationDialog(result);
-        unawaited(_startDutyTrackingAfterNativeLocationIfNeeded(result));
-        return result;
-      },
-    );
-    controller.addJavaScriptHandler(
-      handlerName: 'ensureBackgroundLocationStarted',
-      callback: (args) async {
-        debugPrint(
-          '[SmartNPS360] JS callHandler: ensureBackgroundLocationStarted args=$args',
-        );
-        final allowed = await _confirmDutyLocationTracking();
-        if (!allowed) {
-          return {
-            'ok': false,
-            'error': {
-              'code': 'canceled',
-              'message': 'User canceled location tracking enablement',
-            },
-          };
-        }
-        final result = await _bridge.ensureBackgroundLocationStarted(
-          args.isEmpty ? null : args.first,
-        );
-        debugPrint(
-          '[SmartNPS360] ensureBackgroundLocationStarted result=$result',
-        );
-        await _showAndroidBackgroundLocationSettingsDialogIfNeeded();
-        return result;
-      },
-    );
-    controller.addJavaScriptHandler(
-      handlerName: 'startDutyTracking',
-      callback: (args) async {
-        debugPrint(
-          '[SmartNPS360] JS callHandler: startDutyTracking args=$args',
-        );
-        final allowed = await _confirmDutyLocationTracking();
-        if (!allowed) {
-          return {
-            'ok': false,
-            'error': {
-              'code': 'canceled',
-              'message': 'User canceled location tracking enablement',
-            },
-          };
-        }
-        final result = await _bridge.startDutyTracking(
-          args.isEmpty ? null : args.first,
-        );
-        debugPrint('[SmartNPS360] startDutyTracking result=$result');
-        await _showAndroidBackgroundLocationSettingsDialogIfNeeded();
-        return result;
-      },
-    );
-    controller.addJavaScriptHandler(
-      handlerName: 'stopDutyTracking',
-      callback: (args) async {
-        debugPrint('[SmartNPS360] JS callHandler: stopDutyTracking args=$args');
-        final result = await _bridge.stopDutyTracking(
-          args.isEmpty ? null : args.first,
-        );
-        debugPrint('[SmartNPS360] stopDutyTracking result=$result');
-        if (result['ok'] == true) {
-          _autoDutyTrackingStartAttempted = false;
-        }
         return result;
       },
     );
@@ -1190,6 +971,7 @@ class _WebViewShellState extends State<WebViewShell> {
           await AuthRepository.instance.saveAccessToken(token);
           AuthState.instance.setSession({'accessToken': token});
           _requestNotificationPermissionAfterLogin();
+          unawaited(_maybeStartDutyHeartbeat());
 
           return {'ok': true, 'hasToken': true};
         } catch (e) {
@@ -1232,6 +1014,7 @@ class _WebViewShellState extends State<WebViewShell> {
         if (action == 'logout') {
           AuthState.instance.clear();
           await AuthRepository.instance.clear();
+          _stopDutyHeartbeat();
           return {'ok': true, 'action': 'logout'};
         }
 
@@ -1277,6 +1060,7 @@ class _WebViewShellState extends State<WebViewShell> {
             refreshToken: refreshToken,
           );
           _requestNotificationPermissionAfterLogin();
+          unawaited(_maybeStartDutyHeartbeat());
           return {'ok': true, 'action': 'login'};
         }
 
@@ -1315,6 +1099,7 @@ class _WebViewShellState extends State<WebViewShell> {
             refreshToken: refreshToken,
           );
           _requestNotificationPermissionAfterLogin();
+          unawaited(_maybeStartDutyHeartbeat());
           return {'ok': true, 'action': 'session'};
         }
 
