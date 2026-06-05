@@ -12,7 +12,6 @@ import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../utilities/app_config.dart';
-import '../background/background_location_controller.dart';
 
 class JsBridge {
   JsBridge({
@@ -88,23 +87,6 @@ class JsBridge {
     } catch (_) {
       return null;
     }
-  }
-
-  Future<Map<String, dynamic>> ensureBackgroundLocationStarted([
-    dynamic args,
-  ]) async {
-    if (!_isTrustedCaller()) return _deny();
-    return BackgroundLocationController.ensureStarted();
-  }
-
-  Future<Map<String, dynamic>> startDutyTracking([dynamic args]) async {
-    if (!_isTrustedCaller()) return _deny();
-    return BackgroundLocationController.ensureStarted();
-  }
-
-  Future<Map<String, dynamic>> stopDutyTracking([dynamic args]) async {
-    if (!_isTrustedCaller()) return _deny();
-    return BackgroundLocationController.stop();
   }
 
   Future<Map<String, dynamic>> pickFile([dynamic args]) async {
