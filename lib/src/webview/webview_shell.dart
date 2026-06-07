@@ -48,6 +48,7 @@ class _WebViewShellState extends State<WebViewShell> {
   bool _mockLocationDialogVisible = false;
   final Map<int, StreamSubscription<Position>> _nativeGeoWatches = {};
   final _WebViewShellUiController _uiController = _WebViewShellUiController();
+  String? _pendingPushUrl;
 
   void _refreshUi() {
     if (mounted) _uiController.update();
@@ -626,6 +627,29 @@ class _WebViewShellState extends State<WebViewShell> {
     });
 
     _maybeStartDutyHeartbeat();
+    PushNotificationService.instance.setOnNotificationTap(_onPushNotificationTap);
+  }
+
+  void _onPushNotificationTap(String url) {
+    _pendingPushUrl = url;
+    unawaited(_loadPendingPushUrl());
+  }
+
+  Future<void> _loadPendingPushUrl() async {
+    final url = _pendingPushUrl;
+    final controller = _controller;
+    if (url == null || controller == null) return;
+
+    final uri = Uri.tryParse(url);
+    if (uri == null || !_isInternalUrl(uri)) {
+      debugPrint('[SmartNPS360][Push] ignored untrusted url=$url');
+      _pendingPushUrl = null;
+      return;
+    }
+
+    _pendingPushUrl = null;
+    debugPrint('[SmartNPS360][Push] navigating to $url');
+    await controller.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
   }
 
   Future<void> _maybeStartDutyHeartbeat() async {
@@ -643,6 +667,7 @@ class _WebViewShellState extends State<WebViewShell> {
 
   @override
   void dispose() {
+    PushNotificationService.instance.setOnNotificationTap(null);
     _connectivitySub?.cancel();
     _stopDutyHeartbeat();
     for (final sub in _nativeGeoWatches.values) {
@@ -970,7 +995,7 @@ class _WebViewShellState extends State<WebViewShell> {
 
           await AuthRepository.instance.saveAccessToken(token);
           AuthState.instance.setSession({'accessToken': token});
-          _requestNotificationPermissionAfterLogin();
+          _syncPushTokenAfterLogin();
           unawaited(_maybeStartDutyHeartbeat());
 
           return {'ok': true, 'hasToken': true};
@@ -1019,7 +1044,15 @@ class _WebViewShellState extends State<WebViewShell> {
           return {'ok': true, 'action': 'logout'};
         }
 
-        if (action == 'login') {
+        final authAction = action.toLowerCase();
+        final isAuthSuccess =
+            authAction == 'login' ||
+            authAction == 'signup' ||
+            authAction == 'sign_up' ||
+            authAction == 'sign-up' ||
+            authAction == 'register';
+
+        if (isAuthSuccess) {
           final dynamic rawUser = payload['user'] ?? payload['profile'];
           final Map<String, dynamic>? user = rawUser is Map
               ? Map<String, dynamic>.from(rawUser)
@@ -1060,9 +1093,9 @@ class _WebViewShellState extends State<WebViewShell> {
             accessToken: accessToken,
             refreshToken: refreshToken,
           );
-          _requestNotificationPermissionAfterLogin();
+          _syncPushTokenAfterLogin();
           unawaited(_maybeStartDutyHeartbeat());
-          return {'ok': true, 'action': 'login'};
+          return {'ok': true, 'action': authAction};
         }
 
         if (action == 'session') {
@@ -1099,7 +1132,7 @@ class _WebViewShellState extends State<WebViewShell> {
             accessToken: accessToken,
             refreshToken: refreshToken,
           );
-          _requestNotificationPermissionAfterLogin();
+          _syncPushTokenAfterLogin();
           unawaited(_maybeStartDutyHeartbeat());
           return {'ok': true, 'action': 'session'};
         }
@@ -1115,15 +1148,16 @@ class _WebViewShellState extends State<WebViewShell> {
     );
   }
 
-  void _requestNotificationPermissionAfterLogin() {
-    unawaited(PushNotificationService.instance.requestPermissionAfterLogin());
+  void _syncPushTokenAfterLogin() {
+    unawaited(PushNotificationService.instance.syncPushTokenAfterLogin());
   }
 
   void _maybeRequestNotificationPermissionForRoute(Uri? uri) {
     if (_showOffline) return;
     if (!AppConfig.isAllowedHost(uri?.host)) return;
     if (_isAuthRoute(uri)) return;
-    _requestNotificationPermissionAfterLogin();
+
+    _syncPushTokenAfterLogin();
   }
 
   void _maybeShowMockLocationDialog(Map<String, dynamic> result) {
@@ -1326,6 +1360,7 @@ class _WebViewShellState extends State<WebViewShell> {
                         onWebViewCreated: (controller) {
                           _controller = controller;
                           _installJsHandlers(controller);
+                          unawaited(_loadPendingPushUrl());
                         },
                         onConsoleMessage: (controller, message) {
                           debugPrint(

@@ -12,6 +12,7 @@ class AppConfig {
   static const String sanctumLoginUrl = '${initialUrl}api/auth/login';
   static const String heartbeatUrl = '${initialUrl}api/heartbeat';
   static const String pushTokenUrl = '${initialUrl}api/push-token';
+  static const String defaultPushUrl = '${initialUrl}officer/dashboard';
 
   static const String allowedHost = 'smartnps360.com';
   static const Set<String> allowedHosts = {

@@ -17,14 +17,23 @@ class MainActivity : FlutterActivity() {
     super.onCreate(savedInstanceState)
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-      val channel = NotificationChannel(
+      val manager = getSystemService(NotificationManager::class.java)
+
+      val pushChannel = NotificationChannel(
+        "smartnps360_default",
+        "SmartNPS360",
+        NotificationManager.IMPORTANCE_HIGH
+      )
+      pushChannel.description = "SmartNPS360 notifications"
+      manager?.createNotificationChannel(pushChannel)
+
+      val locationChannel = NotificationChannel(
         "smartnps360_location",
         "Background location",
         NotificationManager.IMPORTANCE_LOW
       )
-      channel.description = "Keeps location tracking active in background"
-      val manager = getSystemService(NotificationManager::class.java)
-      manager?.createNotificationChannel(channel)
+      locationChannel.description = "Keeps location tracking active in background"
+      manager?.createNotificationChannel(locationChannel)
     }
   }
 
