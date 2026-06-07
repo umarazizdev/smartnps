@@ -3,14 +3,122 @@ import 'dart:io';
 
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:dio/dio.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
 
+import '../../firebase_options.dart';
 import '../api/api_client.dart';
 import '../auth/auth_repository.dart';
 import '../utilities/app_config.dart';
+
+const String kPushAndroidChannelId = 'smartnps360_default';
+const String kPushAndroidChannelName = 'SmartNPS360';
+const String kPushAndroidChannelDescription = 'SmartNPS360 notifications';
+
+Future<void> ensurePushLocalNotificationsReady(
+  FlutterLocalNotificationsPlugin plugin,
+) async {
+  const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+  const iosInit = DarwinInitializationSettings(
+    requestAlertPermission: false,
+    requestBadgePermission: false,
+    requestSoundPermission: false,
+  );
+  await plugin.initialize(
+    settings: const InitializationSettings(android: androidInit, iOS: iosInit),
+  );
+
+  final android = plugin
+      .resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin
+      >();
+  if (android != null) {
+    await android.createNotificationChannel(
+      const AndroidNotificationChannel(
+        kPushAndroidChannelId,
+        kPushAndroidChannelName,
+        description: kPushAndroidChannelDescription,
+        importance: Importance.high,
+      ),
+    );
+  }
+}
+
+Future<void> showPushLocalNotification({
+  required FlutterLocalNotificationsPlugin plugin,
+  required String title,
+  required String body,
+  required Map<String, dynamic> data,
+  String? messageId,
+}) async {
+  final payload = jsonEncode({'messageId': messageId, 'data': data});
+
+  final androidDetails = AndroidNotificationDetails(
+    kPushAndroidChannelId,
+    kPushAndroidChannelName,
+    channelDescription: kPushAndroidChannelDescription,
+    importance: Importance.high,
+    priority: Priority.high,
+  );
+  const iosDetails = DarwinNotificationDetails();
+
+  await plugin.show(
+    id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+    title: title,
+    body: body,
+    notificationDetails: NotificationDetails(
+      android: androidDetails,
+      iOS: iosDetails,
+    ),
+    payload: payload,
+  );
+}
+
+@pragma('vm:entry-point')
+Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
+  debugPrint(
+    '[SmartNPS360][Push] background message id=${message.messageId} '
+    'notification=${message.notification?.title} data=${message.data}',
+  );
+
+  // Messages with a notification payload are displayed by the OS when killed.
+  if (message.notification != null) {
+    return;
+  }
+
+  final data = message.data;
+  final title =
+      (data['title'] ?? data['notification_title'] ?? 'SmartNPS360')
+          .toString();
+  final body =
+      (data['body'] ??
+              data['message'] ??
+              data['notification_body'] ??
+              data['text'] ??
+              '')
+          .toString();
+  if (body.trim().isEmpty) {
+    return;
+  }
+
+  final plugin = FlutterLocalNotificationsPlugin();
+  await ensurePushLocalNotificationsReady(plugin);
+  await showPushLocalNotification(
+    plugin: plugin,
+    title: title,
+    body: body,
+    data: Map<String, dynamic>.from(data),
+    messageId: message.messageId,
+  );
+}
 
 class PushNotificationService {
   PushNotificationService._();
@@ -22,35 +130,74 @@ class PushNotificationService {
 
   String? _lastFcmToken;
   bool _firebaseMessagingInitialized = false;
-  bool _permissionRequestStarted = false;
+  bool _permissionPromptAttempted = false;
   String? _cachedDeviceId;
   String? _cachedAppVersion;
 
-  static const String _androidChannelId = 'smartnps360_default';
-  static const String _androidChannelName = 'SmartNPS360';
-  static const String _androidChannelDescription = 'SmartNPS360 notifications';
-
   String? get lastFcmToken => _lastFcmToken;
+
+  void Function(String url)? _onNotificationTap;
+  String? _pendingNotificationUrl;
+
+  void setOnNotificationTap(void Function(String url)? handler) {
+    _onNotificationTap = handler;
+    final pending = _pendingNotificationUrl;
+    if (handler != null && pending != null) {
+      _pendingNotificationUrl = null;
+      handler(pending);
+    }
+  }
 
   Future<void> init() async {
     await _initLocalNotifications();
     await _initFirebaseMessaging();
   }
 
+  /// Prompts for notification permission after login or sign-up (once per app session).
+  Future<void> requestPermissionAfterAuth() async {
+    if (_permissionPromptAttempted) {
+      await _refreshFcmToken(uploadIfAuthenticated: true);
+      return;
+    }
+    _permissionPromptAttempted = true;
+
+    // Brief delay so dashboard/navigation finishes before the system dialog.
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+
+    debugPrint(
+      '[SmartNPS360][Push] requesting notification permission (after auth)',
+    );
+    await _ensureNotificationPermission();
+    await _refreshFcmToken(uploadIfAuthenticated: true);
+  }
+
+  /// Requests permission (if needed) and uploads the FCM token after auth.
+  Future<void> syncPushTokenAfterLogin() async {
+    if (!_permissionPromptAttempted) {
+      await requestPermissionAfterAuth();
+      return;
+    }
+    await _refreshFcmToken(uploadIfAuthenticated: true);
+  }
+
   Future<void> _initLocalNotifications() async {
     const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const iosInit = DarwinInitializationSettings();
-    const initSettings = InitializationSettings(
-      android: androidInit,
-      iOS: iosInit,
+    const iosInit = DarwinInitializationSettings(
+      requestAlertPermission: false,
+      requestBadgePermission: false,
+      requestSoundPermission: false,
     );
 
     await _local.initialize(
-      settings: initSettings,
+      settings: const InitializationSettings(
+        android: androidInit,
+        iOS: iosInit,
+      ),
       onDidReceiveNotificationResponse: (details) {
         debugPrint(
           '[SmartNPS360][Push] notification tapped payload=${details.payload}',
         );
+        _handleLocalNotificationTap(details.payload);
       },
     );
 
@@ -61,9 +208,9 @@ class PushNotificationService {
     if (android != null) {
       await android.createNotificationChannel(
         const AndroidNotificationChannel(
-          _androidChannelId,
-          _androidChannelName,
-          description: _androidChannelDescription,
+          kPushAndroidChannelId,
+          kPushAndroidChannelName,
+          description: kPushAndroidChannelDescription,
           importance: Importance.high,
         ),
       );
@@ -88,8 +235,6 @@ class PushNotificationService {
       _maybeUploadToken();
     });
 
-    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
-
     FirebaseMessaging.onMessage.listen((message) async {
       debugPrint('[SmartNPS360][Push] onMessage id=${message.messageId}');
       await _showLocalFromRemoteMessage(message);
@@ -99,22 +244,63 @@ class PushNotificationService {
       debugPrint(
         '[SmartNPS360][Push] onMessageOpenedApp id=${message.messageId}',
       );
+      _handleRemoteMessageTap(message);
     });
 
     final initial = await messaging.getInitialMessage();
     if (initial != null) {
       debugPrint('[SmartNPS360][Push] initialMessage id=${initial.messageId}');
+      _handleRemoteMessageTap(initial);
     }
   }
 
-  Future<void> requestPermissionAfterLogin() async {
-    if (_permissionRequestStarted) {
-      await _maybeUploadToken();
-      return;
+  Future<bool> _ensureNotificationPermission() async {
+    if (Platform.isAndroid) {
+      return _ensureAndroidNotificationPermission();
     }
-    _permissionRequestStarted = true;
+    if (Platform.isIOS) {
+      return _ensureIosNotificationPermission();
+    }
+    return true;
+  }
+
+  Future<bool> _ensureAndroidNotificationPermission() async {
+    if (!Platform.isAndroid) return true;
+
+    final current = await Permission.notification.status;
+    if (current.isGranted) {
+      debugPrint('[SmartNPS360][Push] android notification permission=already granted');
+      return true;
+    }
+
+    final android = _local
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
+    if (android != null) {
+      final granted = await android.requestNotificationsPermission();
+      if (granted == true) {
+        debugPrint('[SmartNPS360][Push] android notification permission=granted');
+        return true;
+      }
+    }
+
+    final status = await Permission.notification.request();
+    debugPrint('[SmartNPS360][Push] android notification permission=$status');
+    return status.isGranted;
+  }
+
+  Future<bool> _ensureIosNotificationPermission() async {
+    if (!Platform.isIOS) return true;
 
     final messaging = FirebaseMessaging.instance;
+    final current = await messaging.getNotificationSettings();
+    if (current.authorizationStatus == AuthorizationStatus.authorized ||
+        current.authorizationStatus == AuthorizationStatus.provisional) {
+      debugPrint('[SmartNPS360][Push] ios permission=already granted');
+      return true;
+    }
+
     final settings = await messaging.requestPermission(
       alert: true,
       badge: true,
@@ -122,18 +308,21 @@ class PushNotificationService {
       provisional: false,
     );
     debugPrint(
-      '[SmartNPS360][Push] permission=${settings.authorizationStatus}',
+      '[SmartNPS360][Push] ios permission=${settings.authorizationStatus}',
     );
+    return settings.authorizationStatus == AuthorizationStatus.authorized ||
+        settings.authorizationStatus == AuthorizationStatus.provisional;
+  }
 
-    if (settings.authorizationStatus == AuthorizationStatus.denied) {
-      return;
-    }
-
+  Future<void> _refreshFcmToken({required bool uploadIfAuthenticated}) async {
     try {
-      final token = await messaging.getToken();
+      final token = await FirebaseMessaging.instance.getToken();
+      if (token == null || token.isEmpty) return;
       _lastFcmToken = token;
       debugPrint('[SmartNPS360][Push] fcmToken=$token');
-      await _maybeUploadToken();
+      if (uploadIfAuthenticated) {
+        await _maybeUploadToken();
+      }
     } catch (e) {
       debugPrint('[SmartNPS360][Push] getToken failed: $e');
     }
@@ -284,40 +473,98 @@ class PushNotificationService {
     );
   }
 
+  void _handleLocalNotificationTap(String? payload) {
+    if (payload == null || payload.trim().isEmpty) {
+      _dispatchNotificationTap(AppConfig.defaultPushUrl);
+      return;
+    }
+
+    try {
+      final decoded = jsonDecode(payload);
+      if (decoded is Map) {
+        final data = decoded['data'];
+        if (data is Map) {
+          _dispatchNotificationTap(
+            resolveNotificationUrl(Map<String, dynamic>.from(data)),
+          );
+          return;
+        }
+      }
+    } catch (e) {
+      debugPrint('[SmartNPS360][Push] invalid tap payload: $e');
+    }
+
+    _dispatchNotificationTap(AppConfig.defaultPushUrl);
+  }
+
+  void _handleRemoteMessageTap(RemoteMessage message) {
+    _dispatchNotificationTap(resolveNotificationUrl(message.data));
+  }
+
+  void _dispatchNotificationTap(String url) {
+    final normalized = normalizeNotificationUrl(url);
+    debugPrint('[SmartNPS360][Push] open url=$normalized');
+    final handler = _onNotificationTap;
+    if (handler != null) {
+      handler(normalized);
+      return;
+    }
+    _pendingNotificationUrl = normalized;
+  }
+
+  static String resolveNotificationUrl(Map<String, dynamic> data) {
+    final url = data['url']?.toString().trim();
+    if (url != null && url.isNotEmpty) {
+      return normalizeNotificationUrl(url);
+    }
+
+    final path = data['path']?.toString().trim();
+    if (path != null && path.isNotEmpty) {
+      if (path.startsWith('http://') || path.startsWith('https://')) {
+        return normalizeNotificationUrl(path);
+      }
+      final normalizedPath = path.startsWith('/') ? path : '/$path';
+      final base = AppConfig.initialUrl.endsWith('/')
+          ? AppConfig.initialUrl.substring(0, AppConfig.initialUrl.length - 1)
+          : AppConfig.initialUrl;
+      return normalizeNotificationUrl('$base$normalizedPath');
+    }
+
+    return AppConfig.defaultPushUrl;
+  }
+
+  static String normalizeNotificationUrl(String url) {
+    final uri = Uri.tryParse(url.trim());
+    if (uri == null || uri.host.isEmpty) {
+      return AppConfig.defaultPushUrl;
+    }
+    if (!AppConfig.isAllowedHost(uri.host)) {
+      return AppConfig.defaultPushUrl;
+    }
+    return uri.toString();
+  }
+
   Future<void> _showLocalFromRemoteMessage(RemoteMessage message) async {
     final n = message.notification;
-    final title = n?.title ?? 'SmartNPS360';
-    final body = n?.body ?? '';
-    final payload = jsonEncode({
-      'messageId': message.messageId,
-      'data': message.data,
-    });
+    final data = message.data;
+    final title =
+        n?.title ??
+        data['title']?.toString() ??
+        data['notification_title']?.toString() ??
+        'SmartNPS360';
+    final body =
+        n?.body ??
+        data['body']?.toString() ??
+        data['message']?.toString() ??
+        data['notification_body']?.toString() ??
+        '';
 
-    final androidDetails = AndroidNotificationDetails(
-      _androidChannelId,
-      _androidChannelName,
-      channelDescription: _androidChannelDescription,
-      importance: Importance.high,
-      priority: Priority.high,
-    );
-    const iosDetails = DarwinNotificationDetails();
-
-    await _local.show(
-      id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+    await showPushLocalNotification(
+      plugin: _local,
       title: title,
       body: body,
-      notificationDetails: NotificationDetails(
-        android: androidDetails,
-        iOS: iosDetails,
-      ),
-      payload: payload,
+      data: Map<String, dynamic>.from(data),
+      messageId: message.messageId,
     );
   }
-}
-
-@pragma('vm:entry-point')
-Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  debugPrint('[SmartNPS360][Push] background message id=${message.messageId}');
-  // In background/terminated, OS displays notification when payload includes "notification".
-  // If you want local-notifications for data-only messages, initialize FlutterLocalNotifications here later.
 }
