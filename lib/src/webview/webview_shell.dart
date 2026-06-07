@@ -1012,6 +1012,7 @@ class _WebViewShellState extends State<WebViewShell> {
 
         final action = (payload['action'] ?? payload['type'] ?? '').toString();
         if (action == 'logout') {
+          await PushNotificationService.instance.deletePushToken();
           AuthState.instance.clear();
           await AuthRepository.instance.clear();
           _stopDutyHeartbeat();

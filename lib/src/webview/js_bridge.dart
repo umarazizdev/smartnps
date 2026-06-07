@@ -11,6 +11,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../push/push_notification_service.dart';
 import '../utilities/app_config.dart';
 
 class JsBridge {
@@ -403,11 +404,8 @@ class JsBridge {
 
   Future<Map<String, dynamic>> getPushNotificationToken([dynamic args]) async {
     if (!_isTrustedCaller()) return _deny();
-    return _ok({
-      'token': null,
-      'note':
-          'Push notifications are not configured yet. Add a push provider (e.g. FCM) and expose token here.',
-    });
+    final token = PushNotificationService.instance.lastFcmToken;
+    return _ok({'token': token});
   }
 
   String toJsonString(Map<String, dynamic> value) => jsonEncode(value);
