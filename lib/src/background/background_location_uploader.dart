@@ -217,8 +217,9 @@ class BackgroundLocationUploader {
         final status = response.statusCode;
         final body = response.data;
         var bodyText = body == null ? '' : body.toString();
-        if (bodyText.length > 800)
+        if (bodyText.length > 800) {
           bodyText = '${bodyText.substring(0, 800)}...';
+        }
         debugPrint(
           '[BackgroundLocationUploader] batch upload ok status=$status body=$bodyText',
         );
@@ -227,8 +228,9 @@ class BackgroundLocationUploader {
       _consecutiveBatchFailures++;
       final seconds = 1 << (_consecutiveBatchFailures.clamp(0, 6));
       var delay = Duration(seconds: seconds);
-      if (delay < const Duration(seconds: 5))
+      if (delay < const Duration(seconds: 5)) {
         delay = const Duration(seconds: 5);
+      }
       if (delay > _maxBackoff) delay = _maxBackoff;
 
       if (kDebugMode) {
