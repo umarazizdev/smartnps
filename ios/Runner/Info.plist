@@ -28,24 +28,20 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Camera access is required to capture photos/videos for Daily Activity Reports, visit evidence, and profile/ID attachments.</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Photo library access is required to select profile and ID images during registration and to attach images to reports.</string>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Photo library access is required to save and attach registration images and report attachments.</string>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Location access is used only while you are on duty (shift active) to verify attendance, breaks, and visits.</string>
-	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>Location access is used only while you are on duty (shift active). If you allow background location, the app may collect and upload live location in the background during an active shift.</string>
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>location</string>
-	</array>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>Microphone access is required to record audio when capturing visit videos. Audio is recorded only during video recording.</string>
-	<key>NSUserNotificationsUsageDescription</key>
-	<string>Enable notifications to receive important updates and messages related to your account and activity.</string>
 	<key>NSDownloadsFolderUsageDescription</key>
 	<string>Allow access to save downloaded files.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>SmartNPS360 uses your location only while you are on duty or in an active shift. With background location permission, the app may collect and upload your location even when the app is not open to support attendance verification, patrol tracking, visit logs, and live operational monitoring. Location tracking stops when you clock out or end your shift.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Location access is used only while you are on duty (shift active) to verify attendance, breaks, and visits.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Microphone access is required to record audio when capturing visit videos. Audio is recorded only during video recording.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Photo library access is required to save and attach registration images and report attachments.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Photo library access is required to select profile and ID images during registration and to attach images to reports.</string>
+	<key>NSUserNotificationsUsageDescription</key>
+	<string>Enable notifications to receive important updates and messages related to your account and activity.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -69,6 +65,11 @@
 	</dict>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+		<string>remote-notification</string>
+	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
