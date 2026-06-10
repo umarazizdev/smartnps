@@ -5,6 +5,7 @@ import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
@@ -19,6 +20,7 @@ import 'js_bridge.dart';
 import '../app/offline_screen.dart';
 import '../widgets/platform_bottom_bar.dart';
 import '../widgets/mock_location_dialog.dart';
+import '../auth/auth_session_manager.dart';
 import '../auth/auth_state.dart';
 import '../auth/auth_repository.dart';
 import '../api/api_client.dart';
@@ -35,7 +37,7 @@ class WebViewShell extends StatefulWidget {
 
 class _WebViewShellUiController extends GetxController {}
 
-class _WebViewShellState extends State<WebViewShell> {
+class _WebViewShellState extends State<WebViewShell> with WidgetsBindingObserver {
   InAppWebViewController? _controller;
   PullToRefreshController? _pullToRefreshController;
 
@@ -216,8 +218,45 @@ class _WebViewShellState extends State<WebViewShell> {
         }
         if (typeof window.SmartNPSNativeAuth.logout !== 'function') {
           window.SmartNPSNativeAuth.logout = function () {
+            try { sessionStorage.removeItem('__smartnps_login'); } catch (_) {}
             return postAuthEvent({ action: 'logout' });
           };
+        }
+
+        function bindNativeLoginBridge() {
+          if (window.__SMARTNPS_LOGIN_BRIDGE_BOUND__) return;
+          window.__SMARTNPS_LOGIN_BRIDGE_BOUND__ = true;
+          document.addEventListener('submit', function (e) {
+            try {
+              var form = e.target;
+              if (!form || !form.querySelector) return;
+              var emp = form.querySelector('input[name="employee_no"]');
+              var pwd = form.querySelector('input[name="password"]');
+              if (!emp || !pwd) return;
+              var username = String(emp.value || '').trim();
+              var password = String(pwd.value || '');
+              if (!username || !password) return;
+              try {
+                sessionStorage.setItem(
+                  '__smartnps_login',
+                  JSON.stringify({ username: username, password: password })
+                );
+              } catch (_) {}
+              ensureFlutterBridge()
+                .then(function () {
+                  return window.flutter_inappwebview.callHandler('loginWithSanctum', {
+                    username: username,
+                    password: password
+                  });
+                })
+                .catch(function () {});
+            } catch (_) {}
+          }, true);
+        }
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', bindNativeLoginBridge);
+        } else {
+          bindNativeLoginBridge();
         }
 
         function handleMessage(payload) {
@@ -550,6 +589,96 @@ class _WebViewShellState extends State<WebViewShell> {
   ''',
     injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
   );
+
+  /// iOS WKWebView: force the officer notification dropdown to use the mobile
+  /// fixed layout (left/right inset) instead of sm:absolute right-anchored layout.
+  static final UserScript _iosPopoverFixScript = UserScript(
+    source: r'''
+    (function () {
+      'use strict';
+      if (window.__smartnps_ios_popover_fix_installed) return;
+      window.__smartnps_ios_popover_fix_installed = true;
+
+      document.documentElement.classList.add('smartnps-ios-webview');
+
+      function injectStyle() {
+        if (!document.head || document.getElementById('smartnps-ios-popover-fix-style')) return;
+        var style = document.createElement('style');
+        style.id = 'smartnps-ios-popover-fix-style';
+        style.textContent = [
+          'html.smartnps-ios-webview header,',
+          'html.smartnps-ios-webview nav,',
+          'html.smartnps-ios-webview [class*="header" i],',
+          'html.smartnps-ios-webview [class*="navbar" i],',
+          'html.smartnps-ios-webview [class*="topbar" i] {',
+          '  overflow: visible !important;',
+          '}',
+          'html.smartnps-ios-webview [data-smartnps-notification-panel="true"],',
+          'html.smartnps-ios-webview div.fixed.top-\\[4\\.75rem\\].z-\\[80\\].rounded-2xl {',
+          '  position: fixed !important;',
+          '  left: 1rem !important;',
+          '  right: 1rem !important;',
+          '  top: 4.75rem !important;',
+          '  width: auto !important;',
+          '  max-width: calc(100vw - 2rem) !important;',
+          '  min-width: 0 !important;',
+          '  margin-left: 0 !important;',
+          '  margin-right: 0 !important;',
+          '  transform: none !important;',
+          '  translate: none !important;',
+          '  box-sizing: border-box !important;',
+          '}'
+        ].join('\n');
+        document.head.appendChild(style);
+      }
+
+      function looksLikeNotificationPanel(el) {
+        if (!el || el.nodeType !== 1) return false;
+        var text = (el.innerText || '').trim();
+        if (text.length < 16 || text.length > 6000) return false;
+        if (!/\bnotifications?\b/i.test(text)) return false;
+        return /\bunread\b/i.test(text) ||
+          /\bview\s+all\b/i.test(text) ||
+          /\bshift\b/i.test(text) ||
+          /\bhours?\s+ago\b/i.test(text);
+      }
+
+      function markPanels() {
+        var panels = document.querySelectorAll(
+          'div.fixed.top-\\[4\\.75rem\\].z-\\[80\\], div.fixed.rounded-2xl.z-\\[80\\]'
+        );
+        for (var i = 0; i < panels.length; i++) {
+          var el = panels[i];
+          if (!looksLikeNotificationPanel(el)) continue;
+          el.setAttribute('data-smartnps-notification-panel', 'true');
+        }
+      }
+
+      function boot() {
+        injectStyle();
+        markPanels();
+      }
+
+      window.__smartnpsIosPopoverFixScan = function () {
+        injectStyle();
+        markPanels();
+      };
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', boot);
+      } else {
+        boot();
+      }
+
+      document.addEventListener('click', function () {
+        setTimeout(markPanels, 0);
+        setTimeout(markPanels, 150);
+      }, true);
+    })();
+  ''',
+    injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+  );
+
   late final JsBridge _bridge = JsBridge(
     getCurrentUrlHost: () => _currentUri?.host,
     onDownloadRequested: _downloadAndReturn,
@@ -591,6 +720,7 @@ class _WebViewShellState extends State<WebViewShell> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _webPrefersDark = false;
     NativeThemeController.instance.setDark(_webPrefersDark);
     _applySystemUi();
@@ -626,8 +756,12 @@ class _WebViewShellState extends State<WebViewShell> {
       }
     });
 
-    _maybeStartDutyHeartbeat();
     PushNotificationService.instance.setOnNotificationTap(_onPushNotificationTap);
+    if (Platform.isIOS) {
+      PushNotificationService.instance.setIosWebPushUploadHandler(
+        _uploadPushTokenViaWebView,
+      );
+    }
   }
 
   void _onPushNotificationTap(String url) {
@@ -654,6 +788,7 @@ class _WebViewShellState extends State<WebViewShell> {
 
   Future<void> _maybeStartDutyHeartbeat() async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
+    if (AuthSessionManager.isLoginRoute(_currentUri)) return;
     final token = await AuthRepository.instance.getAccessToken();
     if (token == null || token.isEmpty) return;
     DutyHeartbeatService.instance.start();
@@ -666,8 +801,24 @@ class _WebViewShellState extends State<WebViewShell> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed &&
+        !AuthSessionManager.isLoginRoute(_currentUri)) {
+      unawaited(() async {
+        await _requestNotificationPermissionForRoute(_currentUri);
+        await _maybeStartDutyHeartbeat();
+        await DutyHeartbeatService.instance.recheckOnDutyPrompts();
+      }());
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     PushNotificationService.instance.setOnNotificationTap(null);
+    if (Platform.isIOS) {
+      PushNotificationService.instance.setIosWebPushUploadHandler(null);
+    }
     _connectivitySub?.cancel();
     _stopDutyHeartbeat();
     for (final sub in _nativeGeoWatches.values) {
@@ -722,6 +873,16 @@ class _WebViewShellState extends State<WebViewShell> {
   }
 
   void _installJsHandlers(InAppWebViewController controller) {
+    if (kDebugMode && Platform.isIOS) {
+      controller.addJavaScriptHandler(
+        handlerName: 'iosPopoverFixDebug',
+        callback: (args) {
+          final payload = args.isNotEmpty ? args.first : args;
+          debugPrint('[SmartNPS360][iOS PopoverFix] $payload');
+        },
+      );
+    }
+
     controller.addJavaScriptHandler(
       handlerName: 'pickFile',
       callback: (args) => _bridge.pickFile(args.isEmpty ? null : args.first),
@@ -954,58 +1115,20 @@ class _WebViewShellState extends State<WebViewShell> {
           '[SmartNPS360][Auth] loginWithSanctum payload=${_safeBridgePayloadForLog(payload)}',
         );
 
-        ApiClient.instance.ensureAuthInterceptorInstalled();
-        final dio = ApiClient.instance.dio;
-        try {
-          final response = await dio.postUri(
-            Uri.parse(AppConfig.sanctumLoginUrl),
-            data: {
-              'employee_no': username,
-              'password': password,
-              'device_name': 'mobile-app',
-            },
-            options: Options(
-              headers: const {'Accept': 'application/json'},
-              contentType: Headers.jsonContentType,
-              sendTimeout: const Duration(seconds: 12),
-              receiveTimeout: const Duration(seconds: 12),
-            ),
-          );
-
-          debugPrint(
-            '[SmartNPS360][Auth] sanctum login status=${response.statusCode} body=${_safeTextForLog(response.data)}',
-          );
-
-          final dynamic body = response.data;
-          final Map<String, dynamic>? map = body is Map
-              ? Map<String, dynamic>.from(body)
-              : null;
-          final token =
-              (map?['token'] ?? map?['access_token'] ?? map?['accessToken'])
-                  ?.toString();
-          if (token == null || token.isEmpty) {
-            return {
-              'ok': false,
-              'error': {
-                'code': 'missing_token',
-                'message': 'Login succeeded but token missing in response',
-              },
-            };
-          }
-
-          await AuthRepository.instance.saveAccessToken(token);
-          AuthState.instance.setSession({'accessToken': token});
-          _syncPushTokenAfterLogin();
-          unawaited(_maybeStartDutyHeartbeat());
-
-          return {'ok': true, 'hasToken': true};
-        } catch (e) {
-          debugPrint('[SmartNPS360][Auth] sanctum login failed: $e');
+        final ok = await _performSanctumLogin(
+          username: username,
+          password: password,
+        );
+        if (!ok) {
           return {
             'ok': false,
-            'error': {'code': 'request_failed', 'message': e.toString()},
+            'error': {
+              'code': 'request_failed',
+              'message': 'Sanctum login failed',
+            },
           };
         }
+        return {'ok': true, 'hasToken': true};
       },
     );
 
@@ -1037,10 +1160,13 @@ class _WebViewShellState extends State<WebViewShell> {
 
         final action = (payload['action'] ?? payload['type'] ?? '').toString();
         if (action == 'logout') {
-          await PushNotificationService.instance.deletePushToken();
-          AuthState.instance.clear();
-          await AuthRepository.instance.clear();
-          _stopDutyHeartbeat();
+          await AuthSessionManager.clearNativeSession(deletePushToken: true);
+          unawaited(
+            _controller?.evaluateJavascript(
+              source:
+                  "try { sessionStorage.removeItem('__smartnps_login'); } catch (e) {}",
+            ),
+          );
           return {'ok': true, 'action': 'logout'};
         }
 
@@ -1149,15 +1275,372 @@ class _WebViewShellState extends State<WebViewShell> {
   }
 
   void _syncPushTokenAfterLogin() {
+    if (Platform.isIOS) {
+      unawaited(_syncPushTokenAfterLoginIos());
+      return;
+    }
     unawaited(PushNotificationService.instance.syncPushTokenAfterLogin());
   }
 
-  void _maybeRequestNotificationPermissionForRoute(Uri? uri) {
+  Future<void> _syncPushTokenAfterLoginIos() async {
+    await _prepareIosPushAuthFromWeb();
+    for (var attempt = 0; attempt < 4; attempt++) {
+      final token = await AuthRepository.instance.getAccessToken();
+      if (token != null && token.isNotEmpty) break;
+      if (attempt < 3) {
+        await Future<void>.delayed(Duration(milliseconds: 400 * (attempt + 1)));
+        await _prepareIosPushAuthFromWeb();
+      }
+    }
+    await PushNotificationService.instance.syncPushTokenAfterLogin();
+    await _notifyWebPushTokenReady();
+  }
+
+  Future<bool> _performSanctumLogin({
+    required String username,
+    required String password,
+    bool syncPush = true,
+  }) async {
+    ApiClient.instance.ensureAuthInterceptorInstalled();
+    final dio = ApiClient.instance.dio;
+    try {
+      final response = await dio.postUri(
+        Uri.parse(AppConfig.sanctumLoginUrl),
+        data: {
+          'employee_no': username,
+          'password': password,
+          'device_name': 'mobile-app',
+        },
+        options: Options(
+          headers: const {'Accept': 'application/json'},
+          contentType: Headers.jsonContentType,
+          sendTimeout: const Duration(seconds: 12),
+          receiveTimeout: const Duration(seconds: 12),
+        ),
+      );
+
+      debugPrint(
+        '[SmartNPS360][Auth] sanctum login status=${response.statusCode} body=${_safeTextForLog(response.data)}',
+      );
+
+      final dynamic body = response.data;
+      final Map<String, dynamic>? map = body is Map
+          ? Map<String, dynamic>.from(body)
+          : null;
+      final token =
+          (map?['token'] ?? map?['access_token'] ?? map?['accessToken'])
+              ?.toString();
+      if (token == null || token.isEmpty) {
+        debugPrint('[SmartNPS360][Auth] sanctum login missing token in response');
+        return false;
+      }
+
+      await AuthRepository.instance.saveAccessToken(token);
+      AuthState.instance.setSession({'accessToken': token});
+      if (syncPush) {
+        await PushNotificationService.instance.syncPushTokenAfterLogin();
+      }
+      await _maybeStartDutyHeartbeat();
+      return true;
+    } catch (e) {
+      debugPrint('[SmartNPS360][Auth] sanctum login failed: $e');
+      return false;
+    }
+  }
+
+  Future<void> _requestNotificationPermissionForRoute(Uri? uri) async {
     if (_showOffline) return;
     if (!AppConfig.isAllowedHost(uri?.host)) return;
     if (_isAuthRoute(uri)) return;
 
-    _syncPushTokenAfterLogin();
+    await PushNotificationService.instance.syncPushTokenAfterLogin();
+  }
+
+  Future<void> _prepareIosPushAuthFromWeb() async {
+    if (!Platform.isIOS) return;
+
+    var accessToken = await AuthRepository.instance.getAccessToken();
+    if (accessToken == null || accessToken.isEmpty) {
+      accessToken = await _harvestWebAccessToken();
+    }
+    if (accessToken == null || accessToken.isEmpty) {
+      await _mintSanctumTokenFromWebCredentials();
+      accessToken = await AuthRepository.instance.getAccessToken();
+    }
+
+    if (accessToken != null && accessToken.isNotEmpty) {
+      PushNotificationService.instance.setIosSessionAuth();
+      return;
+    }
+
+    final cookies = await CookieManager.instance().getCookies(
+      url: WebUri(AppConfig.initialUrl),
+    );
+    if (cookies.isEmpty) {
+      debugPrint(
+        '[SmartNPS360][Push] ios no bearer token and no web cookies yet',
+      );
+      PushNotificationService.instance.setIosSessionAuth();
+      return;
+    }
+
+    final cookieHeader = cookies.map((c) => '${c.name}=${c.value}').join('; ');
+    String? xsrfToken;
+    for (final cookie in cookies) {
+      if (cookie.name == 'XSRF-TOKEN') {
+        xsrfToken = Uri.decodeComponent(cookie.value);
+        break;
+      }
+    }
+
+    PushNotificationService.instance.setIosSessionAuth(
+      cookieHeader: cookieHeader,
+      xsrfToken: xsrfToken,
+    );
+    debugPrint(
+      '[SmartNPS360][Push] ios using web session cookies for push upload',
+    );
+  }
+
+  Future<String?> _harvestWebAccessToken() async {
+    final controller = _controller;
+    if (controller == null) return null;
+
+    try {
+      final result = await controller.evaluateJavascript(
+        source: '''
+        (function () {
+          function pickToken(obj) {
+            if (!obj || typeof obj !== 'object') return null;
+            var t = obj.accessToken || obj.access_token || obj.token || obj.jwt;
+            return t ? String(t) : null;
+          }
+          try {
+            var apiMeta = document.querySelector('meta[name="api-token"]');
+            if (apiMeta) {
+              var apiToken = apiMeta.getAttribute('content');
+              if (apiToken && apiToken.length > 10) return apiToken;
+            }
+            if (window.Laravel) {
+              var laravelToken =
+                window.Laravel.apiToken || window.Laravel.token;
+              if (laravelToken && String(laravelToken).length > 10) {
+                return String(laravelToken);
+              }
+            }
+            var roots = [
+              window.__SMARTNPS_SESSION__,
+              window.__AUTH__,
+              window.__INITIAL_STATE__ && window.__INITIAL_STATE__.auth,
+              window.auth,
+              window.session
+            ];
+            for (var i = 0; i < roots.length; i++) {
+              var token = pickToken(roots[i]);
+              if (token && token.length > 10) return token;
+            }
+            var keyHints = [
+              'access_token', 'accesstoken', 'token', 'jwt', 'auth', 'sanctum'
+            ];
+            var storages = [localStorage, sessionStorage];
+            for (var s = 0; s < storages.length; s++) {
+              var storage = storages[s];
+              for (var j = 0; j < storage.length; j++) {
+                var key = storage.key(j);
+                if (!key) continue;
+                var lower = key.toLowerCase();
+                var match = false;
+                for (var h = 0; h < keyHints.length; h++) {
+                  if (lower.indexOf(keyHints[h]) !== -1) {
+                    match = true;
+                    break;
+                  }
+                }
+                if (!match) continue;
+                var raw = storage.getItem(key);
+                if (!raw) continue;
+                if (raw.length > 20 && raw.charAt(0) !== '{') return raw;
+                try {
+                  var parsed = JSON.parse(raw);
+                  var nested = pickToken(parsed);
+                  if (!nested && parsed.data) nested = pickToken(parsed.data);
+                  if (nested && nested.length > 10) return nested;
+                } catch (e) {}
+              }
+            }
+          } catch (e) {}
+          return null;
+        })();
+      ''',
+      );
+
+      if (result is String &&
+          result.isNotEmpty &&
+          result != 'null' &&
+          result.length > 10) {
+        await AuthRepository.instance.saveAccessToken(result);
+        AuthState.instance.setSession({'accessToken': result});
+        debugPrint('[SmartNPS360][Push] ios harvested web access token');
+        return result;
+      }
+    } catch (e) {
+      debugPrint('[SmartNPS360][Push] ios harvest token failed: $e');
+    }
+    return null;
+  }
+
+  Future<bool> _mintSanctumTokenFromWebCredentials() async {
+    if (!Platform.isIOS) return false;
+
+    final existing = await AuthRepository.instance.getAccessToken();
+    if (existing != null && existing.isNotEmpty) return true;
+
+    final controller = _controller;
+    if (controller == null) return false;
+
+    try {
+      final result = await controller.evaluateJavascript(
+        source: '''
+        (function () {
+          try {
+            var raw = sessionStorage.getItem('__smartnps_login');
+            if (!raw) return null;
+            var parsed = JSON.parse(raw);
+            if (!parsed || !parsed.username || !parsed.password) return null;
+            return JSON.stringify(parsed);
+          } catch (e) {
+            return null;
+          }
+        })();
+      ''',
+      );
+
+      if (result is! String || result.isEmpty || result == 'null') {
+        return false;
+      }
+
+      final creds = jsonDecode(result);
+      if (creds is! Map) return false;
+      final username = creds['username']?.toString();
+      final password = creds['password']?.toString();
+      if (username == null ||
+          username.isEmpty ||
+          password == null ||
+          password.isEmpty) {
+        return false;
+      }
+
+      debugPrint('[SmartNPS360][Push] ios minting sanctum bearer token');
+      return _performSanctumLogin(
+        username: username,
+        password: password,
+        syncPush: false,
+      );
+    } catch (e) {
+      debugPrint('[SmartNPS360][Push] ios mint sanctum token failed: $e');
+      return false;
+    }
+  }
+
+  Future<bool> _uploadPushTokenViaWebView(Map<String, dynamic> payload) async {
+    final controller = _controller;
+    if (controller == null) return false;
+
+    try {
+      final encodedPayload = jsonEncode(payload);
+      final pushTokenUrl = AppConfig.pushTokenUrl;
+      final result = await controller.evaluateJavascript(
+        source: '''
+        (function () {
+          try {
+            var body = $encodedPayload;
+            var csrf = '';
+            var meta = document.querySelector('meta[name="csrf-token"]');
+            if (meta) csrf = meta.getAttribute('content') || '';
+            var xsrf = '';
+            try {
+              var parts = document.cookie.split(';');
+              for (var i = 0; i < parts.length; i++) {
+                var part = parts[i].trim();
+                if (part.indexOf('XSRF-TOKEN=') === 0) {
+                  xsrf = decodeURIComponent(part.substring('XSRF-TOKEN='.length));
+                  break;
+                }
+              }
+            } catch (e) {}
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '$pushTokenUrl', false);
+            xhr.withCredentials = true;
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.setRequestHeader('Accept', 'application/json');
+            xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+            if (csrf) xhr.setRequestHeader('X-CSRF-TOKEN', csrf);
+            else if (xsrf) xhr.setRequestHeader('X-XSRF-TOKEN', xsrf);
+            xhr.send(JSON.stringify(body));
+            return JSON.stringify({
+              ok: xhr.status >= 200 && xhr.status < 300,
+              status: xhr.status
+            });
+          } catch (e) {
+            return JSON.stringify({ ok: false, error: String(e) });
+          }
+        })();
+      ''',
+      );
+
+      if (result is String) {
+        final decoded = jsonDecode(result);
+        if (decoded is Map) {
+          final ok = decoded['ok'] == true;
+          final status = decoded['status'];
+          if (ok) {
+            debugPrint(
+              '[SmartNPS360][Push] ios web upload ok status=$status',
+            );
+            return true;
+          }
+          debugPrint(
+            '[SmartNPS360][Push] ios web upload failed status=$status '
+            'error=${decoded['error']}',
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('[SmartNPS360][Push] ios web upload failed: $e');
+    }
+    return false;
+  }
+
+  Future<void> _notifyWebPushTokenReady() async {
+    if (!Platform.isIOS) return;
+    final controller = _controller;
+    final fcmToken = PushNotificationService.instance.lastFcmToken;
+    if (controller == null || fcmToken == null || fcmToken.isEmpty) return;
+
+    try {
+      final encodedToken = jsonEncode(fcmToken);
+      await controller.evaluateJavascript(
+        source: '''
+        (function () {
+          try {
+            var token = $encodedToken;
+            var detail = { token: token };
+            window.dispatchEvent(
+              new CustomEvent('smartnps360:push-token', { detail: detail })
+            );
+            if (
+              window.SmartNPS360 &&
+              typeof window.SmartNPS360.onPushTokenReady === 'function'
+            ) {
+              window.SmartNPS360.onPushTokenReady(token);
+            }
+          } catch (e) {}
+        })();
+      ''',
+      );
+    } catch (e) {
+      debugPrint('[SmartNPS360][Push] ios notify web push token failed: $e');
+    }
   }
 
   void _maybeShowMockLocationDialog(Map<String, dynamic> result) {
@@ -1304,6 +1787,90 @@ class _WebViewShellState extends State<WebViewShell> {
     return trimmed.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
   }
 
+  UnmodifiableListView<UserScript> _initialUserScripts() {
+    final scripts = <UserScript>[
+      _smartNpsBridgeScript,
+      _geolocationScript,
+      if (Platform.isIOS) _iosPopoverFixScript,
+    ];
+    return UnmodifiableListView(scripts);
+  }
+
+  Future<void> _runIosPopoverFix(InAppWebViewController controller) async {
+    if (!Platform.isIOS) return;
+    try {
+      await controller.evaluateJavascript(
+        source: '''
+        (function () {
+          try {
+            if (typeof window.__smartnpsIosPopoverFixScan === 'function') {
+              window.__smartnpsIosPopoverFixScan(false);
+            }
+          } catch (_) {}
+        })();
+      ''',
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _logIosWebViewDiagnostics(
+    InAppWebViewController controller,
+  ) async {
+    if (!Platform.isIOS || !kDebugMode) return;
+    try {
+      final ua = await controller.evaluateJavascript(
+        source: 'navigator.userAgent',
+      );
+      debugPrint('[SmartNPS360][iOS WebView] userAgent=$ua');
+      final metrics = await controller.evaluateJavascript(
+        source: '''
+        (function () {
+          var vv = window.visualViewport;
+          return JSON.stringify({
+            innerWidth: window.innerWidth,
+            clientWidth: document.documentElement.clientWidth,
+            visualViewportWidth: vv ? vv.width : null,
+            visualViewportOffsetLeft: vv ? vv.offsetLeft : null
+          });
+        })();
+      ''',
+      );
+      debugPrint('[SmartNPS360][iOS WebView] metrics=$metrics');
+    } catch (e) {
+      debugPrint('[SmartNPS360][iOS WebView] diagnostics failed: $e');
+    }
+  }
+
+  /// iOS: keep the default Mobile Safari UA (append app id only).
+  /// Android: unchanged custom UA.
+  InAppWebViewSettings _createWebViewSettings() {
+    return InAppWebViewSettings(
+      javaScriptEnabled: true,
+      allowsInlineMediaPlayback: true,
+      mediaPlaybackRequiresUserGesture: false,
+      useShouldOverrideUrlLoading: true,
+      supportZoom: false,
+      transparentBackground: false,
+      thirdPartyCookiesEnabled: true,
+      cacheEnabled: true,
+      clearCache: false,
+      sharedCookiesEnabled: true,
+      userAgent: Platform.isIOS
+          ? null
+          : 'SmartNPS360/1.0 (Flutter; InAppWebView) android',
+      applicationNameForUserAgent: Platform.isIOS
+          ? 'SmartNPS360/1.0 (Flutter; InAppWebView)'
+          : null,
+      preferredContentMode: Platform.isIOS
+          ? UserPreferredContentMode.MOBILE
+          : null,
+      geolocationEnabled: false,
+      allowsBackForwardNavigationGestures: true,
+      verticalScrollBarEnabled: true,
+      horizontalScrollBarEnabled: false,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return GetBuilder<_WebViewShellUiController>(
@@ -1334,32 +1901,13 @@ class _WebViewShellState extends State<WebViewShell> {
                         initialUrlRequest: URLRequest(
                           url: WebUri(AppConfig.initialUrl),
                         ),
-                        initialUserScripts: UnmodifiableListView([
-                          _smartNpsBridgeScript,
-                          _geolocationScript,
-                        ]),
+                        initialUserScripts: _initialUserScripts(),
                         pullToRefreshController: _pullToRefreshController,
-                        initialSettings: InAppWebViewSettings(
-                          javaScriptEnabled: true,
-                          allowsInlineMediaPlayback: true,
-                          mediaPlaybackRequiresUserGesture: false,
-                          useShouldOverrideUrlLoading: true,
-                          supportZoom: false,
-                          transparentBackground: false,
-                          thirdPartyCookiesEnabled: true,
-                          cacheEnabled: true,
-                          clearCache: false,
-                          sharedCookiesEnabled: true,
-                          userAgent:
-                              'SmartNPS360/1.0 (Flutter; InAppWebView) ${Platform.operatingSystem}',
-                          geolocationEnabled: false,
-                          allowsBackForwardNavigationGestures: true,
-                          verticalScrollBarEnabled: true,
-                          horizontalScrollBarEnabled: false,
-                        ),
+                        initialSettings: _createWebViewSettings(),
                         onWebViewCreated: (controller) {
                           _controller = controller;
                           _installJsHandlers(controller);
+                          unawaited(_logIosWebViewDiagnostics(controller));
                           unawaited(_loadPendingPushUrl());
                         },
                         onConsoleMessage: (controller, message) {
@@ -1384,14 +1932,26 @@ class _WebViewShellState extends State<WebViewShell> {
                               ? null
                               : await _readWebThemeIsDark(controller);
                           await _installThemeListener(controller);
+                          await _logIosWebViewDiagnostics(controller);
+                          await _runIosPopoverFix(controller);
                           _currentUri = url?.uriValue;
                           _firstPageLoaded = true;
                           _webPrefersDark = webThemeIsDark ?? _webPrefersDark;
                           _refreshUi();
                           _setNativeThemeFromWeb(_webPrefersDark);
-                          _maybeRequestNotificationPermissionForRoute(
+                          await AuthSessionManager.clearNativeSessionIfLoginScreen(
                             url?.uriValue,
                           );
+                          if (AuthSessionManager.isLoginRoute(url?.uriValue)) {
+                            _stopDutyHeartbeat();
+                          } else {
+                            await _requestNotificationPermissionForRoute(
+                              url?.uriValue,
+                            );
+                            await _maybeStartDutyHeartbeat();
+                            await DutyHeartbeatService.instance
+                                .recheckOnDutyPrompts();
+                          }
                         },
                         onReceivedError: (controller, request, error) async {
                           _pullToRefreshController?.endRefreshing();
@@ -1540,21 +2100,7 @@ class _WebViewShellState extends State<WebViewShell> {
     await controller.loadUrl(urlRequest: URLRequest(url: WebUri(item.url)));
   }
 
-  bool _isAuthRoute(Uri? uri) {
-    if (uri == null) return false;
-    final s = (uri.path).toLowerCase();
-    // Your login screen uses the base URL path.
-    if (s.isEmpty || s == '/' || uri.toString() == AppConfig.initialUrl) {
-      return true;
-    }
-    return s.contains('officer/login') ||
-        s.contains('officer/sign-in') ||
-        s.contains('officer/signin') ||
-        s.contains('officer/sign_up') ||
-        s.contains('officer/sign-up') ||
-        s.contains('officer/signup') ||
-        s.contains('officer/register');
-  }
+  bool _isAuthRoute(Uri? uri) => AuthSessionManager.isLoginRoute(uri);
 
   bool _shouldShowBottomBar(BuildContext context) {
     if (_showOffline) return false;
