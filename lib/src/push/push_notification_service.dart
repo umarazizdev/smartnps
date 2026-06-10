@@ -14,7 +14,9 @@ import 'package:permission_handler/permission_handler.dart';
 import '../../firebase_options.dart';
 import '../api/api_client.dart';
 import '../auth/auth_repository.dart';
+import '../auth/auth_state.dart';
 import '../utilities/app_config.dart';
+import '../utilities/permission_settings_helper.dart';
 
 const String kPushAndroidChannelId = 'smartnps360_default';
 const String kPushAndroidChannelName = 'SmartNPS360';
@@ -131,8 +133,26 @@ class PushNotificationService {
   String? _lastFcmToken;
   bool _firebaseMessagingInitialized = false;
   bool _permissionPromptAttempted = false;
+  Future<void>? _permissionPromptFuture;
+  bool _iosPendingTokenUpload = false;
+  bool _notificationSettingsPromptShown = false;
+  String? _iosSessionCookieHeader;
+  String? _iosXsrfToken;
   String? _cachedDeviceId;
   String? _cachedAppVersion;
+
+  void setIosSessionAuth({String? cookieHeader, String? xsrfToken}) {
+    _iosSessionCookieHeader = cookieHeader;
+    _iosXsrfToken = xsrfToken;
+  }
+
+  Future<bool> Function(Map<String, dynamic> payload)? _iosWebPushUpload;
+
+  void setIosWebPushUploadHandler(
+    Future<bool> Function(Map<String, dynamic> payload)? handler,
+  ) {
+    _iosWebPushUpload = handler;
+  }
 
   String? get lastFcmToken => _lastFcmToken;
 
@@ -153,8 +173,44 @@ class PushNotificationService {
     await _initFirebaseMessaging();
   }
 
+  /// Waits until the notification permission flow finishes (system dialog included).
+  ///
+  /// Duty/location prompts should call this first so dialogs never stack.
+  Future<void> waitForPermissionPromptCompleted({
+    bool promptIfNeeded = false,
+  }) async {
+    if (_permissionPromptFuture != null) {
+      await _permissionPromptFuture!;
+      return;
+    }
+    if (_permissionPromptAttempted) return;
+    if (!promptIfNeeded) return;
+    await requestPermissionAfterAuth();
+  }
+
   /// Prompts for notification permission after login or sign-up (once per app session).
   Future<void> requestPermissionAfterAuth() async {
+    if (_permissionPromptFuture != null) {
+      return _permissionPromptFuture!;
+    }
+
+    if (_permissionPromptAttempted) {
+      await _refreshFcmToken(uploadIfAuthenticated: true);
+      return;
+    }
+
+    final future = _requestPermissionAfterAuthImpl();
+    _permissionPromptFuture = future;
+    try {
+      await future;
+    } finally {
+      if (identical(_permissionPromptFuture, future)) {
+        _permissionPromptFuture = null;
+      }
+    }
+  }
+
+  Future<void> _requestPermissionAfterAuthImpl() async {
     if (_permissionPromptAttempted) {
       await _refreshFcmToken(uploadIfAuthenticated: true);
       return;
@@ -169,6 +225,9 @@ class PushNotificationService {
     );
     await _ensureNotificationPermission();
     await _refreshFcmToken(uploadIfAuthenticated: true);
+    if (Platform.isIOS) {
+      await _iosRetryFcmTokenAndUpload();
+    }
   }
 
   /// Requests permission (if needed) and uploads the FCM token after auth.
@@ -178,6 +237,9 @@ class PushNotificationService {
       return;
     }
     await _refreshFcmToken(uploadIfAuthenticated: true);
+    if (Platform.isIOS && _iosPendingTokenUpload) {
+      await _maybeUploadToken();
+    }
   }
 
   Future<void> _initLocalNotifications() async {
@@ -287,6 +349,18 @@ class PushNotificationService {
 
     final status = await Permission.notification.request();
     debugPrint('[SmartNPS360][Push] android notification permission=$status');
+    if (!status.isGranted &&
+        PermissionSettingsHelper.shouldOpenSettings(status) &&
+        !_notificationSettingsPromptShown) {
+      _notificationSettingsPromptShown = true;
+      await PermissionSettingsHelper.promptOpenSettings(
+        title: 'Notifications disabled',
+        message:
+            'Please enable notifications for SmartNPS360 to receive important '
+            'shift updates.',
+        dialogKey: 'push_notification',
+      );
+    }
     return status.isGranted;
   }
 
@@ -310,8 +384,20 @@ class PushNotificationService {
     debugPrint(
       '[SmartNPS360][Push] ios permission=${settings.authorizationStatus}',
     );
-    return settings.authorizationStatus == AuthorizationStatus.authorized ||
+    final granted =
+        settings.authorizationStatus == AuthorizationStatus.authorized ||
         settings.authorizationStatus == AuthorizationStatus.provisional;
+    if (!granted && !_notificationSettingsPromptShown) {
+      _notificationSettingsPromptShown = true;
+      await PermissionSettingsHelper.promptOpenSettings(
+        title: 'Notifications disabled',
+        message:
+            'Please enable notifications for SmartNPS360 to receive important '
+            'shift updates.',
+        dialogKey: 'push_notification',
+      );
+    }
+    return granted;
   }
 
   Future<void> _refreshFcmToken({required bool uploadIfAuthenticated}) async {
@@ -328,24 +414,94 @@ class PushNotificationService {
     }
   }
 
+  Future<String?> _resolveAccessToken() async {
+    final stored = await AuthRepository.instance.getAccessToken();
+    if (stored != null && stored.isNotEmpty) return stored;
+
+    if (!Platform.isIOS) return null;
+
+    final session = AuthState.instance.session.value;
+    if (session == null) return null;
+
+    final token =
+        (session['accessToken'] ??
+                session['access_token'] ??
+                session['token'] ??
+                session['jwt'])
+            ?.toString();
+    if (token == null || token.isEmpty) return null;
+
+    await AuthRepository.instance.saveAccessToken(token);
+    return token;
+  }
+
+  Future<void> _iosRetryFcmTokenAndUpload() async {
+    if (!Platform.isIOS) return;
+
+    const delays = <Duration>[
+      Duration(milliseconds: 600),
+      Duration(seconds: 2),
+    ];
+    for (final delay in delays) {
+      await Future<void>.delayed(delay);
+      await _refreshFcmToken(uploadIfAuthenticated: true);
+      final accessToken = await _resolveAccessToken();
+      if (accessToken != null &&
+          accessToken.isNotEmpty &&
+          _lastFcmToken != null &&
+          !_iosPendingTokenUpload) {
+        return;
+      }
+    }
+  }
+
   Future<void> _maybeUploadToken() async {
     final token = _lastFcmToken;
     if (token == null || token.isEmpty) return;
 
-    final accessToken = await AuthRepository.instance.getAccessToken();
-    if (accessToken == null || accessToken.isEmpty) {
-      debugPrint('[SmartNPS360][Push] skip upload (no accessToken yet)');
+    final payload = await _buildPushTokenPayload(pushToken: token);
+    final accessToken = await _resolveAccessToken();
+    if (accessToken != null && accessToken.isNotEmpty) {
+      _iosPendingTokenUpload = false;
+      await uploadPushToken();
       return;
     }
 
-    await uploadPushToken();
+    if (Platform.isIOS) {
+      final webUpload = _iosWebPushUpload;
+      if (webUpload != null) {
+        debugPrint('[SmartNPS360][Push] ios upload via web session fetch');
+        final uploaded = await webUpload(payload);
+        if (uploaded) {
+          _iosPendingTokenUpload = false;
+          return;
+        }
+      }
+
+      if (_iosSessionCookieHeader != null &&
+          _iosSessionCookieHeader!.isNotEmpty) {
+        final uploaded = await uploadPushToken(useSessionCookies: true);
+        if (uploaded) {
+          _iosPendingTokenUpload = false;
+          return;
+        }
+      }
+
+      _iosPendingTokenUpload = true;
+      debugPrint(
+        '[SmartNPS360][Push] ios upload failed (API requires bearer token)',
+      );
+      return;
+    }
+
+    debugPrint('[SmartNPS360][Push] skip upload (no accessToken yet)');
   }
 
-  Future<void> uploadPushToken() async {
+  Future<bool> uploadPushToken({bool useSessionCookies = false}) async {
     final token = _lastFcmToken;
     if (token == null || token.isEmpty) {
       debugPrint('[SmartNPS360][Push] skip upload (no FCM token)');
-      return;
+      return false;
     }
 
     ApiClient.instance.ensureAuthInterceptorInstalled();
@@ -354,20 +510,27 @@ class PushNotificationService {
 
     try {
       if (kDebugMode) {
-        debugPrint('[SmartNPS360][Push] POST $uri body=$payload');
+        debugPrint(
+          '[SmartNPS360][Push] POST $uri body=$payload '
+          'auth=${useSessionCookies ? 'session-cookies' : 'bearer'}',
+        );
       }
       final response = await ApiClient.instance.dio.postUri(
         uri,
         data: payload,
-        options: _jsonOptions(),
+        options: _jsonOptions(useSessionCookies: useSessionCookies),
       );
       if (kDebugMode) {
         debugPrint(
           '[SmartNPS360][Push] upload ok status=${response.statusCode}',
         );
       }
+      return response.statusCode != null &&
+          response.statusCode! >= 200 &&
+          response.statusCode! < 300;
     } catch (e) {
       debugPrint('[SmartNPS360][Push] upload failed: $e');
+      return false;
     }
   }
 
@@ -464,9 +627,23 @@ class PushNotificationService {
         .replaceAll(RegExp(r'^-|-$'), '');
   }
 
-  Options _jsonOptions() {
+  Options _jsonOptions({bool useSessionCookies = false}) {
+    final headers = <String, dynamic>{'Accept': 'application/json'};
+    if (useSessionCookies) {
+      final cookieHeader = _iosSessionCookieHeader;
+      if (cookieHeader != null && cookieHeader.isNotEmpty) {
+        headers['Cookie'] = cookieHeader;
+      }
+      final xsrf = _iosXsrfToken;
+      if (xsrf != null && xsrf.isNotEmpty) {
+        headers['X-XSRF-TOKEN'] = xsrf;
+      }
+      headers['X-Requested-With'] = 'XMLHttpRequest';
+      headers['Referer'] = AppConfig.initialUrl;
+      headers['Origin'] = AppConfig.initialUrl.replaceAll(RegExp(r'/$'), '');
+    }
     return Options(
-      headers: const {'Accept': 'application/json'},
+      headers: headers,
       contentType: Headers.jsonContentType,
       sendTimeout: const Duration(seconds: 12),
       receiveTimeout: const Duration(seconds: 12),

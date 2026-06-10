@@ -13,6 +13,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../push/push_notification_service.dart';
 import '../utilities/app_config.dart';
+import '../utilities/permission_settings_helper.dart';
 
 class JsBridge {
   JsBridge({
@@ -191,10 +192,28 @@ class JsBridge {
       }
 
       if (permission == LocationPermission.denied) {
+        unawaited(
+          PermissionSettingsHelper.promptOpenSettings(
+            title: 'Location permission denied',
+            message:
+                'Location access was denied. To use GPS features, open '
+                'Settings and enable Location for SmartNPS360.',
+            dialogKey: 'webview_location',
+          ),
+        );
         return _err('permission_denied', 'Location permission denied');
       }
 
       if (permission == LocationPermission.deniedForever) {
+        unawaited(
+          PermissionSettingsHelper.promptOpenSettings(
+            title: 'Location permission denied',
+            message:
+                'Location access was permanently denied. Open Settings, tap '
+                'SmartNPS360, then enable Location.',
+            dialogKey: 'webview_location',
+          ),
+        );
         return _err(
           'permission_denied_forever',
           'Location permission permanently denied. Enable it from settings.',

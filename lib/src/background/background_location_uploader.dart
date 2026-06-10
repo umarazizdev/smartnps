@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:geolocator/geolocator.dart';
@@ -9,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../api/api_client.dart';
 import '../utilities/app_config.dart';
+import '../utilities/device_identity.dart';
 
 class BackgroundLocationUploader {
   BackgroundLocationUploader({Dio? dio})
@@ -20,11 +20,13 @@ class BackgroundLocationUploader {
 
   static const String _boxName = 'gps_points';
   Box<Map>? _box;
+  String? _deviceId;
 
   Timer? _batchTimer;
   int _consecutiveBatchFailures = 0;
   bool _isFlushing = false;
   DateTime? _nextBatchAllowedAt;
+  final List<Map<String, dynamic>> _memoryBatch = [];
 
   static const int _maxBatchSize = 20;
   static const Duration _batchEvery = Duration(minutes: 1);
@@ -36,10 +38,23 @@ class BackgroundLocationUploader {
       Uri.parse('${AppConfig.gpsApiBaseUrl}${AppConfig.gpsBatchPath}');
 
   Future<void> init() async {
+    _deviceId ??= await DeviceIdentity.getDeviceId();
+    await _ensureStorage();
+  }
+
+  Future<void> _ensureStorage() async {
     if (_box != null) return;
-    final dir = await getApplicationDocumentsDirectory();
-    Hive.init(dir.path);
-    _box = await Hive.openBox<Map>(_boxName);
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      Hive.init(dir.path);
+      _box = await Hive.openBox<Map>(_boxName);
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint(
+          '[BackgroundLocationUploader] storage init skipped (ping still works): $e',
+        );
+      }
+    }
   }
 
   void start() {
@@ -55,27 +70,37 @@ class BackgroundLocationUploader {
   /// Stores points for batch upload only (Hive).
   ///
   /// Ping uploads are sent live and are not persisted.
-  Future<void> add(Position position, {String? deviceId}) async {
+  Future<void> add(Position position) async {
+    await _ensureStorage();
+    final point = _sanitizePoint(_buildPoint(position));
     final box = _box;
-    if (box == null) {
-      throw StateError('BackgroundLocationUploader.init() not called');
-    }
-    final point = _buildPoint(position, deviceId: deviceId);
-    await box.add(point);
+    if (box != null) {
+      await box.add(point);
 
-    // Cap on-disk queue size (drop oldest first).
-    while (box.length > 2000) {
-      await box.deleteAt(0);
+      // Cap on-disk queue size (drop oldest first).
+      while (box.length > 2000) {
+        await box.deleteAt(0);
+      }
+
+      if (box.length >= _maxBatchSize) {
+        await flushBatch();
+      }
+      return;
     }
 
-    if (box.length >= _maxBatchSize) {
+    _memoryBatch.add(point);
+    while (_memoryBatch.length > 2000) {
+      _memoryBatch.removeAt(0);
+    }
+    if (_memoryBatch.length >= _maxBatchSize) {
       await flushBatch();
     }
   }
 
   /// Sends the current point to the ping API immediately (no local storage).
-  Future<void> pingNow(Position position, {String? deviceId}) async {
-    final point = _buildPoint(position, deviceId: deviceId);
+  Future<void> pingNow(Position position) async {
+    _deviceId ??= await DeviceIdentity.getDeviceId();
+    final point = _sanitizePoint(_buildPoint(position));
 
     final Options options = Options(
       headers: const {'Accept': 'application/json'},
@@ -107,6 +132,13 @@ class BackgroundLocationUploader {
           '[BackgroundLocationUploader] ping ok status=$status body=$bodyText',
         );
       }
+    } on DioException catch (e) {
+      if (kDebugMode) {
+        debugPrint(
+          '[BackgroundLocationUploader] ping failed status=${e.response?.statusCode} '
+          'body=${_truncateForLog(e.response?.data)}',
+        );
+      }
     } catch (e) {
       if (kDebugMode) {
         debugPrint('[BackgroundLocationUploader] ping failed: $e');
@@ -114,7 +146,7 @@ class BackgroundLocationUploader {
     }
   }
 
-  Map<String, dynamic> _buildPoint(Position position, {String? deviceId}) {
+  Map<String, dynamic> _buildPoint(Position position) {
     final dynamic p = position;
     final dynamic sourceInformation = _safeRead<dynamic>(
       () => p.sourceInformation,
@@ -125,8 +157,9 @@ class BackgroundLocationUploader {
 
     return {
       'app': AppConfig.appName,
-      'platform': Platform.operatingSystem,
-      'deviceId': deviceId,
+      'platform': DeviceIdentity.platformName(),
+      'device_id': _deviceId,
+      'deviceId': _deviceId,
       'latitude': position.latitude,
       'longitude': position.longitude,
       'accuracy': position.accuracy,
@@ -134,10 +167,10 @@ class BackgroundLocationUploader {
       'timestampMs': position.timestamp.millisecondsSinceEpoch,
       'timestamp': position.timestamp.toIso8601String(),
       'altitude': position.altitude,
-      'speed': position.speed,
-      'speedAccuracy': _numOrNull(() => position.speedAccuracy),
-      'heading': position.heading,
-      'headingAccuracy': _numOrNull(() => position.headingAccuracy),
+      'speed': _validSensorNumOrNull(() => position.speed),
+      'speedAccuracy': _validSensorNumOrNull(() => position.speedAccuracy),
+      'heading': _validSensorNumOrNull(() => position.heading),
+      'headingAccuracy': _validSensorNumOrNull(() => position.headingAccuracy),
       'isMocked': position.isMocked,
       'isSimulatedBySoftware': isSimulatedBySoftware,
       'floor': _numOrNull(() => p.floor),
@@ -161,20 +194,60 @@ class BackgroundLocationUploader {
     }
   }
 
+  Map<String, dynamic> _sanitizePoint(Map<String, dynamic> point) {
+    final sanitized = Map<String, dynamic>.from(point);
+    for (final key in const [
+      'heading',
+      'headingAccuracy',
+      'speed',
+      'speedAccuracy',
+    ]) {
+      final value = sanitized[key];
+      if (value is num && (value.isNaN || value < 0)) {
+        sanitized[key] = null;
+      }
+    }
+    return sanitized;
+  }
+
+  /// iOS/CoreLocation uses negative sentinels (e.g. -1) when a value is unknown.
+  /// The GPS API rejects those; omit the field instead.
+  num? _validSensorNumOrNull(num Function() read, {num min = 0}) {
+    try {
+      final v = read();
+      if (v.isNaN || v < min) return null;
+      return v;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> flushBatch() async {
     if (_isFlushing) return;
     final nextAllowed = _nextBatchAllowedAt;
     if (nextAllowed != null && DateTime.now().isBefore(nextAllowed)) return;
 
     final box = _box;
-    if (box == null) return;
-    if (box.length < 2) return;
+    if (box != null) {
+      if (box.length < 2) return;
+      await _flushHiveBatch(box);
+      return;
+    }
 
+    if (_memoryBatch.length < 2) return;
+    await _flushMemoryBatch();
+  }
+
+  Future<void> _flushHiveBatch(Box<Map> box) async {
     _isFlushing = true;
     final takeCount = box.length < _maxBatchSize ? box.length : _maxBatchSize;
     final keys = box.keys.take(takeCount).toList(growable: false);
     final batch = keys
-        .map((k) => Map<String, dynamic>.from(box.get(k) ?? const {}))
+        .map(
+          (k) => _sanitizePoint(
+            Map<String, dynamic>.from(box.get(k) ?? const {}),
+          ),
+        )
         .where((m) => m.isNotEmpty)
         .toList(growable: false);
 
@@ -183,9 +256,39 @@ class BackgroundLocationUploader {
       return;
     }
 
+    try {
+      await _postBatch(batch);
+      await box.deleteAll(keys);
+    } finally {
+      _isFlushing = false;
+    }
+  }
+
+  Future<void> _flushMemoryBatch() async {
+    _isFlushing = true;
+    final takeCount = _memoryBatch.length < _maxBatchSize
+        ? _memoryBatch.length
+        : _maxBatchSize;
+    final batch = _memoryBatch.take(takeCount).toList(growable: false);
+    if (batch.length < 2) {
+      _isFlushing = false;
+      return;
+    }
+
+    try {
+      await _postBatch(batch);
+      _memoryBatch.removeRange(0, takeCount);
+    } finally {
+      _isFlushing = false;
+    }
+  }
+
+  Future<void> _postBatch(List<Map<String, dynamic>> batch) async {
     if (kDebugMode) {
+      debugPrint('[BackgroundLocationUploader] flushBatch count=${batch.length}');
+      debugPrint('[BackgroundLocationUploader] POST ${_batchUri()} (batch)');
       debugPrint(
-        '[BackgroundLocationUploader] flushBatch count=${batch.length}',
+        '[BackgroundLocationUploader] body=${_truncateForLog({'points': batch})}',
       );
     }
 
@@ -197,12 +300,6 @@ class BackgroundLocationUploader {
     );
 
     try {
-      if (kDebugMode) {
-        debugPrint('[BackgroundLocationUploader] POST ${_batchUri()} (batch)');
-        debugPrint(
-          '[BackgroundLocationUploader] body=${_truncateForLog({'points': batch})}',
-        );
-      }
       final response = await _dio.postUri(
         _batchUri(),
         data: {'points': batch},
@@ -211,7 +308,6 @@ class BackgroundLocationUploader {
 
       _consecutiveBatchFailures = 0;
       _nextBatchAllowedAt = null;
-      await box.deleteAll(keys);
 
       if (kDebugMode) {
         final status = response.statusCode;
@@ -239,8 +335,7 @@ class BackgroundLocationUploader {
         );
       }
       _nextBatchAllowedAt = DateTime.now().add(delay);
-    } finally {
-      _isFlushing = false;
+      rethrow;
     }
   }
 

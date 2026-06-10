@@ -82,6 +82,7 @@ class BackgroundLocationService {
             timeLimit: null,
             pauseLocationUpdatesAutomatically: false,
             showBackgroundLocationIndicator: true,
+            allowBackgroundLocationUpdates: true,
           );
 
     DateTime? lastUploadAt;
