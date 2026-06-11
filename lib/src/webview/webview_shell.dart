@@ -19,7 +19,8 @@ import '../utilities/app_config.dart';
 import 'js_bridge.dart';
 import '../app/offline_screen.dart';
 import '../widgets/platform_bottom_bar.dart';
-import '../widgets/mock_location_dialog.dart';
+import '../location/mock_location_detection.dart';
+import '../location/mock_location_guard.dart';
 import '../auth/auth_session_manager.dart';
 import '../auth/auth_state.dart';
 import '../auth/auth_repository.dart';
@@ -47,7 +48,6 @@ class _WebViewShellState extends State<WebViewShell> with WidgetsBindingObserver
   bool _webPrefersDark = false;
   bool _hasWebThemeSignal = false;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
-  bool _mockLocationDialogVisible = false;
   final Map<int, StreamSubscription<Position>> _nativeGeoWatches = {};
   final _WebViewShellUiController _uiController = _WebViewShellUiController();
   String? _pendingPushUrl;
@@ -70,16 +70,6 @@ class _WebViewShellState extends State<WebViewShell> with WidgetsBindingObserver
     final text = value?.toString() ?? '';
     if (text.length <= max) return text;
     return '${text.substring(0, max)}...';
-  }
-
-  bool _isSimulatedBySoftware(Position position) {
-    try {
-      final dynamic p = position;
-      final dynamic sourceInformation = p.sourceInformation;
-      return sourceInformation?.isSimulatedBySoftware == true;
-    } catch (_) {
-      return false;
-    }
   }
 
   Map<String, dynamic> _toWebGeolocationPayloadFromBridgeLocation(
@@ -126,7 +116,8 @@ class _WebViewShellState extends State<WebViewShell> with WidgetsBindingObserver
       'nativeSource': true,
       'provider': 'flutter_geolocator',
       'is_mocked': position.isMocked,
-      'is_simulated_by_software': _isSimulatedBySoftware(position),
+      'is_simulated_by_software':
+          MockLocationDetection.isSimulatedBySoftware(position),
       'accepted_from_live_stream': true,
       'max_allowed_accuracy_meters': requiredAccuracyMeters,
       'timeout_ms': 0,
@@ -905,7 +896,7 @@ class _WebViewShellState extends State<WebViewShell> with WidgetsBindingObserver
           args.isEmpty ? null : args.first,
         );
         debugPrint('[SmartNPS360] getCurrentLocation result=$result');
-        _maybeShowMockLocationDialog(result);
+        MockLocationGuard.maybeShowDialogFromBridgeResult(result);
         return result;
       },
     );
@@ -1641,32 +1632,6 @@ class _WebViewShellState extends State<WebViewShell> with WidgetsBindingObserver
     } catch (e) {
       debugPrint('[SmartNPS360][Push] ios notify web push token failed: $e');
     }
-  }
-
-  void _maybeShowMockLocationDialog(Map<String, dynamic> result) {
-    if (!mounted) return;
-    if (_mockLocationDialogVisible) return;
-
-    final ok = result['ok'] == true;
-    if (!ok) return;
-
-    final location = result['location'];
-    if (location is! Map) return;
-
-    final isMocked = location['isMocked'] == true;
-    final isSimulatedBySoftware = location['isSimulatedBySoftware'] == true;
-    if (!isMocked && !isSimulatedBySoftware) return;
-
-    _mockLocationDialogVisible = true;
-
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      barrierColor: Colors.black.withValues(alpha: 0.32),
-      builder: (context) => const MockLocationDialog(),
-    ).whenComplete(() {
-      if (mounted) _mockLocationDialogVisible = false;
-    });
   }
 
   Future<void> _installThemeListener(InAppWebViewController controller) async {

@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 
+import '../location/mock_location_detection.dart';
+import '../location/mock_location_guard.dart';
 import 'background_location_uploader.dart';
 import 'ios_background_location_notification.dart';
 
@@ -19,7 +21,7 @@ class IosDutyLocationPinger {
   static bool _running = false;
   static bool _recoverInFlight = false;
 
-  static const Duration _pingEvery = Duration(seconds: 5);
+  static const Duration _pingEvery = Duration(seconds: 1);
   static const Duration _recoverDelay = Duration(seconds: 2);
   static const Duration _staleLocationThreshold = Duration(minutes: 2);
 
@@ -98,7 +100,7 @@ class IosDutyLocationPinger {
   }
 
   /// iOS may not emit stream events when the device is stationary (simulator).
-  /// Poll explicitly so ping/batch keep running on the 5s duty interval.
+  /// Poll explicitly so ping/batch keep running on the 1s duty interval.
   static void _startPeriodicPing() {
     _pingTimer?.cancel();
     _pingTimer = Timer.periodic(_pingEvery, (_) {
@@ -177,15 +179,24 @@ class IosDutyLocationPinger {
   static Future<void> _onPosition(Position pos) async {
     final now = DateTime.now();
     final last = _lastUploadAt;
-    if (last != null && now.difference(last) < const Duration(seconds: 5)) {
+    if (last != null && now.difference(last) < const Duration(seconds: 1)) {
       return;
     }
     _lastUploadAt = now;
+
+    final mockFlags = MockLocationDetection.flagsFor(pos);
+    if (mockFlags.isDetected) {
+      MockLocationGuard.maybeShowDialog(
+        isMocked: mockFlags.isMocked,
+        isSimulatedBySoftware: mockFlags.isSimulatedBySoftware,
+      );
+    }
 
     if (kDebugMode) {
       debugPrint(
         '[IosDutyLocationPinger] location '
         'lat=${pos.latitude} lng=${pos.longitude} acc=${pos.accuracy} '
+        'mocked=${mockFlags.isMocked} simulated=${mockFlags.isSimulatedBySoftware} '
         'ts=${pos.timestamp.toIso8601String()}',
       );
     }

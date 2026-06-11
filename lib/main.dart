@@ -4,12 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'firebase_options.dart';
-import 'src/app/app_navigator.dart';
 import 'src/app/smart_nps_app.dart';
 import 'src/push/push_notification_service.dart';
 import 'src/api/api_client.dart';
-import 'package:flutter_background_service/flutter_background_service.dart';
-import 'src/widgets/mock_location_dialog.dart';
+import 'src/location/mock_location_guard.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -19,25 +17,6 @@ Future<void> main() async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   ApiClient.instance.ensureAuthInterceptorInstalled();
   await PushNotificationService.instance.init();
-
-  DateTime? lastMockDialogAt;
-  FlutterBackgroundService().on('mock_location').listen((event) {
-    final now = DateTime.now();
-    final last = lastMockDialogAt;
-    if (last != null && now.difference(last) < const Duration(minutes: 2)) {
-      return;
-    }
-    lastMockDialogAt = now;
-
-    final ctx = AppNavigator.key.currentContext;
-    if (ctx == null) return;
-    showDialog<void>(
-      // ignore: use_build_context_synchronously
-      context: ctx,
-      barrierDismissible: false,
-      barrierColor: Colors.black.withValues(alpha: 0.32),
-      builder: (context) => const MockLocationDialog(),
-    );
-  });
+  MockLocationGuard.ensureBackgroundListenerInstalled();
   runApp(const SmartNpsApp());
 }

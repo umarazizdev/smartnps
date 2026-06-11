@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:geolocator/geolocator.dart';
 
+import '../location/mock_location_detection.dart';
 import 'background_location_uploader.dart';
 
 @pragma('vm:entry-point')
@@ -72,7 +73,7 @@ class BackgroundLocationService {
         ? AndroidSettings(
             accuracy: LocationAccuracy.bestForNavigation,
             distanceFilter: 0,
-            intervalDuration: const Duration(seconds: 5),
+            intervalDuration: const Duration(seconds: 1),
             timeLimit: null,
             forceLocationManager: false,
           )
@@ -90,25 +91,16 @@ class BackgroundLocationService {
       (pos) async {
         final now = DateTime.now();
         final last = lastUploadAt;
-        if (last != null && now.difference(last) < const Duration(seconds: 5)) {
+        if (last != null && now.difference(last) < const Duration(seconds: 1)) {
           return;
         }
         lastUploadAt = now;
 
-        bool isSimulatedBySoftware = false;
-        try {
-          final dynamic p = pos;
-          final dynamic sourceInformation = p.sourceInformation;
-          isSimulatedBySoftware =
-              sourceInformation?.isSimulatedBySoftware == true;
-        } catch (_) {
-          isSimulatedBySoftware = false;
-        }
-
-        if (pos.isMocked || isSimulatedBySoftware) {
+        final mockFlags = MockLocationDetection.flagsFor(pos);
+        if (mockFlags.isDetected) {
           service.invoke('mock_location', {
-            'isMocked': pos.isMocked,
-            'isSimulatedBySoftware': isSimulatedBySoftware,
+            'isMocked': mockFlags.isMocked,
+            'isSimulatedBySoftware': mockFlags.isSimulatedBySoftware,
             'timestamp': pos.timestamp.toIso8601String(),
           });
         }
@@ -118,7 +110,7 @@ class BackgroundLocationService {
           print(
             '[BackgroundLocationService] location '
             'lat=${pos.latitude} lng=${pos.longitude} acc=${pos.accuracy} '
-            'mocked=${pos.isMocked} simulated=$isSimulatedBySoftware '
+            'mocked=${mockFlags.isMocked} simulated=${mockFlags.isSimulatedBySoftware} '
             'ts=${pos.timestamp.toIso8601String()}',
           );
         }
