@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:geolocator/geolocator.dart';
@@ -26,6 +27,8 @@ class BackgroundLocationUploader {
   int _consecutiveBatchFailures = 0;
   bool _isFlushing = false;
   DateTime? _nextBatchAllowedAt;
+  DateTime? _lastSuccessfulBatchFlushAt;
+  DateTime? _batchTimerStartedAt;
   final List<Map<String, dynamic>> _memoryBatch = [];
 
   static const int _maxBatchSize = 20;
@@ -58,12 +61,14 @@ class BackgroundLocationUploader {
   }
 
   void start() {
+    _batchTimerStartedAt ??= DateTime.now();
     _batchTimer ??= Timer.periodic(_batchEvery, (_) => unawaited(flushBatch()));
   }
 
   Future<void> stop() async {
     _batchTimer?.cancel();
     _batchTimer = null;
+    _batchTimerStartedAt = null;
     await flushBatch();
   }
 
@@ -82,9 +87,7 @@ class BackgroundLocationUploader {
         await box.deleteAt(0);
       }
 
-      if (box.length >= _maxBatchSize) {
-        await flushBatch();
-      }
+      await _maybeFlushBatchAfterAdd();
       return;
     }
 
@@ -92,9 +95,33 @@ class BackgroundLocationUploader {
     while (_memoryBatch.length > 2000) {
       _memoryBatch.removeAt(0);
     }
-    if (_memoryBatch.length >= _maxBatchSize) {
+    await _maybeFlushBatchAfterAdd();
+  }
+
+  int _queuedPointCount() {
+    final box = _box;
+    if (box != null) return box.length;
+    return _memoryBatch.length;
+  }
+
+  /// Flushes on full batch (20) or when the queue has 2+ points and the
+  /// batch interval elapsed. Location wakes on iOS may not run [Timer.periodic].
+  Future<void> _maybeFlushBatchAfterAdd() async {
+    final count = _queuedPointCount();
+    if (count < 2) return;
+    if (count >= _maxBatchSize) {
+      await flushBatch();
+      return;
+    }
+    if (_isBatchIntervalElapsed()) {
       await flushBatch();
     }
+  }
+
+  bool _isBatchIntervalElapsed() {
+    final anchor = _lastSuccessfulBatchFlushAt ?? _batchTimerStartedAt;
+    if (anchor == null) return false;
+    return DateTime.now().difference(anchor) >= _batchEvery;
   }
 
   /// Sends the current point to the ping API immediately (no local storage).
@@ -155,6 +182,9 @@ class BackgroundLocationUploader {
       () => sourceInformation?.isSimulatedBySoftware as bool?,
     );
 
+    // Geolocator reports when the GPS fix was measured (UTC), not when we flush batch.
+    final recordedAtUtc = position.timestamp.toUtc();
+
     return {
       'app': AppConfig.appName,
       'platform': DeviceIdentity.platformName(),
@@ -164,8 +194,8 @@ class BackgroundLocationUploader {
       'longitude': position.longitude,
       'accuracy': position.accuracy,
       'altitudeAccuracy': _numOrNull(() => position.altitudeAccuracy),
-      'timestampMs': position.timestamp.millisecondsSinceEpoch,
-      'timestamp': position.timestamp.toIso8601String(),
+      'timestampMs': recordedAtUtc.millisecondsSinceEpoch,
+      'timestamp': recordedAtUtc.toIso8601String(),
       'altitude': position.altitude,
       'speed': _validSensorNumOrNull(() => position.speed),
       'speedAccuracy': _validSensorNumOrNull(() => position.speedAccuracy),
@@ -287,9 +317,8 @@ class BackgroundLocationUploader {
     if (kDebugMode) {
       debugPrint('[BackgroundLocationUploader] flushBatch count=${batch.length}');
       debugPrint('[BackgroundLocationUploader] POST ${_batchUri()} (batch)');
-      debugPrint(
-        '[BackgroundLocationUploader] body=${_truncateForLog({'points': batch})}',
-      );
+      _logBatchTimestampSummary(batch);
+      _logFullJson('batch request', {'points': batch});
     }
 
     final Options options = Options(
@@ -308,6 +337,7 @@ class BackgroundLocationUploader {
 
       _consecutiveBatchFailures = 0;
       _nextBatchAllowedAt = null;
+      _lastSuccessfulBatchFlushAt = DateTime.now();
 
       if (kDebugMode) {
         final status = response.statusCode;
@@ -343,5 +373,78 @@ class BackgroundLocationUploader {
     final text = value?.toString() ?? '';
     if (text.length <= max) return text;
     return '${text.substring(0, max)}...';
+  }
+
+  /// Clarifies that batch `timestamp` values are per-point GPS fix times (UTC),
+  /// which can look "old" vs device local clock or vs batch flush time.
+  void _logBatchTimestampSummary(List<Map<String, dynamic>> batch) {
+    if (!kDebugMode || batch.isEmpty) return;
+
+    final nowUtc = DateTime.now().toUtc();
+    final nowLocal = DateTime.now();
+
+    DateTime? oldestUtc;
+    DateTime? newestUtc;
+    for (final point in batch) {
+      final ms = point['timestampMs'];
+      if (ms is! num) continue;
+      final at = DateTime.fromMillisecondsSinceEpoch(ms.toInt(), isUtc: true);
+      oldestUtc = oldestUtc == null || at.isBefore(oldestUtc) ? at : oldestUtc;
+      newestUtc = newestUtc == null || at.isAfter(newestUtc) ? at : newestUtc;
+    }
+
+    debugPrint(
+      '[BackgroundLocationUploader] device now '
+      'local=${nowLocal.toIso8601String()} utc=${nowUtc.toIso8601String()}',
+    );
+
+    if (oldestUtc == null || newestUtc == null) return;
+
+    final oldestAge = nowUtc.difference(oldestUtc);
+    final newestAge = nowUtc.difference(newestUtc);
+    debugPrint(
+      '[BackgroundLocationUploader] batch GPS fix times (UTC, not flush time): '
+      'oldest=${oldestUtc.toIso8601String()} '
+      '(local ${oldestUtc.toLocal().toIso8601String()}, '
+      '${oldestAge.inSeconds}s before flush) '
+      'newest=${newestUtc.toIso8601String()} '
+      '(local ${newestUtc.toLocal().toIso8601String()}, '
+      '${newestAge.inSeconds}s before flush)',
+    );
+  }
+
+  /// Logs the full JSON body in debug builds, split across lines so logcat
+  /// does not truncate payloads larger than ~4 KB (e.g. 20 GPS points).
+  void _logFullJson(String label, Object? value) {
+    if (!kDebugMode) return;
+
+    final String json;
+    try {
+      json = const JsonEncoder.withIndent('  ').convert(value);
+    } catch (e) {
+      debugPrint(
+        '[BackgroundLocationUploader] $label json encode failed: $e',
+      );
+      debugPrint(
+        '[BackgroundLocationUploader] $label fallback=${_truncateForLog(value)}',
+      );
+      return;
+    }
+
+    const chunkSize = 3500;
+    if (json.length <= chunkSize) {
+      debugPrint('[BackgroundLocationUploader] $label json:\n$json');
+      return;
+    }
+
+    final total = (json.length / chunkSize).ceil();
+    for (var i = 0; i < total; i++) {
+      final start = i * chunkSize;
+      final end = start + chunkSize < json.length ? start + chunkSize : json.length;
+      debugPrint(
+        '[BackgroundLocationUploader] $label json part ${i + 1}/$total:\n'
+        '${json.substring(start, end)}',
+      );
+    }
   }
 }

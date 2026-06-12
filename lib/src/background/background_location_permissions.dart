@@ -275,13 +275,11 @@ class BackgroundLocationPermissions {
       case 'location_always':
         if (Platform.isIOS) {
           return 'Background location is required while you are on duty. '
-              'Please set location to Always.\n\n'
-              'Open ${PermissionSettingsHelper.iosBackgroundLocationSettingsSteps}.';
+              'Please set location to Always.';
         }
         if (Platform.isAndroid) {
           return 'Background location is required while you are on duty. '
-              'Please set location to Allow all the time.\n\n'
-              'Open ${PermissionSettingsHelper.androidBackgroundLocationSettingsSteps}.';
+              'Please set location to Allow all the time.';
         }
         return 'Please enable always-on location access for duty tracking.';
       case 'notification':
