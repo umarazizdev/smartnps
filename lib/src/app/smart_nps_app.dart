@@ -6,7 +6,6 @@ import 'package:get/get.dart';
 
 import '../app/app_navigator.dart';
 import '../app/native_theme_controller.dart';
-import '../dev/location_test_screen.dart';
 import '../webview/webview_shell.dart';
 import 'unsupported_platform_screen.dart';
 
@@ -64,7 +63,6 @@ class SmartNpsApp extends StatelessWidget {
         home: (kIsWeb || !(Platform.isAndroid || Platform.isIOS))
             ? const UnsupportedPlatformScreen()
             : const WebViewShell(),
-        routes: {'/__dev/location': (_) => const LocationTestScreen()},
       );
     });
   }

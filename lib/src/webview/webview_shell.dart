@@ -2095,7 +2095,6 @@ class _WebViewShellState extends State<WebViewShell> with WidgetsBindingObserver
     return true;
   }
 }
-
 class _SplashOverlay extends StatelessWidget {
   const _SplashOverlay({required this.isDark});
 
@@ -2103,6 +2102,7 @@ class _SplashOverlay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final logoWidth = MediaQuery.sizeOf(context).width * 0.7;
     return ColoredBox(
       color: isDark
           ? const Color(AppConfig.cDarkCardColor)
@@ -2112,7 +2112,11 @@ class _SplashOverlay extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Image.asset('assets/npslogo.png', width: 160, height: 160),
+              Image.asset(
+                'assets/npslogo.png',
+                width: logoWidth,
+                fit: BoxFit.contain,
+              ),
             ],
           ),
         ),
