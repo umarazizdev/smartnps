@@ -19,6 +19,7 @@ import '../utilities/app_config.dart';
 import 'js_bridge.dart';
 import '../app/offline_screen.dart';
 import '../widgets/platform_bottom_bar.dart';
+import '../widgets/background_location_required_banner.dart';
 import '../location/mock_location_detection.dart';
 import '../location/mock_location_guard.dart';
 import '../auth/auth_session_manager.dart';
@@ -1855,14 +1856,26 @@ class _WebViewShellState extends State<WebViewShell> with WidgetsBindingObserver
             body: SafeArea(
               top: true,
               bottom: false,
-              child: Stack(
-                children: [
-                  if (_showOffline)
-                    OfflineScreen(onRetry: _retry)
-                  else
-                    Padding(
-                      padding: EdgeInsets.only(bottom: 0),
-                      child: InAppWebView(
+              child: ValueListenableBuilder<bool>(
+                valueListenable: DutyHeartbeatService
+                    .instance
+                    .backgroundLocationPermissionMissing,
+                builder: (context, showBackgroundLocationBanner, _) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (showBackgroundLocationBanner &&
+                          (Platform.isAndroid || Platform.isIOS))
+                        const BackgroundLocationRequiredBanner(),
+                      Expanded(
+                        child: Stack(
+                          children: [
+                            if (_showOffline)
+                              OfflineScreen(onRetry: _retry)
+                            else
+                              Padding(
+                                padding: EdgeInsets.only(bottom: 0),
+                                child: InAppWebView(
                         initialUrlRequest: URLRequest(
                           url: WebUri(AppConfig.initialUrl),
                         ),
@@ -1977,27 +1990,34 @@ class _WebViewShellState extends State<WebViewShell> with WidgetsBindingObserver
                             mode: LaunchMode.externalApplication,
                           );
                         },
-                      ),
-                    ),
-                  if (!_firstPageLoaded && !_showOffline)
-                    _SplashOverlay(isDark: _webPrefersDark),
-                  AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 160),
-                    switchInCurve: Curves.easeOut,
-                    switchOutCurve: Curves.easeIn,
-                    child: _shouldShowBottomBar(context)
-                        ? Align(
-                            key: const ValueKey('bottom-bar'),
-                            alignment: Alignment.bottomCenter,
-                            child: _BottomBar(
-                              currentUri: _currentUri,
-                              isDark: _webPrefersDark,
-                              onTap: _onBottomTap,
+                                ),
+                              ),
+                            if (!_firstPageLoaded && !_showOffline)
+                              _SplashOverlay(isDark: _webPrefersDark),
+                            AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 160),
+                              switchInCurve: Curves.easeOut,
+                              switchOutCurve: Curves.easeIn,
+                              child: _shouldShowBottomBar(context)
+                                  ? Align(
+                                      key: const ValueKey('bottom-bar'),
+                                      alignment: Alignment.bottomCenter,
+                                      child: _BottomBar(
+                                        currentUri: _currentUri,
+                                        isDark: _webPrefersDark,
+                                        onTap: _onBottomTap,
+                                      ),
+                                    )
+                                  : const SizedBox.shrink(
+                                      key: ValueKey('no-bottom-bar'),
+                                    ),
                             ),
-                          )
-                        : const SizedBox.shrink(key: ValueKey('no-bottom-bar')),
-                  ),
-                ],
+                          ],
+                        ),
+                      ),
+                    ],
+                  );
+                },
               ),
             ),
           ),

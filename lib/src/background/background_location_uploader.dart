@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:dio/dio.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter/foundation.dart';
@@ -18,7 +19,7 @@ class BackgroundLocationUploader {
   }
 
   final Dio _dio;
-
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
   static const String _boxName = 'gps_points';
   Box<Map>? _box;
   String? _deviceId;
@@ -62,14 +63,35 @@ class BackgroundLocationUploader {
 
   void start() {
     _batchTimerStartedAt ??= DateTime.now();
+
     _batchTimer ??= Timer.periodic(_batchEvery, (_) => unawaited(flushBatch()));
+
+    _connectivitySub ??= Connectivity().onConnectivityChanged.listen((results) {
+      final hasNetwork = results.any((r) => r != ConnectivityResult.none);
+
+      if (!hasNetwork) return;
+
+      unawaited(
+        flushBatch().catchError((Object e) {
+          if (kDebugMode) {
+            debugPrint(
+              '[BackgroundLocationUploader] connectivity flush failed: $e',
+            );
+          }
+        }),
+      );
+    });
   }
 
   Future<void> stop() async {
     _batchTimer?.cancel();
     _batchTimer = null;
     _batchTimerStartedAt = null;
-    await flushBatch();
+
+    await _connectivitySub?.cancel();
+    _connectivitySub = null;
+
+    await flushBatch(force: true);
   }
 
   /// Stores points for batch upload only (Hive).
@@ -252,36 +274,39 @@ class BackgroundLocationUploader {
     }
   }
 
-  Future<void> flushBatch() async {
+  Future<void> flushBatch({bool force = false}) async {
     if (_isFlushing) return;
-    final nextAllowed = _nextBatchAllowedAt;
-    if (nextAllowed != null && DateTime.now().isBefore(nextAllowed)) return;
+    if (!force) {
+      final nextAllowed = _nextBatchAllowedAt;
+      if (nextAllowed != null && DateTime.now().isBefore(nextAllowed)) return;
+    }
 
     final box = _box;
     if (box != null) {
-      if (box.length < 2) return;
-      await _flushHiveBatch(box);
+      if (box.isEmpty) return;
+      if (!force && box.length < 2) return;
+      await _flushHiveBatch(box, force: force);
       return;
     }
 
-    if (_memoryBatch.length < 2) return;
-    await _flushMemoryBatch();
+    if (_memoryBatch.isEmpty) return;
+    if (!force && _memoryBatch.length < 2) return;
+    await _flushMemoryBatch(force: force);
   }
 
-  Future<void> _flushHiveBatch(Box<Map> box) async {
+  Future<void> _flushHiveBatch(Box<Map> box, {bool force = false}) async {
     _isFlushing = true;
     final takeCount = box.length < _maxBatchSize ? box.length : _maxBatchSize;
     final keys = box.keys.take(takeCount).toList(growable: false);
     final batch = keys
         .map(
-          (k) => _sanitizePoint(
-            Map<String, dynamic>.from(box.get(k) ?? const {}),
-          ),
+          (k) =>
+              _sanitizePoint(Map<String, dynamic>.from(box.get(k) ?? const {})),
         )
         .where((m) => m.isNotEmpty)
         .toList(growable: false);
 
-    if (batch.length < 2) {
+    if (batch.isEmpty || (!force && batch.length < 2)) {
       _isFlushing = false;
       return;
     }
@@ -294,13 +319,13 @@ class BackgroundLocationUploader {
     }
   }
 
-  Future<void> _flushMemoryBatch() async {
+  Future<void> _flushMemoryBatch({bool force = false}) async {
     _isFlushing = true;
     final takeCount = _memoryBatch.length < _maxBatchSize
         ? _memoryBatch.length
         : _maxBatchSize;
     final batch = _memoryBatch.take(takeCount).toList(growable: false);
-    if (batch.length < 2) {
+    if (batch.isEmpty || (!force && batch.length < 2)) {
       _isFlushing = false;
       return;
     }
@@ -315,7 +340,9 @@ class BackgroundLocationUploader {
 
   Future<void> _postBatch(List<Map<String, dynamic>> batch) async {
     if (kDebugMode) {
-      debugPrint('[BackgroundLocationUploader] flushBatch count=${batch.length}');
+      debugPrint(
+        '[BackgroundLocationUploader] flushBatch count=${batch.length}',
+      );
       debugPrint('[BackgroundLocationUploader] POST ${_batchUri()} (batch)');
       _logBatchTimestampSummary(batch);
       _logFullJson('batch request', {'points': batch});
@@ -422,9 +449,7 @@ class BackgroundLocationUploader {
     try {
       json = const JsonEncoder.withIndent('  ').convert(value);
     } catch (e) {
-      debugPrint(
-        '[BackgroundLocationUploader] $label json encode failed: $e',
-      );
+      debugPrint('[BackgroundLocationUploader] $label json encode failed: $e');
       debugPrint(
         '[BackgroundLocationUploader] $label fallback=${_truncateForLog(value)}',
       );
@@ -440,7 +465,9 @@ class BackgroundLocationUploader {
     final total = (json.length / chunkSize).ceil();
     for (var i = 0; i < total; i++) {
       final start = i * chunkSize;
-      final end = start + chunkSize < json.length ? start + chunkSize : json.length;
+      final end = start + chunkSize < json.length
+          ? start + chunkSize
+          : json.length;
       debugPrint(
         '[BackgroundLocationUploader] $label json part ${i + 1}/$total:\n'
         '${json.substring(start, end)}',

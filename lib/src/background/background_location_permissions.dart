@@ -127,7 +127,7 @@ class BackgroundLocationPermissions {
 
     // Foreground location is enough to start; user can upgrade in settings.
     return const BackgroundPermissionOutcome(
-      granted: true,
+      granted: false,
       openSettings: true,
       deniedReason: 'location_background',
     );
@@ -143,7 +143,9 @@ class BackgroundLocationPermissions {
     final permission = await readIosLocationPermission();
     if (kDebugMode && Platform.isIOS) {
       // ignore: avoid_print
-      print('[BackgroundLocationPermissions] ios geolocator(check)=$permission');
+      print(
+        '[BackgroundLocationPermissions] ios geolocator(check)=$permission',
+      );
     }
     return permission;
   }
@@ -184,7 +186,7 @@ class BackgroundLocationPermissions {
 
     // whileInUse: tracking can start, but background updates need "Always".
     return const BackgroundPermissionOutcome(
-      granted: true,
+      granted: false,
       openSettings: true,
       deniedReason: 'location_always',
     );
@@ -236,9 +238,7 @@ class BackgroundLocationPermissions {
     }
     if (Platform.isAndroid) {
       final bg = await Permission.locationAlways.status;
-      if (bg.isGranted) return true;
-      final fg = await Permission.location.status;
-      return fg.isGranted;
+      return bg.isGranted;
     }
     return true;
   }

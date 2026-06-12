@@ -1,9 +1,12 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../app/app_navigator.dart';
+import '../background/background_location_permissions.dart';
 import '../widgets/glass_action_dialog.dart';
 
 enum PermissionSettingsPromptResult { skipped, dismissed, openedSettings }
@@ -22,6 +25,56 @@ class PermissionSettingsHelper {
 
   static Future<void> launchAppSettings() async {
     await Geolocator.openAppSettings();
+  }
+
+  /// Opens the native location-permission flow when possible, then falls back to
+  /// app settings only if the system dialog cannot be shown again.
+  static Future<void> launchLocationPermissionSettings() async {
+    if (Platform.isAndroid || Platform.isIOS) {
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        await Geolocator.openLocationSettings();
+        return;
+      }
+    }
+
+    if (Platform.isAndroid) {
+      final foreground = await Permission.location.status;
+      if (!foreground.isGranted) {
+        final foregroundResult = await Permission.location.request();
+        if (await BackgroundLocationPermissions.hasSufficientBackgroundAccess()) {
+          return;
+        }
+        if (shouldOpenSettings(foregroundResult)) {
+          await launchAppSettings();
+          return;
+        }
+      }
+
+      final background = await Permission.locationAlways.status;
+      if (!background.isGranted) {
+        // Foreground already granted: shows Android "Allow all the time" sheet.
+        final backgroundResult = await Permission.locationAlways.request();
+        if (backgroundResult.isGranted) return;
+        if (shouldOpenSettings(backgroundResult) || backgroundResult.isDenied) {
+          await launchAppSettings();
+        }
+        return;
+      }
+      return;
+    }
+
+    if (Platform.isIOS) {
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.always) return;
+      }
+      await Geolocator.openAppSettings();
+      return;
+    }
+
+    await launchAppSettings();
   }
 
   /// Shows an explanatory dialog first. Settings open only if the user taps
@@ -73,7 +126,11 @@ class PermissionSettingsHelper {
       openedSettings = openSettings == true;
 
       if (openedSettings) {
-        await launchAppSettings();
+        if (dialogKey == 'background_location') {
+          await launchLocationPermissionSettings();
+        } else {
+          await launchAppSettings();
+        }
         return PermissionSettingsPromptResult.openedSettings;
       }
       return PermissionSettingsPromptResult.dismissed;

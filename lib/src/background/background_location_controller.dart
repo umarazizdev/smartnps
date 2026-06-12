@@ -12,7 +12,8 @@ class BackgroundLocationController {
   static Future<Map<String, dynamic>> ensureStarted() async {
     try {
       if (Platform.isIOS) {
-        if (IosDutyLocationPinger.isRunning && !IosDutyLocationPinger.needsRecovery) {
+        if (IosDutyLocationPinger.isRunning &&
+            !IosDutyLocationPinger.needsRecovery) {
           return {'ok': true, 'started': false, 'running': true};
         }
         if (IosDutyLocationPinger.isRunning) {
@@ -33,6 +34,23 @@ class BackgroundLocationController {
           'permissions': await BackgroundLocationPermissions.statusSnapshot(),
           'openSettings': outcome.openSettings,
           'deniedReason': outcome.deniedReason,
+          'error': {
+            'code': 'permission_denied',
+            'message': 'Background location permission not granted',
+          },
+        };
+      }
+      final hasBackgroundAccess =
+          await BackgroundLocationPermissions.hasSufficientBackgroundAccess();
+
+      if (!hasBackgroundAccess) {
+        return {
+          'ok': false,
+          'permissions': await BackgroundLocationPermissions.statusSnapshot(),
+          'openSettings': true,
+          'deniedReason': Platform.isIOS
+              ? 'location_always'
+              : 'location_background',
           'error': {
             'code': 'permission_denied',
             'message': 'Background location permission not granted',
