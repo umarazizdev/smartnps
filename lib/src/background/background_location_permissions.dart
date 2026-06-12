@@ -262,6 +262,57 @@ class BackgroundLocationPermissions {
     }
   }
 
+  static String bannerTitleFor(String? deniedReason) {
+    switch (deniedReason) {
+      case 'location_services_disabled':
+        return 'Turn on location services';
+      case 'location_foreground':
+      case 'location_when_in_use':
+        return 'Location permission needed';
+      case 'location_background':
+      case 'location_always':
+        return 'Background location required';
+      default:
+        return 'Location permission needed';
+    }
+  }
+
+  static String bannerMessageFor(String? deniedReason) {
+    switch (deniedReason) {
+      case 'location_services_disabled':
+        return 'Location services are turned off. Turn them on to continue '
+            'duty tracking while you are on duty.';
+      case 'location_foreground':
+        return 'Tap Allow Location to grant access. Your location is used only '
+            'while you are on duty.';
+      case 'location_when_in_use':
+        return 'Tap Allow Location to grant access. Your location is used only '
+            'while you are on duty.';
+      case 'location_background':
+        return 'Tap Allow all the time on the next screen, or open Settings to '
+            'enable background location for duty tracking.';
+      case 'location_always':
+        return 'Open Settings and set location to Always. Your location is used '
+            'only while you are on duty.';
+      default:
+        return 'Location access is required while you are on duty.';
+    }
+  }
+
+  static String bannerButtonLabelFor(String? deniedReason) {
+    switch (deniedReason) {
+      case 'location_services_disabled':
+      case 'location_background':
+      case 'location_always':
+        return 'Open Settings';
+      case 'location_foreground':
+      case 'location_when_in_use':
+        return 'Allow Location';
+      default:
+        return 'Enable Location';
+    }
+  }
+
   static String settingsMessageFor(String? deniedReason) {
     switch (deniedReason) {
       case 'location_services_disabled':

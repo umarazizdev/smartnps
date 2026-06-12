@@ -1,29 +1,82 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../background/background_location_permissions.dart';
 import '../background/duty_heartbeat_service.dart';
 import '../utilities/app_config.dart';
 import '../utilities/permission_settings_helper.dart';
 
-class BackgroundLocationRequiredBanner extends StatelessWidget {
+class BackgroundLocationRequiredBanner extends StatefulWidget {
   const BackgroundLocationRequiredBanner({super.key});
 
-  Future<void> _onEnableLocation() async {
-    await PermissionSettingsHelper.launchLocationPermissionSettings();
+  @override
+  State<BackgroundLocationRequiredBanner> createState() =>
+      _BackgroundLocationRequiredBannerState();
+}
+
+class _BackgroundLocationRequiredBannerState
+    extends State<BackgroundLocationRequiredBanner> with WidgetsBindingObserver {
+  String? _deniedReason;
+  bool _loading = true;
+  bool _requestInFlight = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    unawaited(_refreshBannerContent());
   }
 
-  String _permissionHint() {
-    if (Platform.isIOS) return 'Always';
-    if (Platform.isAndroid) return 'Allow all the time';
-    return 'Always';
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_refreshBannerContent());
+    }
+  }
+
+  Future<void> _refreshBannerContent() async {
+    final reason =
+        await BackgroundLocationPermissions.settingsDeniedReasonIfAny();
+    if (!mounted) return;
+    setState(() {
+      _deniedReason = reason;
+      _loading = false;
+    });
+  }
+
+  Future<void> _onEnableLocation() async {
+    if (_requestInFlight) return;
+    setState(() => _requestInFlight = true);
+    try {
+      await PermissionSettingsHelper.requestNextLocationPermissionStep();
+      await _refreshBannerContent();
+      await DutyHeartbeatService.instance
+          .refreshBackgroundLocationPermissionBannerState();
+    } finally {
+      if (mounted) setState(() => _requestInFlight = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final permissionHint = _permissionHint();
+    final deniedReason = _deniedReason;
+    final title = _loading
+        ? 'Location permission needed'
+        : BackgroundLocationPermissions.bannerTitleFor(deniedReason);
+    final message = _loading
+        ? 'Checking location access...'
+        : BackgroundLocationPermissions.bannerMessageFor(deniedReason);
+    final buttonLabel = _loading
+        ? 'Enable Location'
+        : BackgroundLocationPermissions.bannerButtonLabelFor(deniedReason);
 
     final background = isDark
         ? const Color(0xFF1A2332)
@@ -71,7 +124,7 @@ class BackgroundLocationRequiredBanner extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Background location required',
+                          title,
                           style: TextStyle(
                             color: titleColor,
                             fontSize: 14,
@@ -81,8 +134,7 @@ class BackgroundLocationRequiredBanner extends StatelessWidget {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          'Enable $permissionHint location to continue duty tracking. '
-                          'Your location is used only while you are on duty.',
+                          message,
                           style: TextStyle(
                             color: messageColor,
                             fontSize: 12.5,
@@ -98,13 +150,7 @@ class BackgroundLocationRequiredBanner extends StatelessWidget {
               Align(
                 alignment: Alignment.centerRight,
                 child: FilledButton(
-                  onPressed: () {
-                    unawaited(() async {
-                      await _onEnableLocation();
-                      await DutyHeartbeatService.instance
-                          .refreshBackgroundLocationPermissionBannerState();
-                    }());
-                  },
+                  onPressed: _loading || _requestInFlight ? null : _onEnableLocation,
                   style: FilledButton.styleFrom(
                     backgroundColor: isDark
                         ? accent
@@ -123,9 +169,12 @@ class BackgroundLocationRequiredBanner extends StatelessWidget {
                       borderRadius: BorderRadius.circular(8),
                     ),
                   ),
-                  child: const Text(
-                    'Enable Location',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  child: Text(
+                    buttonLabel,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               ),

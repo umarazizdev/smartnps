@@ -12,6 +12,12 @@ import '../widgets/glass_action_dialog.dart';
 
 enum PermissionSettingsPromptResult { skipped, dismissed, openedSettings }
 
+enum LocationPermissionRequestResult {
+  completed,
+  promptShown,
+  openedSettings,
+}
+
 class PermissionSettingsHelper {
   PermissionSettingsHelper._();
 
@@ -21,61 +27,95 @@ class PermissionSettingsHelper {
   static const Duration _promptCooldown = Duration(minutes: 2);
 
   static bool shouldOpenSettings(PermissionStatus status) {
-    return status.isPermanentlyDenied || status.isRestricted || status.isDenied;
+    return status.isPermanentlyDenied || status.isRestricted;
   }
 
   static Future<void> launchAppSettings() async {
     await Geolocator.openAppSettings();
   }
 
-  /// Opens the native location-permission flow when possible, then falls back to
-  /// app settings only if the system dialog cannot be shown again.
-  static Future<void> launchLocationPermissionSettings() async {
+  /// Handles one location-permission step per call: OS prompt or Settings, never both.
+  static Future<LocationPermissionRequestResult>
+  requestNextLocationPermissionStep() async {
     if (Platform.isAndroid || Platform.isIOS) {
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
         await Geolocator.openLocationSettings();
-        return;
+        return LocationPermissionRequestResult.openedSettings;
       }
     }
 
     if (Platform.isAndroid) {
-      final foreground = await Permission.location.status;
-      if (!foreground.isGranted) {
-        final foregroundResult = await Permission.location.request();
-        if (await BackgroundLocationPermissions.hasSufficientBackgroundAccess()) {
-          return;
-        }
-        if (shouldOpenSettings(foregroundResult)) {
-          await launchAppSettings();
-          return;
-        }
-      }
-
-      final background = await Permission.locationAlways.status;
-      if (!background.isGranted) {
-        // Foreground already granted: shows Android "Allow all the time" sheet.
-        final backgroundResult = await Permission.locationAlways.request();
-        if (backgroundResult.isGranted) return;
-        if (shouldOpenSettings(backgroundResult) || backgroundResult.isDenied) {
-          await launchAppSettings();
-        }
-        return;
-      }
-      return;
+      return _requestNextAndroidLocationStep();
     }
 
     if (Platform.isIOS) {
-      var permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.always) return;
+      return _requestNextIosLocationStep();
+    }
+
+    return LocationPermissionRequestResult.completed;
+  }
+
+  static Future<LocationPermissionRequestResult>
+  _requestNextAndroidLocationStep() async {
+    final foreground = await Permission.location.status;
+    if (!foreground.isGranted) {
+      if (shouldOpenSettings(foreground)) {
+        await launchAppSettings();
+        return LocationPermissionRequestResult.openedSettings;
       }
-      await Geolocator.openAppSettings();
-      return;
+      await Permission.location.request();
+      return LocationPermissionRequestResult.promptShown;
+    }
+
+    if (await BackgroundLocationPermissions.hasSufficientBackgroundAccess()) {
+      return LocationPermissionRequestResult.completed;
+    }
+
+    final background = await Permission.locationAlways.status;
+    if (shouldOpenSettings(background)) {
+      await launchAppSettings();
+      return LocationPermissionRequestResult.openedSettings;
+    }
+
+    await Permission.locationAlways.request();
+    if (await BackgroundLocationPermissions.hasSufficientBackgroundAccess()) {
+      return LocationPermissionRequestResult.completed;
+    }
+
+    final after = await Permission.locationAlways.status;
+    if (shouldOpenSettings(after)) {
+      await launchAppSettings();
+      return LocationPermissionRequestResult.openedSettings;
+    }
+
+    return LocationPermissionRequestResult.promptShown;
+  }
+
+  static Future<LocationPermissionRequestResult> _requestNextIosLocationStep() async {
+    var permission = await Geolocator.checkPermission();
+
+    if (permission == LocationPermission.deniedForever) {
+      await launchAppSettings();
+      return LocationPermissionRequestResult.openedSettings;
+    }
+
+    if (permission == LocationPermission.denied) {
+      await Geolocator.requestPermission();
+      return LocationPermissionRequestResult.promptShown;
+    }
+
+    if (permission == LocationPermission.always) {
+      return LocationPermissionRequestResult.completed;
     }
 
     await launchAppSettings();
+    return LocationPermissionRequestResult.openedSettings;
+  }
+
+  /// One staged step per call. Prefer [requestNextLocationPermissionStep].
+  static Future<void> launchLocationPermissionSettings() async {
+    await requestNextLocationPermissionStep();
   }
 
   /// Shows an explanatory dialog first. Settings open only if the user taps
