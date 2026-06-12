@@ -14,6 +14,7 @@ import '../app/app_navigator.dart';
 import '../auth/auth_repository.dart';
 import '../push/push_notification_service.dart';
 import '../utilities/app_config.dart';
+import '../utilities/overlay_prompt_guard.dart';
 import '../utilities/permission_settings_helper.dart';
 import '../widgets/location_tracking_disclosure_dialog.dart';
 import 'background_location_controller.dart';
@@ -80,11 +81,16 @@ class DutyHeartbeatService {
   Future<void> _hydrateConsentFromStorage() async {
     if (await DutyTrackingPreferences.isDisclosureAccepted()) {
       _disclosureAccepted = true;
+      _disclosureDeferred = false;
+      return;
+    }
+
+    if (await DutyTrackingPreferences.isDisclosureDismissed()) {
+      _disclosureDeferred = true;
     }
   }
 
   /// Re-checks prompts after page refresh or app resume.
-  /// "Not now" is memory-only and is cleared here so the user can be asked again.
   Future<void> recheckOnDutyPrompts() async {
     final token = await AuthRepository.instance.getAccessToken();
     if (token == null || token.isEmpty) return;
@@ -93,7 +99,8 @@ class DutyHeartbeatService {
       promptIfNeeded: true,
     );
 
-    _disclosureDeferred = false;
+    await OverlayPromptGuard.waitUntilReady();
+
     await DutyTrackingPreferences.clearSettingsPromptDeferred();
 
     await _hydrateConsentFromStorage();
@@ -489,10 +496,12 @@ class DutyHeartbeatService {
       return true;
     }
 
-    if (_disclosureDeferred) {
+    if (_disclosureDeferred ||
+        await DutyTrackingPreferences.isDisclosureDismissed()) {
+      _disclosureDeferred = true;
       if (kDebugMode) {
         debugPrint(
-          '[DutyHeartbeatService] disclosure skipped (not now, until refresh)',
+          '[DutyHeartbeatService] disclosure skipped (dismissed for this shift)',
         );
       }
       return false;
@@ -511,6 +520,9 @@ class DutyHeartbeatService {
     }
 
     if (!context.mounted) return false;
+
+    await OverlayPromptGuard.waitUntilReady();
+    if (!_heartbeatActive || !await _hasActiveAuthToken()) return false;
 
     final future = _promptBackgroundLocationDisclosure(context);
     _disclosurePromptFuture = future;
@@ -533,6 +545,7 @@ class DutyHeartbeatService {
     }
 
     _disclosureDeferred = true;
+    await DutyTrackingPreferences.setDisclosureDismissed();
     return false;
   }
 
@@ -551,6 +564,9 @@ class DutyHeartbeatService {
       await refreshBackgroundLocationPermissionBannerState();
       return;
     }
+
+    await OverlayPromptGuard.waitUntilReady();
+    if (_backgroundLocationSettingsDialogVisible) return;
 
     _backgroundLocationSettingsDialogVisible = true;
     try {

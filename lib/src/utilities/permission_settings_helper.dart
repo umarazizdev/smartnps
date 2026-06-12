@@ -7,6 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../app/app_navigator.dart';
 import '../background/background_location_permissions.dart';
+import '../utilities/overlay_prompt_guard.dart';
 import '../widgets/glass_action_dialog.dart';
 
 enum PermissionSettingsPromptResult { skipped, dismissed, openedSettings }
@@ -109,13 +110,25 @@ class PermissionSettingsHelper {
       return PermissionSettingsPromptResult.skipped;
     }
 
+    await OverlayPromptGuard.waitUntilReady();
+
+    final readyContext = AppNavigator.key.currentContext;
+    if (readyContext == null || !readyContext.mounted) {
+      if (kDebugMode) {
+        debugPrint(
+          '[PermissionSettings] skip dialog key=$dialogKey (no context after wait)',
+        );
+      }
+      return PermissionSettingsPromptResult.skipped;
+    }
+
     _dialogVisible = true;
     _lastPromptAtByKey[dialogKey] = DateTime.now();
     var openedSettings = false;
 
     try {
       final openSettings = await GlassActionDialog.show(
-        context: context,
+        context: readyContext,
         barrierDismissible: barrierDismissible,
         icon: Icons.location_on_rounded,
         title: title,

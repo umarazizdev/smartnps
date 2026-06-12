@@ -29,6 +29,7 @@ import '../api/api_client.dart';
 import '../background/duty_heartbeat_service.dart';
 import '../app/native_theme_controller.dart';
 import '../push/push_notification_service.dart';
+import '../utilities/overlay_prompt_guard.dart';
 
 class WebViewShell extends StatefulWidget {
   const WebViewShell({super.key});
@@ -52,9 +53,18 @@ class _WebViewShellState extends State<WebViewShell> with WidgetsBindingObserver
   final Map<int, StreamSubscription<Position>> _nativeGeoWatches = {};
   final _WebViewShellUiController _uiController = _WebViewShellUiController();
   String? _pendingPushUrl;
+  Uri? _uriAtLoadStart;
 
   void _refreshUi() {
     if (mounted) _uiController.update();
+  }
+
+  void _markPostLoginOverlayDelay() {
+    OverlayPromptGuard.markPostLoginDelay();
+    _refreshUi();
+    Future<void>.delayed(OverlayPromptGuard.postLoginDelay, () {
+      if (mounted) _refreshUi();
+    });
   }
 
   Map<String, dynamic> _safeBridgePayloadForLog(Map payload) {
@@ -582,6 +592,67 @@ class _WebViewShellState extends State<WebViewShell> with WidgetsBindingObserver
     injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
   );
 
+  static final UserScript _keyboardVisibilityScript = UserScript(
+    source: r'''
+    (function () {
+      'use strict';
+      if (window.__smartnps_keyboard_bridge_installed) return;
+      window.__smartnps_keyboard_bridge_installed = true;
+
+      var active = false;
+
+      function notify(open) {
+        if (active === open) return;
+        active = open;
+        try {
+          if (window.flutter_inappwebview &&
+              typeof window.flutter_inappwebview.callHandler === 'function') {
+            window.flutter_inappwebview.callHandler('keyboardVisibilityChanged', {
+              visible: open
+            });
+          }
+        } catch (_) {}
+      }
+
+      function isEditable(el) {
+        if (!el || el.nodeType !== 1) return false;
+        var tag = el.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+        return el.isContentEditable === true;
+      }
+
+      function hasFocusedEditable() {
+        return isEditable(document.activeElement);
+      }
+
+      document.addEventListener('focusin', function (e) {
+        if (isEditable(e.target)) notify(true);
+      }, true);
+
+      document.addEventListener('focusout', function () {
+        setTimeout(function () {
+          if (!hasFocusedEditable()) notify(false);
+        }, 120);
+      }, true);
+
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', function () {
+          var inset =
+            window.innerHeight -
+            window.visualViewport.height -
+            window.visualViewport.offsetTop;
+          if (inset > 100) {
+            notify(true);
+          } else if (!hasFocusedEditable()) {
+            notify(false);
+          }
+        });
+      }
+    })();
+  ''',
+    injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+  );
+
   /// iOS WKWebView: force the officer notification dropdown to use the mobile
   /// fixed layout (left/right inset) instead of sm:absolute right-anchored layout.
   static final UserScript _iosPopoverFixScript = UserScript(
@@ -876,6 +947,18 @@ class _WebViewShellState extends State<WebViewShell> with WidgetsBindingObserver
     }
 
     controller.addJavaScriptHandler(
+      handlerName: 'keyboardVisibilityChanged',
+      callback: (args) {
+        final payload = args.isNotEmpty && args.first is Map
+            ? args.first as Map
+            : null;
+        OverlayPromptGuard.setWebKeyboardVisible(payload?['visible'] == true);
+        _refreshUi();
+        return {'ok': true};
+      },
+    );
+
+    controller.addJavaScriptHandler(
       handlerName: 'pickFile',
       callback: (args) => _bridge.pickFile(args.isEmpty ? null : args.first),
     );
@@ -1153,6 +1236,8 @@ class _WebViewShellState extends State<WebViewShell> with WidgetsBindingObserver
         final action = (payload['action'] ?? payload['type'] ?? '').toString();
         if (action == 'logout') {
           await AuthSessionManager.clearNativeSession(deletePushToken: true);
+          OverlayPromptGuard.clearPostLoginDelay();
+          OverlayPromptGuard.setWebKeyboardVisible(false);
           unawaited(
             _controller?.evaluateJavascript(
               source:
@@ -1211,6 +1296,7 @@ class _WebViewShellState extends State<WebViewShell> with WidgetsBindingObserver
             accessToken: accessToken,
             refreshToken: refreshToken,
           );
+          _markPostLoginOverlayDelay();
           _syncPushTokenAfterLogin();
           unawaited(_maybeStartDutyHeartbeat());
           return {'ok': true, 'action': authAction};
@@ -1250,6 +1336,7 @@ class _WebViewShellState extends State<WebViewShell> with WidgetsBindingObserver
             accessToken: accessToken,
             refreshToken: refreshToken,
           );
+          _markPostLoginOverlayDelay();
           _syncPushTokenAfterLogin();
           unawaited(_maybeStartDutyHeartbeat());
           return {'ok': true, 'action': 'session'};
@@ -1332,6 +1419,7 @@ class _WebViewShellState extends State<WebViewShell> with WidgetsBindingObserver
       if (syncPush) {
         await PushNotificationService.instance.syncPushTokenAfterLogin();
       }
+      _markPostLoginOverlayDelay();
       await _maybeStartDutyHeartbeat();
       return true;
     } catch (e) {
@@ -1757,6 +1845,7 @@ class _WebViewShellState extends State<WebViewShell> with WidgetsBindingObserver
     final scripts = <UserScript>[
       _smartNpsBridgeScript,
       _geolocationScript,
+      _keyboardVisibilityScript,
       if (Platform.isIOS) _iosPopoverFixScript,
     ];
     return UnmodifiableListView(scripts);
@@ -1861,11 +1950,14 @@ class _WebViewShellState extends State<WebViewShell> with WidgetsBindingObserver
                     .instance
                     .backgroundLocationPermissionMissing,
                 builder: (context, showBackgroundLocationBanner, _) {
+                  final showBanner =
+                      showBackgroundLocationBanner &&
+                      (Platform.isAndroid || Platform.isIOS) &&
+                      OverlayPromptGuard.canShowOverlay(context);
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      if (showBackgroundLocationBanner &&
-                          (Platform.isAndroid || Platform.isIOS))
+                      if (showBanner)
                         const BackgroundLocationRequiredBanner(),
                       Expanded(
                         child: Stack(
@@ -1896,6 +1988,7 @@ class _WebViewShellState extends State<WebViewShell> with WidgetsBindingObserver
                         shouldOverrideUrlLoading: (controller, action) async =>
                             _handleNavigation(action),
                         onLoadStart: (controller, url) {
+                          _uriAtLoadStart = _currentUri;
                           _currentUri = url?.uriValue;
                           _refreshUi();
                         },
@@ -1920,9 +2013,16 @@ class _WebViewShellState extends State<WebViewShell> with WidgetsBindingObserver
                           await AuthSessionManager.clearNativeSessionIfLoginScreen(
                             url?.uriValue,
                           );
+                          final leavingLoginRoute =
+                              _isAuthRoute(_uriAtLoadStart) &&
+                              !AuthSessionManager.isLoginRoute(url?.uriValue);
                           if (AuthSessionManager.isLoginRoute(url?.uriValue)) {
                             _stopDutyHeartbeat();
+                            OverlayPromptGuard.clearPostLoginDelay();
                           } else {
+                            if (leavingLoginRoute) {
+                              _markPostLoginOverlayDelay();
+                            }
                             await _requestNotificationPermissionForRoute(
                               url?.uriValue,
                             );
@@ -2091,7 +2191,7 @@ class _WebViewShellState extends State<WebViewShell> with WidgetsBindingObserver
     if (_showOffline) return false;
     if (!_firstPageLoaded) return false; // never on splash
     if (_isAuthRoute(_currentUri)) return false;
-    if (MediaQuery.viewInsetsOf(context).bottom > 0) return false;
+    if (!OverlayPromptGuard.canShowOverlay(context)) return false;
     return true;
   }
 }

@@ -12,14 +12,16 @@ class DutyTrackingPreferences {
   static const _kBgLocationReady = 'duty.bg_location_ready';
 
   static const String disclosureAccepted = 'accepted';
+  static const String disclosureDismissed = 'dismissed';
 
   static Future<bool> isDisclosureAccepted() async {
     final state = await _storage.read(key: _kDisclosureState);
-    if (state != null && state != disclosureAccepted) {
-      await _storage.delete(key: _kDisclosureState);
-      return false;
-    }
     return state == disclosureAccepted;
+  }
+
+  static Future<bool> isDisclosureDismissed() async {
+    final state = await _storage.read(key: _kDisclosureState);
+    return state == disclosureDismissed;
   }
 
   static Future<void> setDisclosureAccepted() async {
@@ -27,6 +29,13 @@ class DutyTrackingPreferences {
     await _storage.delete(key: _kSettingsPromptDeferred);
     if (kDebugMode) {
       debugPrint('[DutyTrackingPreferences] disclosure accepted (stored)');
+    }
+  }
+
+  static Future<void> setDisclosureDismissed() async {
+    await _storage.write(key: _kDisclosureState, value: disclosureDismissed);
+    if (kDebugMode) {
+      debugPrint('[DutyTrackingPreferences] disclosure dismissed (stored)');
     }
   }
 

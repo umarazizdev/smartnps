@@ -218,7 +218,7 @@ class PushNotificationService {
     _permissionPromptAttempted = true;
 
     // Brief delay so dashboard/navigation finishes before the system dialog.
-    await Future<void>.delayed(const Duration(milliseconds: 400));
+    await Future<void>.delayed(const Duration(seconds: 1));
 
     debugPrint(
       '[SmartNPS360][Push] requesting notification permission (after auth)',
