@@ -20,7 +20,8 @@ class LocationTrackingDisclosureDialog extends StatelessWidget {
       message:
           'SmartNPS360 uses your location only during an active shift to verify attendance, breaks, visits, and field activity.\n\n'
           'Please enable $alwaysAccessLabel location access to continue your shift, even when the app is closed or not on screen.\n\n'
-          'Your live location is collected and uploaded only while you are on duty. Tracking stops when you clock out or end your shift.',
+          'Your live location is collected and uploaded only while you are on duty. Tracking stops when you clock out or end your shift.'
+          '${Platform.isIOS ? '\n\nIf you force-close SmartNPS360 from the app switcher, location updates may pause until you open the app again.' : ''}',
       secondaryLabel: 'Not now',
       primaryLabel: 'Continue',
     );
