@@ -39,41 +39,61 @@ class WebViewShell extends StatefulWidget {
   State<WebViewShell> createState() => _WebViewShellState();
 }
 
-class _WebViewShellUiController extends GetxController {}
+class _WebViewShellUiController extends GetxController {
+  final currentUri = Rxn<Uri>();
+  final isNavigating = false.obs;
+  final loadProgress = 0.obs;
+  final firstPageLoaded = false.obs;
+  final showOffline = false.obs;
+  final hasNativeAuthSession = false.obs;
+  final webPrefersDark = false.obs;
+  final pullToRefreshActive = false.obs;
+  final selectedBottomTabIndex = 0.obs;
+  final bottomTabNavigationActive = false.obs;
+
+  void beginNavigation() {
+    isNavigating.value = true;
+    loadProgress.value = 0;
+  }
+
+  void setLoadProgress(int progress) {
+    final clamped = progress.clamp(0, 100);
+    if (loadProgress.value == clamped && isNavigating.value) return;
+    isNavigating.value = true;
+    loadProgress.value = clamped;
+  }
+
+  void endNavigation() {
+    if (!isNavigating.value && loadProgress.value == 0) return;
+    isNavigating.value = false;
+    loadProgress.value = 0;
+  }
+
+  void setNativeAuthSession(bool value) {
+    if (hasNativeAuthSession.value == value) return;
+    hasNativeAuthSession.value = value;
+  }
+
+}
 
 class _WebViewShellState extends State<WebViewShell>
     with WidgetsBindingObserver {
   InAppWebViewController? _controller;
   PullToRefreshController? _pullToRefreshController;
 
-  bool _firstPageLoaded = false;
-  bool _showOffline = false;
-  Uri? _currentUri;
   Uri? _uriAtLoadStart;
-  bool _pullToRefreshActive = false;
   Uri? _pullToRefreshSourceUri;
   bool _webReloadInProgress = false;
-  bool _webPrefersDark = false;
+  bool _pendingBottomTabLoadStarted = false;
   bool _hasWebThemeSignal = false;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
   final Map<int, StreamSubscription<Position>> _nativeGeoWatches = {};
-  final _WebViewShellUiController _uiController = _WebViewShellUiController();
+  final _WebViewShellUiController _ui = _WebViewShellUiController();
   String? _pendingPushUrl;
-  bool _hasNativeAuthSession = false;
-
-  void _refreshUi() {
-    if (mounted) _uiController.update();
-  }
-
-  void _setNativeAuthSession(bool value) {
-    if (_hasNativeAuthSession == value) return;
-    _hasNativeAuthSession = value;
-    _refreshUi();
-  }
 
   Future<void> _refreshNativeAuthSessionFromStorage() async {
     final token = await AuthRepository.instance.getAccessToken();
-    _setNativeAuthSession(token != null && token.isNotEmpty);
+    _ui.setNativeAuthSession(token != null && token.isNotEmpty);
   }
 
   bool _isSamePageReload(Uri? uriAtLoadStart, Uri? nextUri) {
@@ -94,34 +114,55 @@ class _WebViewShellState extends State<WebViewShell>
   }
 
   void _clearPullToRefreshState() {
-    _pullToRefreshActive = false;
+    _ui.pullToRefreshActive.value = false;
     _pullToRefreshSourceUri = null;
   }
 
   bool _isTransientReloadUri(Uri? uri) {
     if (uri == null) return true;
-    if (!_hasNativeAuthSession) return false;
+    if (!_ui.hasNativeAuthSession.value) return false;
     if (!_isAuthRoute(uri)) return false;
-    final current = _currentUri;
+    final current = _ui.currentUri.value;
     return current != null && !_isAuthRoute(current);
   }
 
   void _syncCurrentUriFromWebView(Uri? uri) {
-    if (uri == null || _isTransientReloadUri(uri)) return;
-    if (_currentUri?.toString() == uri.toString()) return;
-    _currentUri = uri;
-    _refreshUi();
+    if (_shouldIgnoreWebViewNavigationEvent(uri)) return;
+    if (_ui.currentUri.value?.toString() == uri.toString()) return;
+    _ui.currentUri.value = uri;
+  }
+
+  void _finishBottomTabNavigation() {
+    _ui.bottomTabNavigationActive.value = false;
+    _pendingBottomTabLoadStarted = false;
+  }
+
+  bool _shouldIgnoreWebViewNavigationEvent(Uri? uri) {
+    if (uri == null) return true;
+    if (_isTransientReloadUri(uri)) return true;
+
+    final uriTab = _bottomTabIndexFromUri(uri);
+    final selectedTab = _ui.selectedBottomTabIndex.value;
+
+    if (_ui.bottomTabNavigationActive.value) {
+      return uriTab != selectedTab;
+    }
+    // Android can deliver stale load events for the previous tab after navigation
+    // has already finished; ignore anything that would move selection backward.
+    if (!_ui.isNavigating.value && uriTab != selectedTab) {
+      return true;
+    }
+    return false;
   }
 
   void _restoreUriAfterReload(Uri? uri) {
     if (uri == null || _isAuthRoute(uri)) return;
-    if (_currentUri?.toString() == uri.toString()) return;
-    _currentUri = uri;
-    _refreshUi();
+    if (_ui.currentUri.value?.toString() == uri.toString()) return;
+    _ui.currentUri.value = uri;
   }
 
   bool _isPullToRefreshReload(Uri? nextUri) {
-    if (!_pullToRefreshActive) return false;
+    if (!_ui.pullToRefreshActive.value) return false;
     final source = _normalizePageUrl(_pullToRefreshSourceUri);
     final next = _normalizePageUrl(nextUri);
     if (source == null || next == null) return true;
@@ -263,6 +304,138 @@ class _WebViewShellState extends State<WebViewShell>
             .then(function () {
               return window.flutter_inappwebview.callHandler('themeChanged', isDark);
             });
+        };
+        window.SmartNPS360.isNativeApp = function () {
+          try {
+            return /SmartNPS360App/i.test(navigator.userAgent || '');
+          } catch (_) {
+            return false;
+          }
+        };
+        window.SmartNPS360.getBackgroundLocationStatus = function () {
+          return ensureFlutterBridge()
+            .then(function () {
+              return window.flutter_inappwebview.callHandler(
+                'getBackgroundLocationStatus'
+              );
+            });
+        };
+        window.SmartNPS360.ensureCanClockIn = function () {
+          return window.SmartNPS360.getBackgroundLocationStatus().then(
+            function (status) {
+              if (!status || status.ok !== true) {
+                return {
+                  ok: false,
+                  reason: 'status_unavailable',
+                  title: 'Location check failed',
+                  message:
+                    'Unable to verify location permissions. Please try again.',
+                  status: status || null
+                };
+              }
+              if (status.canClockIn === true || status.backgroundReady === true) {
+                return { ok: true, status: status };
+              }
+              return {
+                ok: false,
+                reason: status.deniedReason || 'background_location_required',
+                title: status.title || 'Background location required',
+                message:
+                  status.message ||
+                  'Background location is required to clock in from the mobile app.',
+                status: status
+              };
+            }
+          );
+        };
+        window.SmartNPS360._applyClockInButtonState = function (button, status) {
+          if (!button) return;
+          var canClockIn =
+            !window.SmartNPS360.isNativeApp() ||
+            (status && status.ok === true && status.canClockIn === true);
+          button.disabled = !canClockIn;
+          button.setAttribute('aria-disabled', canClockIn ? 'false' : 'true');
+          if (canClockIn) {
+            button.removeAttribute('title');
+            button.classList.remove('smartnps-clockin-blocked');
+          } else {
+            button.setAttribute(
+              'title',
+              (status && status.message) ||
+                'Enable background location in Settings to clock in.'
+            );
+            button.classList.add('smartnps-clockin-blocked');
+          }
+        };
+        window.SmartNPS360.bindClockInGate = function (
+          button,
+          onAllowedClockIn,
+          onBlocked
+        ) {
+          if (!button || typeof onAllowedClockIn !== 'function') return;
+
+          function refresh() {
+            return window.SmartNPS360.getBackgroundLocationStatus()
+              .then(function (status) {
+                window.SmartNPS360._applyClockInButtonState(button, status);
+                return status;
+              })
+              .catch(function () {
+                if (window.SmartNPS360.isNativeApp()) {
+                  button.disabled = true;
+                  button.setAttribute('aria-disabled', 'true');
+                }
+              });
+          }
+
+          if (button.dataset.smartnpsClockinBound !== '1') {
+            button.dataset.smartnpsClockinBound = '1';
+            button.addEventListener(
+              'click',
+              function (e) {
+                if (!window.SmartNPS360.isNativeApp()) return;
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                window.SmartNPS360.ensureCanClockIn().then(function (gate) {
+                  if (!gate.ok) {
+                    if (typeof onBlocked === 'function') {
+                      onBlocked(gate);
+                    } else {
+                      alert(
+                        gate.message ||
+                          'Background location is required to clock in.'
+                      );
+                    }
+                    return;
+                  }
+                  onAllowedClockIn();
+                });
+              },
+              true
+            );
+
+            window.addEventListener(
+              'smartnps360:background-location',
+              function (ev) {
+                window.SmartNPS360._applyClockInButtonState(
+                  button,
+                  ev && ev.detail
+                );
+              }
+            );
+
+            window.SmartNPS360.onBackgroundLocationStatusChanged = function (
+              status
+            ) {
+              window.SmartNPS360._applyClockInButtonState(button, status);
+            };
+
+            document.addEventListener('visibilitychange', function () {
+              if (document.visibilityState === 'visible') refresh();
+            });
+          }
+
+          refresh();
         };
 
         if (!window.SmartNPSNativeAuth) window.SmartNPSNativeAuth = {};
@@ -879,18 +1052,17 @@ class _WebViewShellState extends State<WebViewShell>
   );
 
   late final JsBridge _bridge = JsBridge(
-    getCurrentUrlHost: () => _currentUri?.host,
+    getCurrentUrlHost: () => _ui.currentUri.value?.host,
     onDownloadRequested: _downloadAndReturn,
   );
 
   void _applySystemUi() {
-    final style = _webPrefersDark
+    final isDark = _ui.webPrefersDark.value;
+    final style = isDark
         ? SystemUiOverlayStyle.light
         : SystemUiOverlayStyle.dark;
 
-    final navColor = _webPrefersDark
-        ? const Color(0xFF0F1724)
-        : const Color(0xFFF8FAFC);
+    final navColor = isDark ? const Color(0xFF0F1724) : const Color(0xFFF8FAFC);
 
     SystemChrome.setSystemUIOverlayStyle(
       style.copyWith(
@@ -910,9 +1082,9 @@ class _WebViewShellState extends State<WebViewShell>
   void _setNativeThemeFromWeb(bool isDark) {
     _hasWebThemeSignal = true;
     NativeThemeController.instance.setDark(isDark);
-    final shouldRefresh = _webPrefersDark != isDark;
-    _webPrefersDark = isDark;
-    if (shouldRefresh) _refreshUi();
+    if (_ui.webPrefersDark.value != isDark) {
+      _ui.webPrefersDark.value = isDark;
+    }
     _applySystemUi();
   }
 
@@ -921,10 +1093,10 @@ class _WebViewShellState extends State<WebViewShell>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     PushNotificationService.instance.setDeferPermissionPromptWhile(
-      () => _isAuthRoute(_currentUri),
+      () => _isAuthRoute(_ui.currentUri.value),
     );
-    _webPrefersDark = false;
-    NativeThemeController.instance.setDark(_webPrefersDark);
+    _ui.webPrefersDark.value = false;
+    NativeThemeController.instance.setDark(_ui.webPrefersDark.value);
     _applySystemUi();
 
     if (Platform.isAndroid || Platform.isIOS) {
@@ -934,9 +1106,10 @@ class _WebViewShellState extends State<WebViewShell>
           final controller = _controller;
           if (controller == null) return;
           final currentUrl = await controller.getUrl();
-          _pullToRefreshActive = true;
+          _ui.pullToRefreshActive.value = true;
           _webReloadInProgress = true;
-          _pullToRefreshSourceUri = currentUrl?.uriValue ?? _currentUri;
+          _pullToRefreshSourceUri =
+              currentUrl?.uriValue ?? _ui.currentUri.value;
           // reload() avoids iOS WKWebView firing intermediate navigation URLs
           // that look like a fresh login-page load and tear down duty state.
           await controller.reload();
@@ -948,12 +1121,15 @@ class _WebViewShellState extends State<WebViewShell>
       results,
     ) async {
       final hasInternet = results.any((r) => r != ConnectivityResult.none);
-      if (hasInternet && _showOffline) {
-        _showOffline = false;
-        _refreshUi();
+      if (hasInternet && _ui.showOffline.value) {
+        _ui.showOffline.value = false;
         unawaited(_controller?.reload());
       }
     });
+
+    DutyHeartbeatService.instance.backgroundLocationPermissionMissing.addListener(
+      _onBackgroundLocationPermissionChanged,
+    );
 
     PushNotificationService.instance.setOnNotificationTap(
       _onPushNotificationTap,
@@ -990,7 +1166,7 @@ class _WebViewShellState extends State<WebViewShell>
 
   Future<void> _maybeStartDutyHeartbeat() async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
-    if (AuthSessionManager.isLoginRoute(_currentUri)) return;
+    if (AuthSessionManager.isLoginRoute(_ui.currentUri.value)) return;
     final token = await AuthRepository.instance.getAccessToken();
     if (token == null || token.isEmpty) return;
     DutyHeartbeatService.instance.start();
@@ -1002,14 +1178,54 @@ class _WebViewShellState extends State<WebViewShell>
     );
   }
 
+  void _onBackgroundLocationPermissionChanged() {
+    unawaited(_notifyWebBackgroundLocationStatus());
+  }
+
+  Future<void> _notifyWebBackgroundLocationStatus() async {
+    if (!_ui.hasNativeAuthSession.value) return;
+    final controller = _controller;
+    if (controller == null) return;
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+
+    try {
+      final result = await _bridge.getBackgroundLocationStatus();
+      final encoded = jsonEncode(result);
+      await controller.evaluateJavascript(
+        source:
+            '''
+        (function () {
+          try {
+            var status = $encoded;
+            window.dispatchEvent(
+              new CustomEvent('smartnps360:background-location', { detail: status })
+            );
+            if (
+              window.SmartNPS360 &&
+              typeof window.SmartNPS360.onBackgroundLocationStatusChanged === 'function'
+            ) {
+              window.SmartNPS360.onBackgroundLocationStatusChanged(status);
+            }
+          } catch (e) {}
+        })();
+      ''',
+      );
+    } catch (e) {
+      debugPrint(
+        '[SmartNPS360] notify web background location status failed: $e',
+      );
+    }
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed &&
-        !AuthSessionManager.isLoginRoute(_currentUri)) {
+        !AuthSessionManager.isLoginRoute(_ui.currentUri.value)) {
       unawaited(() async {
-        await _requestNotificationPermissionForRoute(_currentUri);
+        await _requestNotificationPermissionForRoute(_ui.currentUri.value);
         await _maybeStartDutyHeartbeat();
         await DutyHeartbeatService.instance.recheckOnDutyPrompts();
+        await _notifyWebBackgroundLocationStatus();
       }());
     }
   }
@@ -1023,17 +1239,19 @@ class _WebViewShellState extends State<WebViewShell>
       PushNotificationService.instance.setIosWebPushUploadHandler(null);
     }
     _connectivitySub?.cancel();
+    DutyHeartbeatService.instance.backgroundLocationPermissionMissing
+        .removeListener(_onBackgroundLocationPermissionChanged);
     _stopDutyHeartbeat();
     for (final sub in _nativeGeoWatches.values) {
       sub.cancel();
     }
     _nativeGeoWatches.clear();
+    _ui.dispose();
     super.dispose();
   }
 
   Future<void> _retry() async {
-    _showOffline = false;
-    _refreshUi();
+    _ui.showOffline.value = false;
     await _controller?.loadUrl(
       urlRequest: URLRequest(url: WebUri(AppConfig.initialUrl)),
     );
@@ -1093,7 +1311,6 @@ class _WebViewShellState extends State<WebViewShell>
             ? args.first as Map
             : null;
         OverlayPromptGuard.setWebKeyboardVisible(payload?['visible'] == true);
-        _refreshUi();
         return {'ok': true};
       },
     );
@@ -1268,6 +1485,16 @@ class _WebViewShellState extends State<WebViewShell>
           _bridge.getPushNotificationToken(args.isEmpty ? null : args.first),
     );
     controller.addJavaScriptHandler(
+      handlerName: 'getBackgroundLocationStatus',
+      callback: (args) async {
+        final result = await _bridge.getBackgroundLocationStatus(
+          args.isEmpty ? null : args.first,
+        );
+        debugPrint('[SmartNPS360] getBackgroundLocationStatus result=$result');
+        return result;
+      },
+    );
+    controller.addJavaScriptHandler(
       handlerName: 'themeChanged',
       callback: (args) {
         final value = args.isNotEmpty ? args.first : null;
@@ -1288,7 +1515,7 @@ class _WebViewShellState extends State<WebViewShell>
     controller.addJavaScriptHandler(
       handlerName: 'loginWithSanctum',
       callback: (args) async {
-        final currentHost = _currentUri?.host;
+        final currentHost = _ui.currentUri.value?.host;
         if (!AppConfig.isAllowedHost(currentHost)) {
           debugPrint(
             '[SmartNPS360][Auth] denied loginWithSanctum from host=$currentHost args=$args',
@@ -1351,7 +1578,7 @@ class _WebViewShellState extends State<WebViewShell>
     controller.addJavaScriptHandler(
       handlerName: 'authEvent',
       callback: (args) async {
-        final currentHost = _currentUri?.host;
+        final currentHost = _ui.currentUri.value?.host;
         if (!AppConfig.isAllowedHost(currentHost)) {
           debugPrint(
             '[SmartNPS360][Auth] denied authEvent from host=$currentHost args=$args',
@@ -1377,9 +1604,8 @@ class _WebViewShellState extends State<WebViewShell>
         final action = (payload['action'] ?? payload['type'] ?? '').toString();
         if (action == 'logout') {
           await AuthSessionManager.clearNativeSession(deletePushToken: true);
-          _setNativeAuthSession(false);
+          _ui.setNativeAuthSession(false);
           OverlayPromptGuard.setWebKeyboardVisible(false);
-          _refreshUi();
           unawaited(
             _controller?.evaluateJavascript(
               source:
@@ -1438,7 +1664,7 @@ class _WebViewShellState extends State<WebViewShell>
             accessToken: accessToken,
             refreshToken: refreshToken,
           );
-          _setNativeAuthSession(true);
+          _ui.setNativeAuthSession(true);
           _syncPushTokenAfterLogin();
           unawaited(_maybeStartDutyHeartbeat());
           return {'ok': true, 'action': authAction};
@@ -1478,7 +1704,7 @@ class _WebViewShellState extends State<WebViewShell>
             accessToken: accessToken,
             refreshToken: refreshToken,
           );
-          _setNativeAuthSession(true);
+          _ui.setNativeAuthSession(true);
           _syncPushTokenAfterLogin();
           unawaited(_maybeStartDutyHeartbeat());
           return {'ok': true, 'action': 'session'};
@@ -1560,7 +1786,7 @@ class _WebViewShellState extends State<WebViewShell>
 
       await AuthRepository.instance.saveAccessToken(token);
       AuthState.instance.setSession({'accessToken': token});
-      _setNativeAuthSession(true);
+      _ui.setNativeAuthSession(true);
       if (syncPush) {
         await PushNotificationService.instance.syncPushTokenAfterLogin();
       }
@@ -1573,7 +1799,7 @@ class _WebViewShellState extends State<WebViewShell>
   }
 
   Future<void> _requestNotificationPermissionForRoute(Uri? uri) async {
-    if (_showOffline) return;
+    if (_ui.showOffline.value) return;
     if (!AppConfig.isAllowedHost(uri?.host)) return;
     if (_isAuthRoute(uri)) return;
 
@@ -1704,7 +1930,7 @@ class _WebViewShellState extends State<WebViewShell>
           result.length > 10) {
         await AuthRepository.instance.saveAccessToken(result);
         AuthState.instance.setSession({'accessToken': result});
-        _setNativeAuthSession(true);
+        _ui.setNativeAuthSession(true);
         debugPrint('[SmartNPS360][Push] ios harvested web access token');
         return result;
       }
@@ -2041,8 +2267,8 @@ class _WebViewShellState extends State<WebViewShell>
     }
   }
 
-  /// iOS: keep the default Mobile Safari UA (append app id only).
-  /// Android: unchanged custom UA.
+  /// iOS: keep default Mobile Safari UA and append [AppConfig.webViewAppSignature].
+  /// Android: full custom UA with the same app signature token.
   InAppWebViewSettings _createWebViewSettings() {
     return InAppWebViewSettings(
       javaScriptEnabled: true,
@@ -2057,9 +2283,9 @@ class _WebViewShellState extends State<WebViewShell>
       sharedCookiesEnabled: true,
       userAgent: Platform.isIOS
           ? null
-          : 'SmartNPS360/1.0 (Flutter; InAppWebView) android',
+          : AppConfig.webViewUserAgentToken(platform: 'Android'),
       applicationNameForUserAgent: Platform.isIOS
-          ? 'SmartNPS360/1.0 (Flutter; InAppWebView)'
+          ? AppConfig.webViewUserAgentToken(platform: 'iOS')
           : null,
       preferredContentMode: Platform.isIOS
           ? UserPreferredContentMode.MOBILE
@@ -2073,269 +2299,346 @@ class _WebViewShellState extends State<WebViewShell>
 
   @override
   Widget build(BuildContext context) {
-    return GetBuilder<_WebViewShellUiController>(
-      init: _uiController,
-      global: false,
-      builder: (_) {
-        return PopScope(
-          canPop: false,
-          onPopInvokedWithResult: (didPop, result) async {
-            if (didPop) return;
-            final shouldPop = await _onWillPop();
-            if (shouldPop && mounted) {
-              SystemNavigator.pop();
-            }
-          },
-          child: Scaffold(
-            body: SafeArea(
-              top: true,
-              bottom: false,
-              child: AnimatedBuilder(
-                animation: Listenable.merge([
-                  DutyHeartbeatService.instance.backgroundLocationPermissionMissing,
-                  DutyHeartbeatService.instance.disclosurePromptVisible,
-                  PermissionSettingsHelper.settingsPromptVisible,
-                ]),
-                builder: (context, _) {
-                  final showBanner =
-                      DutyHeartbeatService
-                          .instance
-                          .shouldShowBackgroundLocationBanner &&
-                      (Platform.isAndroid || Platform.isIOS) &&
-                      _hasNativeAuthSession &&
-                      !_isAuthRoute(_currentUri);
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      if (showBanner) const BackgroundLocationRequiredBanner(),
-                      Expanded(
-                        child: Stack(
-                          children: [
-                            if (_showOffline)
-                              OfflineScreen(onRetry: _retry)
-                            else
-                              Padding(
-                                padding: EdgeInsets.only(bottom: 0),
-                                child: InAppWebView(
-                                  initialUrlRequest: URLRequest(
-                                    url: WebUri(AppConfig.initialUrl),
-                                  ),
-                                  initialUserScripts: _initialUserScripts(),
-                                  pullToRefreshController:
-                                      _pullToRefreshController,
-                                  initialSettings: _createWebViewSettings(),
-                                  onWebViewCreated: (controller) {
-                                    _controller = controller;
-                                    _installJsHandlers(controller);
-                                    unawaited(
-                                      _logIosWebViewDiagnostics(controller),
-                                    );
-                                    unawaited(_loadPendingPushUrl());
-                                  },
-                                  onConsoleMessage: (controller, message) {
-                                    debugPrint(
-                                      '[WebView][${message.messageLevel}] ${message.message}',
-                                    );
-                                  },
-                                  shouldOverrideUrlLoading:
-                                      (controller, action) async =>
-                                          _handleNavigation(action),
-                                  onLoadStart: (controller, url) {
-                                    if (!_pullToRefreshActive) {
-                                      _uriAtLoadStart = _currentUri;
-                                      _syncCurrentUriFromWebView(url?.uriValue);
-                                      return;
-                                    }
-                                    // iOS can emit transient URLs during reload;
-                                    // keep the last known route until loadStop.
-                                  },
-                                  onUpdateVisitedHistory:
-                                      (controller, url, isReload) {
-                                    if (_pullToRefreshActive ||
-                                        _webReloadInProgress) {
-                                      return;
-                                    }
-                                    _syncCurrentUriFromWebView(url?.uriValue);
-                                  },
-                                  onProgressChanged: (controller, progress) {
-                                    if (progress == 100) {
-                                      _pullToRefreshController?.endRefreshing();
-                                    }
-                                  },
-                                  onLoadStop: (controller, url) async {
-                                    _pullToRefreshController?.endRefreshing();
-                                    final nextUri = url?.uriValue;
-                                    final isSamePageReload =
-                                        _isPullToRefreshReload(nextUri) ||
-                                        _isSamePageReload(
-                                          _uriAtLoadStart,
-                                          nextUri,
-                                        );
-                                    final preservedUri =
-                                        _pullToRefreshSourceUri ??
-                                        _uriAtLoadStart ??
-                                        _currentUri;
-                                    try {
-                                      final webThemeIsDark = _hasWebThemeSignal
-                                          ? null
-                                          : await _readWebThemeIsDark(
-                                              controller,
-                                            );
-                                      await _installThemeListener(controller);
-                                      await _logIosWebViewDiagnostics(
-                                        controller,
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        final shouldPop = await _onWillPop();
+        if (shouldPop && mounted) {
+          SystemNavigator.pop();
+        }
+      },
+      child: Scaffold(
+        body: SafeArea(
+          top: true,
+          bottom: false,
+          child: AnimatedBuilder(
+            animation: Listenable.merge([
+              DutyHeartbeatService.instance.backgroundLocationPermissionMissing,
+              DutyHeartbeatService.instance.disclosurePromptVisible,
+              PermissionSettingsHelper.settingsPromptVisible,
+            ]),
+            builder: (context, _) {
+              final showBanner =
+                  DutyHeartbeatService
+                      .instance
+                      .shouldShowBackgroundLocationBanner &&
+                  (Platform.isAndroid || Platform.isIOS) &&
+                  _ui.hasNativeAuthSession.value &&
+                  !_isAuthRoute(_ui.currentUri.value);
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (showBanner) const BackgroundLocationRequiredBanner(),
+                  Expanded(
+                    child: Stack(
+                      children: [
+                        Obx(
+                          () => _ui.showOffline.value
+                              ? OfflineScreen(onRetry: _retry)
+                              : Padding(
+                                  padding: EdgeInsets.only(bottom: 0),
+                                  child: InAppWebView(
+                                    initialUrlRequest: URLRequest(
+                                      url: WebUri(AppConfig.initialUrl),
+                                    ),
+                                    initialUserScripts: _initialUserScripts(),
+                                    pullToRefreshController:
+                                        _pullToRefreshController,
+                                    initialSettings: _createWebViewSettings(),
+                                    onWebViewCreated: (controller) {
+                                      _controller = controller;
+                                      _installJsHandlers(controller);
+                                      unawaited(
+                                        _logIosWebViewDiagnostics(controller),
                                       );
-                                      await _runIosPopoverFix(controller);
-                                      if (isSamePageReload) {
-                                        _restoreUriAfterReload(preservedUri);
-                                      } else {
-                                        _syncCurrentUriFromWebView(nextUri);
+                                      unawaited(_loadPendingPushUrl());
+                                    },
+                                    onConsoleMessage: (controller, message) {
+                                      debugPrint(
+                                        '[WebView][${message.messageLevel}] ${message.message}',
+                                      );
+                                    },
+                                    shouldOverrideUrlLoading:
+                                        (controller, action) async =>
+                                            _handleNavigation(action),
+                                    onLoadStart: (controller, url) {
+                                      if (!_ui.pullToRefreshActive.value) {
+                                        final startUri = url?.uriValue;
+                                        // Android (and sometimes iOS) emit load events
+                                        // for the page being left during bottom-tab switches.
+                                        if (_shouldIgnoreWebViewNavigationEvent(
+                                          startUri,
+                                        )) {
+                                          return;
+                                        }
+                                        _uriAtLoadStart =
+                                            _ui.currentUri.value ?? startUri;
+                                        _syncCurrentUriFromWebView(startUri);
+                                        _pendingBottomTabLoadStarted = true;
+                                        _ui.beginNavigation();
+                                        return;
                                       }
-                                      _firstPageLoaded = true;
-                                      _webPrefersDark =
-                                          webThemeIsDark ?? _webPrefersDark;
-                                      _setNativeThemeFromWeb(_webPrefersDark);
-                                      if (!isSamePageReload) {
-                                        await AuthSessionManager
-                                            .clearNativeSessionIfLoginScreen(
-                                          nextUri,
-                                        );
+                                      // iOS can emit transient URLs during reload;
+                                      // keep the last known route until loadStop.
+                                    },
+                                    onUpdateVisitedHistory:
+                                        (controller, url, isReload) {
+                                          if (_ui.pullToRefreshActive.value ||
+                                              _webReloadInProgress) {
+                                            return;
+                                          }
+                                          if (_shouldIgnoreWebViewNavigationEvent(
+                                            url?.uriValue,
+                                          )) {
+                                            return;
+                                          }
+                                          _syncCurrentUriFromWebView(
+                                            url?.uriValue,
+                                          );
+                                        },
+                                    onProgressChanged: (controller, progress) {
+                                      if (_ui.bottomTabNavigationActive.value &&
+                                          !_pendingBottomTabLoadStarted) {
+                                        return;
                                       }
-                                      await _refreshNativeAuthSessionFromStorage();
-                                      if (AuthSessionManager.isLoginRoute(
-                                            nextUri,
-                                          ) &&
-                                          !isSamePageReload) {
-                                        _stopDutyHeartbeat();
-                                      } else {
-                                        await _requestNotificationPermissionForRoute(
-                                          nextUri,
-                                        );
-                                        await _maybeStartDutyHeartbeat();
-                                        await DutyHeartbeatService.instance
-                                            .recheckOnDutyPrompts(
-                                          pageReload: isSamePageReload,
-                                        );
+                                      if (progress > 0 && progress < 100) {
+                                        _ui.setLoadProgress(progress);
                                       }
-                                    } finally {
-                                      _clearPullToRefreshState();
-                                      _webReloadInProgress = false;
-                                      _uriAtLoadStart = null;
-                                      if (isSamePageReload) {
-                                        _restoreUriAfterReload(preservedUri);
-                                      }
-                                      _refreshUi();
-                                    }
-                                  },
-                                  onReceivedError:
-                                      (controller, request, error) async {
+                                      if (progress == 100) {
                                         _pullToRefreshController
                                             ?.endRefreshing();
-                                        _clearPullToRefreshState();
-                                        _webReloadInProgress = false;
-                                        if (!_firstPageLoaded) {
-                                          final connectivity =
-                                              await Connectivity()
-                                                  .checkConnectivity();
-                                          if (!connectivity.any(
-                                            (r) => r != ConnectivityResult.none,
-                                          )) {
-                                            _showOffline = true;
-                                            _refreshUi();
+                                      }
+                                    },
+                                    onLoadStop: (controller, url) async {
+                                      _pullToRefreshController?.endRefreshing();
+                                      final nextUri = url?.uriValue;
+                                      // Android fires loadStop for the previous page when
+                                      // switching bottom tabs; ignore until the target tab loads.
+                                      if (_shouldIgnoreWebViewNavigationEvent(
+                                        nextUri,
+                                      )) {
+                                        return;
+                                      }
+                                      final isBottomTabNavigationComplete =
+                                          _ui.bottomTabNavigationActive.value &&
+                                          _bottomTabIndexFromUri(nextUri) ==
+                                              _ui.selectedBottomTabIndex.value;
+                                      if (isBottomTabNavigationComplete) {
+                                        _finishBottomTabNavigation();
+                                      }
+                                      final isSamePageReload =
+                                          !isBottomTabNavigationComplete &&
+                                          (_isPullToRefreshReload(nextUri) ||
+                                              _isSamePageReload(
+                                                _uriAtLoadStart,
+                                                nextUri,
+                                              ));
+                                      final preservedUri =
+                                          _pullToRefreshSourceUri ??
+                                          _uriAtLoadStart ??
+                                          _ui.currentUri.value;
+                                      try {
+                                        final webThemeIsDark =
+                                            _hasWebThemeSignal
+                                            ? null
+                                            : await _readWebThemeIsDark(
+                                                controller,
+                                              );
+                                        await _installThemeListener(controller);
+                                        await _logIosWebViewDiagnostics(
+                                          controller,
+                                        );
+                                        await _runIosPopoverFix(controller);
+                                        if (isSamePageReload) {
+                                          _restoreUriAfterReload(preservedUri);
+                                        } else {
+                                          _syncCurrentUriFromWebView(nextUri);
+                                          if (!_ui.bottomTabNavigationActive
+                                              .value) {
+                                            _ui.selectedBottomTabIndex.value =
+                                                _bottomTabIndexFromUri(nextUri);
                                           }
                                         }
-                                      },
-                                  onGeolocationPermissionsShowPrompt: (controller, origin) async {
-                                    final uri = Uri.tryParse(origin);
-                                    final allow = uri == null
-                                        ? false
-                                        : AppConfig.isAllowedHost(uri.host);
-                                    if (!allow) {
+                                        _ui.firstPageLoaded.value = true;
+                                        _setNativeThemeFromWeb(
+                                          webThemeIsDark ??
+                                              _ui.webPrefersDark.value,
+                                        );
+                                        if (!isSamePageReload) {
+                                          await AuthSessionManager.clearNativeSessionIfLoginScreen(
+                                            nextUri,
+                                          );
+                                        }
+                                        await _refreshNativeAuthSessionFromStorage();
+                                        if (AuthSessionManager.isLoginRoute(
+                                              nextUri,
+                                            ) &&
+                                            !isSamePageReload) {
+                                          _stopDutyHeartbeat();
+                                        } else {
+                                          await _requestNotificationPermissionForRoute(
+                                            nextUri,
+                                          );
+                                          await _maybeStartDutyHeartbeat();
+                                          await DutyHeartbeatService.instance
+                                              .recheckOnDutyPrompts(
+                                                pageReload: isSamePageReload,
+                                              );
+                                          await _notifyWebBackgroundLocationStatus();
+                                        }
+                                      } finally {
+                                        _clearPullToRefreshState();
+                                        _webReloadInProgress = false;
+                                        _uriAtLoadStart = null;
+                                        if (isSamePageReload) {
+                                          _restoreUriAfterReload(preservedUri);
+                                        }
+                                        _ui.endNavigation();
+                                      }
+                                    },
+                                    onReceivedError:
+                                        (controller, request, error) async {
+                                          _pullToRefreshController
+                                              ?.endRefreshing();
+                                          _clearPullToRefreshState();
+                                          _webReloadInProgress = false;
+                                          _finishBottomTabNavigation();
+                                          _ui.endNavigation();
+                                          if (!_ui.firstPageLoaded.value) {
+                                            final connectivity =
+                                                await Connectivity()
+                                                    .checkConnectivity();
+                                            if (!connectivity.any(
+                                              (r) =>
+                                                  r != ConnectivityResult.none,
+                                            )) {
+                                              _ui.showOffline.value = true;
+                                            }
+                                          }
+                                        },
+                                    onGeolocationPermissionsShowPrompt: (controller, origin) async {
+                                      final uri = Uri.tryParse(origin);
+                                      final allow = uri == null
+                                          ? false
+                                          : AppConfig.isAllowedHost(uri.host);
+                                      if (!allow) {
+                                        return GeolocationPermissionShowPromptResponse(
+                                          origin: origin,
+                                          allow: false,
+                                          retain: false,
+                                        );
+                                      }
+
+                                      final disclosureReady =
+                                          await DutyHeartbeatService.instance
+                                              .ensureDisclosureBeforeWebLocationAccess();
+                                      if (!disclosureReady) {
+                                        return GeolocationPermissionShowPromptResponse(
+                                          origin: origin,
+                                          allow: false,
+                                          retain: false,
+                                        );
+                                      }
+
+                                      if (!await BackgroundLocationPermissions.hasForegroundLocationAccess()) {
+                                        await PermissionSettingsHelper.requestForegroundLocationStep();
+                                      }
+
+                                      final granted =
+                                          await BackgroundLocationPermissions.hasForegroundLocationAccess();
                                       return GeolocationPermissionShowPromptResponse(
                                         origin: origin,
-                                        allow: false,
-                                        retain: false,
+                                        allow: granted,
+                                        retain: granted,
                                       );
-                                    }
+                                    },
+                                    onReceivedServerTrustAuthRequest:
+                                        (controller, challenge) async {
+                                          final host =
+                                              challenge.protectionSpace.host;
+                                          final isAllowed =
+                                              AppConfig.isAllowedHost(host);
 
-                                    final disclosureReady =
-                                        await DutyHeartbeatService.instance
-                                            .ensureDisclosureBeforeWebLocationAccess();
-                                    if (!disclosureReady) {
-                                      return GeolocationPermissionShowPromptResponse(
-                                        origin: origin,
-                                        allow: false,
-                                        retain: false,
-                                      );
-                                    }
+                                          // iOS often reports sslError code 4 even when evaluation succeeded
+                                          // ("implicitly trusted, but user intent was not explicitly specified").
+                                          // Proceed for allowed hosts to avoid resource loading issues.
+                                          if (isAllowed) {
+                                            return ServerTrustAuthResponse(
+                                              action:
+                                                  ServerTrustAuthResponseAction
+                                                      .PROCEED,
+                                            );
+                                          }
 
-                                    if (!await BackgroundLocationPermissions.hasForegroundLocationAccess()) {
-                                      await PermissionSettingsHelper.requestForegroundLocationStep();
-                                    }
-
-                                    final granted =
-                                        await BackgroundLocationPermissions.hasForegroundLocationAccess();
-                                    return GeolocationPermissionShowPromptResponse(
-                                      origin: origin,
-                                      allow: granted,
-                                      retain: granted,
-                                    );
-                                  },
-                                  onReceivedServerTrustAuthRequest:
-                                      (controller, challenge) async {
-                                        final host =
-                                            challenge.protectionSpace.host;
-                                        final isAllowed =
-                                            AppConfig.isAllowedHost(host);
-
-                                        // iOS often reports sslError code 4 even when evaluation succeeded
-                                        // ("implicitly trusted, but user intent was not explicitly specified").
-                                        // Proceed for allowed hosts to avoid resource loading issues.
-                                        if (isAllowed) {
                                           return ServerTrustAuthResponse(
                                             action:
                                                 ServerTrustAuthResponseAction
-                                                    .PROCEED,
+                                                    .CANCEL,
                                           );
-                                        }
-
-                                        return ServerTrustAuthResponse(
-                                          action: ServerTrustAuthResponseAction
-                                              .CANCEL,
-                                        );
-                                      },
-                                  onDownloadStartRequest:
-                                      (controller, request) async {
-                                        final uri = request.url.uriValue;
-                                        await launchUrl(
-                                          uri,
-                                          mode: LaunchMode.externalApplication,
-                                        );
-                                      },
+                                        },
+                                    onDownloadStartRequest:
+                                        (controller, request) async {
+                                          final uri = request.url.uriValue;
+                                          await launchUrl(
+                                            uri,
+                                            mode:
+                                                LaunchMode.externalApplication,
+                                          );
+                                        },
+                                  ),
                                 ),
-                              ),
-                            if (!_firstPageLoaded && !_showOffline)
-                              _SplashOverlay(isDark: _webPrefersDark),
-                            if (_shouldShowBottomBar(context))
-                              Align(
-                                alignment: Alignment.bottomCenter,
-                                child: _BottomBar(
-                                  currentUri: _currentUri,
-                                  isDark: _webPrefersDark,
-                                  onTap: _onBottomTap,
-                                ),
-                              ),
-                          ],
                         ),
-                      ),
-                    ],
-                  );
-                },
-              ),
-            ),
+                        Obx(() {
+                          if (!_ui.firstPageLoaded.value &&
+                              !_ui.showOffline.value) {
+                            return _SplashOverlay(
+                              isDark: _ui.webPrefersDark.value,
+                            );
+                          }
+                          return const SizedBox.shrink();
+                        }),
+                        Obx(() {
+                          if (!_ui.isNavigating.value ||
+                              !_ui.firstPageLoaded.value ||
+                              _ui.pullToRefreshActive.value ||
+                              _ui.showOffline.value) {
+                            return const SizedBox.shrink();
+                          }
+                          return Align(
+                            alignment: Alignment.topCenter,
+                            child: _NavigationProgressBar(
+                              progress: _ui.loadProgress.value,
+                            ),
+                          );
+                        }),
+                        Obx(() {
+                          final showBottomBar =
+                              !_ui.showOffline.value &&
+                              _ui.firstPageLoaded.value &&
+                              _ui.hasNativeAuthSession.value &&
+                              !_isAuthRoute(_ui.currentUri.value);
+                          if (!showBottomBar) {
+                            return const SizedBox.shrink();
+                          }
+                          return Align(
+                            alignment: Alignment.bottomCenter,
+                            child: _BottomBar(
+                              selectedTabIndex: _ui.selectedBottomTabIndex.value,
+                              isDark: _ui.webPrefersDark.value,
+                              onTap: _onBottomTap,
+                            ),
+                          );
+                        }),
+                      ],
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 
@@ -2395,22 +2698,59 @@ class _WebViewShellState extends State<WebViewShell>
   Future<void> _onBottomTap(_BottomItem item) async {
     final controller = _controller;
     if (controller == null) return;
+
+    if (_ui.selectedBottomTabIndex.value == item.index &&
+        !_ui.isNavigating.value) {
+      return;
+    }
+
+    _ui.selectedBottomTabIndex.value = item.index;
+    _ui.bottomTabNavigationActive.value = true;
+    _pendingBottomTabLoadStarted = false;
     final nextUri = Uri.tryParse(item.url);
     if (nextUri != null) {
-      _currentUri = nextUri;
-      _refreshUi();
+      _ui.currentUri.value = nextUri;
+    }
+    _ui.beginNavigation();
+    if (Platform.isAndroid) {
+      try {
+        await controller.stopLoading();
+      } catch (_) {}
     }
     await controller.loadUrl(urlRequest: URLRequest(url: WebUri(item.url)));
   }
 
   bool _isAuthRoute(Uri? uri) => AuthSessionManager.isLoginRoute(uri);
+}
 
-  bool _shouldShowBottomBar(BuildContext context) {
-    if (_showOffline) return false;
-    if (!_firstPageLoaded) return false; // never on splash
-    if (!_hasNativeAuthSession) return false;
-    if (_isAuthRoute(_currentUri)) return false;
-    return true;
+int _bottomTabIndexFromUri(Uri? uri) {
+  final s = uri?.toString() ?? '';
+  if (s.contains('/officer/timesheet')) return 1;
+  if (s.contains('/officer/dar')) return 2;
+  if (s.contains('/officer/profile')) return 3;
+  return 0;
+}
+
+class _NavigationProgressBar extends StatelessWidget {
+  const _NavigationProgressBar({required this.progress});
+
+  final int progress;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: SizedBox(
+        width: double.infinity,
+        height: 2.5,
+        child: LinearProgressIndicator(
+          value: progress > 0 ? progress / 100.0 : null,
+          minHeight: 2.5,
+          backgroundColor: Colors.transparent,
+          color: const Color(AppConfig.cPrimary),
+        ),
+      ),
+    );
   }
 }
 
@@ -2484,26 +2824,17 @@ enum _BottomItem {
 
 class _BottomBar extends StatelessWidget {
   const _BottomBar({
-    required this.currentUri,
+    required this.selectedTabIndex,
     required this.isDark,
     required this.onTap,
   });
 
-  final Uri? currentUri;
+  final int selectedTabIndex;
   final bool isDark;
   final ValueChanged<_BottomItem> onTap;
 
-  int _indexFromUrl(Uri? uri) {
-    final s = uri?.toString() ?? '';
-    if (s.contains('/officer/timesheet')) return 1;
-    if (s.contains('/officer/dar')) return 2;
-    if (s.contains('/officer/profile')) return 3;
-    return 0;
-  }
-
   @override
   Widget build(BuildContext context) {
-    final selected = _indexFromUrl(currentUri);
     final tabs = <PlatformBottomTab>[
       for (final item in _BottomItem.values)
         PlatformBottomTab(
@@ -2522,7 +2853,7 @@ class _BottomBar extends StatelessWidget {
 
     return PlatformBottomBar(
       tabs: tabs,
-      currentIndex: selected,
+      currentIndex: selectedTabIndex,
       tint: const Color(AppConfig.cPrimary),
       surface: const Color(AppConfig.cSurface),
       darkSurface: const Color(AppConfig.cDarkCardColor),

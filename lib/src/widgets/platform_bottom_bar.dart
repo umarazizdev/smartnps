@@ -199,8 +199,10 @@ class _ClassicBottomBar extends StatelessWidget {
                     borderRadius: BorderRadius.circular(24),
                     onTap: () => onTap(tab.index),
                     child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 180),
-                      curve: Curves.easeOut,
+                      duration: isAndroid
+                          ? const Duration(milliseconds: 320)
+                          : const Duration(milliseconds: 180),
+                      curve: isAndroid ? Curves.easeInOut : Curves.easeOut,
                       width: isAndroid ? 66 : 70,
                       height: isAndroid ? 54 : 58,
                       padding: const EdgeInsets.symmetric(

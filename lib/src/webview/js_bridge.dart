@@ -13,6 +13,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../background/background_location_permissions.dart';
 import '../background/duty_heartbeat_service.dart';
+import '../background/duty_tracking_preferences.dart';
 import '../push/push_notification_service.dart';
 import '../utilities/app_config.dart';
 import '../utilities/permission_settings_helper.dart';
@@ -441,6 +442,56 @@ class JsBridge {
     if (!_isTrustedCaller()) return _deny();
     final token = PushNotificationService.instance.lastFcmToken;
     return _ok({'token': token});
+  }
+
+  /// Read-only background location readiness for web clock-in gating.
+  Future<Map<String, dynamic>> getBackgroundLocationStatus([
+    dynamic args,
+  ]) async {
+    if (!_isTrustedCaller()) return _deny();
+
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      return _ok({
+        'backgroundReady': true,
+        'phase': 'backgroundReady',
+        'deniedReason': null,
+        'disclosureAccepted': true,
+        'serviceEnabled': true,
+        'canClockIn': true,
+        'platform': Platform.operatingSystem,
+      });
+    }
+
+    final phase = await BackgroundLocationPermissions.currentPermissionPhase();
+    final backgroundReady =
+        await BackgroundLocationPermissions.hasSufficientBackgroundAccess();
+    final deniedReason =
+        await BackgroundLocationPermissions.settingsDeniedReasonIfAny();
+    final disclosureAccepted =
+        await DutyTrackingPreferences.isDisclosureAccepted();
+    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+
+    final phaseName = switch (phase) {
+      LocationPermissionPhase.none => 'none',
+      LocationPermissionPhase.foregroundOnly => 'foregroundOnly',
+      LocationPermissionPhase.backgroundReady => 'backgroundReady',
+    };
+
+    return _ok({
+      'backgroundReady': backgroundReady,
+      'phase': phaseName,
+      'deniedReason': deniedReason,
+      'disclosureAccepted': disclosureAccepted,
+      'serviceEnabled': serviceEnabled,
+      'canClockIn': backgroundReady,
+      'title': backgroundReady
+          ? null
+          : BackgroundLocationPermissions.bannerTitleFor(deniedReason),
+      'message': backgroundReady
+          ? null
+          : BackgroundLocationPermissions.bannerMessageFor(deniedReason),
+      'platform': Platform.isIOS ? 'ios' : 'android',
+    });
   }
 
   String toJsonString(Map<String, dynamic> value) => jsonEncode(value);
