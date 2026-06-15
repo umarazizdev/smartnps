@@ -27,7 +27,7 @@ class BackgroundLocationController {
       }
 
       await BackgroundLocationPermissions.refreshIosLocationPermission();
-      final outcome = await BackgroundLocationPermissions.ensureGranted();
+      final outcome = await BackgroundLocationPermissions.readinessOutcome();
       if (!outcome.granted) {
         return {
           'ok': false,
@@ -40,23 +40,8 @@ class BackgroundLocationController {
           },
         };
       }
-      final hasBackgroundAccess =
-          await BackgroundLocationPermissions.hasSufficientBackgroundAccess();
 
-      if (!hasBackgroundAccess) {
-        return {
-          'ok': false,
-          'permissions': await BackgroundLocationPermissions.statusSnapshot(),
-          'openSettings': true,
-          'deniedReason': Platform.isIOS
-              ? 'location_always'
-              : 'location_background',
-          'error': {
-            'code': 'permission_denied',
-            'message': 'Background location permission not granted',
-          },
-        };
-      }
+      await BackgroundLocationPermissions.ensureAndroidNotificationForService();
 
       if (Platform.isIOS) {
         await IosDutyLocationPinger.start();
@@ -69,8 +54,6 @@ class BackgroundLocationController {
         'started': true,
         'running': true,
         'permissions': await BackgroundLocationPermissions.statusSnapshot(),
-        if (outcome.openSettings) 'openSettings': true,
-        if (outcome.deniedReason != null) 'deniedReason': outcome.deniedReason,
       };
     } catch (e) {
       return {

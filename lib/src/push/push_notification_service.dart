@@ -141,6 +141,17 @@ class PushNotificationService {
   String? _cachedDeviceId;
   String? _cachedAppVersion;
 
+  /// When this returns true, notification permission prompts are deferred
+  /// (e.g. while the login screen is visible).
+  bool Function()? _deferPermissionPromptWhile;
+
+  void setDeferPermissionPromptWhile(bool Function()? checker) {
+    _deferPermissionPromptWhile = checker;
+  }
+
+  bool get _shouldDeferPermissionPrompt =>
+      _deferPermissionPromptWhile?.call() ?? false;
+
   void setIosSessionAuth({String? cookieHeader, String? xsrfToken}) {
     _iosSessionCookieHeader = cookieHeader;
     _iosXsrfToken = xsrfToken;
@@ -190,6 +201,12 @@ class PushNotificationService {
 
   /// Prompts for notification permission after login or sign-up (once per app session).
   Future<void> requestPermissionAfterAuth() async {
+    if (_shouldDeferPermissionPrompt) {
+      debugPrint(
+        '[SmartNPS360][Push] deferring notification permission (auth route)',
+      );
+      return;
+    }
     if (_permissionPromptFuture != null) {
       return _permissionPromptFuture!;
     }
@@ -232,6 +249,12 @@ class PushNotificationService {
 
   /// Requests permission (if needed) and uploads the FCM token after auth.
   Future<void> syncPushTokenAfterLogin() async {
+    if (_shouldDeferPermissionPrompt) {
+      debugPrint(
+        '[SmartNPS360][Push] deferring push sync until post-login route',
+      );
+      return;
+    }
     if (!_permissionPromptAttempted) {
       await requestPermissionAfterAuth();
       return;

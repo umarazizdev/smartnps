@@ -6,6 +6,12 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../utilities/permission_settings_helper.dart';
 
+enum LocationPermissionPhase {
+  none,
+  foregroundOnly,
+  backgroundReady,
+}
+
 class BackgroundPermissionOutcome {
   const BackgroundPermissionOutcome({
     required this.granted,
@@ -232,6 +238,28 @@ class BackgroundLocationPermissions {
     return null;
   }
 
+  static Future<LocationPermissionPhase> currentPermissionPhase() async {
+    if (await hasSufficientBackgroundAccess()) {
+      return LocationPermissionPhase.backgroundReady;
+    }
+    if (await hasForegroundLocationAccess()) {
+      return LocationPermissionPhase.foregroundOnly;
+    }
+    return LocationPermissionPhase.none;
+  }
+
+  static Future<bool> hasForegroundLocationAccess() async {
+    if (Platform.isIOS) {
+      final permission = await readIosLocationPermission();
+      return permission == LocationPermission.always ||
+          permission == LocationPermission.whileInUse;
+    }
+    if (Platform.isAndroid) {
+      return (await Permission.location.status).isGranted;
+    }
+    return true;
+  }
+
   static Future<bool> hasSufficientBackgroundAccess() async {
     if (Platform.isIOS) {
       return iosHasBackgroundLocation();
@@ -241,6 +269,42 @@ class BackgroundLocationPermissions {
       return bg.isGranted;
     }
     return true;
+  }
+
+  /// Read-only check used before starting duty background tracking.
+  static Future<BackgroundPermissionOutcome> readinessOutcome() async {
+    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      return const BackgroundPermissionOutcome(
+        granted: false,
+        openSettings: true,
+        deniedReason: 'location_services_disabled',
+      );
+    }
+
+    if (!await hasSufficientBackgroundAccess()) {
+      final deniedReason = await settingsDeniedReasonIfAny();
+      final reason =
+          deniedReason ??
+          (Platform.isIOS ? 'location_always' : 'location_background');
+      final openSettings =
+          reason != 'location_foreground' && reason != 'location_when_in_use';
+      return BackgroundPermissionOutcome(
+        granted: false,
+        openSettings: openSettings,
+        deniedReason: reason,
+      );
+    }
+
+    return const BackgroundPermissionOutcome(granted: true);
+  }
+
+  /// Requests notification permission once before Android foreground service start.
+  static Future<void> ensureAndroidNotificationForService() async {
+    if (!Platform.isAndroid) return;
+    final status = await Permission.notification.status;
+    if (status.isGranted) return;
+    await Permission.notification.request();
   }
 
   static String settingsTitleFor(String? deniedReason) {
@@ -292,6 +356,10 @@ class BackgroundLocationPermissions {
         return 'Tap Allow all the time on the next screen, or open Settings to '
             'enable background location for duty tracking.';
       case 'location_always':
+        if (Platform.isIOS) {
+          return 'Open Settings, tap SmartNPS360, choose Location, then '
+              'select Always. Your location is used only while you are on duty.';
+        }
         return 'Open Settings and set location to Always. Your location is used '
             'only while you are on duty.';
       default:
@@ -325,8 +393,8 @@ class BackgroundLocationPermissions {
       case 'location_background':
       case 'location_always':
         if (Platform.isIOS) {
-          return 'Background location is required while you are on duty. '
-              'Please set location to Always.';
+          return 'Open Settings, tap SmartNPS360, choose Location, then '
+              'select Always. Your location is used only while you are on duty.';
         }
         if (Platform.isAndroid) {
           return 'Background location is required while you are on duty. '
@@ -340,5 +408,14 @@ class BackgroundLocationPermissions {
         return 'A required permission is missing. Please enable it to '
             'continue duty tracking.';
     }
+  }
+
+  static String locationServicesDisabledSettingsMessage() {
+    if (Platform.isIOS) {
+      return 'Location Services are turned off. Open Settings, go to Privacy & '
+          'Security, tap Location Services, and turn them on. Then return here.';
+    }
+    return 'Location services are turned off on this device. Turn them on '
+        'to continue duty tracking.';
   }
 }

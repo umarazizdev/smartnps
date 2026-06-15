@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import '../background/background_location_permissions.dart';
 import '../background/duty_heartbeat_service.dart';
 import '../utilities/app_config.dart';
-import '../utilities/permission_settings_helper.dart';
 
 class BackgroundLocationRequiredBanner extends StatefulWidget {
   const BackgroundLocationRequiredBanner({super.key});
@@ -55,10 +54,10 @@ class _BackgroundLocationRequiredBannerState
     if (_requestInFlight) return;
     setState(() => _requestInFlight = true);
     try {
-      await PermissionSettingsHelper.requestNextLocationPermissionStep();
+      await DutyHeartbeatService.instance.handleBannerEnableLocationAction(
+        context,
+      );
       await _refreshBannerContent();
-      await DutyHeartbeatService.instance
-          .refreshBackgroundLocationPermissionBannerState();
     } finally {
       if (mounted) setState(() => _requestInFlight = false);
     }

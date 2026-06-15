@@ -1,5 +1,6 @@
 package com.smartnps360.app
 
+import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Intent
@@ -47,19 +48,97 @@ class MainActivity : FlutterActivity() {
       when (call.method) {
         "openAppSettings" -> {
           try {
-            val intent = Intent(
-              Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-              Uri.parse("package:$packageName")
-            )
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(intent)
+            openAppSettings()
             result.success(true)
           } catch (error: Exception) {
             result.error("open_app_settings_failed", error.message, null)
           }
         }
+        "openLocationPermissionSettings" -> {
+          try {
+            openLocationPermissionSettings()
+            result.success(true)
+          } catch (error: Exception) {
+            result.error("open_location_permission_settings_failed", error.message, null)
+          }
+        }
         else -> result.notImplemented()
       }
+    }
+  }
+
+  private fun openAppSettings() {
+    val intent = Intent(
+      Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+      Uri.parse("package:$packageName"),
+    )
+    startActivity(intent)
+  }
+
+  private fun openLocationPermissionSettings() {
+    val pkg = packageName
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      val groupNames = listOf(
+        Manifest.permission_group.LOCATION,
+        "android.permission-group.LOCATION",
+      )
+      for (group in groupNames) {
+        if (tryStartActivity(
+            Intent("android.settings.MANAGE_APP_PERMISSION").apply {
+              setPackage("com.android.settings")
+              putExtra(Intent.EXTRA_PACKAGE_NAME, pkg)
+              putExtra("android.intent.extra.PERMISSION_GROUP_NAME", group)
+            },
+          )) {
+          return
+        }
+      }
+
+      if (tryStartActivity(
+          Intent("android.settings.MANAGE_APP_PERMISSION").apply {
+            putExtra(Intent.EXTRA_PACKAGE_NAME, pkg)
+            putExtra(
+              "android.intent.extra.PERMISSION_GROUP_NAME",
+              Manifest.permission_group.LOCATION,
+            )
+          },
+        )) {
+        return
+      }
+    }
+
+    val permissionListIntents = listOf(
+      Intent("android.settings.MANAGE_APP_PERMISSIONS").apply {
+        setPackage("com.android.settings")
+        putExtra(Intent.EXTRA_PACKAGE_NAME, pkg)
+        putExtra("android.intent.extra.PACKAGE_NAME", pkg)
+        data = Uri.parse("package:$pkg")
+      },
+      Intent("android.settings.MANAGE_APP_PERMISSIONS").apply {
+        putExtra(Intent.EXTRA_PACKAGE_NAME, pkg)
+        data = Uri.parse("package:$pkg")
+      },
+    )
+    for (intent in permissionListIntents) {
+      if (tryStartActivity(intent)) {
+        return
+      }
+    }
+
+    openAppSettings()
+  }
+
+  private fun tryStartActivity(intent: Intent): Boolean {
+    return try {
+      if (intent.resolveActivity(packageManager) == null) {
+        false
+      } else {
+        startActivity(intent)
+        true
+      }
+    } catch (_: Exception) {
+      false
     }
   }
 }

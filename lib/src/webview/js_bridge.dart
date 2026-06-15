@@ -11,6 +11,8 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../background/background_location_permissions.dart';
+import '../background/duty_heartbeat_service.dart';
 import '../push/push_notification_service.dart';
 import '../utilities/app_config.dart';
 import '../utilities/permission_settings_helper.dart';
@@ -185,35 +187,49 @@ class JsBridge {
         );
       }
 
+      final disclosureReady = await DutyHeartbeatService.instance
+          .ensureDisclosureBeforeWebLocationAccess();
+      if (!disclosureReady) {
+        return _err(
+          'disclosure_required',
+          'Location disclosure must be accepted to use GPS',
+        );
+      }
+
       var permission = await Geolocator.checkPermission();
 
-      if (permission == LocationPermission.denied) {
+      if (permission == LocationPermission.denied &&
+          !await BackgroundLocationPermissions.hasForegroundLocationAccess()) {
         permission = await Geolocator.requestPermission();
       }
 
       if (permission == LocationPermission.denied) {
-        unawaited(
-          PermissionSettingsHelper.promptOpenSettings(
-            title: 'Location permission denied',
-            message:
-                'Location access was denied. To use GPS features, open '
-                'Settings and enable Location for SmartNPS360.',
-            dialogKey: 'webview_location',
-          ),
-        );
+        if (!DutyHeartbeatService.instance.shouldShowBackgroundLocationBanner) {
+          unawaited(
+            PermissionSettingsHelper.promptOpenSettings(
+              title: 'Location permission denied',
+              message:
+                  'Location access was denied. To use GPS features, open '
+                  'Settings, tap SmartNPS360, then enable Location.',
+              dialogKey: 'webview_location',
+            ),
+          );
+        }
         return _err('permission_denied', 'Location permission denied');
       }
 
       if (permission == LocationPermission.deniedForever) {
-        unawaited(
-          PermissionSettingsHelper.promptOpenSettings(
-            title: 'Location permission denied',
-            message:
-                'Location access was permanently denied. Open Settings, tap '
-                'SmartNPS360, then enable Location.',
-            dialogKey: 'webview_location',
-          ),
-        );
+        if (!DutyHeartbeatService.instance.shouldShowBackgroundLocationBanner) {
+          unawaited(
+            PermissionSettingsHelper.promptOpenSettings(
+              title: 'Location permission denied',
+              message:
+                  'Location access was permanently denied. Open Settings, tap '
+                  'SmartNPS360, then enable Location.',
+              dialogKey: 'webview_location',
+            ),
+          );
+        }
         return _err(
           'permission_denied_forever',
           'Location permission permanently denied. Enable it from settings.',
