@@ -50,6 +50,23 @@ class _WebViewShellUiController extends GetxController {
   final pullToRefreshActive = false.obs;
   final selectedBottomTabIndex = 0.obs;
   final bottomTabNavigationActive = false.obs;
+  final keyboardVisible = false.obs;
+  final flutterKeyboardInset = 0.0.obs;
+
+  void setKeyboardVisible(bool value) {
+    if (keyboardVisible.value == value) return;
+    keyboardVisible.value = value;
+    OverlayPromptGuard.setWebKeyboardVisible(value);
+  }
+
+  void setFlutterKeyboardInset(double inset) {
+    final clamped = inset < 0 ? 0.0 : inset;
+    if (flutterKeyboardInset.value == clamped) return;
+    flutterKeyboardInset.value = clamped;
+  }
+
+  bool get isKeyboardOpen =>
+      keyboardVisible.value || flutterKeyboardInset.value > 0;
 
   void beginNavigation() {
     isNavigating.value = true;
@@ -910,17 +927,44 @@ class _WebViewShellState extends State<WebViewShell>
 
       var active = false;
 
-      function notify(open) {
-        if (active === open) return;
-        active = open;
+      function viewportKeyboardInset() {
+        if (!window.visualViewport) return 0;
+        return Math.max(
+          0,
+          window.innerHeight -
+            window.visualViewport.height -
+            window.visualViewport.offsetTop
+        );
+      }
+
+      function postToFlutter(open) {
         try {
           if (window.flutter_inappwebview &&
               typeof window.flutter_inappwebview.callHandler === 'function') {
             window.flutter_inappwebview.callHandler('keyboardVisibilityChanged', {
               visible: open
             });
+            return true;
           }
         } catch (_) {}
+        return false;
+      }
+
+      function notify(open) {
+        if (active === open) return;
+        active = open;
+        if (!postToFlutter(open) && open) {
+          window.addEventListener(
+            'flutterInAppWebViewPlatformReady',
+            function onReady() {
+              window.removeEventListener(
+                'flutterInAppWebViewPlatformReady',
+                onReady
+              );
+              postToFlutter(active);
+            }
+          );
+        }
       }
 
       function isEditable(el) {
@@ -934,28 +978,33 @@ class _WebViewShellState extends State<WebViewShell>
         return isEditable(document.activeElement);
       }
 
+      function syncFromViewport() {
+        var inset = viewportKeyboardInset();
+        if (inset > 80 || hasFocusedEditable()) {
+          notify(true);
+        } else if (inset <= 40) {
+          notify(false);
+        }
+      }
+
       document.addEventListener('focusin', function (e) {
         if (isEditable(e.target)) notify(true);
       }, true);
 
       document.addEventListener('focusout', function () {
         setTimeout(function () {
-          if (!hasFocusedEditable()) notify(false);
-        }, 120);
+          if (hasFocusedEditable()) return;
+          if (viewportKeyboardInset() > 80) {
+            notify(true);
+            return;
+          }
+          notify(false);
+        }, 180);
       }, true);
 
       if (window.visualViewport) {
-        window.visualViewport.addEventListener('resize', function () {
-          var inset =
-            window.innerHeight -
-            window.visualViewport.height -
-            window.visualViewport.offsetTop;
-          if (inset > 100) {
-            notify(true);
-          } else if (!hasFocusedEditable()) {
-            notify(false);
-          }
-        });
+        window.visualViewport.addEventListener('resize', syncFromViewport);
+        window.visualViewport.addEventListener('scroll', syncFromViewport);
       }
     })();
   ''',
@@ -1218,6 +1267,13 @@ class _WebViewShellState extends State<WebViewShell>
   }
 
   @override
+  void didChangeMetrics() {
+    super.didChangeMetrics();
+    if (!mounted) return;
+    _ui.setFlutterKeyboardInset(MediaQuery.viewInsetsOf(context).bottom);
+  }
+
+  @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed &&
         !AuthSessionManager.isLoginRoute(_ui.currentUri.value)) {
@@ -1310,7 +1366,7 @@ class _WebViewShellState extends State<WebViewShell>
         final payload = args.isNotEmpty && args.first is Map
             ? args.first as Map
             : null;
-        OverlayPromptGuard.setWebKeyboardVisible(payload?['visible'] == true);
+        _ui.setKeyboardVisible(payload?['visible'] == true);
         return {'ok': true};
       },
     );
@@ -1605,7 +1661,7 @@ class _WebViewShellState extends State<WebViewShell>
         if (action == 'logout') {
           await AuthSessionManager.clearNativeSession(deletePushToken: true);
           _ui.setNativeAuthSession(false);
-          OverlayPromptGuard.setWebKeyboardVisible(false);
+          _ui.setKeyboardVisible(false);
           unawaited(
             _controller?.evaluateJavascript(
               source:
@@ -2617,7 +2673,8 @@ class _WebViewShellState extends State<WebViewShell>
                               !_ui.showOffline.value &&
                               _ui.firstPageLoaded.value &&
                               _ui.hasNativeAuthSession.value &&
-                              !_isAuthRoute(_ui.currentUri.value);
+                              !_isAuthRoute(_ui.currentUri.value) &&
+                              !_ui.isKeyboardOpen;
                           if (!showBottomBar) {
                             return const SizedBox.shrink();
                           }
