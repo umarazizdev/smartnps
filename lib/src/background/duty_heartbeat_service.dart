@@ -12,6 +12,7 @@ import '../api/api_client.dart';
 import '../app/app_navigator.dart';
 import '../auth/auth_repository.dart';
 import '../push/push_notification_service.dart';
+import '../auth/location_disclosure_account_sync.dart';
 import '../utilities/app_config.dart';
 import '../utilities/overlay_prompt_guard.dart';
 import '../utilities/permission_settings_helper.dart';
@@ -20,6 +21,7 @@ import 'background_location_controller.dart';
 import 'background_location_permissions.dart';
 import 'duty_tracking_preferences.dart';
 import 'ios_duty_location_pinger.dart';
+import 'location_disclosure_consent.dart';
 
 class DutyHeartbeatService {
   DutyHeartbeatService._();
@@ -100,14 +102,11 @@ class DutyHeartbeatService {
   }
 
   Future<void> _hydrateConsentFromStorage() async {
-    if (await DutyTrackingPreferences.isDisclosureAccepted()) {
+    await LocationDisclosureAccountSync.onLoginResolved();
+
+    if (await LocationDisclosureConsent.hasAccepted()) {
       _disclosureAccepted = true;
       _disclosureDeferred = false;
-      return;
-    }
-
-    if (await DutyTrackingPreferences.isDisclosureDismissed()) {
-      _disclosureDeferred = true;
     }
   }
 
@@ -117,6 +116,8 @@ class DutyHeartbeatService {
   /// native session teardown is skipped elsewhere and we only refresh banner
   /// state without re-prompting settings the user already dismissed.
   Future<void> recheckOnDutyPrompts({bool pageReload = false}) async {
+    if (!_heartbeatActive) return;
+
     final token = await AuthRepository.instance.getAccessToken();
     if (token == null || token.isEmpty) return;
 
@@ -159,7 +160,6 @@ class DutyHeartbeatService {
   Future<bool> _shouldAutoApplyOnDutyFromPoll() async {
     if (_onDutyAutoPromptComplete) return false;
     if (_disclosureDeferred || _disclosurePromptInFlight) return false;
-    if (await DutyTrackingPreferences.isDisclosureDismissed()) return false;
     if (await DutyTrackingPreferences.isSettingsPromptDeferred()) return false;
     return true;
   }
@@ -205,7 +205,7 @@ class DutyHeartbeatService {
     }
   }
 
-  void stop({bool stopBackgroundLocation = true}) {
+  Future<void> stop({bool stopBackgroundLocation = true}) async {
     _heartbeatActive = false;
     _pollTimer?.cancel();
     _pollTimer = null;
@@ -216,7 +216,7 @@ class DutyHeartbeatService {
     debugPrint('[DutyHeartbeatService] stopped heartbeat polling');
 
     if (stopBackgroundLocation) {
-      unawaited(_applyOffDuty());
+      await _applyOffDuty();
     }
   }
 
@@ -228,23 +228,29 @@ class DutyHeartbeatService {
           _maxPollInterval.inMilliseconds - _minPollInterval.inMilliseconds + 1,
         );
     _pollTimer = Timer(Duration(milliseconds: jitterMs), () async {
+      if (!_heartbeatActive) return;
       await _pollOnce();
-      if (_pollTimer != null) {
+      if (_heartbeatActive && _pollTimer != null) {
         _scheduleNextPoll();
       }
     });
   }
 
   Future<void> _pollOnce() async {
-    if (_pollInFlight) return;
+    if (_pollInFlight || !_heartbeatActive) return;
     _pollInFlight = true;
 
     try {
+      if (!_heartbeatActive) return;
+
       final token = await AuthRepository.instance.getAccessToken();
       if (token == null || token.isEmpty) {
         if (kDebugMode) {
-          debugPrint('[DutyHeartbeatService] skip poll: no auth token');
+          debugPrint(
+            '[DutyHeartbeatService] no auth token; stopping heartbeat and location',
+          );
         }
+        await stop();
         return;
       }
 
@@ -269,6 +275,8 @@ class DutyHeartbeatService {
         }
         return;
       }
+
+      if (!_heartbeatActive || !await _hasActiveAuthToken()) return;
 
       debugPrint('[DutyHeartbeatService] duty status=$status');
       if (status == onDuty) {
@@ -400,6 +408,8 @@ class DutyHeartbeatService {
 
     final isFreshClockIn = _lastAppliedStatus == offDuty;
 
+    await _hydrateConsentFromStorage();
+
     await PushNotificationService.instance.waitForPermissionPromptCompleted(
       promptIfNeeded: true,
     );
@@ -410,6 +420,24 @@ class DutyHeartbeatService {
     await _syncPermissionReadyState();
 
     if (!_heartbeatActive || !await _hasActiveAuthToken()) return;
+
+    if (await LocationDisclosureConsent.hasAccepted()) {
+      _disclosureAccepted = true;
+      _lastAppliedStatus = onDuty;
+      if (!await _isLocationTrackingRunning()) {
+        await _runPostDisclosurePermissionStep();
+        final result = await BackgroundLocationController.ensureStarted();
+        debugPrint(
+          '[DutyHeartbeatService] ensureStarted (disclosure accepted) result=$result',
+        );
+        if (result['ok'] == true) {
+          await _syncPermissionReadyState();
+        }
+      }
+      await refreshBackgroundLocationPermissionBannerState();
+      _onDutyAutoPromptComplete = true;
+      return;
+    }
 
     if (isFreshClockIn) {
       await Future.delayed(const Duration(seconds: 1));
@@ -460,21 +488,24 @@ class DutyHeartbeatService {
   }
 
   /// Store-safe gate for web geolocation: disclosure before any OS prompt.
-  /// Re-shows disclosure after Not now on retry (forceRetry).
+  /// Re-shows disclosure on user-initiated retry (forceRetry).
   Future<bool> ensureDisclosureBeforeWebLocationAccess() async {
     if (!Platform.isAndroid && !Platform.isIOS) return true;
+
+    if (!await LocationDisclosureConsent.shouldShowLocationDisclosure()) {
+      _disclosureAccepted = true;
+      return true;
+    }
 
     if (_disclosurePromptFuture != null) {
       if (!await _disclosurePromptFuture!) return false;
     }
 
-    if (_disclosureAccepted ||
-        await DutyTrackingPreferences.isDisclosureAccepted()) {
+    if (_disclosureAccepted) {
       return true;
     }
 
-    final accepted =
-        await _confirmBackgroundLocationDisclosure(forceRetry: true);
+    final accepted = await _confirmBackgroundLocationDisclosure(forceRetry: false);
     if (!accepted) return false;
 
     if (_requestPermissionAfterDisclosure) {
@@ -487,6 +518,16 @@ class DutyHeartbeatService {
 
   /// Handles the top banner primary action with the correct next step per state.
   Future<void> handleBannerEnableLocationAction(BuildContext context) async {
+    if (await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled() &&
+        await LocationDisclosureConsent.hasAccepted()) {
+      final result = await BackgroundLocationController.ensureStarted();
+      if (result['ok'] == true) {
+        await _syncPermissionReadyState();
+      }
+      await refreshBackgroundLocationPermissionBannerState();
+      return;
+    }
+
     _resetOnDutyAutoPromptState();
     await DutyTrackingPreferences.clearSettingsPromptDeferred();
     final proceed = await prepareBannerLocationPermissionRequest(context);
@@ -511,35 +552,12 @@ class DutyHeartbeatService {
       case 'location_when_in_use':
         await PermissionSettingsHelper.requestNextLocationPermissionStep();
         break;
-      case 'location_services_disabled':
-        if (Platform.isIOS) {
-          await PermissionSettingsHelper.promptOpenSettings(
-            title: BackgroundLocationPermissions.settingsTitleFor(deniedReason),
-            message: BackgroundLocationPermissions
-                .locationServicesDisabledSettingsMessage(),
-            dialogKey: 'location_services',
-            respectCooldown: false,
-          );
-        } else {
-          await PermissionSettingsHelper.openSettingsForUserTap(
-            destination: StoreSafeSettingsDestination.systemLocationServices,
-          );
-        }
-        break;
-      case 'location_background':
-      case 'location_always':
-        await PermissionSettingsHelper.openSettingsForUserTap(
-          destination: StoreSafeSettingsDestination.locationPermission,
-        );
-        break;
       default:
-        if (await BackgroundLocationPermissions.hasForegroundLocationAccess()) {
-          await PermissionSettingsHelper.openSettingsForUserTap(
-            destination: StoreSafeSettingsDestination.locationPermission,
-          );
-        } else {
-          await PermissionSettingsHelper.requestNextLocationPermissionStep();
-        }
+        await _showBackgroundLocationSettingsDialogIfNeeded(
+          deniedReason: deniedReason,
+          respectCooldown: false,
+          userInitiated: true,
+        );
     }
 
     if (await BackgroundLocationPermissions.hasSufficientBackgroundAccess()) {
@@ -553,22 +571,29 @@ class DutyHeartbeatService {
 
   /// Shows duty disclosure from the banner when it has not been accepted yet.
   Future<bool> prepareBannerLocationPermissionRequest(BuildContext context) async {
-    if (await DutyTrackingPreferences.isDisclosureAccepted()) {
+    if (!await LocationDisclosureConsent.shouldShowLocationDisclosure()) {
+      _disclosureAccepted = true;
       return true;
     }
+
+    _disclosureDeferred = false;
 
     await OverlayPromptGuard.waitUntilReady();
     if (!context.mounted) return false;
 
     final phase = await BackgroundLocationPermissions.currentPermissionPhase();
-    final accepted = await DutyTrackingPreferences.isDisclosureDismissed()
-        ? await LocationTrackingDisclosureDialog.showBackgroundReminder(context)
-        : await LocationTrackingDisclosureDialog.show(context, phase: phase);
+    final accepted = await LocationTrackingDisclosureDialog.show(
+      context,
+      phase: phase,
+    );
     if (accepted) {
       _disclosureAccepted = true;
       _disclosureDeferred = false;
       _requestPermissionAfterDisclosure = true;
-      await DutyTrackingPreferences.setDisclosureAccepted();
+      await LocationDisclosureConsent.markAcceptedForAll();
+    } else {
+      _disclosureDeferred = true;
+      _requestPermissionAfterDisclosure = false;
     }
     return accepted;
   }
@@ -578,7 +603,18 @@ class DutyHeartbeatService {
   Future<bool> _runPostDisclosurePermissionStep({
     bool userInitiated = false,
   }) async {
-    if (!_requestPermissionAfterDisclosure && !userInitiated) return false;
+    if (await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled()) {
+      return false;
+    }
+
+    final permissionReady =
+        await BackgroundLocationPermissions.hasSufficientBackgroundAccess();
+    final disclosureAccepted = await LocationDisclosureConsent.hasAccepted();
+    final shouldRunPermissionFlow = userInitiated ||
+        _requestPermissionAfterDisclosure ||
+        (!permissionReady && disclosureAccepted);
+
+    if (!shouldRunPermissionFlow) return false;
     _requestPermissionAfterDisclosure = false;
 
     final phase = await BackgroundLocationPermissions.currentPermissionPhase();
@@ -607,7 +643,7 @@ class DutyHeartbeatService {
   Future<void> retryOnDutyTrackingIfReady() async {
     if (_lastAppliedStatus != onDuty) return;
     if (!await _hasActiveAuthToken()) return;
-    if (!await DutyTrackingPreferences.isDisclosureAccepted()) return;
+    if (!await LocationDisclosureConsent.hasAccepted()) return;
     if (!await BackgroundLocationPermissions.hasSufficientBackgroundAccess()) {
       await promptBackgroundLocationSettingsIfNeeded();
       await refreshBackgroundLocationPermissionBannerState();
@@ -630,7 +666,7 @@ class DutyHeartbeatService {
   /// missing after foreground was granted (Android/iOS duty flows).
   Future<void> promptBackgroundLocationSettingsIfNeeded() async {
     if (_lastAppliedStatus != onDuty) return;
-    if (!await DutyTrackingPreferences.isDisclosureAccepted()) return;
+    if (!await LocationDisclosureConsent.hasAccepted()) return;
     if (await BackgroundLocationPermissions.hasSufficientBackgroundAccess()) {
       return;
     }
@@ -641,23 +677,29 @@ class DutyHeartbeatService {
   }
 
   Future<void> _applyOffDuty() async {
+    debugPrint(
+      '[DutyHeartbeatService] stopping location after flushing pending batches',
+    );
     final result = await BackgroundLocationController.stop();
     debugPrint('[DutyHeartbeatService] stop result=$result');
-    if (result['ok'] == true) {
-      _lastAppliedStatus = offDuty;
-      _resetDisclosureState();
-      PermissionSettingsHelper.clearCooldown('background_location');
-      await DutyTrackingPreferences.clearOnOffDuty();
-      await refreshBackgroundLocationPermissionBannerState();
-    }
+    _lastAppliedStatus = offDuty;
+    _resetDisclosureState();
+    PermissionSettingsHelper.clearCooldown('background_location');
+    await DutyTrackingPreferences.clearOnOffDuty();
+    await refreshBackgroundLocationPermissionBannerState();
   }
 
-  void _resetDisclosureState() {
+  void resetLocationDisclosureMemory() {
     _disclosureAccepted = false;
     _disclosureDeferred = false;
     _requestPermissionAfterDisclosure = false;
     _disclosurePromptInFlight = false;
     _disclosurePromptFuture = null;
+    _setDisclosurePromptVisible(false);
+  }
+
+  void _resetDisclosureState() {
+    resetLocationDisclosureMemory();
     _resetOnDutyAutoPromptState();
   }
 
@@ -715,7 +757,7 @@ class DutyHeartbeatService {
     }
   }
 
-  /// Marks permission-ready state and auto-accepts disclosure when already enabled.
+  /// Marks permission-ready state after background access is sufficient.
   Future<void> _syncPermissionReadyState() async {
     if (!await BackgroundLocationPermissions.hasSufficientBackgroundAccess()) {
       await refreshBackgroundLocationPermissionBannerState();
@@ -730,19 +772,23 @@ class DutyHeartbeatService {
   }) async {
     if (!Platform.isAndroid && !Platform.isIOS) return true;
 
-    if (_disclosureAccepted ||
-        await DutyTrackingPreferences.isDisclosureAccepted()) {
+    if (!await LocationDisclosureConsent.shouldShowLocationDisclosure()) {
       _disclosureAccepted = true;
       return true;
     }
 
-    if (!forceRetry &&
-        (_disclosureDeferred ||
-            await DutyTrackingPreferences.isDisclosureDismissed())) {
-      _disclosureDeferred = true;
+    if (_disclosureAccepted || await LocationDisclosureConsent.hasAccepted()) {
+      _disclosureAccepted = true;
+      if (!await DutyTrackingPreferences.isDisclosureAccepted()) {
+        await DutyTrackingPreferences.setDisclosureAccepted();
+      }
+      return true;
+    }
+
+    if (!forceRetry && _disclosureDeferred) {
       if (kDebugMode) {
         debugPrint(
-          '[DutyHeartbeatService] disclosure skipped (dismissed for this shift)',
+          '[DutyHeartbeatService] disclosure skipped (deferred this session)',
         );
       }
       return false;
@@ -770,11 +816,14 @@ class DutyHeartbeatService {
         return;
       }
 
-      if (!forceRetry &&
-          (_disclosureDeferred ||
-              await DutyTrackingPreferences.isDisclosureDismissed())) {
-        _disclosureDeferred = true;
+      if (!forceRetry && _disclosureDeferred) {
         completer.complete(false);
+        return;
+      }
+
+      if (!await LocationDisclosureConsent.shouldShowLocationDisclosure()) {
+        _disclosureAccepted = true;
+        completer.complete(true);
         return;
       }
 
@@ -793,10 +842,7 @@ class DutyHeartbeatService {
         return;
       }
 
-      if (!forceRetry &&
-          (_disclosureDeferred ||
-              await DutyTrackingPreferences.isDisclosureDismissed())) {
-        _disclosureDeferred = true;
+      if (!forceRetry && _disclosureDeferred) {
         completer.complete(false);
         return;
       }
@@ -829,17 +875,20 @@ class DutyHeartbeatService {
   Future<bool> _promptBackgroundLocationDisclosure({
     bool forceRetry = false,
   }) async {
-    if (!forceRetry &&
-        (_disclosureDeferred ||
-            await DutyTrackingPreferences.isDisclosureDismissed())) {
-      _disclosureDeferred = true;
+    if (!forceRetry && _disclosureDeferred) {
       return false;
     }
 
     final context = AppNavigator.key.currentContext;
     if (context == null || !context.mounted) return false;
 
+    if (!await LocationDisclosureConsent.shouldShowLocationDisclosure()) {
+      _disclosureAccepted = true;
+      return true;
+    }
+
     final phase = await BackgroundLocationPermissions.currentPermissionPhase();
+
     final allowed = await LocationTrackingDisclosureDialog.show(
       context,
       phase: phase,
@@ -848,13 +897,12 @@ class DutyHeartbeatService {
       _disclosureAccepted = true;
       _disclosureDeferred = false;
       _requestPermissionAfterDisclosure = true;
-      await DutyTrackingPreferences.setDisclosureAccepted();
+      await LocationDisclosureConsent.markAcceptedForAll();
       return true;
     }
 
     _disclosureDeferred = true;
     _requestPermissionAfterDisclosure = false;
-    await DutyTrackingPreferences.setDisclosureDismissed();
     return false;
   }
 
@@ -871,7 +919,7 @@ class DutyHeartbeatService {
       return;
     }
 
-    if (await BackgroundLocationPermissions.hasSufficientBackgroundAccess()) {
+    if (await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled()) {
       await _syncPermissionReadyState();
       await refreshBackgroundLocationPermissionBannerState();
       return;
@@ -889,9 +937,15 @@ class DutyHeartbeatService {
     try {
       final result = await PermissionSettingsHelper.promptOpenSettings(
         title: BackgroundLocationPermissions.settingsTitleFor(deniedReason),
-        message: BackgroundLocationPermissions.settingsMessageFor(deniedReason),
-        dialogKey: 'background_location',
+        message: BackgroundLocationPermissions.settingsDialogMessageFor(
+          deniedReason,
+        ),
+        dialogKey: BackgroundLocationPermissions.settingsDialogKeyFor(
+          deniedReason,
+        ),
         respectCooldown: respectCooldown,
+        secondaryLabel: LocationTrackingDisclosureDialog.cancelDutyLabel,
+        destructiveSecondary: true,
       );
 
       await _reconcileBgLocationReadyFlag();
@@ -928,7 +982,7 @@ class DutyHeartbeatService {
       return;
     }
 
-    if (await BackgroundLocationPermissions.hasSufficientBackgroundAccess()) {
+    if (await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled()) {
       await _syncPermissionReadyState();
       await refreshBackgroundLocationPermissionBannerState();
       return;
@@ -942,17 +996,6 @@ class DutyHeartbeatService {
     final reason =
         deniedReason ??
         await BackgroundLocationPermissions.settingsDeniedReasonIfAny();
-
-    if (reason == 'location_services_disabled' && Platform.isIOS) {
-      await PermissionSettingsHelper.promptOpenSettings(
-        title: BackgroundLocationPermissions.settingsTitleFor(reason),
-        message: BackgroundLocationPermissions.locationServicesDisabledSettingsMessage(),
-        dialogKey: 'location_services',
-        respectCooldown: respectCooldown,
-      );
-      await refreshBackgroundLocationPermissionBannerState();
-      return;
-    }
 
     if (reason == 'location_foreground' || reason == 'location_when_in_use') {
       await refreshBackgroundLocationPermissionBannerState();

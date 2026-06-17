@@ -103,12 +103,33 @@ class BackgroundLocationController {
         return {'ok': true, 'stopped': false, 'running': false};
       }
       service.invoke('stop');
-      return {'ok': true, 'stopped': true, 'running': false};
+      await _waitUntilAndroidServiceStopped();
+      final stillRunning = await service.isRunning();
+      return {
+        'ok': !stillRunning,
+        'stopped': !stillRunning,
+        'running': stillRunning,
+        if (stillRunning)
+          'error': {
+            'code': 'stop_timeout',
+            'message': 'Background location service did not stop in time',
+          },
+      };
     } catch (e) {
       return {
         'ok': false,
         'error': {'code': 'stop_failed', 'message': e.toString()},
       };
+    }
+  }
+
+  static Future<void> _waitUntilAndroidServiceStopped() async {
+    final service = FlutterBackgroundService();
+    // Allow time for queued batch uploads to finish during logout teardown.
+    final deadline = DateTime.now().add(const Duration(seconds: 60));
+    while (DateTime.now().isBefore(deadline)) {
+      if (!await service.isRunning()) return;
+      await Future<void>.delayed(const Duration(milliseconds: 100));
     }
   }
 }

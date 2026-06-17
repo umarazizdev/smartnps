@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 
+import '../auth/auth_repository.dart';
 import '../location/mock_location_detection.dart';
 import '../location/mock_location_guard.dart';
 import 'background_location_uploader.dart';
@@ -19,6 +20,7 @@ class IosDutyLocationPinger {
   static BackgroundLocationUploader? _uploader;
   static DateTime? _lastUploadAt;
   static bool _running = false;
+  static bool _stopping = false;
   static bool _recoverInFlight = false;
 
   static const Duration _pingEvery = Duration(seconds: 1);
@@ -90,6 +92,7 @@ class IosDutyLocationPinger {
     }
 
     _running = true;
+    _stopping = false;
     _startPeriodicPing();
     if (kDebugMode) {
       debugPrint(
@@ -110,7 +113,7 @@ class IosDutyLocationPinger {
   }
 
   static Future<void> _pollCurrentPosition() async {
-    if (!_running || _uploader == null) return;
+    if (_stopping || !_running || _uploader == null) return;
 
     try {
       final permission = await Geolocator.checkPermission();
@@ -177,6 +180,14 @@ class IosDutyLocationPinger {
   }
 
   static Future<void> _onPosition(Position pos) async {
+    if (_stopping) return;
+
+    final token = await AuthRepository.instance.getAccessToken();
+    if (token == null || token.isEmpty) {
+      await stop();
+      return;
+    }
+
     final now = DateTime.now();
     final last = _lastUploadAt;
     if (last != null && now.difference(last) < const Duration(seconds: 1)) {
@@ -216,7 +227,10 @@ class IosDutyLocationPinger {
 
   static Future<void> stop() async {
     if (!Platform.isIOS) return;
+    if (_stopping) return;
 
+    _stopping = true;
+    _running = false;
     _pingTimer?.cancel();
     _pingTimer = null;
     await _subscription?.cancel();
@@ -224,7 +238,6 @@ class IosDutyLocationPinger {
     await _uploader?.stop();
     _uploader = null;
     _lastUploadAt = null;
-    _running = false;
 
     try {
       await IosBackgroundLocationNotification.dismiss();
@@ -237,5 +250,7 @@ class IosDutyLocationPinger {
     if (kDebugMode) {
       debugPrint('[IosDutyLocationPinger] stopped');
     }
+
+    _stopping = false;
   }
 }

@@ -131,6 +131,10 @@ class PermissionSettingsHelper {
   /// Foreground-only OS prompt. Does not open Settings or request background.
   static Future<LocationPermissionRequestResult>
   requestForegroundLocationStep() async {
+    if (await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled()) {
+      return LocationPermissionRequestResult.completed;
+    }
+
     if (Platform.isAndroid || Platform.isIOS) {
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
@@ -169,6 +173,10 @@ class PermissionSettingsHelper {
   /// Handles one location-permission step per call: OS prompt or Settings, never both.
   static Future<LocationPermissionRequestResult>
   requestNextLocationPermissionStep() async {
+    if (await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled()) {
+      return LocationPermissionRequestResult.completed;
+    }
+
     if (Platform.isAndroid || Platform.isIOS) {
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
@@ -240,9 +248,21 @@ class PermissionSettingsHelper {
     required String title,
     required String message,
     String dialogKey = 'default',
+    String secondaryLabel = 'Not now',
+    bool destructiveSecondary = false,
     bool barrierDismissible = false,
     bool respectCooldown = true,
+    bool skipOverlayWait = false,
   }) async {
+    if (await _isLocationSettingsPromptRedundant(dialogKey)) {
+      if (kDebugMode) {
+        debugPrint(
+          '[PermissionSettings] skip dialog key=$dialogKey (location already enabled)',
+        );
+      }
+      return PermissionSettingsPromptResult.skipped;
+    }
+
     if (_dialogVisible) {
       return PermissionSettingsPromptResult.skipped;
     }
@@ -266,7 +286,9 @@ class PermissionSettingsHelper {
       return PermissionSettingsPromptResult.skipped;
     }
 
-    await OverlayPromptGuard.waitUntilReady();
+    if (!skipOverlayWait) {
+      await OverlayPromptGuard.waitUntilReady();
+    }
 
     final readyContext = AppNavigator.key.currentContext;
     if (readyContext == null || !readyContext.mounted) {
@@ -290,8 +312,9 @@ class PermissionSettingsHelper {
         icon: Icons.location_on_rounded,
         title: title,
         message: message,
-        secondaryLabel: 'Not now',
+        secondaryLabel: secondaryLabel,
         primaryLabel: 'Open Settings',
+        destructiveSecondary: destructiveSecondary,
       );
       openedSettings = openSettings == true;
 
@@ -302,7 +325,9 @@ class PermissionSettingsHelper {
           );
         } else if (dialogKey == 'location_services') {
           await openSettingsForUserTap(
-            destination: StoreSafeSettingsDestination.app,
+            destination: BackgroundLocationPermissions.settingsDestinationFor(
+              'location_services_disabled',
+            ),
           );
         } else {
           await openSettingsForUserTap();
@@ -325,10 +350,19 @@ class PermissionSettingsHelper {
   }
 
   static bool _shouldOpenLocationPermissionSettings(String dialogKey) {
-    if (dialogKey != 'background_location' && dialogKey != 'webview_location') {
+    if (dialogKey != 'background_location' &&
+        dialogKey != 'webview_location' &&
+        dialogKey != 'clockin_background_location') {
       return false;
     }
     return Platform.isAndroid || Platform.isIOS;
+  }
+
+  static Future<bool> _isLocationSettingsPromptRedundant(String dialogKey) async {
+    if (!_shouldOpenLocationPermissionSettings(dialogKey)) {
+      return false;
+    }
+    return BackgroundLocationPermissions.isBackgroundLocationFullyEnabled();
   }
 
   static bool _isInCooldown(String dialogKey) {

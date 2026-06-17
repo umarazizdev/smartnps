@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -25,6 +26,55 @@ class BackgroundPermissionOutcome {
 }
 
 class BackgroundLocationPermissions {
+  static const MethodChannel _nativeSettingsChannel = MethodChannel(
+    'com.smartnps360.app/settings',
+  );
+
+  /// True when background location is already granted — skip all disclosure and
+  /// permission dialogs (Android Allow all the time / iOS Always).
+  static Future<bool> isBackgroundLocationFullyEnabled() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return true;
+    await refreshPermissionStateFromOs();
+    return hasSufficientBackgroundAccess();
+  }
+
+  /// Re-reads the current OS permission state (Settings-safe on iOS).
+  static Future<void> refreshPermissionStateFromOs() async {
+    if (Platform.isIOS) {
+      await refreshIosLocationPermission();
+      return;
+    }
+    if (Platform.isAndroid) {
+      await androidHasBackgroundLocationAccess();
+    }
+  }
+
+  /// Strict clock-in check: reads background permission from the OS only.
+  /// Foreground / "While using the app" is never treated as clock-in ready.
+  static Future<bool> isClockInBackgroundReady() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return true;
+    await refreshPermissionStateFromOs();
+    if (Platform.isIOS) {
+      final permission = await readIosLocationPermission();
+      return permission == LocationPermission.always;
+    }
+    if (Platform.isAndroid) {
+      try {
+        final nativeGranted = await _nativeSettingsChannel.invokeMethod<bool>(
+          'hasBackgroundLocationPermission',
+        );
+        return nativeGranted == true;
+      } catch (error) {
+        if (kDebugMode) {
+          debugPrint(
+            '[BackgroundLocationPermissions] clock-in bg check failed: $error',
+          );
+        }
+        return false;
+      }
+    }
+    return false;
+  }
   static Future<Map<String, dynamic>> statusSnapshot() async {
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     final geolocatorPermission = await readIosLocationPermission();
@@ -207,7 +257,7 @@ class BackgroundLocationPermissions {
 
   static Future<bool> iosHasBackgroundLocation() async {
     if (!Platform.isIOS) return true;
-    final permission = await readIosLocationPermission();
+    final permission = await refreshIosLocationPermission();
     return permission == LocationPermission.always;
   }
 
@@ -228,11 +278,10 @@ class BackgroundLocationPermissions {
     }
 
     if (Platform.isAndroid) {
+      if (await androidHasBackgroundLocationAccess()) return null;
       final foreground = await Permission.location.status;
       if (!foreground.isGranted) return 'location_foreground';
-      final background = await Permission.locationAlways.status;
-      if (!background.isGranted) return 'location_background';
-      return null;
+      return 'location_background';
     }
 
     return null;
@@ -265,10 +314,31 @@ class BackgroundLocationPermissions {
       return iosHasBackgroundLocation();
     }
     if (Platform.isAndroid) {
-      final bg = await Permission.locationAlways.status;
-      return bg.isGranted;
+      return androidHasBackgroundLocationAccess();
     }
     return true;
+  }
+
+  /// Android "Allow all the time" — native OS check first, then plugin fallbacks.
+  static Future<bool> androidHasBackgroundLocationAccess() async {
+    try {
+      final nativeGranted = await _nativeSettingsChannel.invokeMethod<bool>(
+        'hasBackgroundLocationPermission',
+      );
+      if (nativeGranted == true) return true;
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint(
+          '[BackgroundLocationPermissions] native bg check failed: $error',
+        );
+      }
+    }
+
+    final bg = await Permission.locationAlways.status;
+    if (bg.isGranted) return true;
+
+    final geo = await Geolocator.checkPermission();
+    return geo == LocationPermission.always;
   }
 
   /// Read-only check used before starting duty background tracking.
@@ -338,6 +408,63 @@ class BackgroundLocationPermissions {
         return 'Background location required';
       default:
         return 'Location permission needed';
+    }
+  }
+
+  static String clockInTitleFor(String? deniedReason) {
+    switch (deniedReason) {
+      case 'location_services_disabled':
+        return 'Turn on location services';
+      case 'location_foreground':
+      case 'location_when_in_use':
+        return 'Location permission needed';
+      case 'location_background':
+      case 'location_always':
+        return 'Background location required to clock in';
+      default:
+        return 'Location required to clock in';
+    }
+  }
+
+  static String clockInMessageFor(String? deniedReason) {
+    switch (deniedReason) {
+      case 'location_services_disabled':
+        return 'Location services are turned off. Turn them on to clock in '
+            'from the mobile app.';
+      case 'location_foreground':
+        return 'Allow location access to clock in. Background location '
+            '(Allow all the time) is required to complete clock-in.';
+      case 'location_when_in_use':
+        return 'Allow location access to clock in. Background location '
+            '(Always) is required to complete clock-in.';
+      case 'location_background':
+        return 'Set location to Allow all the time to clock in from this app. '
+            'Without background location, clock-in is not available.';
+      case 'location_always':
+        if (Platform.isIOS) {
+          return 'Open Settings, tap SmartNPS360, choose Location, then select '
+              'Always. Without Always access, you cannot clock in from this app.';
+        }
+        return 'Open Settings and set location to Always. Without background '
+            'location, you cannot clock in from this app.';
+      default:
+        return 'Background location is required to clock in from the mobile app.';
+    }
+  }
+
+  static String clockInSettingsMessageFor(String? deniedReason) {
+    switch (deniedReason) {
+      case 'location_background':
+        return 'Clock-in requires location set to Allow all the time. Open '
+            'Settings and choose Allow all the time for SmartNPS360.';
+      case 'location_always':
+        if (Platform.isIOS) {
+          return 'Clock-in requires Location set to Always. Open Settings, tap '
+              'SmartNPS360, choose Location, then select Always.';
+        }
+        return clockInMessageFor(deniedReason);
+      default:
+        return clockInMessageFor(deniedReason);
     }
   }
 
@@ -417,5 +544,29 @@ class BackgroundLocationPermissions {
     }
     return 'Location services are turned off on this device. Turn them on '
         'to continue duty tracking.';
+  }
+
+  /// Where Open Settings should navigate after the user confirms in-app.
+  static StoreSafeSettingsDestination settingsDestinationFor(String? deniedReason) {
+    if (deniedReason == 'location_services_disabled') {
+      if (Platform.isAndroid) {
+        return StoreSafeSettingsDestination.systemLocationServices;
+      }
+      return StoreSafeSettingsDestination.app;
+    }
+    return StoreSafeSettingsDestination.locationPermission;
+  }
+
+  static String settingsDialogKeyFor(String? deniedReason) {
+    return deniedReason == 'location_services_disabled'
+        ? 'location_services'
+        : 'background_location';
+  }
+
+  static String settingsDialogMessageFor(String? deniedReason) {
+    if (deniedReason == 'location_services_disabled') {
+      return locationServicesDisabledSettingsMessage();
+    }
+    return settingsMessageFor(deniedReason);
   }
 }

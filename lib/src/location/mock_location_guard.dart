@@ -50,6 +50,63 @@ class MockLocationGuard {
     );
   }
 
+  /// Blocking clock-in check: shows mock dialog when needed, then re-reads GPS.
+  static Future<bool> ensureClearForClockIn() async {
+    final position = await _readPositionOrNull();
+    if (position == null) {
+      return false;
+    }
+
+    final flags = MockLocationDetection.flagsFor(position);
+    if (!flags.isDetected) return true;
+
+    await _presentBlockingDialog();
+
+    final recheck = await _readPositionOrNull();
+    if (recheck == null) return false;
+    return !MockLocationDetection.isDetected(recheck);
+  }
+
+  static Future<Position?> _readPositionOrNull() async {
+    try {
+      return await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.best,
+          timeLimit: Duration(seconds: 5),
+        ),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<void> _presentBlockingDialog() async {
+    if (_dialogVisible) return;
+
+    for (var attempt = 0; attempt < 8; attempt++) {
+      final navigator = AppNavigator.key.currentState;
+      final context =
+          navigator?.overlay?.context ?? AppNavigator.key.currentContext;
+      if (context == null || !context.mounted) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        continue;
+      }
+
+      _pendingShowAttempts = 0;
+      _dialogVisible = true;
+
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        barrierColor: Colors.black.withValues(alpha: 0.32),
+        builder: (context) => const MockLocationDialog(),
+      );
+
+      _dialogVisible = false;
+      return;
+    }
+  }
+
   static void maybeShowDialog({
     required bool isMocked,
     required bool isSimulatedBySoftware,

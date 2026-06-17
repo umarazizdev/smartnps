@@ -1,42 +1,23 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-/// On-duty location consent state. Persisted across app restarts until off duty.
+import 'location_disclosure_consent.dart';
+
+/// On-duty location consent state. Persisted per officer account until off duty.
 class DutyTrackingPreferences {
   DutyTrackingPreferences._();
 
   static const _storage = FlutterSecureStorage();
 
-  static const _kDisclosureState = 'duty.disclosure_state';
   static const _kSettingsPromptDeferred = 'duty.settings_prompt_deferred';
   static const _kBgLocationReady = 'duty.bg_location_ready';
 
-  static const String disclosureAccepted = 'accepted';
-  static const String disclosureDismissed = 'dismissed';
-
-  static Future<bool> isDisclosureAccepted() async {
-    final state = await _storage.read(key: _kDisclosureState);
-    return state == disclosureAccepted;
+  static Future<bool> isDisclosureAccepted() {
+    return LocationDisclosureConsent.isDutyAccepted();
   }
 
-  static Future<bool> isDisclosureDismissed() async {
-    final state = await _storage.read(key: _kDisclosureState);
-    return state == disclosureDismissed;
-  }
-
-  static Future<void> setDisclosureAccepted() async {
-    await _storage.write(key: _kDisclosureState, value: disclosureAccepted);
-    await _storage.delete(key: _kSettingsPromptDeferred);
-    if (kDebugMode) {
-      debugPrint('[DutyTrackingPreferences] disclosure accepted (stored)');
-    }
-  }
-
-  static Future<void> setDisclosureDismissed() async {
-    await _storage.write(key: _kDisclosureState, value: disclosureDismissed);
-    if (kDebugMode) {
-      debugPrint('[DutyTrackingPreferences] disclosure dismissed (stored)');
-    }
+  static Future<void> setDisclosureAccepted() {
+    return LocationDisclosureConsent.markDutyAccepted();
   }
 
   static Future<bool> isSettingsPromptDeferred() async {
@@ -75,11 +56,10 @@ class DutyTrackingPreferences {
   }
 
   static Future<void> clearOnOffDuty() async {
-    await _storage.delete(key: _kDisclosureState);
     await _storage.delete(key: _kSettingsPromptDeferred);
     await _storage.delete(key: _kBgLocationReady);
     if (kDebugMode) {
-      debugPrint('[DutyTrackingPreferences] cleared on off duty');
+      debugPrint('[DutyTrackingPreferences] cleared per-shift state on off duty');
     }
   }
 }

@@ -12,8 +12,10 @@ import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../background/background_location_permissions.dart';
+import '../background/clock_in_gate_service.dart';
+import '../background/location_disclosure_consent.dart';
 import '../background/duty_heartbeat_service.dart';
-import '../background/duty_tracking_preferences.dart';
+import '../location/mock_location_detection.dart';
 import '../push/push_notification_service.dart';
 import '../utilities/app_config.dart';
 import '../utilities/permission_settings_helper.dart';
@@ -178,6 +180,23 @@ class JsBridge {
           options != null && options['required_accuracy_meters'] is num
           ? (options['required_accuracy_meters'] as num).toDouble()
           : null;
+      final bool forClockIn =
+          options != null &&
+          (options['for_clock_in'] == true ||
+              options['purpose'] == 'clockIn' ||
+              options['purpose'] == 'clock_in');
+      final bool allowForegroundOnly = options?['allow_foreground_only'] == true;
+
+      if ((Platform.isAndroid || Platform.isIOS) &&
+          ClockInGateService.instance.isPrepareInFlight &&
+          !await BackgroundLocationPermissions.isClockInBackgroundReady()) {
+        ClockInGateService.instance.clearGeoUnlock();
+        return _err(
+          'clock_in_gate_in_progress',
+          'Location permission check is still in progress. '
+              'Enable background location (Always / Allow all the time) to clock in.',
+        );
+      }
 
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
 
@@ -188,13 +207,64 @@ class JsBridge {
         );
       }
 
-      final disclosureReady = await DutyHeartbeatService.instance
-          .ensureDisclosureBeforeWebLocationAccess();
-      if (!disclosureReady) {
+      if ((Platform.isAndroid || Platform.isIOS) && !allowForegroundOnly) {
+        await BackgroundLocationPermissions.refreshPermissionStateFromOs();
+        if (!await BackgroundLocationPermissions.isClockInBackgroundReady()) {
+          if (!ClockInGateService.instance.isGeoUnlockedForClockIn) {
+            final gate = await ClockInGateService.instance.prepareClockIn();
+            if (gate['canClockIn'] != true) {
+              ClockInGateService.instance.clearGeoUnlock();
+              return _err(
+                gate['reason']?.toString() ?? 'background_location_required',
+                gate['message']?.toString() ??
+                    BackgroundLocationPermissions.clockInMessageFor(
+                      await BackgroundLocationPermissions
+                          .settingsDeniedReasonIfAny(),
+                    ),
+              );
+            }
+          }
+
+          await BackgroundLocationPermissions.refreshPermissionStateFromOs();
+          if (!await BackgroundLocationPermissions.isClockInBackgroundReady()) {
+            ClockInGateService.instance.clearGeoUnlock();
+            return _err(
+              'background_location_required',
+              BackgroundLocationPermissions.clockInMessageFor(
+                await BackgroundLocationPermissions.settingsDeniedReasonIfAny(),
+              ),
+            );
+          }
+        }
+      }
+
+      final requiresBackgroundForClockIn =
+          forClockIn || ClockInGateService.instance.isGeoUnlockedForClockIn;
+
+      if (allowForegroundOnly) {
+        final disclosureReady = await DutyHeartbeatService.instance
+            .ensureDisclosureBeforeWebLocationAccess();
+        if (!disclosureReady) {
+          return _err(
+            'disclosure_required',
+            'Location disclosure must be accepted to use GPS',
+          );
+        }
+      } else if (requiresBackgroundForClockIn &&
+          !await LocationDisclosureConsent.hasAccepted()) {
         return _err(
           'disclosure_required',
-          'Location disclosure must be accepted to use GPS',
+          'Clock-in location disclosure must be accepted',
         );
+      } else {
+        final disclosureReady = await DutyHeartbeatService.instance
+            .ensureDisclosureBeforeWebLocationAccess();
+        if (!disclosureReady) {
+          return _err(
+            'disclosure_required',
+            'Location disclosure must be accepted to use GPS',
+          );
+        }
       }
 
       var permission = await Geolocator.checkPermission();
@@ -308,6 +378,17 @@ class JsBridge {
         'Accuracy: ${position.accuracy}m, '
         'receivedAfter: ${requestStopwatch.elapsedMilliseconds}ms',
       );
+
+      if (requiresBackgroundForClockIn) {
+        if (MockLocationDetection.isDetected(position)) {
+          ClockInGateService.instance.clearGeoUnlock();
+          return _err(
+            'mock_location',
+            'Disable mock or fake GPS location before clocking in.',
+          );
+        }
+        ClockInGateService.instance.clearGeoUnlock();
+      }
 
       return _ok({
         'location': {
@@ -464,12 +545,12 @@ class JsBridge {
 
     final phase = await BackgroundLocationPermissions.currentPermissionPhase();
     final backgroundReady =
-        await BackgroundLocationPermissions.hasSufficientBackgroundAccess();
+        await BackgroundLocationPermissions.isClockInBackgroundReady();
     final deniedReason =
         await BackgroundLocationPermissions.settingsDeniedReasonIfAny();
-    final disclosureAccepted =
-        await DutyTrackingPreferences.isDisclosureAccepted();
+    final disclosureAccepted = await LocationDisclosureConsent.hasAccepted();
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    final prepareInFlight = ClockInGateService.instance.isPrepareInFlight;
 
     final phaseName = switch (phase) {
       LocationPermissionPhase.none => 'none',
@@ -483,15 +564,24 @@ class JsBridge {
       'deniedReason': deniedReason,
       'disclosureAccepted': disclosureAccepted,
       'serviceEnabled': serviceEnabled,
-      'canClockIn': backgroundReady,
+      'canClockIn': backgroundReady &&
+          disclosureAccepted &&
+          !prepareInFlight,
+      'prepareInFlight': prepareInFlight,
       'title': backgroundReady
           ? null
-          : BackgroundLocationPermissions.bannerTitleFor(deniedReason),
+          : BackgroundLocationPermissions.clockInTitleFor(deniedReason),
       'message': backgroundReady
           ? null
-          : BackgroundLocationPermissions.bannerMessageFor(deniedReason),
+          : BackgroundLocationPermissions.clockInMessageFor(deniedReason),
       'platform': Platform.isIOS ? 'ios' : 'android',
     });
+  }
+
+  /// Store-safe clock-in gate: disclosure, permissions, then readiness check.
+  Future<Map<String, dynamic>> prepareClockIn([dynamic args]) async {
+    if (!_isTrustedCaller()) return _deny();
+    return ClockInGateService.instance.prepareClockIn();
   }
 
   String toJsonString(Map<String, dynamic> value) => jsonEncode(value);
