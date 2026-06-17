@@ -34,7 +34,7 @@ class AuthSessionManager {
     final token = await AuthRepository.instance.getAccessToken();
     if (token == null || token.isEmpty) return;
 
-    await clearNativeSession(deletePushToken: false);
+    await clearNativeSession(deletePushToken: true);
     if (kDebugMode) {
       debugPrint(
         '[AuthSessionManager] cleared bearer token (login screen: ${uri?.path})',
@@ -42,14 +42,14 @@ class AuthSessionManager {
     }
   }
 
-  static Future<void> clearNativeSession({bool deletePushToken = false}) async {
+  static Future<void> clearNativeSession({bool deletePushToken = true}) async {
     if (deletePushToken) {
       await PushNotificationService.instance.deletePushToken();
     }
 
     AuthState.instance.clear();
+    await DutyHeartbeatService.instance.stop();
     await AuthRepository.instance.clear();
     PushNotificationService.instance.setIosSessionAuth();
-    DutyHeartbeatService.instance.stop();
   }
 }

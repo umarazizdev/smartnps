@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -62,9 +63,29 @@ class MainActivity : FlutterActivity() {
             result.error("open_location_permission_settings_failed", error.message, null)
           }
         }
+        "hasBackgroundLocationPermission" -> {
+          result.success(hasBackgroundLocationPermission())
+        }
         else -> result.notImplemented()
       }
     }
+  }
+
+  private fun hasBackgroundLocationPermission(): Boolean {
+    val fineGranted =
+      checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
+    val coarseGranted =
+      checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
+    if (!fineGranted && !coarseGranted) {
+      return false
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      return checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
+    }
+    return true
   }
 
   private fun openAppSettings() {

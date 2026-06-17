@@ -3,10 +3,13 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../background/background_location_permissions.dart';
+import '../background/location_disclosure_consent.dart';
 import 'glass_action_dialog.dart';
 
 class LocationTrackingDisclosureDialog extends StatelessWidget {
   const LocationTrackingDisclosureDialog({super.key});
+
+  static const String cancelDutyLabel = 'Cancel duty tracking';
 
   static String _alwaysAccessLabel() {
     if (Platform.isIOS) return 'Always';
@@ -36,7 +39,9 @@ class LocationTrackingDisclosureDialog extends StatelessWidget {
                 '$alwaysAccessLabel.'
             : 'After you tap Continue, you will see an Open Settings prompt. '
                 'Set location to $alwaysAccessLabel for on-duty tracking.',
-      LocationPermissionPhase.backgroundReady => intro,
+      LocationPermissionPhase.backgroundReady =>
+        'Background location ($alwaysAccessLabel) is already enabled for on-duty '
+        'tracking.',
       LocationPermissionPhase.none =>
         compact
             ? 'You will be asked to allow location access, then $alwaysAccessLabel '
@@ -53,9 +58,6 @@ class LocationTrackingDisclosureDialog extends StatelessWidget {
         ? '\n\nIf you force-close SmartNPS360 from the app switcher, location '
             'updates may pause until you open the app again.'
         : '';
-    if (phase == LocationPermissionPhase.backgroundReady) {
-      return dutyOnly;
-    }
     return '$intro\n\n$steps\n\n$dutyOnly$iosNote';
   }
 
@@ -71,27 +73,18 @@ class LocationTrackingDisclosureDialog extends StatelessWidget {
     BuildContext context, {
     LocationPermissionPhase phase = LocationPermissionPhase.none,
   }) async {
+    if (!await LocationDisclosureConsent.shouldShowLocationDisclosure()) {
+      return true;
+    }
+
     final result = await GlassActionDialog.show(
       context: context,
       icon: Icons.location_on_rounded,
       title: _titleForPhase(phase),
       message: _dutyDisclosureMessage(compact: false, phase: phase),
-      secondaryLabel: 'Not now',
+      secondaryLabel: cancelDutyLabel,
       primaryLabel: 'Continue',
-    );
-    return result == true;
-  }
-
-  /// Shown from the duty banner when the user previously tapped Not now.
-  static Future<bool> showBackgroundReminder(BuildContext context) async {
-    final phase = await BackgroundLocationPermissions.currentPermissionPhase();
-    final result = await GlassActionDialog.show(
-      context: context,
-      icon: Icons.location_on_rounded,
-      title: _titleForPhase(phase),
-      message: _dutyDisclosureMessage(compact: true, phase: phase),
-      secondaryLabel: 'Not now',
-      primaryLabel: 'Continue',
+      destructiveSecondary: true,
     );
     return result == true;
   }

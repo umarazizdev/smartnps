@@ -26,7 +26,9 @@ import '../auth/auth_state.dart';
 import '../auth/auth_repository.dart';
 import '../api/api_client.dart';
 import '../background/duty_heartbeat_service.dart';
+import '../background/clock_in_gate_service.dart';
 import '../background/background_location_permissions.dart';
+import '../utilities/app_lifecycle_resume_gate.dart';
 import '../utilities/permission_settings_helper.dart';
 import '../app/native_theme_controller.dart';
 import '../push/push_notification_service.dart';
@@ -90,7 +92,6 @@ class _WebViewShellUiController extends GetxController {
     if (hasNativeAuthSession.value == value) return;
     hasNativeAuthSession.value = value;
   }
-
 }
 
 class _WebViewShellState extends State<WebViewShell>
@@ -107,6 +108,19 @@ class _WebViewShellState extends State<WebViewShell>
   final Map<int, StreamSubscription<Position>> _nativeGeoWatches = {};
   final _WebViewShellUiController _ui = _WebViewShellUiController();
   String? _pendingPushUrl;
+
+  Future<void> _teardownNativeSessionForLoginScreen(Uri? uri) async {
+    if (!_isAuthRoute(uri)) return;
+
+    final token = await AuthRepository.instance.getAccessToken();
+    if (token == null || token.isEmpty) return;
+
+    debugPrint(
+      '[SmartNPS360] tearing down native session for login screen: ${uri?.path}',
+    );
+    await AuthSessionManager.clearNativeSession(deletePushToken: true);
+    _ui.setNativeAuthSession(false);
+  }
 
   Future<void> _refreshNativeAuthSessionFromStorage() async {
     final token = await AuthRepository.instance.getAccessToken();
@@ -140,7 +154,10 @@ class _WebViewShellState extends State<WebViewShell>
     if (!_ui.hasNativeAuthSession.value) return false;
     if (!_isAuthRoute(uri)) return false;
     final current = _ui.currentUri.value;
-    return current != null && !_isAuthRoute(current);
+    if (current == null || _isAuthRoute(current)) return false;
+    // Ignore incidental auth URLs during bottom-tab switches only — not logout
+    // redirects to the login screen (those must run session + GPS teardown).
+    return _ui.bottomTabNavigationActive.value;
   }
 
   void _syncCurrentUriFromWebView(Uri? uri) {
@@ -156,6 +173,12 @@ class _WebViewShellState extends State<WebViewShell>
 
   bool _shouldIgnoreWebViewNavigationEvent(Uri? uri) {
     if (uri == null) return true;
+
+    // Logout / session expiry: always handle login routes while native auth exists.
+    if (_ui.hasNativeAuthSession.value && _isAuthRoute(uri)) {
+      return false;
+    }
+
     if (_isTransientReloadUri(uri)) return true;
 
     final uriTab = _bottomTabIndexFromUri(uri);
@@ -338,38 +361,66 @@ class _WebViewShellState extends State<WebViewShell>
             });
         };
         window.SmartNPS360.ensureCanClockIn = function () {
-          return window.SmartNPS360.getBackgroundLocationStatus().then(
-            function (status) {
-              if (!status || status.ok !== true) {
+          if (window.SmartNPS360) {
+            window.SmartNPS360._clockInGeoUnlocked = false;
+            window.SmartNPS360._clockInGateInFlight = true;
+          }
+          return ensureFlutterBridge()
+            .then(function () {
+              return window.flutter_inappwebview.callHandler('prepareClockIn');
+            })
+            .then(function (gate) {
+              if (window.SmartNPS360) {
+                window.SmartNPS360._clockInGateInFlight = false;
+              }
+              if (!gate || gate.ok !== true) {
+                if (window.SmartNPS360) {
+                  window.SmartNPS360._clockInGeoUnlocked = false;
+                }
                 return {
                   ok: false,
                   reason: 'status_unavailable',
                   title: 'Location check failed',
                   message:
                     'Unable to verify location permissions. Please try again.',
-                  status: status || null
+                  status: gate || null
                 };
               }
-              if (status.canClockIn === true || status.backgroundReady === true) {
-                return { ok: true, status: status };
+              if (gate.canClockIn === true) {
+                if (window.SmartNPS360) {
+                  window.SmartNPS360._clockInGeoUnlocked = true;
+                }
+                return { ok: true, status: gate };
+              }
+              if (window.SmartNPS360) {
+                window.SmartNPS360._clockInGeoUnlocked = false;
               }
               return {
                 ok: false,
-                reason: status.deniedReason || 'background_location_required',
-                title: status.title || 'Background location required',
+                reason: gate.reason || 'background_location_required',
+                title: gate.title || 'Background location required to clock in',
                 message:
-                  status.message ||
-                  'Background location is required to clock in from the mobile app.',
-                status: status
+                  gate.message ||
+                  'Background location (Always or Allow all the time) is required to clock in from the mobile app.',
+                status: gate
               };
-            }
-          );
+            })
+            .catch(function (err) {
+              if (window.SmartNPS360) {
+                window.SmartNPS360._clockInGateInFlight = false;
+                window.SmartNPS360._clockInGeoUnlocked = false;
+              }
+              throw err;
+            });
         };
         window.SmartNPS360._applyClockInButtonState = function (button, status) {
           if (!button) return;
           var canClockIn =
             !window.SmartNPS360.isNativeApp() ||
-            (status && status.ok === true && status.canClockIn === true);
+            (status &&
+              status.ok === true &&
+              status.canClockIn === true &&
+              status.prepareInFlight !== true);
           button.disabled = !canClockIn;
           button.setAttribute('aria-disabled', canClockIn ? 'false' : 'true');
           if (canClockIn) {
@@ -379,7 +430,7 @@ class _WebViewShellState extends State<WebViewShell>
             button.setAttribute(
               'title',
               (status && status.message) ||
-                'Enable background location in Settings to clock in.'
+                'Enable Always or Allow all the time location in Settings to clock in.'
             );
             button.classList.add('smartnps-clockin-blocked');
           }
@@ -415,6 +466,9 @@ class _WebViewShellState extends State<WebViewShell>
                 e.stopImmediatePropagation();
                 window.SmartNPS360.ensureCanClockIn().then(function (gate) {
                   if (!gate.ok) {
+                    if (window.SmartNPS360) {
+                      window.SmartNPS360._clockInGeoUnlocked = false;
+                    }
                     if (typeof onBlocked === 'function') {
                       onBlocked(gate);
                     } else {
@@ -762,6 +816,17 @@ class _WebViewShellState extends State<WebViewShell>
             timeout_ms: 12000
           };
 
+          if (
+            window.SmartNPS360 &&
+            window.SmartNPS360._clockInGeoUnlocked === true
+          ) {
+            nativeOptions.for_clock_in = true;
+          }
+
+          if (options.allow_foreground_only === true) {
+            nativeOptions.allow_foreground_only = true;
+          }
+
           if (!options || typeof options !== 'object') {
             return nativeOptions;
           }
@@ -790,7 +855,45 @@ class _WebViewShellState extends State<WebViewShell>
         function requestNativePosition(success, error, options) {
           log('Native location requested from webpage');
 
-          waitForFlutterBridge()
+          if (
+            window.SmartNPS360 &&
+            window.SmartNPS360.isNativeApp() &&
+            window.SmartNPS360._clockInGateInFlight === true &&
+            !(options && options.allow_foreground_only === true)
+          ) {
+            if (typeof error === 'function') {
+              error(
+                gpsError(
+                  'Location permission check is still in progress. ' +
+                    'Enable background location (Always / Allow all the time) to clock in.'
+                )
+              );
+            }
+            return;
+          }
+
+          var chain = waitForFlutterBridge();
+
+          if (
+            window.SmartNPS360 &&
+            window.SmartNPS360.isNativeApp() &&
+            !(options && options.allow_foreground_only === true)
+          ) {
+            chain = chain
+              .then(function () {
+                return window.SmartNPS360.ensureCanClockIn();
+              })
+              .then(function (gate) {
+                if (!gate || gate.ok !== true) {
+                  var msg =
+                    (gate && gate.message) ||
+                    'Background location (Always / Allow all the time) is required to clock in from the mobile app.';
+                  throw gpsError(msg);
+                }
+              });
+          }
+
+          chain
             .then(function () {
               return window.flutter_inappwebview.callHandler(
                 'getCurrentLocation',
@@ -1176,9 +1279,8 @@ class _WebViewShellState extends State<WebViewShell>
       }
     });
 
-    DutyHeartbeatService.instance.backgroundLocationPermissionMissing.addListener(
-      _onBackgroundLocationPermissionChanged,
-    );
+    DutyHeartbeatService.instance.backgroundLocationPermissionMissing
+        .addListener(_onBackgroundLocationPermissionChanged);
 
     PushNotificationService.instance.setOnNotificationTap(
       _onPushNotificationTap,
@@ -1221,8 +1323,8 @@ class _WebViewShellState extends State<WebViewShell>
     DutyHeartbeatService.instance.start();
   }
 
-  void _stopDutyHeartbeat({bool stopBackgroundLocation = true}) {
-    DutyHeartbeatService.instance.stop(
+  Future<void> _stopDutyHeartbeat({bool stopBackgroundLocation = true}) async {
+    await DutyHeartbeatService.instance.stop(
       stopBackgroundLocation: stopBackgroundLocation,
     );
   }
@@ -1277,10 +1379,12 @@ class _WebViewShellState extends State<WebViewShell>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed &&
         !AuthSessionManager.isLoginRoute(_ui.currentUri.value)) {
+      AppLifecycleResumeGate.notifyResumed();
       unawaited(() async {
         await _requestNotificationPermissionForRoute(_ui.currentUri.value);
         await _maybeStartDutyHeartbeat();
         await DutyHeartbeatService.instance.recheckOnDutyPrompts();
+        await ClockInGateService.instance.recheckAfterAppResume();
         await _notifyWebBackgroundLocationStatus();
       }());
     }
@@ -1297,7 +1401,7 @@ class _WebViewShellState extends State<WebViewShell>
     _connectivitySub?.cancel();
     DutyHeartbeatService.instance.backgroundLocationPermissionMissing
         .removeListener(_onBackgroundLocationPermissionChanged);
-    _stopDutyHeartbeat();
+    unawaited(_stopDutyHeartbeat());
     for (final sub in _nativeGeoWatches.values) {
       sub.cancel();
     }
@@ -1323,7 +1427,14 @@ class _WebViewShellState extends State<WebViewShell>
 
     final scheme = uri.scheme.toLowerCase();
     if (scheme == 'http' || scheme == 'https') {
-      if (_isInternalUrl(uri)) return NavigationActionPolicy.ALLOW;
+      if (_isInternalUrl(uri)) {
+        if (action.isForMainFrame == true &&
+            _ui.hasNativeAuthSession.value &&
+            _isAuthRoute(uri)) {
+          unawaited(_teardownNativeSessionForLoginScreen(uri));
+        }
+        return NavigationActionPolicy.ALLOW;
+      }
       final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
       return opened
           ? NavigationActionPolicy.CANCEL
@@ -1551,6 +1662,21 @@ class _WebViewShellState extends State<WebViewShell>
       },
     );
     controller.addJavaScriptHandler(
+      handlerName: 'prepareClockIn',
+      callback: (args) async {
+        try {
+          final result = await _bridge.prepareClockIn(
+            args.isEmpty ? null : args.first,
+          );
+          debugPrint('[SmartNPS360] prepareClockIn result=$result');
+          return result;
+        } catch (e, st) {
+          debugPrint('[SmartNPS360] prepareClockIn failed: $e\n$st');
+          rethrow;
+        }
+      },
+    );
+    controller.addJavaScriptHandler(
       handlerName: 'themeChanged',
       callback: (args) {
         final value = args.isNotEmpty ? args.first : null;
@@ -1668,6 +1794,7 @@ class _WebViewShellState extends State<WebViewShell>
                   "try { sessionStorage.removeItem('__smartnps_login'); } catch (e) {}",
             ),
           );
+          await _notifyWebBackgroundLocationStatus();
           return {'ok': true, 'action': 'logout'};
         }
 
@@ -1840,8 +1967,19 @@ class _WebViewShellState extends State<WebViewShell>
         return false;
       }
 
-      await AuthRepository.instance.saveAccessToken(token);
-      AuthState.instance.setSession({'accessToken': token});
+      final dynamic rawUser = map?['user'] ?? map?['profile'];
+      final Map<String, dynamic>? user = rawUser is Map
+          ? Map<String, dynamic>.from(rawUser)
+          : null;
+
+      if (user != null && user.isNotEmpty) {
+        AuthState.instance.setLoggedInUser(user);
+        await AuthRepository.instance.saveLogin(user: user, accessToken: token);
+      } else {
+        await AuthRepository.instance.saveAccessToken(token);
+        AuthState.instance.setSession({'accessToken': token});
+      }
+
       _ui.setNativeAuthSession(true);
       if (syncPush) {
         await PushNotificationService.instance.syncPushTokenAfterLogin();
@@ -2510,7 +2648,8 @@ class _WebViewShellState extends State<WebViewShell>
                                           _restoreUriAfterReload(preservedUri);
                                         } else {
                                           _syncCurrentUriFromWebView(nextUri);
-                                          if (!_ui.bottomTabNavigationActive
+                                          if (!_ui
+                                              .bottomTabNavigationActive
                                               .value) {
                                             _ui.selectedBottomTabIndex.value =
                                                 _bottomTabIndexFromUri(nextUri);
@@ -2522,7 +2661,7 @@ class _WebViewShellState extends State<WebViewShell>
                                               _ui.webPrefersDark.value,
                                         );
                                         if (!isSamePageReload) {
-                                          await AuthSessionManager.clearNativeSessionIfLoginScreen(
+                                          await _teardownNativeSessionForLoginScreen(
                                             nextUri,
                                           );
                                         }
@@ -2531,7 +2670,7 @@ class _WebViewShellState extends State<WebViewShell>
                                               nextUri,
                                             ) &&
                                             !isSamePageReload) {
-                                          _stopDutyHeartbeat();
+                                          await _stopDutyHeartbeat();
                                         } else {
                                           await _requestNotificationPermissionForRoute(
                                             nextUri,
@@ -2597,12 +2736,16 @@ class _WebViewShellState extends State<WebViewShell>
                                         );
                                       }
 
-                                      if (!await BackgroundLocationPermissions.hasForegroundLocationAccess()) {
-                                        await PermissionSettingsHelper.requestForegroundLocationStep();
+                                      if (!await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled()) {
+                                        if (!await BackgroundLocationPermissions.hasForegroundLocationAccess()) {
+                                          await PermissionSettingsHelper.requestForegroundLocationStep();
+                                          await BackgroundLocationPermissions.refreshPermissionStateFromOs();
+                                        }
                                       }
 
+                                      await BackgroundLocationPermissions.refreshPermissionStateFromOs();
                                       final granted =
-                                          await BackgroundLocationPermissions.hasForegroundLocationAccess();
+                                          await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled();
                                       return GeolocationPermissionShowPromptResponse(
                                         origin: origin,
                                         allow: granted,
@@ -2681,7 +2824,8 @@ class _WebViewShellState extends State<WebViewShell>
                           return Align(
                             alignment: Alignment.bottomCenter,
                             child: _BottomBar(
-                              selectedTabIndex: _ui.selectedBottomTabIndex.value,
+                              selectedTabIndex:
+                                  _ui.selectedBottomTabIndex.value,
                               isDark: _ui.webPrefersDark.value,
                               onTap: _onBottomTap,
                             ),

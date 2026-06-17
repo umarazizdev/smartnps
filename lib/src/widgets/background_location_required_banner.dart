@@ -7,6 +7,7 @@ import 'package:get/get.dart';
 import '../app/native_theme_controller.dart';
 import '../background/background_location_permissions.dart';
 import '../background/duty_heartbeat_service.dart';
+import '../utilities/app_lifecycle_resume_gate.dart';
 import '../utilities/app_config.dart';
 
 class BackgroundLocationRequiredBanner extends StatefulWidget {
@@ -71,6 +72,7 @@ class _BackgroundLocationRequiredBannerState
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      AppLifecycleResumeGate.notifyResumed();
       unawaited(_refreshBannerContent());
     }
   }

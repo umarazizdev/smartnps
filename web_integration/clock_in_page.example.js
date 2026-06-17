@@ -1,68 +1,59 @@
 /**
- * WEB APP CHANGES — paste into your attendance / clock-in page.
+ * WEB APP — REQUIRED clock-in integration for native app (iOS/Android)
  *
- * The native Flutter app injects SmartNPS360.bindClockInGate automatically.
- * You only need the code below on smartnps360.com (no extra JS file to host).
+ * ROOT CAUSE if clock-in works after foreground-only OS permission:
+ * The web is calling clock-in (or geolocation) WITHOUT awaiting ensureCanClockIn.
+ *
+ * Native app now blocks GPS until OS reports background location (Always /
+ * Allow all the time). Clock-in API calls that do not use GPS can still succeed
+ * if the web submits the API directly — that MUST be fixed on the web side.
  */
 
 // ---------------------------------------------------------------------------
-// 1) Add this once when the clock-in page loads (DOMContentLoaded or your SPA mount)
+// REQUIRED: bind clock-in button — do not use a raw click handler
 // ---------------------------------------------------------------------------
 
 function initSmartNpsClockInGate() {
-  var clockInBtn = document.querySelector('#clock-in-btn'); // your button selector
+  var clockInBtn = document.querySelector('#clock-in-btn');
 
   if (!clockInBtn || !window.SmartNPS360) return;
 
   window.SmartNPS360.bindClockInGate(
     clockInBtn,
     function onAllowed() {
-      // Called ONLY when background location is ready (native app).
-      // Put your existing clock-in logic here:
+      // ONLY runs after native OS confirms background location.
       submitClockIn();
     },
     function onBlocked(gate) {
-      // Optional: replace alert with your toast/modal component
       showToast(gate.title, gate.message);
-      // gate.reason examples:
-      //   location_background  (Android — need "Allow all the time")
-      //   location_always      (iOS — need "Always")
-      //   location_foreground  (need basic location first)
-      //   location_services_disabled
     }
   );
 }
 
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initSmartNpsClockInGate);
-} else {
-  initSmartNpsClockInGate();
-}
-
 // ---------------------------------------------------------------------------
-// 2) Your existing clock-in function (unchanged except it is called from above)
+// REQUIRED: submitClockIn must NOT run on button click directly
 // ---------------------------------------------------------------------------
 
 async function submitClockIn() {
-  // e.g. get GPS, then POST to your clock-in API
-  // const location = await getCurrentLocation();
-  // await fetch('/api/attendance/clock-in', { method: 'POST', body: ... });
+  // If you use geolocation here, it is blocked until background is enabled.
+  // await new Promise((resolve, reject) => {
+  //   navigator.geolocation.getCurrentPosition(resolve, reject);
+  // });
+  // await fetch('/api/attendance/clock-in', { method: 'POST', ... });
 }
 
 // ---------------------------------------------------------------------------
-// 3) Optional CSS — dim blocked button in native app
+// WRONG — causes clock-in before background permission:
+//
+// clockInBtn.addEventListener('click', submitClockIn);
+//
+// navigator.permissions.query({ name: 'geolocation' }).then((s) => {
+//   s.onchange = () => submitClockIn(); // fires after foreground OS grant
+// });
 // ---------------------------------------------------------------------------
 
-/*
-.smartnps-clockin-blocked {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-*/
-
 // ---------------------------------------------------------------------------
-// ALTERNATIVE — if you use a form submit instead of a button click handler:
-// call ensureCanClockIn() at the start of your handler
+// ALTERNATIVE (no bindClockInGate): await gate before anything else
 // ---------------------------------------------------------------------------
 
 /*

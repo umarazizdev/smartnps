@@ -9,6 +9,7 @@ import 'package:hive/hive.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../api/api_client.dart';
+import '../auth/auth_repository.dart';
 import '../utilities/app_config.dart';
 import '../utilities/device_identity.dart';
 
@@ -83,6 +84,26 @@ class BackgroundLocationUploader {
     });
   }
 
+  /// Drains the on-device queue before shutdown (e.g. logout).
+  Future<void> flushAllPendingBatches({int maxRounds = 200}) async {
+    for (var round = 0; round < maxRounds; round++) {
+      final remaining = _queuedPointCount();
+      if (remaining == 0) return;
+
+      try {
+        await flushBatch(force: true);
+      } catch (_) {
+        // Best-effort: stop if a round makes no progress.
+        if (_queuedPointCount() >= remaining) return;
+      }
+
+      if (_queuedPointCount() >= remaining) {
+        // Partial failure or single-point edge; retry once more for leftovers.
+        if (round > 0) return;
+      }
+    }
+  }
+
   Future<void> stop() async {
     _batchTimer?.cancel();
     _batchTimer = null;
@@ -91,13 +112,14 @@ class BackgroundLocationUploader {
     await _connectivitySub?.cancel();
     _connectivitySub = null;
 
-    await flushBatch(force: true);
+    await flushAllPendingBatches();
   }
 
   /// Stores points for batch upload only (Hive).
   ///
   /// Ping uploads are sent live and are not persisted.
   Future<void> add(Position position) async {
+    if (!await _hasUploadAuth()) return;
     await _ensureStorage();
     final point = _sanitizePoint(_buildPoint(position));
     final box = _box;
@@ -146,8 +168,14 @@ class BackgroundLocationUploader {
     return DateTime.now().difference(anchor) >= _batchEvery;
   }
 
+  Future<bool> _hasUploadAuth() async {
+    final token = await AuthRepository.instance.getAccessToken();
+    return token != null && token.isNotEmpty;
+  }
+
   /// Sends the current point to the ping API immediately (no local storage).
   Future<void> pingNow(Position position) async {
+    if (!await _hasUploadAuth()) return;
     _deviceId ??= await DeviceIdentity.getDeviceId();
     final point = _sanitizePoint(_buildPoint(position));
 

@@ -6,6 +6,7 @@ import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../location/mock_location_detection.dart';
+import '../auth/auth_repository.dart';
 import 'background_location_uploader.dart';
 
 @pragma('vm:entry-point')
@@ -56,8 +57,11 @@ class BackgroundLocationService {
     }
 
     StreamSubscription<Position>? sub;
+    var stopping = false;
 
     Future<void> stop() async {
+      if (stopping) return;
+      stopping = true;
       await sub?.cancel();
       sub = null;
       await uploader.stop();
@@ -89,6 +93,14 @@ class BackgroundLocationService {
     DateTime? lastUploadAt;
     sub = Geolocator.getPositionStream(locationSettings: settings).listen(
       (pos) async {
+        if (stopping) return;
+
+        final token = await AuthRepository.instance.getAccessToken();
+        if (token == null || token.isEmpty) {
+          await stop();
+          return;
+        }
+
         final now = DateTime.now();
         final last = lastUploadAt;
         if (last != null && now.difference(last) < const Duration(seconds: 1)) {
