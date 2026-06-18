@@ -99,7 +99,7 @@ class JsBridge {
   Future<Map<String, dynamic>> pickFile([dynamic args]) async {
     if (!_isTrustedCaller()) return _deny();
     try {
-      final result = await FilePicker.platform.pickFiles(
+      final result = await FilePicker.pickFiles(
         allowMultiple: false,
         withData: false,
         withReadStream: false,
