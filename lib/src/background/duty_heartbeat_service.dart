@@ -205,7 +205,9 @@ class DutyHeartbeatService {
     }
   }
 
-  Future<void> stop({bool stopBackgroundLocation = true}) async {
+  Future<void> stop({
+    bool stopBackgroundLocation = true,
+  }) async {
     _heartbeatActive = false;
     _pollTimer?.cancel();
     _pollTimer = null;
@@ -218,6 +220,24 @@ class DutyHeartbeatService {
     if (stopBackgroundLocation) {
       await _applyOffDuty();
     }
+  }
+
+  /// Instant logout: stop polling/tracking immediately; no batch flush here.
+  Future<void> finalizeLogoutInstant() async {
+    _heartbeatActive = false;
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    _pollInFlight = false;
+    _lastAppliedStatus = offDuty;
+    _resetDisclosureState();
+    backgroundLocationPermissionMissing.value = false;
+    PermissionSettingsHelper.clearCooldown('background_location');
+    debugPrint(
+      '[DutyHeartbeatService] instant logout (heartbeat + tracking stopped)',
+    );
+    unawaited(BackgroundLocationController.stopCollectingOnly());
+    unawaited(DutyTrackingPreferences.clearOnOffDuty());
+    unawaited(refreshBackgroundLocationPermissionBannerState());
   }
 
   void _scheduleNextPoll() {

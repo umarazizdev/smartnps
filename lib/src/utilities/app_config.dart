@@ -33,16 +33,4 @@ class AppConfig {
 
   /// Token the web app can detect in `navigator.userAgent` for native shell traffic.
   static const String webViewAppSignature = 'SmartNPS360App';
-
-  static const String appVersion = '1.0.0';
-  static const String appBuildNumber = '14';
-
-  /// Example Android UA:
-  /// `SmartNPS360App/1.0.0 (Flutter; InAppWebView; Android; Build 14)`
-  ///
-  /// Example iOS UA suffix appended to Mobile Safari:
-  /// `... SmartNPS360App/1.0.0 (Flutter; InAppWebView; iOS; Build 14)`
-  static String webViewUserAgentToken({required String platform}) {
-    return '$webViewAppSignature/$appVersion (Flutter; InAppWebView; $platform; Build $appBuildNumber)';
-  }
 }

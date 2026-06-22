@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 
+import '../background/background_location_uploader.dart';
 import '../background/duty_heartbeat_service.dart';
 import '../push/push_notification_service.dart';
 import '../utilities/app_config.dart';
@@ -27,29 +28,48 @@ class AuthSessionManager {
         path.contains('officer/register');
   }
 
-  /// Clears native bearer auth when the WebView shows a login/signup screen.
-  static Future<void> clearNativeSessionIfLoginScreen(Uri? uri) async {
-    if (!isLoginRoute(uri)) return;
+  static bool isLogoutRoute(Uri? uri) {
+    if (uri == null) return false;
+    if (!AppConfig.isAllowedHost(uri.host)) return false;
 
-    final token = await AuthRepository.instance.getAccessToken();
-    if (token == null || token.isEmpty) return;
-
-    await clearNativeSession(deletePushToken: true);
-    if (kDebugMode) {
-      debugPrint(
-        '[AuthSessionManager] cleared bearer token (login screen: ${uri?.path})',
-      );
-    }
+    final path = uri.path.toLowerCase();
+    return path.contains('officer/logout') || path.endsWith('/logout');
   }
 
+  /// Logout phases:
+  /// 1. Instant — logged-out flag + stop tracking + start FCM delete
+  /// 2. Drain — flush/discard GPS batches (token still in secure storage)
+  /// 3. Final — clear bearer token and credentials
   static Future<void> clearNativeSession({bool deletePushToken = true}) async {
-    if (deletePushToken) {
-      await PushNotificationService.instance.deletePushToken();
+    if (kDebugMode) {
+      debugPrint('[AuthSessionManager] logout phase 1: instant UI flags');
     }
-
+    await AuthRepository.instance.setOfficerLoggedIn(false);
     AuthState.instance.clear();
-    await DutyHeartbeatService.instance.stop();
+    await DutyHeartbeatService.instance.finalizeLogoutInstant();
+
+    final fcmDelete = deletePushToken
+        ? PushNotificationService.instance.deletePushToken()
+        : Future<void>.value();
+
+    if (kDebugMode) {
+      debugPrint(
+        '[AuthSessionManager] logout phase 2: drain GPS batches (token kept)',
+      );
+    }
+    await BackgroundLocationUploader.drainAndDiscardOnLogoutStatic();
+
+    if (kDebugMode) {
+      debugPrint(
+        '[AuthSessionManager] logout phase 3: await FCM + clear token',
+      );
+    }
+    await fcmDelete;
     await AuthRepository.instance.clear();
     PushNotificationService.instance.setIosSessionAuth();
+
+    if (kDebugMode) {
+      debugPrint('[AuthSessionManager] logout complete (token cleared)');
+    }
   }
 }

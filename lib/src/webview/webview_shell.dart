@@ -15,6 +15,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../utilities/app_config.dart';
+import '../utilities/app_version_info.dart';
 import 'js_bridge.dart';
 import '../app/offline_screen.dart';
 import '../widgets/platform_bottom_bar.dart';
@@ -32,7 +33,6 @@ import '../utilities/app_lifecycle_resume_gate.dart';
 import '../utilities/permission_settings_helper.dart';
 import '../app/native_theme_controller.dart';
 import '../push/push_notification_service.dart';
-import '../utilities/overlay_prompt_guard.dart';
 
 class WebViewShell extends StatefulWidget {
   const WebViewShell({super.key});
@@ -48,18 +48,12 @@ class _WebViewShellUiController extends GetxController {
   final firstPageLoaded = false.obs;
   final showOffline = false.obs;
   final hasNativeAuthSession = false.obs;
+  final officerLoggedIn = false.obs;
   final webPrefersDark = false.obs;
   final pullToRefreshActive = false.obs;
   final selectedBottomTabIndex = 0.obs;
   final bottomTabNavigationActive = false.obs;
-  final keyboardVisible = false.obs;
   final flutterKeyboardInset = 0.0.obs;
-
-  void setKeyboardVisible(bool value) {
-    if (keyboardVisible.value == value) return;
-    keyboardVisible.value = value;
-    OverlayPromptGuard.setWebKeyboardVisible(value);
-  }
 
   void setFlutterKeyboardInset(double inset) {
     final clamped = inset < 0 ? 0.0 : inset;
@@ -67,8 +61,7 @@ class _WebViewShellUiController extends GetxController {
     flutterKeyboardInset.value = clamped;
   }
 
-  bool get isKeyboardOpen =>
-      keyboardVisible.value || flutterKeyboardInset.value > 0;
+  bool get isKeyboardOpen => flutterKeyboardInset.value > 0;
 
   void beginNavigation() {
     isNavigating.value = true;
@@ -92,6 +85,11 @@ class _WebViewShellUiController extends GetxController {
     if (hasNativeAuthSession.value == value) return;
     hasNativeAuthSession.value = value;
   }
+
+  void setOfficerLoggedIn(bool value) {
+    if (officerLoggedIn.value == value) return;
+    officerLoggedIn.value = value;
+  }
 }
 
 class _WebViewShellState extends State<WebViewShell>
@@ -108,21 +106,64 @@ class _WebViewShellState extends State<WebViewShell>
   final Map<int, StreamSubscription<Position>> _nativeGeoWatches = {};
   final _WebViewShellUiController _ui = _WebViewShellUiController();
   String? _pendingPushUrl;
+  String? _lastBottomBarHideReason;
+  bool _nativeLogoutInFlight = false;
 
-  Future<void> _teardownNativeSessionForLoginScreen(Uri? uri) async {
-    if (!_isAuthRoute(uri)) return;
+  Future<void> _performNativeLogout({
+    required String reason,
+    bool skipIfAlreadyLoggedOut = false,
+  }) async {
+    if (_nativeLogoutInFlight) return;
+    if (skipIfAlreadyLoggedOut && !await _hasActiveNativeSession()) {
+      debugPrint(
+        '[SmartNPS360][Auth] $reason skipped (session already cleared)',
+      );
+      return;
+    }
+    _nativeLogoutInFlight = true;
+    try {
+      debugPrint('[SmartNPS360][Auth] native logout ($reason)');
 
+      // Instant UI — bottom bar hides immediately.
+      _ui.setOfficerLoggedIn(false);
+      _ui.setNativeAuthSession(false);
+      unawaited(
+        _controller?.evaluateJavascript(
+          source:
+              "try { sessionStorage.removeItem('__smartnps_login'); } catch (e) {}",
+        ),
+      );
+
+      await AuthSessionManager.clearNativeSession(deletePushToken: true);
+
+      debugPrint(
+        '[SmartNPS360][Auth] native logout completed '
+        '(officerLoggedIn=false, session cleared)',
+      );
+    } finally {
+      _nativeLogoutInFlight = false;
+    }
+  }
+
+  Future<bool> _hasActiveNativeSession() async {
+    if (_ui.officerLoggedIn.value) return true;
+    if (await AuthRepository.instance.isOfficerLoggedIn()) return true;
     final token = await AuthRepository.instance.getAccessToken();
-    if (token == null || token.isEmpty) return;
+    return token != null && token.isNotEmpty;
+  }
 
-    debugPrint(
-      '[SmartNPS360] tearing down native session for login screen: ${uri?.path}',
+  /// Fallback when web does not call authEvent logout before navigating away.
+  Future<void> _maybePerformLogoutForRoute(Uri? uri, String reason) async {
+    if (!AuthSessionManager.isLogoutRoute(uri)) return;
+    await _performNativeLogout(
+      reason: 'fallback: $reason',
+      skipIfAlreadyLoggedOut: true,
     );
-    await AuthSessionManager.clearNativeSession(deletePushToken: true);
-    _ui.setNativeAuthSession(false);
   }
 
   Future<void> _refreshNativeAuthSessionFromStorage() async {
+    final loggedIn = await AuthRepository.instance.isOfficerLoggedIn();
+    _ui.setOfficerLoggedIn(loggedIn);
     final token = await AuthRepository.instance.getAccessToken();
     _ui.setNativeAuthSession(token != null && token.isNotEmpty);
   }
@@ -174,8 +215,8 @@ class _WebViewShellState extends State<WebViewShell>
   bool _shouldIgnoreWebViewNavigationEvent(Uri? uri) {
     if (uri == null) return true;
 
-    // Logout / session expiry: always handle login routes while native auth exists.
-    if (_ui.hasNativeAuthSession.value && _isAuthRoute(uri)) {
+    // Logout route: always process so native session is cleared on server logout.
+    if (AuthSessionManager.isLogoutRoute(uri)) {
       return false;
     }
 
@@ -360,6 +401,257 @@ class _WebViewShellState extends State<WebViewShell>
               );
             });
         };
+        window.SmartNPS360.getPushNotificationStatus = function () {
+          return ensureFlutterBridge()
+            .then(function () {
+              return window.flutter_inappwebview.callHandler(
+                'getPushNotificationStatus'
+              );
+            });
+        };
+        window.SmartNPS360.setPushNotificationsEnabled = function (enabled) {
+          var next =
+            enabled === true ||
+            enabled === 1 ||
+            enabled === '1' ||
+            enabled === 'true';
+          return ensureFlutterBridge()
+            .then(function () {
+              return window.flutter_inappwebview.callHandler(
+                'setPushNotificationsEnabled',
+                { enabled: next }
+              );
+            });
+        };
+        window.SmartNPS360._applyPushNotificationToggleState = function (
+          input,
+          status
+        ) {
+          if (!input || !status || status.ok !== true) return;
+          input.checked = status.enabled === true;
+          input.setAttribute(
+            'aria-checked',
+            status.enabled === true ? 'true' : 'false'
+          );
+        };
+        window.SmartNPS360.bindPushNotificationToggle = function (
+          input,
+          options
+        ) {
+          if (!input) return;
+          options = options || {};
+
+          function refresh() {
+            if (!window.SmartNPS360.isNativeApp()) return;
+            return window.SmartNPS360.getPushNotificationStatus()
+              .then(function (status) {
+                window.SmartNPS360._applyPushNotificationToggleState(
+                  input,
+                  status
+                );
+                return status;
+              })
+              .catch(function (err) {
+                if (typeof options.onError === 'function') {
+                  options.onError(err);
+                }
+              });
+          }
+
+          if (input.dataset.smartnpsPushBound !== '1') {
+            input.dataset.smartnpsPushBound = '1';
+            input.addEventListener('change', function () {
+              if (!window.SmartNPS360.isNativeApp()) return;
+              var next = input.checked === true;
+              input.disabled = true;
+              window.SmartNPS360.setPushNotificationsEnabled(next)
+                .then(function (status) {
+                  window.SmartNPS360._applyPushNotificationToggleState(
+                    input,
+                    status
+                  );
+                  if (typeof options.onChanged === 'function') {
+                    options.onChanged(status);
+                  }
+                })
+                .catch(function (err) {
+                  input.checked = !next;
+                  if (typeof options.onError === 'function') {
+                    options.onError(err);
+                  }
+                })
+                .finally(function () {
+                  input.disabled = false;
+                });
+            });
+            document.addEventListener('visibilitychange', function () {
+              if (document.visibilityState === 'visible') refresh();
+            });
+          }
+
+          refresh();
+        };
+        window.SmartNPS360._applyAlpinePushNotificationToggleState = function (
+          button,
+          enabled
+        ) {
+          if (!button) return;
+          var on = enabled === true;
+          button.setAttribute('aria-pressed', on ? 'true' : 'false');
+          button.title = on
+            ? 'Turn push notifications off'
+            : 'Turn push notifications on';
+          var spans = button.querySelectorAll('span');
+          var track = spans.length > 1 ? spans[1] : null;
+          var knob = spans.length > 2 ? spans[2] : null;
+          if (track) {
+            track.classList.toggle('bg-teal-600', on);
+            track.classList.toggle('bg-slate-300', !on);
+            track.classList.toggle('dark:bg-slate-700', !on);
+          }
+          if (knob) {
+            knob.classList.toggle('translate-x-[18px]', on);
+            knob.classList.toggle('translate-x-0.5', !on);
+          }
+        };
+        window.SmartNPS360.bindAlpinePushNotificationToggle = function (
+          button,
+          options
+        ) {
+          if (!button || button.dataset.smartnpsAlpinePushBound === '1') return;
+          options = options || {};
+          button.dataset.smartnpsAlpinePushBound = '1';
+
+          function refresh() {
+            if (!window.SmartNPS360.isNativeApp()) return;
+            return window.SmartNPS360.getPushNotificationStatus()
+              .then(function (status) {
+                if (status && status.ok === true) {
+                  window.SmartNPS360._applyAlpinePushNotificationToggleState(
+                    button,
+                    status.enabled === true
+                  );
+                }
+                return status;
+              })
+              .catch(function (err) {
+                if (typeof options.onError === 'function') {
+                  options.onError(err);
+                }
+              });
+          }
+
+          button.addEventListener(
+            'click',
+            function (e) {
+              if (!window.SmartNPS360.isNativeApp()) return;
+              e.preventDefault();
+              e.stopImmediatePropagation();
+              var current = button.getAttribute('aria-pressed') === 'true';
+              var next = !current;
+              button.disabled = true;
+              window.SmartNPS360.setPushNotificationsEnabled(next)
+                .then(function (status) {
+                  if (status && status.ok === true) {
+                    window.SmartNPS360._applyAlpinePushNotificationToggleState(
+                      button,
+                      status.enabled === true
+                    );
+                    if (typeof options.onChanged === 'function') {
+                      options.onChanged(status);
+                    }
+                  } else {
+                    window.SmartNPS360._applyAlpinePushNotificationToggleState(
+                      button,
+                      current
+                    );
+                  }
+                })
+                .catch(function (err) {
+                  window.SmartNPS360._applyAlpinePushNotificationToggleState(
+                    button,
+                    current
+                  );
+                  if (typeof options.onError === 'function') {
+                    options.onError(err);
+                  }
+                })
+                .finally(function () {
+                  button.disabled = false;
+                });
+            },
+            true
+          );
+
+          document.addEventListener('visibilitychange', function () {
+            if (document.visibilityState === 'visible') refresh();
+          });
+
+          refresh();
+        };
+        function findAlpinePushNotificationButtons() {
+          var byTitle = document.querySelectorAll(
+            'button[title*="push notification" i]'
+          );
+          if (byTitle.length) {
+            return Array.prototype.slice.call(byTitle);
+          }
+          var buttons = document.querySelectorAll('button[type="button"]');
+          var found = [];
+          for (var i = 0; i < buttons.length; i++) {
+            var btn = buttons[i];
+            var labels = btn.querySelectorAll('span');
+            for (var j = 0; j < labels.length; j++) {
+              var text = String(labels[j].textContent || '').trim();
+              if (/^notifications$/i.test(text)) {
+                found.push(btn);
+                break;
+              }
+            }
+          }
+          return found;
+        }
+        function bindPushNotificationToggles() {
+          if (!window.SmartNPS360.isNativeApp()) return;
+          var toggles = document.querySelectorAll(
+            '[data-smartnps-push-toggle]'
+          );
+          for (var i = 0; i < toggles.length; i++) {
+            window.SmartNPS360.bindPushNotificationToggle(toggles[i]);
+          }
+          var alpineButtons = findAlpinePushNotificationButtons();
+          for (var k = 0; k < alpineButtons.length; k++) {
+            window.SmartNPS360.bindAlpinePushNotificationToggle(alpineButtons[k]);
+          }
+        }
+        function startPushNotificationToggleObserver() {
+          if (!window.SmartNPS360.isNativeApp()) return;
+          if (window.__smartnps_push_toggle_observer) return;
+          window.__smartnps_push_toggle_observer = true;
+          var timer = null;
+          var observer = new MutationObserver(function () {
+            if (timer) clearTimeout(timer);
+            timer = setTimeout(bindPushNotificationToggles, 250);
+          });
+          if (document.documentElement) {
+            observer.observe(document.documentElement, {
+              childList: true,
+              subtree: true
+            });
+          }
+        }
+        if (document.readyState === 'loading') {
+          document.addEventListener(
+            'DOMContentLoaded',
+            function () {
+              bindPushNotificationToggles();
+              startPushNotificationToggleObserver();
+            }
+          );
+        } else {
+          bindPushNotificationToggles();
+          startPushNotificationToggleObserver();
+        }
         window.SmartNPS360.ensureCanClockIn = function () {
           if (window.SmartNPS360) {
             window.SmartNPS360._clockInGeoUnlocked = false;
@@ -1021,101 +1313,6 @@ class _WebViewShellState extends State<WebViewShell>
     injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
   );
 
-  static final UserScript _keyboardVisibilityScript = UserScript(
-    source: r'''
-    (function () {
-      'use strict';
-      if (window.__smartnps_keyboard_bridge_installed) return;
-      window.__smartnps_keyboard_bridge_installed = true;
-
-      var active = false;
-
-      function viewportKeyboardInset() {
-        if (!window.visualViewport) return 0;
-        return Math.max(
-          0,
-          window.innerHeight -
-            window.visualViewport.height -
-            window.visualViewport.offsetTop
-        );
-      }
-
-      function postToFlutter(open) {
-        try {
-          if (window.flutter_inappwebview &&
-              typeof window.flutter_inappwebview.callHandler === 'function') {
-            window.flutter_inappwebview.callHandler('keyboardVisibilityChanged', {
-              visible: open
-            });
-            return true;
-          }
-        } catch (_) {}
-        return false;
-      }
-
-      function notify(open) {
-        if (active === open) return;
-        active = open;
-        if (!postToFlutter(open) && open) {
-          window.addEventListener(
-            'flutterInAppWebViewPlatformReady',
-            function onReady() {
-              window.removeEventListener(
-                'flutterInAppWebViewPlatformReady',
-                onReady
-              );
-              postToFlutter(active);
-            }
-          );
-        }
-      }
-
-      function isEditable(el) {
-        if (!el || el.nodeType !== 1) return false;
-        var tag = el.tagName;
-        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
-        return el.isContentEditable === true;
-      }
-
-      function hasFocusedEditable() {
-        return isEditable(document.activeElement);
-      }
-
-      function syncFromViewport() {
-        var inset = viewportKeyboardInset();
-        if (inset > 80 || hasFocusedEditable()) {
-          notify(true);
-        } else if (inset <= 40) {
-          notify(false);
-        }
-      }
-
-      document.addEventListener('focusin', function (e) {
-        if (isEditable(e.target)) notify(true);
-      }, true);
-
-      document.addEventListener('focusout', function () {
-        setTimeout(function () {
-          if (hasFocusedEditable()) return;
-          if (viewportKeyboardInset() > 80) {
-            notify(true);
-            return;
-          }
-          notify(false);
-        }, 180);
-      }, true);
-
-      if (window.visualViewport) {
-        window.visualViewport.addEventListener('resize', syncFromViewport);
-        window.visualViewport.addEventListener('scroll', syncFromViewport);
-      }
-    })();
-  ''',
-    injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
-  );
-
-  /// iOS WKWebView: force the officer notification dropdown to use the mobile
-  /// fixed layout (left/right inset) instead of sm:absolute right-anchored layout.
   static final UserScript _iosPopoverFixScript = UserScript(
     source: r'''
     (function () {
@@ -1289,6 +1486,9 @@ class _WebViewShellState extends State<WebViewShell>
       PushNotificationService.instance.setIosWebPushUploadHandler(
         _uploadPushTokenViaWebView,
       );
+      PushNotificationService.instance.setIosWebPushDeleteHandler(
+        _deletePushTokenViaWebView,
+      );
     }
     unawaited(_refreshNativeAuthSessionFromStorage());
   }
@@ -1397,6 +1597,7 @@ class _WebViewShellState extends State<WebViewShell>
     PushNotificationService.instance.setOnNotificationTap(null);
     if (Platform.isIOS) {
       PushNotificationService.instance.setIosWebPushUploadHandler(null);
+      PushNotificationService.instance.setIosWebPushDeleteHandler(null);
     }
     _connectivitySub?.cancel();
     DutyHeartbeatService.instance.backgroundLocationPermissionMissing
@@ -1429,9 +1630,10 @@ class _WebViewShellState extends State<WebViewShell>
     if (scheme == 'http' || scheme == 'https') {
       if (_isInternalUrl(uri)) {
         if (action.isForMainFrame == true &&
-            _ui.hasNativeAuthSession.value &&
-            _isAuthRoute(uri)) {
-          unawaited(_teardownNativeSessionForLoginScreen(uri));
+            AuthSessionManager.isLogoutRoute(uri)) {
+          unawaited(
+            _maybePerformLogoutForRoute(uri, 'logout_route navigation'),
+          );
         }
         return NavigationActionPolicy.ALLOW;
       }
@@ -1470,17 +1672,6 @@ class _WebViewShellState extends State<WebViewShell>
         },
       );
     }
-
-    controller.addJavaScriptHandler(
-      handlerName: 'keyboardVisibilityChanged',
-      callback: (args) {
-        final payload = args.isNotEmpty && args.first is Map
-            ? args.first as Map
-            : null;
-        _ui.setKeyboardVisible(payload?['visible'] == true);
-        return {'ok': true};
-      },
-    );
 
     controller.addJavaScriptHandler(
       handlerName: 'pickFile',
@@ -1652,6 +1843,21 @@ class _WebViewShellState extends State<WebViewShell>
           _bridge.getPushNotificationToken(args.isEmpty ? null : args.first),
     );
     controller.addJavaScriptHandler(
+      handlerName: 'getPushNotificationStatus',
+      callback: (args) =>
+          _bridge.getPushNotificationStatus(args.isEmpty ? null : args.first),
+    );
+    controller.addJavaScriptHandler(
+      handlerName: 'setPushNotificationsEnabled',
+      callback: (args) async {
+        final result = await _bridge.setPushNotificationsEnabled(
+          args.isEmpty ? null : args.first,
+        );
+        debugPrint('[SmartNPS360] setPushNotificationsEnabled result=$result');
+        return result;
+      },
+    );
+    controller.addJavaScriptHandler(
       handlerName: 'getBackgroundLocationStatus',
       callback: (args) async {
         final result = await _bridge.getBackgroundLocationStatus(
@@ -1785,16 +1991,11 @@ class _WebViewShellState extends State<WebViewShell>
 
         final action = (payload['action'] ?? payload['type'] ?? '').toString();
         if (action == 'logout') {
-          await AuthSessionManager.clearNativeSession(deletePushToken: true);
-          _ui.setNativeAuthSession(false);
-          _ui.setKeyboardVisible(false);
-          unawaited(
-            _controller?.evaluateJavascript(
-              source:
-                  "try { sessionStorage.removeItem('__smartnps_login'); } catch (e) {}",
-            ),
+          debugPrint(
+            '[SmartNPS360][Auth] authEvent logout received from web (primary) '
+            '(host=$currentHost path=${_ui.currentUri.value?.path})',
           );
-          await _notifyWebBackgroundLocationStatus();
+          await _performNativeLogout(reason: 'primary: authEvent');
           return {'ok': true, 'action': 'logout'};
         }
 
@@ -1847,6 +2048,7 @@ class _WebViewShellState extends State<WebViewShell>
             accessToken: accessToken,
             refreshToken: refreshToken,
           );
+          _ui.setOfficerLoggedIn(true);
           _ui.setNativeAuthSession(true);
           _syncPushTokenAfterLogin();
           unawaited(_maybeStartDutyHeartbeat());
@@ -1887,6 +2089,7 @@ class _WebViewShellState extends State<WebViewShell>
             accessToken: accessToken,
             refreshToken: refreshToken,
           );
+          _ui.setOfficerLoggedIn(true);
           _ui.setNativeAuthSession(true);
           _syncPushTokenAfterLogin();
           unawaited(_maybeStartDutyHeartbeat());
@@ -1980,6 +2183,7 @@ class _WebViewShellState extends State<WebViewShell>
         AuthState.instance.setSession({'accessToken': token});
       }
 
+      _ui.setOfficerLoggedIn(true);
       _ui.setNativeAuthSession(true);
       if (syncPush) {
         await PushNotificationService.instance.syncPushTokenAfterLogin();
@@ -2124,6 +2328,8 @@ class _WebViewShellState extends State<WebViewShell>
           result.length > 10) {
         await AuthRepository.instance.saveAccessToken(result);
         AuthState.instance.setSession({'accessToken': result});
+        await AuthRepository.instance.setOfficerLoggedIn(true);
+        _ui.setOfficerLoggedIn(true);
         _ui.setNativeAuthSession(true);
         debugPrint('[SmartNPS360][Push] ios harvested web access token');
         return result;
@@ -2251,6 +2457,74 @@ class _WebViewShellState extends State<WebViewShell>
       }
     } catch (e) {
       debugPrint('[SmartNPS360][Push] ios web upload failed: $e');
+    }
+    return false;
+  }
+
+  Future<bool> _deletePushTokenViaWebView(Map<String, dynamic> payload) async {
+    final controller = _controller;
+    if (controller == null) return false;
+
+    try {
+      final encodedPayload = jsonEncode(payload);
+      final pushTokenUrl = AppConfig.pushTokenUrl;
+      final result = await controller.evaluateJavascript(
+        source:
+            '''
+        (function () {
+          try {
+            var body = $encodedPayload;
+            var csrf = '';
+            var meta = document.querySelector('meta[name="csrf-token"]');
+            if (meta) csrf = meta.getAttribute('content') || '';
+            var xsrf = '';
+            try {
+              var parts = document.cookie.split(';');
+              for (var i = 0; i < parts.length; i++) {
+                var part = parts[i].trim();
+                if (part.indexOf('XSRF-TOKEN=') === 0) {
+                  xsrf = decodeURIComponent(part.substring('XSRF-TOKEN='.length));
+                  break;
+                }
+              }
+            } catch (e) {}
+            var xhr = new XMLHttpRequest();
+            xhr.open('DELETE', '$pushTokenUrl', false);
+            xhr.withCredentials = true;
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.setRequestHeader('Accept', 'application/json');
+            xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+            if (csrf) xhr.setRequestHeader('X-CSRF-TOKEN', csrf);
+            else if (xsrf) xhr.setRequestHeader('X-XSRF-TOKEN', xsrf);
+            xhr.send(JSON.stringify(body));
+            return JSON.stringify({
+              ok: xhr.status >= 200 && xhr.status < 300,
+              status: xhr.status
+            });
+          } catch (e) {
+            return JSON.stringify({ ok: false, error: String(e) });
+          }
+        })();
+      ''',
+      );
+
+      if (result is String) {
+        final decoded = jsonDecode(result);
+        if (decoded is Map) {
+          final ok = decoded['ok'] == true;
+          final status = decoded['status'];
+          if (ok) {
+            debugPrint('[SmartNPS360][Push] ios web delete ok status=$status');
+            return true;
+          }
+          debugPrint(
+            '[SmartNPS360][Push] ios web delete failed status=$status '
+            'error=${decoded['error']}',
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('[SmartNPS360][Push] ios web delete failed: $e');
     }
     return false;
   }
@@ -2410,7 +2684,6 @@ class _WebViewShellState extends State<WebViewShell>
     final scripts = <UserScript>[
       _smartNpsBridgeScript,
       _geolocationScript,
-      _keyboardVisibilityScript,
       if (Platform.isIOS) _iosPopoverFixScript,
     ];
     return UnmodifiableListView(scripts);
@@ -2477,9 +2750,9 @@ class _WebViewShellState extends State<WebViewShell>
       sharedCookiesEnabled: true,
       userAgent: Platform.isIOS
           ? null
-          : AppConfig.webViewUserAgentToken(platform: 'Android'),
+          : AppVersionInfo.webViewUserAgentToken(platform: 'Android'),
       applicationNameForUserAgent: Platform.isIOS
-          ? AppConfig.webViewUserAgentToken(platform: 'iOS')
+          ? AppVersionInfo.webViewUserAgentToken(platform: 'iOS')
           : null,
       preferredContentMode: Platform.isIOS
           ? UserPreferredContentMode.MOBILE
@@ -2518,8 +2791,7 @@ class _WebViewShellState extends State<WebViewShell>
                       .instance
                       .shouldShowBackgroundLocationBanner &&
                   (Platform.isAndroid || Platform.isIOS) &&
-                  _ui.hasNativeAuthSession.value &&
-                  !_isAuthRoute(_ui.currentUri.value);
+                  _ui.officerLoggedIn.value;
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -2569,6 +2841,12 @@ class _WebViewShellState extends State<WebViewShell>
                                         _uriAtLoadStart =
                                             _ui.currentUri.value ?? startUri;
                                         _syncCurrentUriFromWebView(startUri);
+                                        unawaited(
+                                          _maybePerformLogoutForRoute(
+                                            startUri,
+                                            'logout_route onLoadStart',
+                                          ),
+                                        );
                                         _pendingBottomTabLoadStarted = true;
                                         _ui.beginNavigation();
                                         return;
@@ -2661,8 +2939,9 @@ class _WebViewShellState extends State<WebViewShell>
                                               _ui.webPrefersDark.value,
                                         );
                                         if (!isSamePageReload) {
-                                          await _teardownNativeSessionForLoginScreen(
+                                          await _maybePerformLogoutForRoute(
                                             nextUri,
+                                            'logout_route onLoadStop',
                                           );
                                         }
                                         await _refreshNativeAuthSessionFromStorage();
@@ -2815,12 +3094,15 @@ class _WebViewShellState extends State<WebViewShell>
                           final showBottomBar =
                               !_ui.showOffline.value &&
                               _ui.firstPageLoaded.value &&
-                              _ui.hasNativeAuthSession.value &&
-                              !_isAuthRoute(_ui.currentUri.value) &&
+                              _ui.officerLoggedIn.value &&
                               !_ui.isKeyboardOpen;
                           if (!showBottomBar) {
+                            _logBottomBarHiddenIfNeeded(
+                              _bottomBarHideReasons(),
+                            );
                             return const SizedBox.shrink();
                           }
+                          _lastBottomBarHideReason = null;
                           return Align(
                             alignment: Alignment.bottomCenter,
                             child: _BottomBar(
@@ -2922,6 +3204,35 @@ class _WebViewShellState extends State<WebViewShell>
   }
 
   bool _isAuthRoute(Uri? uri) => AuthSessionManager.isLoginRoute(uri);
+
+  List<String> _bottomBarHideReasons() {
+    final reasons = <String>[];
+    if (_ui.showOffline.value) {
+      reasons.add('offline');
+    }
+    if (!_ui.firstPageLoaded.value) {
+      reasons.add('first_page_not_loaded');
+    }
+    if (!_ui.officerLoggedIn.value) {
+      reasons.add('officer_not_logged_in');
+    }
+    if (_ui.isKeyboardOpen) {
+      reasons.add(
+        'native_keyboard_inset(${_ui.flutterKeyboardInset.value})',
+      );
+    }
+    return reasons;
+  }
+
+  void _logBottomBarHiddenIfNeeded(List<String> reasons) {
+    if (!kDebugMode) return;
+    final reasonKey = reasons.join('|');
+    if (_lastBottomBarHideReason == reasonKey) return;
+    _lastBottomBarHideReason = reasonKey;
+    debugPrint(
+      '[SmartNPS360][BottomBar] hidden: ${reasons.join(', ')}',
+    );
+  }
 }
 
 int _bottomTabIndexFromUri(Uri? uri) {

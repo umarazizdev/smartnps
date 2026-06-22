@@ -253,4 +253,33 @@ class IosDutyLocationPinger {
 
     _stopping = false;
   }
+
+  /// Stops GPS collection immediately without waiting for batch flush.
+  static Future<void> stopCollectingOnly() async {
+    if (!Platform.isIOS) return;
+    if (!_running && _subscription == null && _uploader == null) return;
+
+    _running = false;
+    _pingTimer?.cancel();
+    _pingTimer = null;
+    await _subscription?.cancel();
+    _subscription = null;
+    await _uploader?.stopCollectingOnly();
+    _uploader = null;
+    _lastUploadAt = null;
+
+    try {
+      await IosBackgroundLocationNotification.dismiss();
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint(
+          '[IosDutyLocationPinger] dismiss notification failed: $e',
+        );
+      }
+    }
+
+    if (kDebugMode) {
+      debugPrint('[IosDutyLocationPinger] stopped collecting (instant logout)');
+    }
+  }
 }

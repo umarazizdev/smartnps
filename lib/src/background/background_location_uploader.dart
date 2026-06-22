@@ -36,6 +36,7 @@ class BackgroundLocationUploader {
   static const int _maxBatchSize = 20;
   static const Duration _batchEvery = Duration(minutes: 1);
   static const Duration _maxBackoff = Duration(minutes: 2);
+  static const Duration logoutFlushBudget = Duration(seconds: 15);
 
   Uri _pingUri() =>
       Uri.parse('${AppConfig.gpsApiBaseUrl}${AppConfig.gpsPingPath}');
@@ -84,7 +85,7 @@ class BackgroundLocationUploader {
     });
   }
 
-  /// Drains the on-device queue before shutdown (e.g. logout).
+  /// Drains the on-device queue before shutdown (e.g. off duty).
   Future<void> flushAllPendingBatches({int maxRounds = 200}) async {
     for (var round = 0; round < maxRounds; round++) {
       final remaining = _queuedPointCount();
@@ -104,6 +105,83 @@ class BackgroundLocationUploader {
     }
   }
 
+  /// Best-effort upload during logout, bounded by [timeout].
+  Future<void> flushAllPendingBatchesBounded({
+    Duration timeout = logoutFlushBudget,
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      final remaining = _queuedPointCount();
+      if (remaining == 0) return;
+
+      final before = remaining;
+      try {
+        await flushBatch(force: true);
+      } catch (_) {}
+
+      if (_queuedPointCount() < before) continue;
+      if (DateTime.now().isAfter(deadline)) return;
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+  }
+
+  /// Drops any queued GPS points still on disk or in memory.
+  Future<int> discardPendingQueue() async {
+    await _ensureStorage();
+    final discarded = _queuedPointCount();
+    _memoryBatch.clear();
+    final box = _box;
+    if (box != null && box.isNotEmpty) {
+      await box.clear();
+    }
+    if (kDebugMode && discarded > 0) {
+      debugPrint(
+        '[BackgroundLocationUploader] discarded $discarded queued GPS point(s)',
+      );
+    }
+    return discarded;
+  }
+
+  /// Logout teardown: bounded flush while auth still exists, then purge leftovers.
+  Future<void> drainAndDiscardOnLogout({
+    Duration timeout = logoutFlushBudget,
+  }) async {
+    _batchTimer?.cancel();
+    _batchTimer = null;
+    _batchTimerStartedAt = null;
+    await _connectivitySub?.cancel();
+    _connectivitySub = null;
+
+    await _ensureStorage();
+    final before = _queuedPointCount();
+    if (before == 0) return;
+
+    if (kDebugMode) {
+      debugPrint(
+        '[BackgroundLocationUploader] logout drain start queued=$before '
+        'timeout=${timeout.inSeconds}s',
+      );
+    }
+
+    await flushAllPendingBatchesBounded(timeout: timeout);
+    final remaining = await discardPendingQueue();
+    if (kDebugMode && remaining > 0) {
+      debugPrint(
+        '[BackgroundLocationUploader] logout drain complete '
+        'uploaded=${before - remaining} discarded=$remaining',
+      );
+    }
+  }
+
+  /// Opens shared Hive storage and drains/discards even when tracking is off.
+  static Future<void> drainAndDiscardOnLogoutStatic({
+    Duration timeout = logoutFlushBudget,
+  }) async {
+    final uploader = BackgroundLocationUploader();
+    await uploader.init();
+    await uploader.drainAndDiscardOnLogout(timeout: timeout);
+  }
+
   Future<void> stop() async {
     _batchTimer?.cancel();
     _batchTimer = null;
@@ -113,6 +191,15 @@ class BackgroundLocationUploader {
     _connectivitySub = null;
 
     await flushAllPendingBatches();
+  }
+
+  /// Stops timers/connectivity without flushing (logout instant phase).
+  Future<void> stopCollectingOnly() async {
+    _batchTimer?.cancel();
+    _batchTimer = null;
+    _batchTimerStartedAt = null;
+    await _connectivitySub?.cancel();
+    _connectivitySub = null;
   }
 
   /// Stores points for batch upload only (Hive).

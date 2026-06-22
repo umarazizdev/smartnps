@@ -525,6 +525,40 @@ class JsBridge {
     return _ok({'token': token});
   }
 
+  Future<Map<String, dynamic>> getPushNotificationStatus([dynamic args]) async {
+    if (!_isTrustedCaller()) return _deny();
+    return PushNotificationService.instance.getNotificationStatus();
+  }
+
+  Future<Map<String, dynamic>> setPushNotificationsEnabled([dynamic args]) async {
+    if (!_isTrustedCaller()) return _deny();
+
+    bool? enabled;
+    if (args is bool) {
+      enabled = args;
+    } else if (args is Map) {
+      final raw = args['enabled'];
+      if (raw is bool) {
+        enabled = raw;
+      } else if (raw != null) {
+        final text = raw.toString().toLowerCase();
+        enabled = text == 'true' || text == '1';
+      }
+    }
+
+    if (enabled == null) {
+      return _err('invalid_args', 'Missing enabled boolean');
+    }
+
+    try {
+      return await PushNotificationService.instance.setNotificationsEnabled(
+        enabled,
+      );
+    } catch (e) {
+      return _err('push_toggle_failed', e.toString());
+    }
+  }
+
   /// Read-only background location readiness for web clock-in gating.
   Future<Map<String, dynamic>> getBackgroundLocationStatus([
     dynamic args,

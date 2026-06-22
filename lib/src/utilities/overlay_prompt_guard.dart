@@ -3,21 +3,14 @@ import 'package:flutter/material.dart';
 import '../app/app_navigator.dart';
 
 /// Coordinates native overlays (bottom bar, banners, dialogs) so they do not
-/// appear while the WebView keyboard is open.
+/// appear while the system keyboard is open.
 class OverlayPromptGuard {
   OverlayPromptGuard._();
 
   static const Duration _pollInterval = Duration(milliseconds: 100);
   static const Duration _maxWait = Duration(seconds: 30);
 
-  static bool webKeyboardVisible = false;
-
-  static void setWebKeyboardVisible(bool visible) {
-    webKeyboardVisible = visible;
-  }
-
   static bool isKeyboardVisible([BuildContext? context]) {
-    if (webKeyboardVisible) return true;
     final ctx = context ?? AppNavigator.key.currentContext;
     if (ctx == null || !ctx.mounted) return false;
     return MediaQuery.viewInsetsOf(ctx).bottom > 0;

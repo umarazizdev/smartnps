@@ -8,6 +8,7 @@ import 'src/app/smart_nps_app.dart';
 import 'src/push/push_notification_service.dart';
 import 'src/api/api_client.dart';
 import 'src/location/mock_location_guard.dart';
+import 'src/utilities/app_version_info.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -15,6 +16,7 @@ Future<void> main() async {
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.dark);
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await AppVersionInfo.init();
   ApiClient.instance.ensureAuthInterceptorInstalled();
   await PushNotificationService.instance.init();
   MockLocationGuard.ensureBackgroundListenerInstalled();

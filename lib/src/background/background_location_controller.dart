@@ -86,6 +86,20 @@ class BackgroundLocationController {
     }
   }
 
+  static Future<void> stopCollectingOnly() async {
+    try {
+      if (Platform.isIOS) {
+        await IosDutyLocationPinger.stopCollectingOnly();
+        return;
+      }
+
+      final service = FlutterBackgroundService();
+      if (await service.isRunning()) {
+        service.invoke('stop');
+      }
+    } catch (_) {}
+  }
+
   static Future<Map<String, dynamic>> stop() async {
     try {
       if (Platform.isIOS) {

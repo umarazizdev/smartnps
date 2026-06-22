@@ -8,7 +8,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:package_info_plus/package_info_plus.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../firebase_options.dart';
@@ -16,6 +16,7 @@ import '../api/api_client.dart';
 import '../auth/auth_repository.dart';
 import '../auth/auth_state.dart';
 import '../utilities/app_config.dart';
+import '../utilities/app_version_info.dart';
 import '../utilities/permission_settings_helper.dart';
 
 const String kPushAndroidChannelId = 'smartnps360_default';
@@ -97,9 +98,8 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   }
 
   final data = message.data;
-  final title =
-      (data['title'] ?? data['notification_title'] ?? 'SmartNPS360')
-          .toString();
+  final title = (data['title'] ?? data['notification_title'] ?? 'SmartNPS360')
+      .toString();
   final body =
       (data['body'] ??
               data['message'] ??
@@ -127,10 +127,14 @@ class PushNotificationService {
 
   static final PushNotificationService instance = PushNotificationService._();
 
+  static const _storage = FlutterSecureStorage();
+  static const _kPushEnabledKey = 'push.notifications_enabled';
+
   final FlutterLocalNotificationsPlugin _local =
       FlutterLocalNotificationsPlugin();
 
   String? _lastFcmToken;
+  bool? _pushNotificationsEnabled;
   bool _firebaseMessagingInitialized = false;
   bool _permissionPromptAttempted = false;
   Future<void>? _permissionPromptFuture;
@@ -139,7 +143,6 @@ class PushNotificationService {
   String? _iosSessionCookieHeader;
   String? _iosXsrfToken;
   String? _cachedDeviceId;
-  String? _cachedAppVersion;
 
   /// When this returns true, notification permission prompts are deferred
   /// (e.g. while the login screen is visible).
@@ -158,6 +161,7 @@ class PushNotificationService {
   }
 
   Future<bool> Function(Map<String, dynamic> payload)? _iosWebPushUpload;
+  Future<bool> Function(Map<String, dynamic> payload)? _iosWebPushDelete;
 
   void setIosWebPushUploadHandler(
     Future<bool> Function(Map<String, dynamic> payload)? handler,
@@ -165,7 +169,15 @@ class PushNotificationService {
     _iosWebPushUpload = handler;
   }
 
+  void setIosWebPushDeleteHandler(
+    Future<bool> Function(Map<String, dynamic> payload)? handler,
+  ) {
+    _iosWebPushDelete = handler;
+  }
+
   String? get lastFcmToken => _lastFcmToken;
+
+  bool get pushNotificationsEnabled => _pushNotificationsEnabled ?? true;
 
   void Function(String url)? _onNotificationTap;
   String? _pendingNotificationUrl;
@@ -180,8 +192,72 @@ class PushNotificationService {
   }
 
   Future<void> init() async {
+    await _loadPushEnabledPreference();
     await _initLocalNotifications();
     await _initFirebaseMessaging();
+  }
+
+  Future<void> _loadPushEnabledPreference() async {
+    final stored = await _storage.read(key: _kPushEnabledKey);
+    _pushNotificationsEnabled = stored != '0';
+  }
+
+  Future<void> _persistPushEnabledPreference(bool enabled) async {
+    _pushNotificationsEnabled = enabled;
+    await _storage.write(key: _kPushEnabledKey, value: enabled ? '1' : '0');
+  }
+
+  Future<Map<String, dynamic>> getNotificationStatus() async {
+    return {
+      'ok': true,
+      'enabled': pushNotificationsEnabled,
+      'hasToken': _lastFcmToken != null && _lastFcmToken!.isNotEmpty,
+      'permissionGranted': await _hasNotificationPermission(),
+    };
+  }
+
+  Future<Map<String, dynamic>> setNotificationsEnabled(bool enabled) async {
+    if (enabled == pushNotificationsEnabled) {
+      return {
+        'ok': true,
+        'enabled': enabled,
+        'unchanged': true,
+        ...(await getNotificationStatus()),
+      };
+    }
+
+    await _persistPushEnabledPreference(enabled);
+    if (!enabled) {
+      await disablePushNotifications();
+      return {
+        'ok': true,
+        'enabled': false,
+        'hasToken': false,
+        'permissionGranted': await _hasNotificationPermission(),
+      };
+    }
+
+    await enablePushNotifications();
+    return await getNotificationStatus();
+  }
+
+  Future<void> enablePushNotifications() async {
+    await _ensureNotificationPermission();
+    await _refreshFcmToken(uploadIfAuthenticated: true);
+    if (Platform.isIOS) {
+      await _iosRetryFcmTokenAndUpload();
+    }
+  }
+
+  Future<void> disablePushNotifications() async {
+    await deletePushToken();
+    try {
+      await FirebaseMessaging.instance.deleteToken();
+    } catch (e) {
+      debugPrint('[SmartNPS360][Push] deleteToken failed: $e');
+    }
+    _lastFcmToken = null;
+    _iosPendingTokenUpload = false;
   }
 
   /// Waits until the notification permission flow finishes (system dialog included).
@@ -201,6 +277,12 @@ class PushNotificationService {
 
   /// Prompts for notification permission after login or sign-up (once per app session).
   Future<void> requestPermissionAfterAuth() async {
+    if (!pushNotificationsEnabled) {
+      debugPrint(
+        '[SmartNPS360][Push] skip permission prompt (disabled by user)',
+      );
+      return;
+    }
     if (_shouldDeferPermissionPrompt) {
       debugPrint(
         '[SmartNPS360][Push] deferring notification permission (auth route)',
@@ -249,6 +331,10 @@ class PushNotificationService {
 
   /// Requests permission (if needed) and uploads the FCM token after auth.
   Future<void> syncPushTokenAfterLogin() async {
+    if (!pushNotificationsEnabled) {
+      debugPrint('[SmartNPS360][Push] skip push sync (disabled by user)');
+      return;
+    }
     if (_shouldDeferPermissionPrompt) {
       debugPrint(
         '[SmartNPS360][Push] deferring push sync until post-login route',
@@ -315,12 +401,19 @@ class PushNotificationService {
     );
 
     FirebaseMessaging.instance.onTokenRefresh.listen((t) {
+      if (!pushNotificationsEnabled) {
+        debugPrint(
+          '[SmartNPS360][Push] ignore onTokenRefresh (disabled by user)',
+        );
+        return;
+      }
       _lastFcmToken = t;
       debugPrint('[SmartNPS360][Push] onTokenRefresh fcmToken=$t');
       _maybeUploadToken();
     });
 
     FirebaseMessaging.onMessage.listen((message) async {
+      if (!pushNotificationsEnabled) return;
       debugPrint('[SmartNPS360][Push] onMessage id=${message.messageId}');
       await _showLocalFromRemoteMessage(message);
     });
@@ -339,6 +432,19 @@ class PushNotificationService {
     }
   }
 
+  Future<bool> _hasNotificationPermission() async {
+    if (Platform.isAndroid) {
+      return (await Permission.notification.status).isGranted;
+    }
+    if (Platform.isIOS) {
+      final settings = await FirebaseMessaging.instance
+          .getNotificationSettings();
+      return settings.authorizationStatus == AuthorizationStatus.authorized ||
+          settings.authorizationStatus == AuthorizationStatus.provisional;
+    }
+    return true;
+  }
+
   Future<bool> _ensureNotificationPermission() async {
     if (Platform.isAndroid) {
       return _ensureAndroidNotificationPermission();
@@ -354,7 +460,9 @@ class PushNotificationService {
 
     final current = await Permission.notification.status;
     if (current.isGranted) {
-      debugPrint('[SmartNPS360][Push] android notification permission=already granted');
+      debugPrint(
+        '[SmartNPS360][Push] android notification permission=already granted',
+      );
       return true;
     }
 
@@ -365,7 +473,9 @@ class PushNotificationService {
     if (android != null) {
       final granted = await android.requestNotificationsPermission();
       if (granted == true) {
-        debugPrint('[SmartNPS360][Push] android notification permission=granted');
+        debugPrint(
+          '[SmartNPS360][Push] android notification permission=granted',
+        );
         return true;
       }
     }
@@ -424,6 +534,7 @@ class PushNotificationService {
   }
 
   Future<void> _refreshFcmToken({required bool uploadIfAuthenticated}) async {
+    if (!pushNotificationsEnabled) return;
     try {
       final token = await FirebaseMessaging.instance.getToken();
       if (token == null || token.isEmpty) return;
@@ -479,6 +590,10 @@ class PushNotificationService {
   }
 
   Future<void> _maybeUploadToken() async {
+    if (!pushNotificationsEnabled) {
+      debugPrint('[SmartNPS360][Push] skip upload (disabled by user)');
+      return;
+    }
     final token = _lastFcmToken;
     if (token == null || token.isEmpty) return;
 
@@ -557,39 +672,78 @@ class PushNotificationService {
     }
   }
 
-  Future<void> deletePushToken() async {
+  Future<bool> deletePushToken() async {
     final token = _lastFcmToken;
     if (token == null || token.isEmpty) {
       debugPrint('[SmartNPS360][Push] skip delete (no FCM token)');
-      return;
+      return true;
     }
 
-    final accessToken = await AuthRepository.instance.getAccessToken();
-    if (accessToken == null || accessToken.isEmpty) {
-      debugPrint('[SmartNPS360][Push] skip delete (no accessToken)');
-      return;
-    }
-
-    ApiClient.instance.ensureAuthInterceptorInstalled();
     final payload = await _buildPushTokenPayload(pushToken: token);
+    var deleted = false;
+
+    final accessToken = await _resolveAccessToken();
+    if (accessToken != null && accessToken.isNotEmpty) {
+      deleted = await _deletePushTokenViaApi(
+        payload: payload,
+        useSessionCookies: false,
+      );
+    }
+
+    if (!deleted && Platform.isIOS) {
+      final webDelete = _iosWebPushDelete;
+      if (webDelete != null) {
+        debugPrint('[SmartNPS360][Push] ios delete via web session fetch');
+        deleted = await webDelete(payload);
+      }
+
+      if (!deleted &&
+          _iosSessionCookieHeader != null &&
+          _iosSessionCookieHeader!.isNotEmpty) {
+        deleted = await _deletePushTokenViaApi(
+          payload: payload,
+          useSessionCookies: true,
+        );
+      }
+    }
+
+    if (!deleted) {
+      debugPrint('[SmartNPS360][Push] delete failed or skipped (no auth)');
+    }
+    return deleted;
+  }
+
+  Future<bool> _deletePushTokenViaApi({
+    required Map<String, dynamic> payload,
+    required bool useSessionCookies,
+  }) async {
+    ApiClient.instance.ensureAuthInterceptorInstalled();
     final uri = Uri.parse(AppConfig.pushTokenUrl);
 
     try {
       if (kDebugMode) {
-        debugPrint('[SmartNPS360][Push] DELETE $uri body=$payload');
+        debugPrint(
+          '[SmartNPS360][Push] DELETE $uri body=$payload '
+          'auth=${useSessionCookies ? 'session-cookies' : 'bearer'}',
+        );
       }
       final response = await ApiClient.instance.dio.deleteUri(
         uri,
         data: payload,
-        options: _jsonOptions(),
+        options: _jsonOptions(useSessionCookies: useSessionCookies),
       );
+      final ok = response.statusCode != null &&
+          response.statusCode! >= 200 &&
+          response.statusCode! < 300;
       if (kDebugMode) {
         debugPrint(
           '[SmartNPS360][Push] delete ok status=${response.statusCode}',
         );
       }
+      return ok;
     } catch (e) {
       debugPrint('[SmartNPS360][Push] delete failed: $e');
+      return false;
     }
   }
 
@@ -632,14 +786,7 @@ class PushNotificationService {
     return id;
   }
 
-  Future<String> _appVersion() async {
-    final cached = _cachedAppVersion;
-    if (cached != null && cached.isNotEmpty) return cached;
-
-    final info = await PackageInfo.fromPlatform();
-    _cachedAppVersion = info.version;
-    return info.version;
-  }
+  Future<String> _appVersion() async => AppVersionInfo.version;
 
   String _slug(String value) {
     return value

@@ -15,6 +15,7 @@ class AuthRepository {
   static const _kAccessToken = 'auth.access_token';
   static const _kRefreshToken = 'auth.refresh_token';
   static const _kUserJson = 'auth.user_json';
+  static const _kOfficerLoggedIn = 'auth.officer_logged_in';
 
   Future<void> saveLogin({
     required Map<String, dynamic> user,
@@ -28,14 +29,29 @@ class AuthRepository {
     if (refreshToken != null && refreshToken.isNotEmpty) {
       await _storage.write(key: _kRefreshToken, value: refreshToken);
     }
+    await setOfficerLoggedIn(true);
     await LocationDisclosureAccountSync.onLoginResolved();
     debugPrint('[SmartNPS360][AuthRepo] saved login (secure storage)');
+  }
+
+  Future<void> setOfficerLoggedIn(bool value) async {
+    if (value) {
+      await _storage.write(key: _kOfficerLoggedIn, value: 'true');
+    } else {
+      await _storage.delete(key: _kOfficerLoggedIn);
+    }
+  }
+
+  Future<bool> isOfficerLoggedIn() async {
+    final value = await _storage.read(key: _kOfficerLoggedIn);
+    return value == 'true';
   }
 
   Future<void> clear() async {
     await _storage.delete(key: _kAccessToken);
     await _storage.delete(key: _kRefreshToken);
     await _storage.delete(key: _kUserJson);
+    await setOfficerLoggedIn(false);
     LocationDisclosureAccountSync.onLoggedOut();
     debugPrint('[SmartNPS360][AuthRepo] cleared auth (secure storage)');
   }
