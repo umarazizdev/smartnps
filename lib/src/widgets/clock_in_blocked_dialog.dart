@@ -19,13 +19,13 @@ class ClockInBlockedDialog {
   static final Map<String, DateTime> _lastShownAtByReason = {};
   static const Duration _repeatCooldown = Duration(seconds: 8);
 
-  static const String cancelClockInLabel = 'Cancel clock-in';
+  static const String cancelClockInLabel = 'Cancel';
 
-  static const String failureTitle = 'Unable to clock in';
+  static const String failureTitle = 'Unable to verify attendance';
   static const String cancelReason = 'clock_in_cancelled';
-  static const String cancelMessage = 'Clock-in was not completed.';
+  static const String cancelMessage = 'Shift attendance was not completed.';
 
-  /// First step: education prompt (same as before, Cancel replaces Not now).
+  /// First step: education prompt before opening Settings.
   static Future<ClockInBlockedAction?> showLocationSettingsPrompt(
     String? deniedReason,
   ) async {
@@ -108,41 +108,48 @@ class ClockInBlockedDialog {
     return DateTime.now().difference(last) < _repeatCooldown;
   }
 
+  /// Android may keep a modal route after opening Settings from this dialog.
+  static void reconcileAfterAppResume() {
+    if (!Platform.isAndroid) return;
+
+    PermissionSettingsHelper.dismissStaleModalRouteIfPresent();
+    _dialogVisible = false;
+  }
+
   static StoreSafeSettingsDestination settingsDestinationFor(String reason) {
     return BackgroundLocationPermissions.settingsDestinationFor(reason);
   }
 
   static String failureMessageFor(String? deniedReason) {
-    final alwaysAccessLabel = Platform.isIOS
-        ? 'Always'
-        : Platform.isAndroid
-            ? 'Allow all the time'
-            : 'always-on';
+    final alwaysAccessLabel =
+        BackgroundLocationPermissions.alwaysAccessLabel();
 
     switch (deniedReason) {
       case 'location_services_disabled':
-        return 'Clock-in was not completed. Location services are turned off on '
-            'this device. Turn them on in Settings, then try again.';
+        return 'Shift attendance was not completed. Location services are turned '
+            'off on this device. Turn them on in Settings, then try again.';
       case 'location_foreground':
       case 'location_when_in_use':
-        return 'Clock-in was not completed. Background location '
+        return 'Shift attendance was not completed. Background location '
             '($alwaysAccessLabel) is required. Open Settings and set location to '
-            '$alwaysAccessLabel, then try clock-in again.';
+            '$alwaysAccessLabel, then try again.';
       case 'location_background':
-        return 'Clock-in was not completed. Set location to $alwaysAccessLabel '
-            'in Settings. Without background location, clock-in cannot be '
-            'completed from this app.';
+        return 'Shift attendance was not completed. Set location to '
+            '$alwaysAccessLabel in Settings. Without background location, '
+            'attendance cannot be verified from this app.';
       case 'location_always':
         if (Platform.isIOS) {
-          return 'Clock-in was not completed. Open Settings, tap SmartNPS360, '
-              'choose Location, then select Always. Clock-in cannot proceed '
-              'without Always access.';
+          return 'Shift attendance was not completed. Open Settings, tap '
+              'SmartNPS360, choose Location, then select $alwaysAccessLabel. '
+              'Attendance cannot be verified without $alwaysAccessLabel access.';
         }
-        return 'Clock-in was not completed. Open Settings and set location to '
-            'Always. Clock-in cannot proceed without background location.';
+        return 'Shift attendance was not completed. Open Settings and set '
+            'location to $alwaysAccessLabel. Attendance cannot be verified without '
+            'background location.';
       default:
-        return 'Clock-in was not completed. Background location '
-            '($alwaysAccessLabel) is required to clock in from the mobile app.';
+        return 'Shift attendance was not completed. Background location '
+            '($alwaysAccessLabel) is required for shift attendance from the '
+            'mobile app.';
     }
   }
 

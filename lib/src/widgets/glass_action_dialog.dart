@@ -15,9 +15,11 @@ class GlassActionDialog extends StatelessWidget {
     this.iconColor = const Color(0xFF2563EB),
     this.variant = GlassActionDialogVariant.normal,
     this.destructiveSecondary = false,
+    this.messageMaxHeightFactor = _defaultMessageMaxHeightFactor,
   });
 
   static const Color _errorColor = Color(0xFFE53935);
+  static const double _defaultMessageMaxHeightFactor = 0.38;
 
   final IconData icon;
   final String title;
@@ -27,6 +29,7 @@ class GlassActionDialog extends StatelessWidget {
   final Color iconColor;
   final GlassActionDialogVariant variant;
   final bool destructiveSecondary;
+  final double messageMaxHeightFactor;
 
   static Future<bool?> show({
     required BuildContext context,
@@ -39,6 +42,7 @@ class GlassActionDialog extends StatelessWidget {
     GlassActionDialogVariant variant = GlassActionDialogVariant.normal,
     bool destructiveSecondary = false,
     bool barrierDismissible = false,
+    double messageMaxHeightFactor = _defaultMessageMaxHeightFactor,
   }) {
     return showDialog<bool>(
       context: context,
@@ -52,6 +56,7 @@ class GlassActionDialog extends StatelessWidget {
         iconColor: iconColor,
         variant: variant,
         destructiveSecondary: destructiveSecondary,
+        messageMaxHeightFactor: messageMaxHeightFactor,
       ),
     );
   }
@@ -148,7 +153,8 @@ class GlassActionDialog extends StatelessWidget {
                 const SizedBox(height: 9),
                 ConstrainedBox(
                   constraints: BoxConstraints(
-                    maxHeight: MediaQuery.sizeOf(context).height * 0.38,
+                    maxHeight: MediaQuery.sizeOf(context).height *
+                        messageMaxHeightFactor,
                   ),
                   child: SingleChildScrollView(
                     child: Text(

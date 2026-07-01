@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -15,6 +16,7 @@ import '../../firebase_options.dart';
 import '../api/api_client.dart';
 import '../auth/auth_repository.dart';
 import '../auth/auth_state.dart';
+import '../permissions/native_permission_status_service.dart';
 import '../utilities/app_config.dart';
 import '../utilities/app_version_info.dart';
 import '../utilities/permission_settings_helper.dart';
@@ -22,18 +24,65 @@ import '../utilities/permission_settings_helper.dart';
 const String kPushAndroidChannelId = 'smartnps360_default';
 const String kPushAndroidChannelName = 'SmartNPS360';
 const String kPushAndroidChannelDescription = 'SmartNPS360 notifications';
+const String kPushIosSoundFile = 'alert_sound.caf';
+
+const DarwinNotificationDetails kPushIosNotificationDetails =
+    DarwinNotificationDetails(
+      presentSound: true,
+      presentBanner: true,
+      presentList: true,
+      sound: kPushIosSoundFile,
+    );
+
+const DarwinInitializationSettings kPushIosInitializationSettings =
+    DarwinInitializationSettings(
+      requestAlertPermission: false,
+      requestBadgePermission: false,
+      requestSoundPermission: false,
+      defaultPresentSound: true,
+      defaultPresentBanner: true,
+      defaultPresentList: true,
+    );
+
+void debugPrintRemoteMessagePayload(String source, RemoteMessage message) {
+  final notification = message.notification;
+  try {
+    final payload = <String, dynamic>{
+      'messageId': message.messageId,
+      'from': message.from,
+      'sentTime': message.sentTime?.toIso8601String(),
+      'collapseKey': message.collapseKey,
+      'messageType': message.messageType,
+      if (notification != null)
+        'notification': {
+          'title': notification.title,
+          'body': notification.body,
+        },
+      'data': message.data,
+    };
+    debugPrint('[SmartNPS360][Push][$source] payload=${jsonEncode(payload)}');
+  } catch (e, st) {
+    debugPrint(
+      '[SmartNPS360][Push][$source] payload='
+      'messageId=${message.messageId}, '
+      'title=${notification?.title}, '
+      'body=${notification?.body}, '
+      'data=${message.data}, '
+      'encodeError=$e',
+    );
+    debugPrint('$st');
+  }
+}
 
 Future<void> ensurePushLocalNotificationsReady(
   FlutterLocalNotificationsPlugin plugin,
 ) async {
   const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
-  const iosInit = DarwinInitializationSettings(
-    requestAlertPermission: false,
-    requestBadgePermission: false,
-    requestSoundPermission: false,
-  );
   await plugin.initialize(
-    settings: const InitializationSettings(android: androidInit, iOS: iosInit),
+    settings: const InitializationSettings(
+      android: androidInit,
+      iOS: kPushIosInitializationSettings,
+    ),
   );
 
   final android = plugin
@@ -47,6 +96,7 @@ Future<void> ensurePushLocalNotificationsReady(
         kPushAndroidChannelName,
         description: kPushAndroidChannelDescription,
         importance: Importance.high,
+        sound: RawResourceAndroidNotificationSound('alert_sound'),
       ),
     );
   }
@@ -67,8 +117,14 @@ Future<void> showPushLocalNotification({
     channelDescription: kPushAndroidChannelDescription,
     importance: Importance.high,
     priority: Priority.high,
+    sound: RawResourceAndroidNotificationSound('alert_sound'),
   );
-  const iosDetails = DarwinNotificationDetails();
+  const iosDetails = kPushIosNotificationDetails;
+
+  debugPrint(
+    '[SmartNPS360][Push] showing local notification sound=$kPushIosSoundFile '
+    'title=$title',
+  );
 
   await plugin.show(
     id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
@@ -87,12 +143,11 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
-  debugPrint(
-    '[SmartNPS360][Push] background message id=${message.messageId} '
-    'notification=${message.notification?.title} data=${message.data}',
-  );
+  debugPrintRemoteMessagePayload('background', message);
 
-  // Messages with a notification payload are displayed by the OS when killed.
+  // iOS/Android display notification+title payloads via the OS/APNs path.
+  // Custom sound in that case requires the server to set APNs sound to
+  // "alert_sound.caf" (iOS) or the Android notification channel sound.
   if (message.notification != null) {
     return;
   }
@@ -208,19 +263,21 @@ class PushNotificationService {
   }
 
   Future<Map<String, dynamic>> getNotificationStatus() async {
+    final permissionGranted = await _hasNotificationPermission();
+    final hasToken = _lastFcmToken != null && _lastFcmToken!.isNotEmpty;
     return {
       'ok': true,
       'enabled': pushNotificationsEnabled,
-      'hasToken': _lastFcmToken != null && _lastFcmToken!.isNotEmpty,
-      'permissionGranted': await _hasNotificationPermission(),
+      'permissionGranted': permissionGranted,
+      'hasToken': hasToken,
     };
   }
 
   Future<Map<String, dynamic>> setNotificationsEnabled(bool enabled) async {
-    if (enabled == pushNotificationsEnabled) {
+    final previous = pushNotificationsEnabled;
+    if (enabled == previous) {
       return {
         'ok': true,
-        'enabled': enabled,
         'unchanged': true,
         ...(await getNotificationStatus()),
       };
@@ -229,20 +286,50 @@ class PushNotificationService {
     await _persistPushEnabledPreference(enabled);
     if (!enabled) {
       await disablePushNotifications();
-      return {
-        'ok': true,
-        'enabled': false,
-        'hasToken': false,
-        'permissionGranted': await _hasNotificationPermission(),
-      };
+    } else {
+      await enablePushNotifications();
     }
 
-    await enablePushNotifications();
-    return await getNotificationStatus();
+    final status = await getNotificationStatus();
+    unawaited(syncPushStateToPermissionApi());
+    return status;
+  }
+
+  /// Uploads the current in-app push toggle to permission-status API.
+  Future<void> syncPushStateToPermissionApi() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+
+    await _loadPushEnabledPreference();
+    await NativePermissionStatusService.instance.uploadPushToggle(
+      enabled: pushNotificationsEnabled,
+    );
+  }
+
+  /// Re-sync FCM token after app resume (user toggle preference is unchanged).
+  Future<Map<String, dynamic>> reconcileOnAppResume() async {
+    await _loadPushEnabledPreference();
+
+    if (pushNotificationsEnabled) {
+      final permissionGranted = await _hasNotificationPermission();
+      if (permissionGranted) {
+        await _refreshFcmToken(uploadIfAuthenticated: true);
+        if (Platform.isIOS) {
+          await _iosRetryFcmTokenAndUpload();
+        } else if (_lastFcmToken != null && _lastFcmToken!.isNotEmpty) {
+          await _maybeUploadToken();
+        }
+      }
+    }
+
+    return getNotificationStatus();
   }
 
   Future<void> enablePushNotifications() async {
-    await _ensureNotificationPermission();
+    final granted = await _ensureNotificationPermission();
+    if (!granted) {
+      debugPrint('[SmartNPS360][Push] enable skipped (permission not granted)');
+      return;
+    }
     await _refreshFcmToken(uploadIfAuthenticated: true);
     if (Platform.isIOS) {
       await _iosRetryFcmTokenAndUpload();
@@ -353,16 +440,11 @@ class PushNotificationService {
 
   Future<void> _initLocalNotifications() async {
     const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const iosInit = DarwinInitializationSettings(
-      requestAlertPermission: false,
-      requestBadgePermission: false,
-      requestSoundPermission: false,
-    );
 
     await _local.initialize(
       settings: const InitializationSettings(
         android: androidInit,
-        iOS: iosInit,
+        iOS: kPushIosInitializationSettings,
       ),
       onDidReceiveNotificationResponse: (details) {
         debugPrint(
@@ -383,6 +465,7 @@ class PushNotificationService {
           kPushAndroidChannelName,
           description: kPushAndroidChannelDescription,
           importance: Importance.high,
+          sound: RawResourceAndroidNotificationSound('alert_sound'),
         ),
       );
     }
@@ -394,11 +477,22 @@ class PushNotificationService {
 
     final messaging = FirebaseMessaging.instance;
 
-    await messaging.setForegroundNotificationPresentationOptions(
-      alert: true,
-      badge: true,
-      sound: true,
-    );
+    // On iOS, suppress Firebase's foreground banner/sound so only our local
+    // notification plays alert_sound.caf. FCM remote notifications use the
+    // server APNs sound (default tri-tone) when alert/sound are enabled here.
+    if (Platform.isIOS) {
+      await messaging.setForegroundNotificationPresentationOptions(
+        alert: false,
+        badge: true,
+        sound: false,
+      );
+    } else {
+      await messaging.setForegroundNotificationPresentationOptions(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+    }
 
     FirebaseMessaging.instance.onTokenRefresh.listen((t) {
       if (!pushNotificationsEnabled) {
@@ -413,23 +507,23 @@ class PushNotificationService {
     });
 
     FirebaseMessaging.onMessage.listen((message) async {
+      debugPrintRemoteMessagePayload('foreground', message);
       if (!pushNotificationsEnabled) return;
-      debugPrint('[SmartNPS360][Push] onMessage id=${message.messageId}');
       await _showLocalFromRemoteMessage(message);
     });
 
     FirebaseMessaging.onMessageOpenedApp.listen((message) {
-      debugPrint(
-        '[SmartNPS360][Push] onMessageOpenedApp id=${message.messageId}',
-      );
+      debugPrintRemoteMessagePayload('openedApp', message);
       _handleRemoteMessageTap(message);
     });
 
     final initial = await messaging.getInitialMessage();
     if (initial != null) {
-      debugPrint('[SmartNPS360][Push] initialMessage id=${initial.messageId}');
+      debugPrintRemoteMessagePayload('initialMessage', initial);
       _handleRemoteMessageTap(initial);
     }
+
+    debugPrint('[SmartNPS360][Push] Firebase messaging listeners ready');
   }
 
   Future<bool> _hasNotificationPermission() async {
@@ -732,7 +826,8 @@ class PushNotificationService {
         data: payload,
         options: _jsonOptions(useSessionCookies: useSessionCookies),
       );
-      final ok = response.statusCode != null &&
+      final ok =
+          response.statusCode != null &&
           response.statusCode! >= 200 &&
           response.statusCode! < 300;
       if (kDebugMode) {

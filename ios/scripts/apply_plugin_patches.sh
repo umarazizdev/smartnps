@@ -169,4 +169,6 @@ patch_flutter_inappwebview_ios
 patch_cupertino_native
 patch_flutter_background_service_ios
 
+bash "$SCRIPT_DIR/patch_swift_package_platform.sh" || true
+
 echo "apply_plugin_patches: done (iOS deployment target >= ${DEPLOYMENT_TARGET})."

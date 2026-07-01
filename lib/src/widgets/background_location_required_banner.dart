@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:ui' show lerpDouble;
 
 import 'package:flutter/material.dart';
@@ -9,6 +10,7 @@ import '../background/background_location_permissions.dart';
 import '../background/duty_heartbeat_service.dart';
 import '../utilities/app_lifecycle_resume_gate.dart';
 import '../utilities/app_config.dart';
+import 'clock_in_blocked_dialog.dart';
 
 class BackgroundLocationRequiredBanner extends StatefulWidget {
   const BackgroundLocationRequiredBanner({super.key});
@@ -72,12 +74,17 @@ class _BackgroundLocationRequiredBannerState
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      DutyHeartbeatService.instance.reconcileDialogsAfterAppResume();
+      if (Platform.isAndroid) {
+        ClockInBlockedDialog.reconcileAfterAppResume();
+      }
       AppLifecycleResumeGate.notifyResumed();
       unawaited(_refreshBannerContent());
     }
   }
 
   Future<void> _refreshBannerContent() async {
+    await BackgroundLocationPermissions.refreshPermissionStateFromOs();
     final reason =
         await BackgroundLocationPermissions.settingsDeniedReasonIfAny();
     if (!mounted) return;

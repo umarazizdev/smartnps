@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../background/background_location_uploader.dart';
 import '../background/duty_heartbeat_service.dart';
+import '../permissions/native_permission_status_service.dart';
 import '../push/push_notification_service.dart';
 import '../utilities/app_config.dart';
 import 'auth_repository.dart';
@@ -65,6 +66,7 @@ class AuthSessionManager {
       );
     }
     await fcmDelete;
+    NativePermissionStatusService.instance.resetSyncState();
     await AuthRepository.instance.clear();
     PushNotificationService.instance.setIosSessionAuth();
 

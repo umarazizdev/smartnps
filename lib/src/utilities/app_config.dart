@@ -12,6 +12,8 @@ class AppConfig {
   static const String sanctumLoginUrl = '${initialUrl}api/auth/login';
   static const String heartbeatUrl = '${initialUrl}api/heartbeat';
   static const String pushTokenUrl = '${initialUrl}api/push-token';
+  static const String permissionStatusUrl =
+      '${initialUrl}api/native-app/permission-status';
   static const String defaultPushUrl = '${initialUrl}officer/dashboard';
 
   static const String allowedHost = 'smartnps360.com';
@@ -25,6 +27,32 @@ class AppConfig {
     final h = host.toLowerCase();
     if (allowedHosts.contains(h)) return true;
     return h.endsWith('.$allowedHost');
+  }
+
+  /// Google Maps / Fonts CDN hosts loaded as subresources from smartnps360 pages.
+  /// iOS WKWebView TLS and iframe navigations must allow these for embedded maps.
+  static bool isTrustedSubresourceHost(String? host) {
+    if (host == null || host.isEmpty) return false;
+    final h = host.toLowerCase();
+    const exact = {
+      'google.com',
+      'googleapis.com',
+      'gstatic.com',
+      'googleusercontent.com',
+      'ggpht.com',
+    };
+    if (exact.contains(h)) return true;
+    const suffixes = [
+      '.google.com',
+      '.googleapis.com',
+      '.gstatic.com',
+      '.googleusercontent.com',
+      '.ggpht.com',
+    ];
+    for (final suffix in suffixes) {
+      if (h.endsWith(suffix)) return true;
+    }
+    return false;
   }
 
   static const int cPrimary = 0xFF022A67;

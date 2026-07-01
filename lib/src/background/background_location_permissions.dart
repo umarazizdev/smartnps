@@ -7,11 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../utilities/permission_settings_helper.dart';
 
-enum LocationPermissionPhase {
-  none,
-  foregroundOnly,
-  backgroundReady,
-}
+enum LocationPermissionPhase { none, foregroundOnly, backgroundReady }
 
 class BackgroundPermissionOutcome {
   const BackgroundPermissionOutcome({
@@ -75,6 +71,7 @@ class BackgroundLocationPermissions {
     }
     return false;
   }
+
   static Future<Map<String, dynamic>> statusSnapshot() async {
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     final geolocatorPermission = await readIosLocationPermission();
@@ -377,6 +374,31 @@ class BackgroundLocationPermissions {
     await Permission.notification.request();
   }
 
+  /// iOS: "Always". Android: "Allow all the time".
+  static String alwaysAccessLabel() {
+    if (Platform.isIOS) return 'Always';
+    if (Platform.isAndroid) return 'Allow all the time';
+    return 'always-on';
+  }
+
+  /// iOS: "While Using the App". Android: "While using the app".
+  static String foregroundAccessLabel() {
+    if (Platform.isIOS) return 'While Using the App';
+    if (Platform.isAndroid) return 'While using the app';
+    return 'while using the app';
+  }
+
+  static String _backgroundAccessSettingsStepsMessage({
+    required String trailingClause,
+  }) {
+    if (Platform.isIOS) {
+      return 'Open Settings, tap SmartNPS360, choose Location, then select '
+          '${alwaysAccessLabel()}. $trailingClause';
+    }
+    return 'Open Settings and set location to ${alwaysAccessLabel()}. '
+        '$trailingClause';
+  }
+
   static String settingsTitleFor(String? deniedReason) {
     switch (deniedReason) {
       case 'location_services_disabled':
@@ -388,7 +410,7 @@ class BackgroundLocationPermissions {
       case 'location_always':
         if (Platform.isIOS) return 'Enable Always location';
         if (Platform.isAndroid) return 'Enable all-the-time location';
-        return 'Enable always-on location';
+        return 'Enable ${alwaysAccessLabel()} location';
       case 'notification':
         return 'Enable notifications';
       default:
@@ -420,55 +442,59 @@ class BackgroundLocationPermissions {
         return 'Location permission needed';
       case 'location_background':
       case 'location_always':
-        return 'Background location required to clock in';
+        return 'Background location required for shift attendance';
       default:
-        return 'Location required to clock in';
+        return 'Location required for shift attendance';
     }
   }
 
   static String clockInMessageFor(String? deniedReason) {
+    final alwaysLabel = alwaysAccessLabel();
     switch (deniedReason) {
       case 'location_services_disabled':
-        return 'Location services are turned off. Turn them on to clock in '
-            'from the mobile app.';
+        return 'Location services are turned off. Turn them on to verify shift '
+            'attendance from the mobile app.';
       case 'location_foreground':
-        return 'Allow location access to clock in. Background location '
-            '(Allow all the time) is required to complete clock-in.';
       case 'location_when_in_use':
-        return 'Allow location access to clock in. Background location '
-            '(Always) is required to complete clock-in.';
+        return 'Allow location access for shift attendance. Background location '
+            '($alwaysLabel) is required to complete attendance verification.';
       case 'location_background':
-        return 'Set location to Allow all the time to clock in from this app. '
-            'Without background location, clock-in is not available.';
       case 'location_always':
         if (Platform.isIOS) {
-          return 'Open Settings, tap SmartNPS360, choose Location, then select '
-              'Always. Without Always access, you cannot clock in from this app.';
+          return _backgroundAccessSettingsStepsMessage(
+            trailingClause:
+                'Without ${alwaysLabel} access, shift attendance cannot be '
+                'verified from this app.',
+          );
         }
-        return 'Open Settings and set location to Always. Without background '
-            'location, you cannot clock in from this app.';
+        return 'Set location to $alwaysLabel to verify shift attendance '
+            'from this app. Without background location, attendance verification '
+            'is not available.';
       default:
-        return 'Background location is required to clock in from the mobile app.';
+        return 'Background location is required for shift attendance from the '
+            'mobile app.';
     }
   }
 
   static String clockInSettingsMessageFor(String? deniedReason) {
+    final alwaysLabel = alwaysAccessLabel();
     switch (deniedReason) {
       case 'location_background':
-        return 'Clock-in requires location set to Allow all the time. Open '
-            'Settings and choose Allow all the time for SmartNPS360.';
       case 'location_always':
         if (Platform.isIOS) {
-          return 'Clock-in requires Location set to Always. Open Settings, tap '
-              'SmartNPS360, choose Location, then select Always.';
+          return 'Shift attendance requires Location set to $alwaysLabel. Open '
+              'Settings, tap SmartNPS360, choose Location, then select '
+              '$alwaysLabel.';
         }
-        return clockInMessageFor(deniedReason);
+        return 'Shift attendance requires location set to $alwaysLabel. Open '
+            'Settings and choose $alwaysLabel for SmartNPS360.';
       default:
         return clockInMessageFor(deniedReason);
     }
   }
 
   static String bannerMessageFor(String? deniedReason) {
+    final alwaysLabel = alwaysAccessLabel();
     switch (deniedReason) {
       case 'location_services_disabled':
         return 'Location services are turned off. Turn them on to continue '
@@ -480,15 +506,14 @@ class BackgroundLocationPermissions {
         return 'Tap Allow Location to grant access. Your location is used only '
             'while you are on duty.';
       case 'location_background':
-        return 'Tap Allow all the time on the next screen, or open Settings to '
-            'enable background location for duty tracking.';
       case 'location_always':
         if (Platform.isIOS) {
-          return 'Open Settings, tap SmartNPS360, choose Location, then '
-              'select Always. Your location is used only while you are on duty.';
+          return _backgroundAccessSettingsStepsMessage(
+            trailingClause: 'Your location is used only while you are on duty.',
+          );
         }
-        return 'Open Settings and set location to Always. Your location is used '
-            'only while you are on duty.';
+        return 'Background location is required while you are on duty. Open '
+            'Settings and set location to $alwaysLabel.';
       default:
         return 'Location access is required while you are on duty.';
     }
@@ -509,6 +534,7 @@ class BackgroundLocationPermissions {
   }
 
   static String settingsMessageFor(String? deniedReason) {
+    final alwaysLabel = alwaysAccessLabel();
     switch (deniedReason) {
       case 'location_services_disabled':
         return 'Location services are turned off on this device. Turn them on '
@@ -520,14 +546,12 @@ class BackgroundLocationPermissions {
       case 'location_background':
       case 'location_always':
         if (Platform.isIOS) {
-          return 'Open Settings, tap SmartNPS360, choose Location, then '
-              'select Always. Your location is used only while you are on duty.';
+          return _backgroundAccessSettingsStepsMessage(
+            trailingClause: 'Your location is used only while you are on duty.',
+          );
         }
-        if (Platform.isAndroid) {
-          return 'Background location is required while you are on duty. '
-              'Please set location to Allow all the time.';
-        }
-        return 'Please enable always-on location access for duty tracking.';
+        return 'Background location is required while you are on duty. '
+            'Please set location to $alwaysLabel.';
       case 'notification':
         return 'Notifications are required for shift alerts. Please enable '
             'notifications for SmartNPS360.';
@@ -547,7 +571,9 @@ class BackgroundLocationPermissions {
   }
 
   /// Where Open Settings should navigate after the user confirms in-app.
-  static StoreSafeSettingsDestination settingsDestinationFor(String? deniedReason) {
+  static StoreSafeSettingsDestination settingsDestinationFor(
+    String? deniedReason,
+  ) {
     if (deniedReason == 'location_services_disabled') {
       if (Platform.isAndroid) {
         return StoreSafeSettingsDestination.systemLocationServices;

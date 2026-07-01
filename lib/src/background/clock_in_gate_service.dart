@@ -141,7 +141,7 @@ class ClockInGateService {
           reason: 'mock_location',
           title: 'Mock location detected',
           message:
-              'Disable mock or fake GPS location before clocking in from the mobile app.',
+              'Disable mock or fake GPS location before verifying shift attendance from the mobile app.',
         );
       }
 
@@ -184,9 +184,16 @@ class ClockInGateService {
 
     await PermissionSettingsHelper.openSettingsForUserTap(
       destination: ClockInBlockedDialog.settingsDestinationFor(blockReason),
+      waitForReturn: true,
     );
-    await AppLifecycleResumeGate.waitForResume();
+    if (!Platform.isAndroid) {
+      await AppLifecycleResumeGate.waitForResume();
+    }
     await BackgroundLocationPermissions.refreshPermissionStateFromOs();
+    if (Platform.isAndroid) {
+      PermissionSettingsHelper.dismissStaleModalRouteIfPresent();
+      ClockInBlockedDialog.reconcileAfterAppResume();
+    }
 
     _pendingFailureAfterSettings = null;
 
@@ -206,7 +213,7 @@ class ClockInGateService {
           reason: 'mock_location',
           title: 'Mock location detected',
           message:
-              'Disable mock or fake GPS location before clocking in from the mobile app.',
+              'Disable mock or fake GPS location before verifying shift attendance from the mobile app.',
         );
       }
 

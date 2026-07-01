@@ -8,6 +8,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../app/app_navigator.dart';
 import '../background/background_location_permissions.dart';
+import '../utilities/app_lifecycle_resume_gate.dart';
 import '../utilities/overlay_prompt_guard.dart';
 import '../widgets/glass_action_dialog.dart';
 
@@ -39,10 +40,13 @@ class PermissionSettingsHelper {
   );
 
   static bool _dialogVisible = false;
+  static bool _awaitingSettingsReturn = false;
   static final Map<String, DateTime> _lastPromptAtByKey = {};
 
   /// True while the store-safe Open Settings dialog is on screen.
   static final ValueNotifier<bool> settingsPromptVisible = ValueNotifier(false);
+
+  static bool get isAwaitingSettingsReturn => _awaitingSettingsReturn;
 
   static const Duration _promptCooldown = Duration(minutes: 2);
 
@@ -55,19 +59,78 @@ class PermissionSettingsHelper {
   static Future<void> openSettingsForUserTap({
     StoreSafeSettingsDestination destination =
         StoreSafeSettingsDestination.app,
+    bool waitForReturn = false,
+    @Deprecated('Use waitForReturn') bool waitForReturnOnAndroid = false,
   }) async {
-    switch (destination) {
-      case StoreSafeSettingsDestination.locationPermission:
-        await launchLocationPermissionSettings();
-      case StoreSafeSettingsDestination.systemLocationServices:
-        if (Platform.isAndroid) {
-          await Geolocator.openLocationSettings();
-          return;
-        }
-        await launchAppSettings();
-      case StoreSafeSettingsDestination.app:
-        await launchAppSettings();
+    final shouldWaitForReturn = waitForReturn || waitForReturnOnAndroid;
+    if (Platform.isAndroid) {
+      await WidgetsBinding.instance.endOfFrame;
     }
+
+    _awaitingSettingsReturn = true;
+    try {
+      switch (destination) {
+        case StoreSafeSettingsDestination.locationPermission:
+          await launchLocationPermissionSettings();
+        case StoreSafeSettingsDestination.systemLocationServices:
+          if (Platform.isAndroid) {
+            await Geolocator.openLocationSettings();
+            break;
+          }
+          await launchAppSettings();
+        case StoreSafeSettingsDestination.app:
+          await launchAppSettings();
+      }
+
+      if (shouldWaitForReturn) {
+        await AppLifecycleResumeGate.waitForResume();
+        if (Platform.isAndroid) {
+          dismissStaleModalRouteIfPresent();
+        }
+        await BackgroundLocationPermissions.refreshPermissionStateFromOs();
+      }
+    } finally {
+      _awaitingSettingsReturn = false;
+    }
+  }
+
+  /// True when the OS will not show another in-app location prompt.
+  static Future<bool> foregroundRequiresSettingsPrompt() async {
+    if (Platform.isAndroid) {
+      return shouldOpenSettings(await Permission.location.status);
+    }
+    if (Platform.isIOS) {
+      final permission = await Geolocator.checkPermission();
+      return permission == LocationPermission.deniedForever;
+    }
+    return false;
+  }
+
+  static BuildContext? resolveDialogContext([BuildContext? fallback]) {
+    final navigatorContext = AppNavigator.key.currentContext;
+    if (navigatorContext != null && navigatorContext.mounted) {
+      return navigatorContext;
+    }
+    if (fallback != null && fallback.mounted) return fallback;
+    return null;
+  }
+
+  /// Clears stale dialog state when returning from Settings.
+  static void reconcilePromptsAfterAppResume() {
+    if (Platform.isAndroid) {
+      dismissStaleModalRouteIfPresent();
+    }
+    _dialogVisible = false;
+    settingsPromptVisible.value = false;
+  }
+
+  static void dismissStaleModalRouteIfPresent() {
+    if (!Platform.isAndroid) return;
+
+    final navigator = AppNavigator.key.currentState;
+    if (navigator == null || !navigator.canPop()) return;
+
+    navigator.pop();
   }
 
   static Future<void> _openAppSettingsWithFallback() async {
@@ -253,6 +316,7 @@ class PermissionSettingsHelper {
     bool barrierDismissible = false,
     bool respectCooldown = true,
     bool skipOverlayWait = false,
+    BuildContext? context,
   }) async {
     if (await _isLocationSettingsPromptRedundant(dialogKey)) {
       if (kDebugMode) {
@@ -276,8 +340,8 @@ class PermissionSettingsHelper {
       return PermissionSettingsPromptResult.skipped;
     }
 
-    final context = AppNavigator.key.currentContext;
-    if (context == null || !context.mounted) {
+    final initialContext = resolveDialogContext(context);
+    if (initialContext == null) {
       if (kDebugMode) {
         debugPrint(
           '[PermissionSettings] skip dialog key=$dialogKey (no context)',
@@ -290,8 +354,8 @@ class PermissionSettingsHelper {
       await OverlayPromptGuard.waitUntilReady();
     }
 
-    final readyContext = AppNavigator.key.currentContext;
-    if (readyContext == null || !readyContext.mounted) {
+    final readyContext = resolveDialogContext(initialContext);
+    if (readyContext == null) {
       if (kDebugMode) {
         debugPrint(
           '[PermissionSettings] skip dialog key=$dialogKey (no context after wait)',
@@ -322,15 +386,19 @@ class PermissionSettingsHelper {
         if (_shouldOpenLocationPermissionSettings(dialogKey)) {
           await openSettingsForUserTap(
             destination: StoreSafeSettingsDestination.locationPermission,
+            waitForReturn: true,
           );
         } else if (dialogKey == 'location_services') {
           await openSettingsForUserTap(
             destination: BackgroundLocationPermissions.settingsDestinationFor(
               'location_services_disabled',
             ),
+            waitForReturn: true,
           );
         } else {
-          await openSettingsForUserTap();
+          await openSettingsForUserTap(
+            waitForReturn: true,
+          );
         }
         return PermissionSettingsPromptResult.openedSettings;
       }
