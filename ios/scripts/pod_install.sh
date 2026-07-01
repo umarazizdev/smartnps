@@ -8,4 +8,5 @@ IOS_DIR="$(dirname "$SCRIPT_DIR")"
 
 cd "$IOS_DIR"
 bash "$SCRIPT_DIR/apply_plugin_patches.sh"
+bash "$SCRIPT_DIR/patch_swift_package_platform.sh"
 pod install --repo-update "$@"

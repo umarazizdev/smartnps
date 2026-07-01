@@ -7,21 +7,19 @@ import '../background/location_disclosure_consent.dart';
 import 'clock_in_blocked_dialog.dart';
 import 'glass_action_dialog.dart';
 
-/// Store-safe disclosure shown only before clock-in location permission prompts.
+/// Store-safe location disclosure before shift attendance / on-duty permission prompts.
 class ClockInLocationDisclosureDialog extends StatelessWidget {
   const ClockInLocationDisclosureDialog({super.key});
 
-  static String _alwaysAccessLabel() {
-    if (Platform.isIOS) return 'Always';
-    if (Platform.isAndroid) return 'Allow all the time';
-    return 'always-on';
-  }
+  static const String cancelLabel = 'Cancel';
+  static const String title = 'Location required for shift attendance';
+  static const double _messageMaxHeightFactor = 0.48;
 
-  static String _foregroundStepLabel() {
-    if (Platform.isIOS) return 'While Using the App';
-    if (Platform.isAndroid) return 'While using the app';
-    return 'while using the app';
-  }
+  static String _alwaysAccessLabel() =>
+      BackgroundLocationPermissions.alwaysAccessLabel();
+
+  static String _foregroundStepLabel() =>
+      BackgroundLocationPermissions.foregroundAccessLabel();
 
   static String _messageForPhase({
     required bool compact,
@@ -30,15 +28,17 @@ class ClockInLocationDisclosureDialog extends StatelessWidget {
     final alwaysAccessLabel = _alwaysAccessLabel();
     final foregroundStepLabel = _foregroundStepLabel();
     final core = compact
-        ? 'Location verifies clock-in and your shift. Sent to your employer; '
-            'stops when you clock out.'
-        : 'Your location verifies clock-in and is used during your shift for '
-            'attendance and field work. Data is sent to your employer and '
-            'stops when you clock out.';
+        ? 'SmartNPS360 uses your location only during an active shift to verify '
+            'attendance and field activity. Sent to your employer; stops when your '
+            'shift ends.'
+        : 'SmartNPS360 uses your location only during an active shift to verify '
+            'attendance, breaks, visits, and field activity. Your live location may '
+            'be collected in the background and is sent to your employer. Tracking '
+            'stops when your shift ends.';
     final requirement = compact
-        ? '$alwaysAccessLabel is required to clock in from this app.'
+        ? '$alwaysAccessLabel is required for shift attendance from this app.'
         : '$alwaysAccessLabel is required when the app is not on screen. '
-            'Without it, you cannot clock in from this app.';
+            'Without it, shift attendance cannot be verified from this app.';
     final steps = switch (phase) {
       LocationPermissionPhase.foregroundOnly =>
         compact
@@ -47,18 +47,24 @@ class ClockInLocationDisclosureDialog extends StatelessWidget {
                 'location to $alwaysAccessLabel.',
       LocationPermissionPhase.backgroundReady =>
         compact
-            ? '$alwaysAccessLabel is enabled. You can clock in now.'
-            : '$alwaysAccessLabel is enabled. You can clock in at your work '
-                'location.',
+            ? '$alwaysAccessLabel is enabled. Location is ready for shift attendance.'
+            : '$alwaysAccessLabel is enabled. Location is ready for shift attendance.',
       LocationPermissionPhase.none =>
         compact
             ? 'Allow $foregroundStepLabel, then $alwaysAccessLabel.'
-            : 'Next: allow $foregroundStepLabel, then $alwaysAccessLabel.',
+            : 'You will be asked in two steps:\n'
+                '1. Allow location ($foregroundStepLabel)\n'
+                '2. Then allow $alwaysAccessLabel access so tracking works when the '
+                'app is in the background or not on screen.',
     };
+    final iosNote = !compact && Platform.isIOS
+        ? '\n\nIf you force-close SmartNPS360 from the app switcher, location '
+            'updates may pause until you open the app again.'
+        : '';
     if (phase == LocationPermissionPhase.backgroundReady) {
-      return '$core\n\n$steps';
+      return '$core\n\n$steps$iosNote';
     }
-    return '$core\n\n$steps\n\n$requirement';
+    return '$core\n\n$steps\n\n$requirement$iosNote';
   }
 
   static Future<bool> show(
@@ -72,12 +78,13 @@ class ClockInLocationDisclosureDialog extends StatelessWidget {
 
     final result = await GlassActionDialog.show(
       context: context,
-      icon: Icons.login_rounded,
-      title: 'Location required to clock in',
+      icon: Icons.location_on_rounded,
+      title: title,
       message: _messageForPhase(compact: compact, phase: phase),
       secondaryLabel: ClockInBlockedDialog.cancelClockInLabel,
       primaryLabel: 'Continue',
       destructiveSecondary: true,
+      messageMaxHeightFactor: _messageMaxHeightFactor,
     );
     return result == true;
   }

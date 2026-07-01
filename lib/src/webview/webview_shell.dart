@@ -20,6 +20,7 @@ import 'js_bridge.dart';
 import '../app/offline_screen.dart';
 import '../widgets/platform_bottom_bar.dart';
 import '../widgets/background_location_required_banner.dart';
+import '../widgets/clock_in_blocked_dialog.dart';
 import '../location/mock_location_detection.dart';
 import '../location/mock_location_guard.dart';
 import '../auth/auth_session_manager.dart';
@@ -33,6 +34,7 @@ import '../utilities/app_lifecycle_resume_gate.dart';
 import '../utilities/permission_settings_helper.dart';
 import '../app/native_theme_controller.dart';
 import '../push/push_notification_service.dart';
+import '../permissions/native_permission_status_service.dart';
 
 class WebViewShell extends StatefulWidget {
   const WebViewShell({super.key});
@@ -203,8 +205,38 @@ class _WebViewShellState extends State<WebViewShell>
 
   void _syncCurrentUriFromWebView(Uri? uri) {
     if (_shouldIgnoreWebViewNavigationEvent(uri)) return;
-    if (_ui.currentUri.value?.toString() == uri.toString()) return;
-    _ui.currentUri.value = uri;
+    final uriText = uri?.toString();
+    if (_ui.currentUri.value?.toString() != uriText) {
+      _ui.currentUri.value = uri;
+    }
+    _recheckBottomBarForUri(uri);
+  }
+
+  void _recheckBottomBarForUri(Uri? uri) {
+    if (_ui.bottomTabNavigationActive.value) return;
+    final tabIndex = _bottomTabIndexFromUri(uri);
+    if (tabIndex != null && _ui.selectedBottomTabIndex.value != tabIndex) {
+      _ui.selectedBottomTabIndex.value = tabIndex;
+    }
+  }
+
+  /// Reads the WebView's live URL and re-syncs bottom-bar visibility.
+  /// Used on both Android and iOS because each platform may deliver navigation
+  /// callbacks in a different order (or skip some during SPA / back navigation).
+  Future<void> _reconcileBottomBarFromWebView(
+    InAppWebViewController controller,
+  ) async {
+    if (_ui.pullToRefreshActive.value) return;
+    try {
+      final currentUrl = await controller.getUrl();
+      _syncCurrentUriFromWebView(currentUrl?.uriValue);
+    } catch (_) {}
+  }
+
+  void _onWebViewUrlCommitted(InAppWebViewController controller, Uri? uri) {
+    if (_ui.pullToRefreshActive.value || _webReloadInProgress) return;
+    _syncCurrentUriFromWebView(uri);
+    unawaited(_reconcileBottomBarFromWebView(controller));
   }
 
   void _finishBottomTabNavigation() {
@@ -230,7 +262,12 @@ class _WebViewShellState extends State<WebViewShell>
     }
     // Android can deliver stale load events for the previous tab after navigation
     // has already finished; ignore anything that would move selection backward.
-    if (!_ui.isNavigating.value && uriTab != selectedTab) {
+    // Only apply while still on a bottom-bar route — after leaving those sections,
+    // every URL change must be processed so the bar can hide and show again.
+    if (!_ui.isNavigating.value &&
+        uriTab != null &&
+        uriTab != selectedTab &&
+        _isBottomBarRoute(_ui.currentUri.value)) {
       return true;
     }
     return false;
@@ -238,8 +275,12 @@ class _WebViewShellState extends State<WebViewShell>
 
   void _restoreUriAfterReload(Uri? uri) {
     if (uri == null || _isAuthRoute(uri)) return;
-    if (_ui.currentUri.value?.toString() == uri.toString()) return;
+    if (_ui.currentUri.value?.toString() == uri.toString()) {
+      _recheckBottomBarForUri(uri);
+      return;
+    }
     _ui.currentUri.value = uri;
+    _recheckBottomBarForUri(uri);
   }
 
   bool _isPullToRefreshReload(Uri? nextUri) {
@@ -317,6 +358,34 @@ class _WebViewShellState extends State<WebViewShell>
       'max_allowed_accuracy_meters': requiredAccuracyMeters,
       'timeout_ms': 0,
     };
+  }
+
+  static String _clockInBackgroundRequiredMessage() =>
+      'Background location (${BackgroundLocationPermissions.alwaysAccessLabel()}) '
+      'is required for shift attendance from the mobile app.';
+
+  static String _enableAlwaysLocationInSettingsMessage() =>
+      'Enable ${BackgroundLocationPermissions.alwaysAccessLabel()} location '
+      'in Settings for shift attendance.';
+
+  static String _enableBackgroundLocationMessage() =>
+      'Enable background location (${BackgroundLocationPermissions.alwaysAccessLabel()}) '
+      'for shift attendance.';
+
+  static String _injectPlatformLocationLabels(String source) {
+    return source
+        .replaceAll(
+          'Background location (Always or Allow all the time) is required for shift attendance from the mobile app.',
+          _clockInBackgroundRequiredMessage(),
+        )
+        .replaceAll(
+          'Enable Always or Allow all the time location in Settings for shift attendance.',
+          _enableAlwaysLocationInSettingsMessage(),
+        )
+        .replaceAll(
+          'Enable background location (Always / Allow all the time) for shift attendance.',
+          _enableBackgroundLocationMessage(),
+        );
   }
 
   static final UserScript _smartNpsBridgeScript = UserScript(
@@ -421,7 +490,106 @@ class _WebViewShellState extends State<WebViewShell>
                 'setPushNotificationsEnabled',
                 { enabled: next }
               );
+            })
+            .then(function (status) {
+              if (
+                window.SmartNPS360 &&
+                typeof window.SmartNPS360.broadcastPushNotificationStatus ===
+                  'function'
+              ) {
+                window.SmartNPS360.broadcastPushNotificationStatus(status);
+              }
+              return status;
             });
+        };
+        window.SmartNPS360._syncAlpinePushNotificationState = function (
+          enabled
+        ) {
+          if (!window.Alpine || typeof window.Alpine.$data !== 'function') {
+            return;
+          }
+          try {
+            var nodes = document.querySelectorAll('[x-data]');
+            for (var i = 0; i < nodes.length; i++) {
+              var data = window.Alpine.$data(nodes[i]);
+              if (
+                data &&
+                Object.prototype.hasOwnProperty.call(
+                  data,
+                  'pushNotificationsEnabled'
+                )
+              ) {
+                data.pushNotificationsEnabled = enabled === true;
+              }
+            }
+          } catch (_) {}
+        };
+        function findAlpinePushNotificationButtons() {
+          var byTitle = document.querySelectorAll(
+            'button[title*="push notification" i]'
+          );
+          if (byTitle.length) {
+            return Array.prototype.slice.call(byTitle);
+          }
+          var buttons = document.querySelectorAll('button[type="button"]');
+          var found = [];
+          for (var i = 0; i < buttons.length; i++) {
+            var btn = buttons[i];
+            var labels = btn.querySelectorAll('span');
+            for (var j = 0; j < labels.length; j++) {
+              var text = String(labels[j].textContent || '').trim();
+              if (/^notifications$/i.test(text)) {
+                found.push(btn);
+                break;
+              }
+            }
+          }
+          return found;
+        }
+        window.SmartNPS360.broadcastPushNotificationStatus = function (
+          status
+        ) {
+          if (!status || status.ok !== true) return;
+          var enabled = status.enabled === true;
+          window.SmartNPS360._syncAlpinePushNotificationState(enabled);
+          var toggles = document.querySelectorAll(
+            '[data-smartnps-push-toggle]'
+          );
+          for (var i = 0; i < toggles.length; i++) {
+            window.SmartNPS360._applyPushNotificationToggleState(
+              toggles[i],
+              status
+            );
+          }
+          var alpineButtons = findAlpinePushNotificationButtons();
+          for (var k = 0; k < alpineButtons.length; k++) {
+            window.SmartNPS360._applyAlpinePushNotificationToggleState(
+              alpineButtons[k],
+              enabled
+            );
+          }
+          window.dispatchEvent(
+            new CustomEvent('smartnps360:push-notifications', {
+              detail: status,
+            })
+          );
+          if (
+            typeof window.SmartNPS360.onPushNotificationStatusChanged ===
+            'function'
+          ) {
+            window.SmartNPS360.onPushNotificationStatusChanged(status);
+          }
+        };
+        window.SmartNPS360.syncPushNotifications = function () {
+          if (!window.SmartNPS360.isNativeApp()) {
+            return Promise.resolve({ ok: false, reason: 'not_native' });
+          }
+          return window.SmartNPS360.getPushNotificationStatus().then(function (
+            status
+          ) {
+            window.SmartNPS360.broadcastPushNotificationStatus(status);
+            return status;
+          });
         };
         window.SmartNPS360._applyPushNotificationToggleState = function (
           input,
@@ -443,19 +611,13 @@ class _WebViewShellState extends State<WebViewShell>
 
           function refresh() {
             if (!window.SmartNPS360.isNativeApp()) return;
-            return window.SmartNPS360.getPushNotificationStatus()
-              .then(function (status) {
-                window.SmartNPS360._applyPushNotificationToggleState(
-                  input,
-                  status
-                );
-                return status;
-              })
-              .catch(function (err) {
-                if (typeof options.onError === 'function') {
-                  options.onError(err);
-                }
-              });
+            return window.SmartNPS360.syncPushNotifications().catch(function (
+              err
+            ) {
+              if (typeof options.onError === 'function') {
+                options.onError(err);
+              }
+            });
           }
 
           if (input.dataset.smartnpsPushBound !== '1') {
@@ -524,22 +686,32 @@ class _WebViewShellState extends State<WebViewShell>
 
           function refresh() {
             if (!window.SmartNPS360.isNativeApp()) return;
-            return window.SmartNPS360.getPushNotificationStatus()
-              .then(function (status) {
-                if (status && status.ok === true) {
-                  window.SmartNPS360._applyAlpinePushNotificationToggleState(
-                    button,
-                    status.enabled === true
-                  );
-                }
-                return status;
-              })
-              .catch(function (err) {
-                if (typeof options.onError === 'function') {
-                  options.onError(err);
-                }
-              });
+            return window.SmartNPS360.syncPushNotifications().catch(function (
+              err
+            ) {
+              if (typeof options.onError === 'function') {
+                options.onError(err);
+              }
+            });
           }
+
+          function patchTogglePushNotifications() {
+            if (window.__smartnps_toggle_push_patched === true) return;
+            window.__smartnps_toggle_push_patched = true;
+            window.togglePushNotifications = function () {
+              if (!window.SmartNPS360.isNativeApp()) {
+                return false;
+              }
+              return window.SmartNPS360.getPushNotificationStatus().then(
+                function (status) {
+                  var next = !(status && status.enabled === true);
+                  return window.SmartNPS360.setPushNotificationsEnabled(next);
+                }
+              );
+            };
+          }
+
+          patchTogglePushNotifications();
 
           button.addEventListener(
             'click',
@@ -552,19 +724,14 @@ class _WebViewShellState extends State<WebViewShell>
               button.disabled = true;
               window.SmartNPS360.setPushNotificationsEnabled(next)
                 .then(function (status) {
-                  if (status && status.ok === true) {
-                    window.SmartNPS360._applyAlpinePushNotificationToggleState(
-                      button,
-                      status.enabled === true
-                    );
-                    if (typeof options.onChanged === 'function') {
-                      options.onChanged(status);
-                    }
-                  } else {
+                  if (!(status && status.ok === true)) {
                     window.SmartNPS360._applyAlpinePushNotificationToggleState(
                       button,
                       current
                     );
+                  }
+                  if (typeof options.onChanged === 'function') {
+                    options.onChanged(status);
                   }
                 })
                 .catch(function (err) {
@@ -589,28 +756,6 @@ class _WebViewShellState extends State<WebViewShell>
 
           refresh();
         };
-        function findAlpinePushNotificationButtons() {
-          var byTitle = document.querySelectorAll(
-            'button[title*="push notification" i]'
-          );
-          if (byTitle.length) {
-            return Array.prototype.slice.call(byTitle);
-          }
-          var buttons = document.querySelectorAll('button[type="button"]');
-          var found = [];
-          for (var i = 0; i < buttons.length; i++) {
-            var btn = buttons[i];
-            var labels = btn.querySelectorAll('span');
-            for (var j = 0; j < labels.length; j++) {
-              var text = String(labels[j].textContent || '').trim();
-              if (/^notifications$/i.test(text)) {
-                found.push(btn);
-                break;
-              }
-            }
-          }
-          return found;
-        }
         function bindPushNotificationToggles() {
           if (!window.SmartNPS360.isNativeApp()) return;
           var toggles = document.querySelectorAll(
@@ -623,6 +768,7 @@ class _WebViewShellState extends State<WebViewShell>
           for (var k = 0; k < alpineButtons.length; k++) {
             window.SmartNPS360.bindAlpinePushNotificationToggle(alpineButtons[k]);
           }
+          window.SmartNPS360.syncPushNotifications();
         }
         function startPushNotificationToggleObserver() {
           if (!window.SmartNPS360.isNativeApp()) return;
@@ -690,10 +836,10 @@ class _WebViewShellState extends State<WebViewShell>
               return {
                 ok: false,
                 reason: gate.reason || 'background_location_required',
-                title: gate.title || 'Background location required to clock in',
+                title: gate.title || 'Background location required for shift attendance',
                 message:
                   gate.message ||
-                  'Background location (Always or Allow all the time) is required to clock in from the mobile app.',
+                  'Background location (Always or Allow all the time) is required for shift attendance from the mobile app.',
                 status: gate
               };
             })
@@ -722,7 +868,7 @@ class _WebViewShellState extends State<WebViewShell>
             button.setAttribute(
               'title',
               (status && status.message) ||
-                'Enable Always or Allow all the time location in Settings to clock in.'
+                'Enable Always or Allow all the time location in Settings for shift attendance.'
             );
             button.classList.add('smartnps-clockin-blocked');
           }
@@ -766,7 +912,7 @@ class _WebViewShellState extends State<WebViewShell>
                     } else {
                       alert(
                         gate.message ||
-                          'Background location is required to clock in.'
+                          'Background location is required for shift attendance.'
                       );
                     }
                     return;
@@ -1157,7 +1303,7 @@ class _WebViewShellState extends State<WebViewShell>
               error(
                 gpsError(
                   'Location permission check is still in progress. ' +
-                    'Enable background location (Always / Allow all the time) to clock in.'
+                    'Enable background location (Always / Allow all the time) for shift attendance.'
                 )
               );
             }
@@ -1179,7 +1325,7 @@ class _WebViewShellState extends State<WebViewShell>
                 if (!gate || gate.ok !== true) {
                   var msg =
                     (gate && gate.message) ||
-                    'Background location (Always / Allow all the time) is required to clock in from the mobile app.';
+                    'Background location (Always or Allow all the time) is required for shift attendance from the mobile app.';
                   throw gpsError(msg);
                 }
               });
@@ -1513,6 +1659,7 @@ class _WebViewShellState extends State<WebViewShell>
     _pendingPushUrl = null;
     debugPrint('[SmartNPS360][Push] navigating to $url');
     await controller.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
+    await _reconcileBottomBarFromWebView(controller);
   }
 
   Future<void> _maybeStartDutyHeartbeat() async {
@@ -1566,6 +1713,44 @@ class _WebViewShellState extends State<WebViewShell>
         '[SmartNPS360] notify web background location status failed: $e',
       );
     }
+    unawaited(NativePermissionStatusService.instance.syncIfChanged());
+  }
+
+  Future<void> _notifyWebPushNotificationStatus({bool reconcile = true}) async {
+    if (!_ui.hasNativeAuthSession.value) return;
+    final controller = _controller;
+    if (controller == null) return;
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+
+    try {
+      final result = reconcile
+          ? await PushNotificationService.instance.reconcileOnAppResume()
+          : await PushNotificationService.instance.getNotificationStatus();
+      final encoded = jsonEncode(result);
+      await controller.evaluateJavascript(
+        source:
+            '''
+        (function () {
+          try {
+            var status = $encoded;
+            if (
+              window.SmartNPS360 &&
+              typeof window.SmartNPS360.broadcastPushNotificationStatus === 'function'
+            ) {
+              window.SmartNPS360.broadcastPushNotificationStatus(status);
+            } else {
+              window.dispatchEvent(
+                new CustomEvent('smartnps360:push-notifications', { detail: status })
+              );
+            }
+          } catch (e) {}
+        })();
+      ''',
+      );
+    } catch (e) {
+      debugPrint('[SmartNPS360][Push] notify web status failed: $e');
+    }
+    unawaited(PushNotificationService.instance.syncPushStateToPermissionApi());
   }
 
   @override
@@ -1579,13 +1764,23 @@ class _WebViewShellState extends State<WebViewShell>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed &&
         !AuthSessionManager.isLoginRoute(_ui.currentUri.value)) {
+      DutyHeartbeatService.instance.reconcileDialogsAfterAppResume();
+      if (Platform.isAndroid) {
+        ClockInBlockedDialog.reconcileAfterAppResume();
+      }
       AppLifecycleResumeGate.notifyResumed();
+      final controller = _controller;
       unawaited(() async {
+        if (controller != null) {
+          await _reconcileBottomBarFromWebView(controller);
+        }
         await _requestNotificationPermissionForRoute(_ui.currentUri.value);
         await _maybeStartDutyHeartbeat();
         await DutyHeartbeatService.instance.recheckOnDutyPrompts();
         await ClockInGateService.instance.recheckAfterAppResume();
         await _notifyWebBackgroundLocationStatus();
+        await _notifyWebPushNotificationStatus();
+        unawaited(NativePermissionStatusService.instance.syncIfChanged());
       }());
     }
   }
@@ -1637,6 +1832,13 @@ class _WebViewShellState extends State<WebViewShell>
         }
         return NavigationActionPolicy.ALLOW;
       }
+
+      // iOS: allow Google Maps iframes/subframes inside smartnps360 pages.
+      if (action.isForMainFrame != true &&
+          AppConfig.isTrustedSubresourceHost(uri.host)) {
+        return NavigationActionPolicy.ALLOW;
+      }
+
       final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
       return opened
           ? NavigationActionPolicy.CANCEL
@@ -1651,12 +1853,45 @@ class _WebViewShellState extends State<WebViewShell>
     return NavigationActionPolicy.CANCEL;
   }
 
+  Future<ServerTrustAuthResponse> _handleServerTrustAuthRequest(
+    URLAuthenticationChallenge challenge,
+  ) async {
+    final host = challenge.protectionSpace.host;
+
+    // App origin — iOS may report sslError UNSPECIFIED even when trust succeeded.
+    if (AppConfig.isAllowedHost(host)) {
+      return ServerTrustAuthResponse(
+        action: ServerTrustAuthResponseAction.PROCEED,
+      );
+    }
+
+    // iOS WKWebView challenges every Google Maps CDN TLS handshake and previously
+    // cancelled all non-smartnps360 hosts. Always proceed for known Google CDNs.
+    if (AppConfig.isTrustedSubresourceHost(host)) {
+      return ServerTrustAuthResponse(
+        action: ServerTrustAuthResponseAction.PROCEED,
+      );
+    }
+
+    final sslError = challenge.protectionSpace.sslError;
+    if (sslError == null) {
+      return ServerTrustAuthResponse(
+        action: ServerTrustAuthResponseAction.PROCEED,
+      );
+    }
+
+    return ServerTrustAuthResponse(
+      action: ServerTrustAuthResponseAction.CANCEL,
+    );
+  }
+
   Future<bool> _onWillPop() async {
     final controller = _controller;
     if (controller == null) return true;
     final canGoBack = await controller.canGoBack();
     if (canGoBack) {
       await controller.goBack();
+      unawaited(_reconcileBottomBarFromWebView(controller));
       return false;
     }
     return true;
@@ -2682,8 +2917,14 @@ class _WebViewShellState extends State<WebViewShell>
 
   UnmodifiableListView<UserScript> _initialUserScripts() {
     final scripts = <UserScript>[
-      _smartNpsBridgeScript,
-      _geolocationScript,
+      UserScript(
+        source: _injectPlatformLocationLabels(_smartNpsBridgeScript.source),
+        injectionTime: _smartNpsBridgeScript.injectionTime,
+      ),
+      UserScript(
+        source: _injectPlatformLocationLabels(_geolocationScript.source),
+        injectionTime: _geolocationScript.injectionTime,
+      ),
       if (Platform.isIOS) _iosPopoverFixScript,
     ];
     return UnmodifiableListView(scripts);
@@ -2865,10 +3106,22 @@ class _WebViewShellState extends State<WebViewShell>
                                           )) {
                                             return;
                                           }
-                                          _syncCurrentUriFromWebView(
+                                          _onWebViewUrlCommitted(
+                                            controller,
                                             url?.uriValue,
                                           );
                                         },
+                                    onPageCommitVisible: (controller, url) {
+                                      if (_shouldIgnoreWebViewNavigationEvent(
+                                        url?.uriValue,
+                                      )) {
+                                        return;
+                                      }
+                                      _onWebViewUrlCommitted(
+                                        controller,
+                                        url?.uriValue,
+                                      );
+                                    },
                                     onProgressChanged: (controller, progress) {
                                       if (_ui.bottomTabNavigationActive.value &&
                                           !_pendingBottomTabLoadStarted) {
@@ -2887,89 +3140,106 @@ class _WebViewShellState extends State<WebViewShell>
                                       final nextUri = url?.uriValue;
                                       // Android fires loadStop for the previous page when
                                       // switching bottom tabs; ignore until the target tab loads.
-                                      if (_shouldIgnoreWebViewNavigationEvent(
-                                        nextUri,
-                                      )) {
-                                        return;
-                                      }
-                                      final isBottomTabNavigationComplete =
-                                          _ui.bottomTabNavigationActive.value &&
-                                          _bottomTabIndexFromUri(nextUri) ==
-                                              _ui.selectedBottomTabIndex.value;
-                                      if (isBottomTabNavigationComplete) {
-                                        _finishBottomTabNavigation();
-                                      }
-                                      final isSamePageReload =
-                                          !isBottomTabNavigationComplete &&
-                                          (_isPullToRefreshReload(nextUri) ||
-                                              _isSamePageReload(
-                                                _uriAtLoadStart,
-                                                nextUri,
-                                              ));
-                                      final preservedUri =
-                                          _pullToRefreshSourceUri ??
-                                          _uriAtLoadStart ??
-                                          _ui.currentUri.value;
-                                      try {
-                                        final webThemeIsDark =
-                                            _hasWebThemeSignal
-                                            ? null
-                                            : await _readWebThemeIsDark(
-                                                controller,
-                                              );
-                                        await _installThemeListener(controller);
-                                        await _logIosWebViewDiagnostics(
-                                          controller,
-                                        );
-                                        await _runIosPopoverFix(controller);
-                                        if (isSamePageReload) {
-                                          _restoreUriAfterReload(preservedUri);
-                                        } else {
-                                          _syncCurrentUriFromWebView(nextUri);
-                                          if (!_ui
-                                              .bottomTabNavigationActive
-                                              .value) {
-                                            _ui.selectedBottomTabIndex.value =
-                                                _bottomTabIndexFromUri(nextUri);
+                                      final ignoreEvent =
+                                          _shouldIgnoreWebViewNavigationEvent(
+                                            nextUri,
+                                          );
+                                      var isSamePageReload = false;
+                                      Uri? preservedUri;
+
+                                      if (!ignoreEvent) {
+                                        final isBottomTabNavigationComplete =
+                                            _ui
+                                                .bottomTabNavigationActive
+                                                .value &&
+                                            _bottomTabIndexFromUri(nextUri) ==
+                                                _ui
+                                                    .selectedBottomTabIndex
+                                                    .value;
+                                        if (isBottomTabNavigationComplete) {
+                                          _finishBottomTabNavigation();
+                                        }
+                                        isSamePageReload =
+                                            !isBottomTabNavigationComplete &&
+                                            (_isPullToRefreshReload(nextUri) ||
+                                                _isSamePageReload(
+                                                  _uriAtLoadStart,
+                                                  nextUri,
+                                                ));
+                                        preservedUri =
+                                            _pullToRefreshSourceUri ??
+                                            _uriAtLoadStart ??
+                                            _ui.currentUri.value;
+                                        try {
+                                          final webThemeIsDark =
+                                              _hasWebThemeSignal
+                                              ? null
+                                              : await _readWebThemeIsDark(
+                                                  controller,
+                                                );
+                                          await _installThemeListener(
+                                            controller,
+                                          );
+                                          await _logIosWebViewDiagnostics(
+                                            controller,
+                                          );
+                                          await _runIosPopoverFix(controller);
+                                          if (isSamePageReload) {
+                                            _restoreUriAfterReload(
+                                              preservedUri,
+                                            );
+                                          } else {
+                                            _syncCurrentUriFromWebView(nextUri);
                                           }
-                                        }
-                                        _ui.firstPageLoaded.value = true;
-                                        _setNativeThemeFromWeb(
-                                          webThemeIsDark ??
-                                              _ui.webPrefersDark.value,
-                                        );
-                                        if (!isSamePageReload) {
-                                          await _maybePerformLogoutForRoute(
-                                            nextUri,
-                                            'logout_route onLoadStop',
+                                          _ui.firstPageLoaded.value = true;
+                                          _setNativeThemeFromWeb(
+                                            webThemeIsDark ??
+                                                _ui.webPrefersDark.value,
                                           );
-                                        }
-                                        await _refreshNativeAuthSessionFromStorage();
-                                        if (AuthSessionManager.isLoginRoute(
+                                          if (!isSamePageReload) {
+                                            await _maybePerformLogoutForRoute(
                                               nextUri,
-                                            ) &&
-                                            !isSamePageReload) {
-                                          await _stopDutyHeartbeat();
-                                        } else {
-                                          await _requestNotificationPermissionForRoute(
-                                            nextUri,
-                                          );
-                                          await _maybeStartDutyHeartbeat();
-                                          await DutyHeartbeatService.instance
-                                              .recheckOnDutyPrompts(
-                                                pageReload: isSamePageReload,
-                                              );
-                                          await _notifyWebBackgroundLocationStatus();
-                                        }
-                                      } finally {
-                                        _clearPullToRefreshState();
-                                        _webReloadInProgress = false;
-                                        _uriAtLoadStart = null;
-                                        if (isSamePageReload) {
-                                          _restoreUriAfterReload(preservedUri);
-                                        }
-                                        _ui.endNavigation();
+                                              'logout_route onLoadStop',
+                                            );
+                                          }
+                                          await _refreshNativeAuthSessionFromStorage();
+                                          if (AuthSessionManager.isLoginRoute(
+                                                nextUri,
+                                              ) &&
+                                              !isSamePageReload) {
+                                            await _stopDutyHeartbeat();
+                                          } else {
+                                            await _requestNotificationPermissionForRoute(
+                                              nextUri,
+                                            );
+                                            await _maybeStartDutyHeartbeat();
+                                            await DutyHeartbeatService.instance
+                                                .recheckOnDutyPrompts(
+                                                  pageReload: isSamePageReload,
+                                                );
+                                            await _notifyWebBackgroundLocationStatus();
+                                            await _notifyWebPushNotificationStatus(
+                                              reconcile: false,
+                                            );
+                                            unawaited(
+                                              NativePermissionStatusService
+                                                  .instance
+                                                  .syncIfChanged(),
+                                            );
+                                          }
+                                        } catch (_) {}
                                       }
+
+                                      _clearPullToRefreshState();
+                                      _webReloadInProgress = false;
+                                      _uriAtLoadStart = null;
+                                      if (!ignoreEvent && isSamePageReload) {
+                                        _restoreUriAfterReload(preservedUri);
+                                      }
+                                      _ui.endNavigation();
+                                      await _reconcileBottomBarFromWebView(
+                                        controller,
+                                      );
                                     },
                                     onReceivedError:
                                         (controller, request, error) async {
@@ -3032,29 +3302,10 @@ class _WebViewShellState extends State<WebViewShell>
                                       );
                                     },
                                     onReceivedServerTrustAuthRequest:
-                                        (controller, challenge) async {
-                                          final host =
-                                              challenge.protectionSpace.host;
-                                          final isAllowed =
-                                              AppConfig.isAllowedHost(host);
-
-                                          // iOS often reports sslError code 4 even when evaluation succeeded
-                                          // ("implicitly trusted, but user intent was not explicitly specified").
-                                          // Proceed for allowed hosts to avoid resource loading issues.
-                                          if (isAllowed) {
-                                            return ServerTrustAuthResponse(
-                                              action:
-                                                  ServerTrustAuthResponseAction
-                                                      .PROCEED,
-                                            );
-                                          }
-
-                                          return ServerTrustAuthResponse(
-                                            action:
-                                                ServerTrustAuthResponseAction
-                                                    .CANCEL,
-                                          );
-                                        },
+                                        (controller, challenge) async =>
+                                            _handleServerTrustAuthRequest(
+                                              challenge,
+                                            ),
                                     onDownloadStartRequest:
                                         (controller, request) async {
                                           final uri = request.url.uriValue;
@@ -3095,7 +3346,8 @@ class _WebViewShellState extends State<WebViewShell>
                               !_ui.showOffline.value &&
                               _ui.firstPageLoaded.value &&
                               _ui.officerLoggedIn.value &&
-                              !_ui.isKeyboardOpen;
+                              !_ui.isKeyboardOpen &&
+                              _isBottomBarRoute(_ui.currentUri.value);
                           if (!showBottomBar) {
                             _logBottomBarHiddenIfNeeded(
                               _bottomBarHideReasons(),
@@ -3193,6 +3445,7 @@ class _WebViewShellState extends State<WebViewShell>
     final nextUri = Uri.tryParse(item.url);
     if (nextUri != null) {
       _ui.currentUri.value = nextUri;
+      _recheckBottomBarForUri(nextUri);
     }
     _ui.beginNavigation();
     if (Platform.isAndroid) {
@@ -3217,9 +3470,10 @@ class _WebViewShellState extends State<WebViewShell>
       reasons.add('officer_not_logged_in');
     }
     if (_ui.isKeyboardOpen) {
-      reasons.add(
-        'native_keyboard_inset(${_ui.flutterKeyboardInset.value})',
-      );
+      reasons.add('native_keyboard_inset(${_ui.flutterKeyboardInset.value})');
+    }
+    if (!_isBottomBarRoute(_ui.currentUri.value)) {
+      reasons.add('not_bottom_bar_route(${_ui.currentUri.value})');
     }
     return reasons;
   }
@@ -3229,19 +3483,13 @@ class _WebViewShellState extends State<WebViewShell>
     final reasonKey = reasons.join('|');
     if (_lastBottomBarHideReason == reasonKey) return;
     _lastBottomBarHideReason = reasonKey;
-    debugPrint(
-      '[SmartNPS360][BottomBar] hidden: ${reasons.join(', ')}',
-    );
+    debugPrint('[SmartNPS360][BottomBar] hidden: ${reasons.join(', ')}');
   }
 }
 
-int _bottomTabIndexFromUri(Uri? uri) {
-  final s = uri?.toString() ?? '';
-  if (s.contains('/officer/timesheet')) return 1;
-  if (s.contains('/officer/dar')) return 2;
-  if (s.contains('/officer/profile')) return 3;
-  return 0;
-}
+bool _isBottomBarRoute(Uri? uri) => _BottomItem.indexForUri(uri) != null;
+
+int? _bottomTabIndexFromUri(Uri? uri) => _BottomItem.indexForUri(uri);
 
 class _NavigationProgressBar extends StatelessWidget {
   const _NavigationProgressBar({required this.progress});
@@ -3309,12 +3557,6 @@ enum _BottomItem {
     'assets/schedule.png',
     'https://smartnps360.com/officer/timesheet/monthly',
   ),
-  dar(
-    'DAR',
-    'assets/reports.png',
-    'assets/reports_outline.png',
-    'https://smartnps360.com/officer/dar',
-  ),
   profile(
     'Profile',
     'assets/avatar.png',
@@ -3332,6 +3574,33 @@ enum _BottomItem {
   final String iconAsset;
   final String iconAssetSelected;
   final String url;
+
+  /// Normalized path for exact bottom-bar route matching (no prefix/subpath match).
+  String get normalizedPath {
+    final uri = Uri.tryParse(url);
+    return _BottomItem.normalizePath(uri) ?? '';
+  }
+
+  static String? normalizePath(Uri? uri) {
+    if (uri == null) return null;
+    if (!AppConfig.isAllowedHost(uri.host)) return null;
+    var path = uri.path.toLowerCase();
+    if (path.isEmpty) return null;
+    if (path.length > 1 && path.endsWith('/')) {
+      path = path.substring(0, path.length - 1);
+    }
+    return path;
+  }
+
+  /// Bottom bar only on the exact tab landing URLs — not sub-pages or siblings.
+  static int? indexForUri(Uri? uri) {
+    final path = normalizePath(uri);
+    if (path == null) return null;
+    for (final item in values) {
+      if (item.normalizedPath == path) return item.index;
+    }
+    return null;
+  }
 }
 
 class _BottomBar extends StatelessWidget {
@@ -3355,7 +3624,6 @@ class _BottomBar extends StatelessWidget {
           iosSymbolName: switch (item) {
             _BottomItem.dashboard => 'house.fill',
             _BottomItem.timesheet => 'calendar',
-            _BottomItem.dar => 'doc.text.image.fill',
             _BottomItem.profile => 'person.crop.circle.fill',
           },
           activeAssetIcon: item.iconAssetSelected,

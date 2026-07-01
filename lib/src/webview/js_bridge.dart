@@ -185,7 +185,8 @@ class JsBridge {
           (options['for_clock_in'] == true ||
               options['purpose'] == 'clockIn' ||
               options['purpose'] == 'clock_in');
-      final bool allowForegroundOnly = options?['allow_foreground_only'] == true;
+      final bool allowForegroundOnly =
+          options?['allow_foreground_only'] == true;
 
       if ((Platform.isAndroid || Platform.isIOS) &&
           ClockInGateService.instance.isPrepareInFlight &&
@@ -194,7 +195,7 @@ class JsBridge {
         return _err(
           'clock_in_gate_in_progress',
           'Location permission check is still in progress. '
-              'Enable background location (Always / Allow all the time) to clock in.',
+              'Enable background location (${BackgroundLocationPermissions.alwaysAccessLabel()}) for shift attendance.',
         );
       }
 
@@ -218,8 +219,7 @@ class JsBridge {
                 gate['reason']?.toString() ?? 'background_location_required',
                 gate['message']?.toString() ??
                     BackgroundLocationPermissions.clockInMessageFor(
-                      await BackgroundLocationPermissions
-                          .settingsDeniedReasonIfAny(),
+                      await BackgroundLocationPermissions.settingsDeniedReasonIfAny(),
                     ),
               );
             }
@@ -254,7 +254,7 @@ class JsBridge {
           !await LocationDisclosureConsent.hasAccepted()) {
         return _err(
           'disclosure_required',
-          'Clock-in location disclosure must be accepted',
+          'Shift attendance location disclosure must be accepted',
         );
       } else {
         final disclosureReady = await DutyHeartbeatService.instance
@@ -384,7 +384,7 @@ class JsBridge {
           ClockInGateService.instance.clearGeoUnlock();
           return _err(
             'mock_location',
-            'Disable mock or fake GPS location before clocking in.',
+            'Disable mock or fake GPS location before verifying shift attendance.',
           );
         }
         ClockInGateService.instance.clearGeoUnlock();
@@ -530,7 +530,9 @@ class JsBridge {
     return PushNotificationService.instance.getNotificationStatus();
   }
 
-  Future<Map<String, dynamic>> setPushNotificationsEnabled([dynamic args]) async {
+  Future<Map<String, dynamic>> setPushNotificationsEnabled([
+    dynamic args,
+  ]) async {
     if (!_isTrustedCaller()) return _deny();
 
     bool? enabled;
@@ -598,9 +600,7 @@ class JsBridge {
       'deniedReason': deniedReason,
       'disclosureAccepted': disclosureAccepted,
       'serviceEnabled': serviceEnabled,
-      'canClockIn': backgroundReady &&
-          disclosureAccepted &&
-          !prepareInFlight,
+      'canClockIn': backgroundReady && disclosureAccepted && !prepareInFlight,
       'prepareInFlight': prepareInFlight,
       'title': backgroundReady
           ? null
