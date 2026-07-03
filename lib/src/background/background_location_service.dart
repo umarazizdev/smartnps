@@ -77,7 +77,7 @@ class BackgroundLocationService {
         ? AndroidSettings(
             accuracy: LocationAccuracy.bestForNavigation,
             distanceFilter: 0,
-            intervalDuration: const Duration(seconds: 1),
+            intervalDuration: const Duration(seconds: 15),
             timeLimit: null,
             forceLocationManager: false,
           )
@@ -103,7 +103,7 @@ class BackgroundLocationService {
 
         final now = DateTime.now();
         final last = lastUploadAt;
-        if (last != null && now.difference(last) < const Duration(seconds: 1)) {
+        if (last != null && now.difference(last) < const Duration(seconds: 15)) {
           return;
         }
         lastUploadAt = now;

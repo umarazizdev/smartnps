@@ -9,6 +9,7 @@ import '../location/mock_location_detection.dart';
 import '../location/mock_location_guard.dart';
 import 'background_location_uploader.dart';
 import 'ios_background_location_notification.dart';
+import 'ios_significant_location_change_service.dart';
 
 /// iOS live location pings run on the main isolate. Background service isolates
 /// cannot safely use flutter_local_notifications (objective_c crash).
@@ -78,14 +79,14 @@ class IosDutyLocationPinger {
     try {
       _subscription = Geolocator.getPositionStream(locationSettings: settings)
           .listen(
-        _onPosition,
-        onError: (Object error) {
-          if (kDebugMode) {
-            debugPrint('[IosDutyLocationPinger] stream error: $error');
-          }
-          unawaited(_onStreamError(error));
-        },
-      );
+            _onPosition,
+            onError: (Object error) {
+              if (kDebugMode) {
+                debugPrint('[IosDutyLocationPinger] stream error: $error');
+              }
+              unawaited(_onStreamError(error));
+            },
+          );
     } catch (e) {
       await stop();
       rethrow;
@@ -93,12 +94,28 @@ class IosDutyLocationPinger {
 
     _running = true;
     _stopping = false;
+    unawaited(_startSignificantLocationChanges());
     _startPeriodicPing();
     if (kDebugMode) {
       debugPrint(
         '[IosDutyLocationPinger] started '
         '(allowBackground=$allowBackground permission=$permission)',
       );
+    }
+  }
+
+  static Future<void> _startSignificantLocationChanges() async {
+    try {
+      final result = await IosSignificantLocationChangeService.start(
+        onLocation: _onPosition,
+      );
+      if (kDebugMode) {
+        debugPrint('[IosDutyLocationPinger] SLC start result: $result');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[IosDutyLocationPinger] SLC start failed: $e');
+      }
     }
   }
 
@@ -233,6 +250,7 @@ class IosDutyLocationPinger {
     _running = false;
     _pingTimer?.cancel();
     _pingTimer = null;
+    await IosSignificantLocationChangeService.stop(drainPending: true);
     await _subscription?.cancel();
     _subscription = null;
     await _uploader?.stop();
@@ -262,6 +280,7 @@ class IosDutyLocationPinger {
     _running = false;
     _pingTimer?.cancel();
     _pingTimer = null;
+    await IosSignificantLocationChangeService.stop();
     await _subscription?.cancel();
     _subscription = null;
     await _uploader?.stopCollectingOnly();
@@ -272,9 +291,7 @@ class IosDutyLocationPinger {
       await IosBackgroundLocationNotification.dismiss();
     } catch (e) {
       if (kDebugMode) {
-        debugPrint(
-          '[IosDutyLocationPinger] dismiss notification failed: $e',
-        );
+        debugPrint('[IosDutyLocationPinger] dismiss notification failed: $e');
       }
     }
 
