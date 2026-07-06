@@ -19,15 +19,15 @@ class MockLocationGuard {
   static int _pendingShowAttempts = 0;
 
   static void ensureBackgroundListenerInstalled() {
-    _backgroundSub ??= FlutterBackgroundService().on('mock_location').listen(
-      (event) {
-        if (event == null) return;
-        maybeShowDialog(
-          isMocked: event['isMocked'] == true,
-          isSimulatedBySoftware: event['isSimulatedBySoftware'] == true,
-        );
-      },
-    );
+    _backgroundSub ??= FlutterBackgroundService().on('mock_location').listen((
+      event,
+    ) {
+      if (event == null) return;
+      maybeShowDialog(
+        isMocked: event['isMocked'] == true,
+        isSimulatedBySoftware: event['isSimulatedBySoftware'] == true,
+      );
+    });
   }
 
   static void maybeShowDialogForPosition(Position position) {
@@ -129,7 +129,8 @@ class MockLocationGuard {
     if (_dialogVisible) return;
 
     final navigator = AppNavigator.key.currentState;
-    final context = navigator?.overlay?.context ?? AppNavigator.key.currentContext;
+    final context =
+        navigator?.overlay?.context ?? AppNavigator.key.currentContext;
     if (context == null || !context.mounted) {
       if (_pendingShowAttempts >= 8) return;
       _pendingShowAttempts++;

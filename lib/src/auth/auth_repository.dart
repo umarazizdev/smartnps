@@ -1,6 +1,9 @@
-import 'package:flutter/foundation.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'dart:async';
 import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import 'auth_state.dart';
 import 'location_disclosure_account_sync.dart';
@@ -10,7 +13,18 @@ class AuthRepository {
 
   static final AuthRepository instance = AuthRepository._();
 
-  static const _storage = FlutterSecureStorage();
+  /// Allows Keychain reads while the screen is locked (after first unlock).
+  static const _storage = FlutterSecureStorage(
+    iOptions: IOSOptions(
+      accessibility: KeychainAccessibility.first_unlock_this_device,
+    ),
+    mOptions: MacOsOptions(
+      accessibility: KeychainAccessibility.first_unlock_this_device,
+    ),
+  );
+
+  static String? _cachedAccessToken;
+  static bool _accessTokenAccessibilityMigrated = false;
 
   static const _kAccessToken = 'auth.access_token';
   static const _kRefreshToken = 'auth.refresh_token';
@@ -25,6 +39,8 @@ class AuthRepository {
     await _storage.write(key: _kUserJson, value: _safeEncode(user));
     if (accessToken != null && accessToken.isNotEmpty) {
       await _storage.write(key: _kAccessToken, value: accessToken);
+      _cachedAccessToken = accessToken;
+      _accessTokenAccessibilityMigrated = true;
     }
     if (refreshToken != null && refreshToken.isNotEmpty) {
       await _storage.write(key: _kRefreshToken, value: refreshToken);
@@ -51,6 +67,8 @@ class AuthRepository {
     await _storage.delete(key: _kAccessToken);
     await _storage.delete(key: _kRefreshToken);
     await _storage.delete(key: _kUserJson);
+    _cachedAccessToken = null;
+    _accessTokenAccessibilityMigrated = false;
     await setOfficerLoggedIn(false);
     LocationDisclosureAccountSync.onLoggedOut();
     debugPrint('[SmartNPS360][AuthRepo] cleared auth (secure storage)');
@@ -59,10 +77,63 @@ class AuthRepository {
   Future<void> saveAccessToken(String token) async {
     if (token.isEmpty) return;
     await _storage.write(key: _kAccessToken, value: token);
+    _cachedAccessToken = token;
+    _accessTokenAccessibilityMigrated = true;
     debugPrint('[SmartNPS360][AuthRepo] saved access token (secure storage)');
   }
 
-  Future<String?> getAccessToken() => _storage.read(key: _kAccessToken);
+  /// Preloads the access token while the device is unlocked (e.g. app launch).
+  Future<void> warmAccessTokenCache() async {
+    await getAccessToken();
+  }
+
+  Future<String?> getAccessToken() async {
+    final cached = _cachedAccessToken;
+    if (cached != null && cached.isNotEmpty) {
+      return cached;
+    }
+
+    try {
+      final token = await _storage.read(key: _kAccessToken);
+      if (token == null || token.isEmpty) {
+        _cachedAccessToken = null;
+        return null;
+      }
+
+      _cachedAccessToken = token;
+      unawaited(_migrateAccessTokenAccessibility(token));
+      return token;
+    } on PlatformException catch (e) {
+      if (_isKeychainInteractionNotAllowed(e)) {
+        return _cachedAccessToken;
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> _migrateAccessTokenAccessibility(String token) async {
+    if (_accessTokenAccessibilityMigrated) return;
+
+    try {
+      await _storage.write(key: _kAccessToken, value: token);
+      _accessTokenAccessibilityMigrated = true;
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint(
+          '[SmartNPS360][AuthRepo] access token accessibility migration failed: $e',
+        );
+      }
+    }
+  }
+
+  static bool _isKeychainInteractionNotAllowed(PlatformException e) {
+    final code = e.code.trim();
+    if (code == '-25308') return true;
+
+    final details = e.details?.toString() ?? '';
+    return details.contains('-25308') ||
+        (e.message?.contains('User interaction is not allowed') ?? false);
+  }
 
   Future<String?> getRefreshToken() => _storage.read(key: _kRefreshToken);
 

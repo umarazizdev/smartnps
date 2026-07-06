@@ -30,6 +30,7 @@ import '../api/api_client.dart';
 import '../background/duty_heartbeat_service.dart';
 import '../background/clock_in_gate_service.dart';
 import '../background/background_location_permissions.dart';
+import '../background/ios_duty_location_pinger.dart';
 import '../utilities/app_lifecycle_resume_gate.dart';
 import '../utilities/permission_settings_helper.dart';
 import '../app/native_theme_controller.dart';
@@ -1777,6 +1778,9 @@ class _WebViewShellState extends State<WebViewShell>
         await _requestNotificationPermissionForRoute(_ui.currentUri.value);
         await _maybeStartDutyHeartbeat();
         await DutyHeartbeatService.instance.recheckOnDutyPrompts();
+        if (Platform.isIOS) {
+          await IosDutyLocationPinger.flushPendingBatchNow();
+        }
         await ClockInGateService.instance.recheckAfterAppResume();
         await _notifyWebBackgroundLocationStatus();
         await _notifyWebPushNotificationStatus();
