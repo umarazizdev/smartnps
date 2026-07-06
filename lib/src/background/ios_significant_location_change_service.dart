@@ -27,16 +27,19 @@ class IosSignificantLocationChangeService {
     if (!Platform.isIOS) return {'ok': true, 'running': false};
 
     _onLocation = onLocation;
-    _subscription ??= _events.receiveBroadcastStream().listen(
-      (event) {
-        unawaited(_handlePayload(event));
-      },
-      onError: (Object error) {
-        if (kDebugMode) {
-          debugPrint('[IosSLC] event stream error: $error');
-        }
-      },
-    );
+
+    if (!await _ensureNativeChannelsReady()) {
+      return {
+        'ok': false,
+        'running': false,
+        'error': {
+          'code': 'missing_plugin',
+          'message': 'iOS SLC native channel is unavailable',
+        },
+      };
+    }
+
+    await _ensureEventSubscription();
 
     final result = await _invokeMap('startMonitoring');
     _nativeMonitoring = result['running'] == true;
@@ -47,9 +50,17 @@ class IosSignificantLocationChangeService {
 
   static Future<void> drainPendingLocations() async {
     if (!Platform.isIOS) return;
-    final pending = await _channel.invokeMethod<List<dynamic>>(
-      'drainPendingLocations',
-    );
+    final List<dynamic>? pending;
+    try {
+      pending = await _channel.invokeMethod<List<dynamic>>(
+        'drainPendingLocations',
+      );
+    } on MissingPluginException catch (e) {
+      if (kDebugMode) {
+        debugPrint('[IosSLC] drain skipped; native channel unavailable: $e');
+      }
+      return;
+    }
     if (pending == null || pending.isEmpty) return;
 
     for (final payload in pending) {
@@ -85,8 +96,57 @@ class IosSignificantLocationChangeService {
     _nativeMonitoring = false;
   }
 
+  static Future<bool> _ensureNativeChannelsReady({int maxAttempts = 15}) async {
+    for (var attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        await _channel.invokeMethod<dynamic>('isMonitoring');
+        return true;
+      } on MissingPluginException {
+        if (attempt == maxAttempts - 1) break;
+        await Future<void>.delayed(Duration(milliseconds: 100 * (attempt + 1)));
+      }
+    }
+    return false;
+  }
+
+  static Future<void> _ensureEventSubscription() async {
+    if (_subscription != null) return;
+
+    try {
+      _subscription = _events.receiveBroadcastStream().listen(
+        (event) {
+          unawaited(_handlePayload(event));
+        },
+        onError: (Object error) {
+          if (kDebugMode) {
+            debugPrint('[IosSLC] event stream error: $error');
+          }
+        },
+      );
+    } on MissingPluginException catch (e) {
+      if (kDebugMode) {
+        debugPrint('[IosSLC] event stream unavailable: $e');
+      }
+    }
+  }
+
   static Future<Map<String, dynamic>> _invokeMap(String method) async {
-    final value = await _channel.invokeMethod<dynamic>(method);
+    final dynamic value;
+    try {
+      value = await _channel.invokeMethod<dynamic>(method);
+    } on MissingPluginException catch (e) {
+      if (kDebugMode) {
+        debugPrint('[IosSLC] $method skipped; native channel unavailable: $e');
+      }
+      return {
+        'ok': false,
+        'running': false,
+        'error': {
+          'code': 'missing_plugin',
+          'message': 'iOS SLC native channel is unavailable',
+        },
+      };
+    }
     if (value is Map) {
       return Map<String, dynamic>.from(value);
     }
@@ -102,7 +162,7 @@ class IosSignificantLocationChangeService {
 
     if (kDebugMode) {
       debugPrint(
-        '[IosSLC] location lat=${position.latitude} '
+        '[IosSLC] wake event lat=${position.latitude} '
         'lng=${position.longitude} acc=${position.accuracy} '
         'ts=${position.timestamp.toIso8601String()}',
       );

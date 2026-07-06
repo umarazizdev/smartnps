@@ -4,7 +4,9 @@ import UIKit
 import UserNotifications
 
 @main
-@objc class AppDelegate: FlutterAppDelegate, CLLocationManagerDelegate, FlutterStreamHandler {
+@objc class AppDelegate: FlutterAppDelegate, CLLocationManagerDelegate, FlutterStreamHandler,
+  FlutterImplicitEngineDelegate
+{
   private let settingsChannel = "com.smartnps360.app/settings"
   private let slcChannelName = "com.smartnps360.app/ios_slc"
   private let slcEventChannelName = "com.smartnps360.app/ios_slc_events"
@@ -23,30 +25,67 @@ import UserNotifications
       UNUserNotificationCenter.current().delegate = self
     }
 
-    GeneratedPluginRegistrant.register(with: self)
-    registerSettingsChannelIfNeeded()
-    registerSlcChannelIfNeeded()
+    let didLaunch = super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    registerPlatformChannelsIfNeeded()
     restoreSlcMonitoringIfNeeded(launchOptions: launchOptions)
     application.registerForRemoteNotifications()
 
-    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    return didLaunch
+  }
+
+  func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
+    GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    registerPlatformChannels(
+      with: engineBridge.applicationRegistrar.messenger()
+    )
   }
 
   override func applicationDidBecomeActive(_ application: UIApplication) {
-    registerSettingsChannelIfNeeded()
-    registerSlcChannelIfNeeded()
+    registerPlatformChannelsIfNeeded()
     super.applicationDidBecomeActive(application)
   }
 
-  private func registerSettingsChannelIfNeeded() {
-    guard !settingsChannelRegistered else { return }
-    guard let controller = window?.rootViewController as? FlutterViewController else {
+  /// Registers custom channels on the active Flutter engine messenger.
+  func registerPlatformChannels(with messenger: FlutterBinaryMessenger) {
+    registerSettingsChannelIfNeeded(with: messenger)
+    registerSlcChannelIfNeeded(with: messenger)
+  }
+
+  /// Fallback for engines created before implicit-engine callback wiring.
+  func registerPlatformChannelsIfNeeded() {
+    if slcChannelRegistered && settingsChannelRegistered {
       return
     }
+    if let messenger = flutterViewController()?.binaryMessenger {
+      registerPlatformChannels(with: messenger)
+    }
+  }
+
+  private func flutterViewController() -> FlutterViewController? {
+    if let controller = window?.rootViewController as? FlutterViewController {
+      return controller
+    }
+
+    if #available(iOS 13.0, *) {
+      for scene in UIApplication.shared.connectedScenes {
+        guard let windowScene = scene as? UIWindowScene else { continue }
+        for sceneWindow in windowScene.windows {
+          if let controller = sceneWindow.rootViewController as? FlutterViewController {
+            return controller
+          }
+        }
+      }
+    }
+
+    return nil
+  }
+
+  private func registerSettingsChannelIfNeeded(with messenger: FlutterBinaryMessenger) {
+    guard !settingsChannelRegistered else { return }
 
     let channel = FlutterMethodChannel(
       name: settingsChannel,
-      binaryMessenger: controller.binaryMessenger
+      binaryMessenger: messenger
     )
     channel.setMethodCallHandler { [weak self] call, result in
       switch call.method {
@@ -59,15 +98,12 @@ import UserNotifications
     settingsChannelRegistered = true
   }
 
-  private func registerSlcChannelIfNeeded() {
+  private func registerSlcChannelIfNeeded(with messenger: FlutterBinaryMessenger) {
     guard !slcChannelRegistered else { return }
-    guard let controller = window?.rootViewController as? FlutterViewController else {
-      return
-    }
 
     let channel = FlutterMethodChannel(
       name: slcChannelName,
-      binaryMessenger: controller.binaryMessenger
+      binaryMessenger: messenger
     )
     channel.setMethodCallHandler { [weak self] call, result in
       guard let self = self else {
@@ -96,7 +132,7 @@ import UserNotifications
 
     let eventChannel = FlutterEventChannel(
       name: slcEventChannelName,
-      binaryMessenger: controller.binaryMessenger
+      binaryMessenger: messenger
     )
     eventChannel.setStreamHandler(self)
     slcChannelRegistered = true

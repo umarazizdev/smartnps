@@ -7,6 +7,7 @@ import 'package:geolocator/geolocator.dart';
 
 import '../location/mock_location_detection.dart';
 import '../auth/auth_repository.dart';
+import 'background_location_accuracy.dart';
 import 'background_location_uploader.dart';
 
 @pragma('vm:entry-point')
@@ -77,7 +78,7 @@ class BackgroundLocationService {
         ? AndroidSettings(
             accuracy: LocationAccuracy.bestForNavigation,
             distanceFilter: 0,
-            intervalDuration: const Duration(seconds: 15),
+            intervalDuration: BackgroundLocationUploader.pingInterval,
             timeLimit: null,
             forceLocationManager: false,
           )
@@ -95,6 +96,17 @@ class BackgroundLocationService {
       (pos) async {
         if (stopping) return;
 
+        if (!BackgroundLocationAccuracy.isAcceptable(pos)) {
+          if (kDebugMode) {
+            // ignore: avoid_print
+            print(
+              '[BackgroundLocationService] skipped inaccurate fix '
+              'acc=${pos.accuracy}m',
+            );
+          }
+          return;
+        }
+
         final token = await AuthRepository.instance.getAccessToken();
         if (token == null || token.isEmpty) {
           await stop();
@@ -103,7 +115,8 @@ class BackgroundLocationService {
 
         final now = DateTime.now();
         final last = lastUploadAt;
-        if (last != null && now.difference(last) < const Duration(seconds: 15)) {
+        if (last != null &&
+            now.difference(last) < BackgroundLocationUploader.pingInterval) {
           return;
         }
         lastUploadAt = now;

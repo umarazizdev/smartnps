@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:dio/dio.dart';
@@ -10,6 +11,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../api/api_client.dart';
 import '../auth/auth_repository.dart';
+import 'background_location_accuracy.dart';
 import '../utilities/app_config.dart';
 import '../utilities/device_identity.dart';
 
@@ -22,7 +24,10 @@ class BackgroundLocationUploader {
   final Dio _dio;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
   static const String _boxName = 'gps_points';
+  static const String _fallbackQueueFileName = 'gps_points_fallback.jsonl';
   Box<Map>? _box;
+  File? _fallbackQueueFile;
+  int _fallbackQueueCount = 0;
   String? _deviceId;
 
   Timer? _batchTimer;
@@ -32,8 +37,13 @@ class BackgroundLocationUploader {
   DateTime? _lastSuccessfulBatchFlushAt;
   DateTime? _batchTimerStartedAt;
   final List<Map<String, dynamic>> _memoryBatch = [];
+  int _nextQueueSeqId = 0;
+  int _batchRunNumber = 0;
+  int _totalBatchPointsQueued = 0;
+  int _totalBatchPointsUploaded = 0;
 
   static const int _maxBatchSize = 20;
+  static const Duration pingInterval = Duration(seconds: 3);
   static const Duration _batchEvery = Duration(minutes: 1);
   static const Duration _maxBackoff = Duration(minutes: 2);
   static const Duration logoutFlushBudget = Duration(seconds: 15);
@@ -52,21 +62,167 @@ class BackgroundLocationUploader {
     if (_box != null) return;
     try {
       final dir = await getApplicationDocumentsDirectory();
-      Hive.init(dir.path);
-      _box = await Hive.openBox<Map>(_boxName);
+      _fallbackQueueFile ??= File('${dir.path}/$_fallbackQueueFileName');
+      _fallbackQueueCount = await _countFallbackQueue();
+
+      try {
+        Hive.init(dir.path);
+        _box = await Hive.openBox<Map>(_boxName);
+        await _migrateFallbackQueueToHive();
+      } catch (e) {
+        if (kDebugMode) {
+          debugPrint(
+            '[BackgroundLocationUploader] Hive storage init skipped '
+            '(file fallback enabled): $e',
+          );
+        }
+      }
     } catch (e) {
       if (kDebugMode) {
         debugPrint(
-          '[BackgroundLocationUploader] storage init skipped (ping still works): $e',
+          '[BackgroundLocationUploader] storage path init failed '
+          '(memory fallback only): $e',
         );
       }
     }
+  }
+
+  Future<int> _countFallbackQueue() async {
+    final file = _fallbackQueueFile;
+    if (file == null || !await file.exists()) return 0;
+    return file
+        .openRead()
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())
+        .where((line) => line.trim().isNotEmpty)
+        .length;
+  }
+
+  Future<List<Map<String, dynamic>>> _readFallbackQueue() async {
+    final file = _fallbackQueueFile;
+    if (file == null || !await file.exists()) return const [];
+
+    final points = <Map<String, dynamic>>[];
+    final seenIds = <String>{};
+    try {
+      final lines = file
+          .openRead()
+          .transform(utf8.decoder)
+          .transform(const LineSplitter());
+      await for (final line in lines) {
+        if (line.trim().isEmpty) continue;
+        try {
+          final decoded = jsonDecode(line);
+          if (decoded is! Map) continue;
+          final point = _sanitizePoint(Map<String, dynamic>.from(decoded));
+          if (point.isEmpty) continue;
+          _normalizeLocalPointKey(point);
+          final id = point['_local_point_key']?.toString();
+          if (id != null && id.isNotEmpty && !seenIds.add(id)) continue;
+          points.add(point);
+        } catch (_) {}
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint(
+          '[BackgroundLocationUploader] fallback queue read failed: $e',
+        );
+      }
+    }
+    return points;
+  }
+
+  Future<void> _rewriteFallbackQueue(List<Map<String, dynamic>> points) async {
+    final file = _fallbackQueueFile;
+    if (file == null) {
+      _fallbackQueueCount = 0;
+      return;
+    }
+
+    if (points.isEmpty) {
+      if (await file.exists()) {
+        await file.delete();
+      }
+      _fallbackQueueCount = 0;
+      return;
+    }
+
+    final sink = file.openWrite(mode: FileMode.write);
+    try {
+      for (final point in points) {
+        sink.writeln(jsonEncode(point));
+      }
+    } finally {
+      await sink.close();
+    }
+    _fallbackQueueCount = points.length;
+  }
+
+  Future<void> _appendFallbackPoint(Map<String, dynamic> point) async {
+    final file = _fallbackQueueFile;
+    if (file == null) {
+      throw StateError('Fallback queue file is unavailable');
+    }
+
+    final sink = file.openWrite(mode: FileMode.append);
+    try {
+      sink.writeln(jsonEncode(point));
+    } finally {
+      await sink.close();
+    }
+
+    _fallbackQueueCount++;
+    if (_fallbackQueueCount > 2000) {
+      final points = await _readFallbackQueue();
+      await _rewriteFallbackQueue(
+        points.length > 2000 ? points.sublist(points.length - 2000) : points,
+      );
+    }
+  }
+
+  Future<void> _migrateFallbackQueueToHive() async {
+    final box = _box;
+    if (box == null || _fallbackQueueCount == 0) return;
+
+    final fallbackPoints = await _readFallbackQueue();
+    if (fallbackPoints.isEmpty) {
+      await _rewriteFallbackQueue(const []);
+      return;
+    }
+
+    final existingIds = box.values
+        .map(
+          (value) =>
+              value['_local_point_key']?.toString() ??
+              value['client_point_id']?.toString(),
+        )
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toSet();
+
+    for (final point in fallbackPoints) {
+      _normalizeLocalPointKey(point);
+      _assignQueueSeq(point);
+      final id = point['_local_point_key']?.toString();
+      if (id != null && id.isNotEmpty && existingIds.contains(id)) continue;
+      await box.add(point);
+      if (id != null && id.isNotEmpty) existingIds.add(id);
+    }
+
+    await _rewriteFallbackQueue(const []);
   }
 
   void start() {
     _batchTimerStartedAt ??= DateTime.now();
 
     _batchTimer ??= Timer.periodic(_batchEvery, (_) => unawaited(flushBatch()));
+
+    if (kDebugMode) {
+      _batchConsoleLog(
+        'batch tracking started interval=${_batchEvery.inSeconds}s '
+        'min_points=2 max_batch=$_maxBatchSize',
+      );
+    }
 
     _connectivitySub ??= Connectivity().onConnectivityChanged.listen((results) {
       final hasNetwork = results.any((r) => r != ConnectivityResult.none);
@@ -134,6 +290,7 @@ class BackgroundLocationUploader {
     if (box != null && box.isNotEmpty) {
       await box.clear();
     }
+    await _rewriteFallbackQueue(const []);
     if (kDebugMode && discarded > 0) {
       debugPrint(
         '[BackgroundLocationUploader] discarded $discarded queued GPS point(s)',
@@ -182,6 +339,16 @@ class BackgroundLocationUploader {
     await uploader.drainAndDiscardOnLogout(timeout: timeout);
   }
 
+  /// Opens shared storage and retries queued GPS batches without discarding
+  /// leftovers. Useful when the app resumes after iOS background suspension.
+  static Future<void> flushPendingBatchesStatic({
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    final uploader = BackgroundLocationUploader();
+    await uploader.init();
+    await uploader.flushAllPendingBatchesBounded(timeout: timeout);
+  }
+
   Future<void> stop() async {
     _batchTimer?.cancel();
     _batchTimer = null;
@@ -206,9 +373,13 @@ class BackgroundLocationUploader {
   ///
   /// Ping uploads are sent live and are not persisted.
   Future<void> add(Position position) async {
+    if (!BackgroundLocationAccuracy.isAcceptable(position)) return;
     if (!await _hasUploadAuth()) return;
     await _ensureStorage();
     final point = _sanitizePoint(_buildPoint(position));
+    _assignQueueSeq(point);
+    final newPointId = _queueSeqLabel(point);
+    _totalBatchPointsQueued++;
     final box = _box;
     if (box != null) {
       await box.add(point);
@@ -218,13 +389,40 @@ class BackgroundLocationUploader {
         await box.deleteAt(0);
       }
 
+      if (kDebugMode) {
+        _logBatchQueueSnapshot(
+          'received',
+          newPointId: newPointId,
+          detail: 'queued for batch upload',
+        );
+      }
+
       await _maybeFlushBatchAfterAdd();
       return;
     }
 
-    _memoryBatch.add(point);
-    while (_memoryBatch.length > 2000) {
-      _memoryBatch.removeAt(0);
+    try {
+      await _appendFallbackPoint(point);
+      _memoryBatch.clear();
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint(
+          '[BackgroundLocationUploader] fallback file append failed '
+          '(memory fallback used): $e',
+        );
+      }
+      _memoryBatch.add(point);
+      while (_memoryBatch.length > 2000) {
+        _memoryBatch.removeAt(0);
+      }
+    }
+
+    if (kDebugMode) {
+      _logBatchQueueSnapshot(
+        'received',
+        newPointId: newPointId,
+        detail: 'queued for batch upload',
+      );
     }
     await _maybeFlushBatchAfterAdd();
   }
@@ -232,7 +430,7 @@ class BackgroundLocationUploader {
   int _queuedPointCount() {
     final box = _box;
     if (box != null) return box.length;
-    return _memoryBatch.length;
+    return _fallbackQueueCount + _memoryBatch.length;
   }
 
   /// Flushes on full batch (20) or when the queue has 2+ points and the
@@ -246,6 +444,19 @@ class BackgroundLocationUploader {
     }
     if (_isBatchIntervalElapsed()) {
       await flushBatch();
+      return;
+    }
+
+    if (kDebugMode) {
+      final anchor = _lastSuccessfulBatchFlushAt ?? _batchTimerStartedAt;
+      final elapsedSec = anchor == null
+          ? 0
+          : DateTime.now().difference(anchor).inSeconds;
+      _logBatchQueueSnapshot(
+        'hold',
+        detail:
+            'waiting_for_1min_interval elapsed=${elapsedSec}s/${_batchEvery.inSeconds}s',
+      );
     }
   }
 
@@ -262,9 +473,10 @@ class BackgroundLocationUploader {
 
   /// Sends the current point to the ping API immediately (no local storage).
   Future<void> pingNow(Position position) async {
+    if (!BackgroundLocationAccuracy.isAcceptable(position)) return;
     if (!await _hasUploadAuth()) return;
     _deviceId ??= await DeviceIdentity.getDeviceId();
-    final point = _sanitizePoint(_buildPoint(position));
+    final point = _apiPoint(_sanitizePoint(_buildPoint(position)));
 
     final Options options = Options(
       headers: const {'Accept': 'application/json'},
@@ -327,6 +539,7 @@ class BackgroundLocationUploader {
       'platform': DeviceIdentity.platformName(),
       'device_id': _deviceId,
       'deviceId': _deviceId,
+      '_local_point_key': _localPointKey(position, recordedAtUtc),
       'latitude': position.latitude,
       'longitude': position.longitude,
       'accuracy': position.accuracy,
@@ -342,6 +555,36 @@ class BackgroundLocationUploader {
       'isSimulatedBySoftware': isSimulatedBySoftware,
       'floor': _numOrNull(() => p.floor),
     };
+  }
+
+  String _localPointKey(Position position, DateTime recordedAtUtc) {
+    final device = _deviceId ?? 'unknown-device';
+    return [
+      AppConfig.appName,
+      DeviceIdentity.platformName(),
+      device,
+      recordedAtUtc.millisecondsSinceEpoch,
+      position.latitude.toStringAsFixed(7),
+      position.longitude.toStringAsFixed(7),
+    ].join(':');
+  }
+
+  void _normalizeLocalPointKey(Map<String, dynamic> point) {
+    final legacy = point.remove('client_point_id')?.toString();
+    final current = point['_local_point_key']?.toString();
+    if ((current == null || current.isEmpty) &&
+        legacy != null &&
+        legacy.isNotEmpty) {
+      point['_local_point_key'] = legacy;
+    }
+  }
+
+  Map<String, dynamic> _apiPoint(Map<String, dynamic> point) {
+    final apiPoint = Map<String, dynamic>.from(point);
+    apiPoint.remove('_local_point_key');
+    apiPoint.remove('client_point_id');
+    apiPoint.remove('_queue_seq');
+    return apiPoint;
   }
 
   T? _safeRead<T>(T Function() read) {
@@ -390,22 +633,61 @@ class BackgroundLocationUploader {
   }
 
   Future<void> flushBatch({bool force = false}) async {
-    if (_isFlushing) return;
+    if (_isFlushing) {
+      if (kDebugMode && _queuedPointCount() > 0) {
+        _logBatchQueueSnapshot(
+          'flush_skipped',
+          detail: _pendingQueueReason(force: force),
+        );
+      }
+      return;
+    }
     if (!force) {
       final nextAllowed = _nextBatchAllowedAt;
-      if (nextAllowed != null && DateTime.now().isBefore(nextAllowed)) return;
+      if (nextAllowed != null && DateTime.now().isBefore(nextAllowed)) {
+        if (kDebugMode && _queuedPointCount() > 0) {
+          final waitSec = nextAllowed.difference(DateTime.now()).inSeconds;
+          _logBatchQueueSnapshot(
+            'flush_skipped',
+            detail:
+                'backoff_retry wait=${waitSec}s (${_pendingQueueReason(force: force)})',
+          );
+        }
+        return;
+      }
     }
 
     final box = _box;
     if (box != null) {
       if (box.isEmpty) return;
-      if (!force && box.length < 2) return;
+      if (!force && box.length < 2) {
+        if (kDebugMode) {
+          _logBatchQueueSnapshot(
+            'flush_skipped',
+            detail: _pendingQueueReason(force: force),
+          );
+        }
+        return;
+      }
       await _flushHiveBatch(box, force: force);
       return;
     }
 
+    if (_fallbackQueueCount > 0) {
+      await _flushFallbackFileBatch(force: force);
+      return;
+    }
+
     if (_memoryBatch.isEmpty) return;
-    if (!force && _memoryBatch.length < 2) return;
+    if (!force && _memoryBatch.length < 2) {
+      if (kDebugMode) {
+        _logBatchQueueSnapshot(
+          'flush_skipped',
+          detail: _pendingQueueReason(force: force),
+        );
+      }
+      return;
+    }
     await _flushMemoryBatch(force: force);
   }
 
@@ -453,14 +735,44 @@ class BackgroundLocationUploader {
     }
   }
 
+  Future<void> _flushFallbackFileBatch({bool force = false}) async {
+    _isFlushing = true;
+    final points = await _readFallbackQueue();
+    final batch = points.take(_maxBatchSize).toList(growable: false);
+    if (batch.isEmpty || (!force && batch.length < 2)) {
+      _fallbackQueueCount = points.length;
+      _isFlushing = false;
+      return;
+    }
+
+    try {
+      await _postBatch(batch);
+      await _rewriteFallbackQueue(points.skip(batch.length).toList());
+    } finally {
+      _isFlushing = false;
+    }
+  }
+
   Future<void> _postBatch(List<Map<String, dynamic>> batch) async {
+    final apiBatch = batch.map(_apiPoint).toList(growable: false);
+    final batchRun = ++_batchRunNumber;
+    final uploadingIds = _formatQueueSeqLabels(batch);
+    final queuedBeforeUpload = _queuedPointCount();
     if (kDebugMode) {
+      _batchConsoleLog(
+        'batchRun=$batchRun START upload_count=${batch.length} '
+        'upload_ids=$uploadingIds queued_before=$queuedBeforeUpload '
+        '${_batchTotalsLabel()}',
+      );
       debugPrint(
-        '[BackgroundLocationUploader] flushBatch count=${batch.length}',
+        '[BackgroundLocationUploader] flushBatch count=${apiBatch.length}',
       );
       debugPrint('[BackgroundLocationUploader] POST ${_batchUri()} (batch)');
-      _logBatchTimestampSummary(batch);
-      _logFullJson('batch request', {'points': batch});
+      _logBatchTimestampSummary(apiBatch);
+      if (kDebugMode) {
+        _logBatchQueuePoints('uploading', batch);
+      }
+      _logFullJson('batch request', {'points': apiBatch});
     }
 
     final Options options = Options(
@@ -473,13 +785,14 @@ class BackgroundLocationUploader {
     try {
       final response = await _dio.postUri(
         _batchUri(),
-        data: {'points': batch},
+        data: {'points': apiBatch},
         options: options,
       );
 
       _consecutiveBatchFailures = 0;
       _nextBatchAllowedAt = null;
       _lastSuccessfulBatchFlushAt = DateTime.now();
+      _totalBatchPointsUploaded += batch.length;
 
       if (kDebugMode) {
         final status = response.statusCode;
@@ -490,6 +803,11 @@ class BackgroundLocationUploader {
         }
         debugPrint(
           '[BackgroundLocationUploader] batch upload ok status=$status body=$bodyText',
+        );
+        _logBatchUploadResult(
+          batchRun: batchRun,
+          uploadedBatch: batch,
+          responseBody: body,
         );
       }
     } catch (e) {
@@ -505,9 +823,180 @@ class BackgroundLocationUploader {
         debugPrint(
           '[BackgroundLocationUploader] batch upload failed (will retry in ${delay.inSeconds}s): $e',
         );
+        _logBatchQueueSnapshot(
+          'upload_failed',
+          batchRun: batchRun,
+          uploadedIds: uploadingIds,
+          detail:
+              'still queued after failure; retry in ${delay.inSeconds}s; error=$e',
+        );
       }
       _nextBatchAllowedAt = DateTime.now().add(delay);
       rethrow;
+    }
+  }
+
+  void _assignQueueSeq(Map<String, dynamic> point) {
+    if (point['_queue_seq'] is int) return;
+    point['_queue_seq'] = ++_nextQueueSeqId;
+  }
+
+  int? _queueSeqFromPoint(Map<String, dynamic> point) {
+    final seq = point['_queue_seq'];
+    if (seq is int) return seq;
+    if (seq is num) return seq.toInt();
+    return null;
+  }
+
+  String _queueSeqLabel(Map<String, dynamic> point, {int? fallbackIndex}) {
+    final seq = _queueSeqFromPoint(point);
+    if (seq != null) return '#$seq';
+    if (fallbackIndex != null) return '#q${fallbackIndex + 1}';
+    return '#?';
+  }
+
+  String _formatQueueSeqLabels(List<Map<String, dynamic>> points) {
+    if (points.isEmpty) return '(none)';
+    return points
+        .asMap()
+        .entries
+        .map((e) => _queueSeqLabel(e.value, fallbackIndex: e.key))
+        .join(',');
+  }
+
+  List<Map<String, dynamic>> _peekQueuedPoints() {
+    final box = _box;
+    if (box != null) {
+      return box.values
+          .map((v) => _sanitizePoint(Map<String, dynamic>.from(v)))
+          .where((m) => m.isNotEmpty)
+          .toList(growable: false);
+    }
+
+    if (_fallbackQueueCount > 0) {
+      // Best-effort preview; flush path reads file synchronously elsewhere.
+      return const [];
+    }
+
+    return List<Map<String, dynamic>>.from(_memoryBatch);
+  }
+
+  String _pendingQueueReason({bool force = false}) {
+    if (_isFlushing) return 'flush_in_progress';
+    final nextAllowed = _nextBatchAllowedAt;
+    if (!force && nextAllowed != null && DateTime.now().isBefore(nextAllowed)) {
+      return 'backoff_after_failed_upload';
+    }
+
+    final count = _queuedPointCount();
+    if (count == 0) return 'queue_empty';
+    if (!force && count < 2) {
+      if (_isBatchIntervalElapsed()) {
+        return 'waiting_for_second_point';
+      }
+      return 'waiting_for_second_point_or_1min_interval';
+    }
+    if (!force && !_isBatchIntervalElapsed() && count < _maxBatchSize) {
+      return 'waiting_for_1min_interval_or_full_batch';
+    }
+    return 'ready_to_flush';
+  }
+
+  void _batchConsoleLog(String message) {
+    if (!kDebugMode) return;
+    // Filter debug console by: BatchQueue
+    debugPrint('[BatchQueue] $message');
+  }
+
+  String _batchTotalsLabel() {
+    return 'total_queued=$_totalBatchPointsQueued '
+        'total_uploaded=$_totalBatchPointsUploaded';
+  }
+
+  void _logBatchQueueSnapshot(
+    String action, {
+    int? batchRun,
+    String? uploadedIds,
+    String? newPointId,
+    String? detail,
+  }) {
+    if (!kDebugMode) return;
+
+    final queued = _peekQueuedPoints();
+    final queuedCount = _queuedPointCount();
+    final remainingIds = _formatQueueSeqLabels(queued);
+    final reason = _pendingQueueReason();
+
+    _batchConsoleLog(
+      'action=$action batchRun=${batchRun ?? '-'} '
+      'queued=$queuedCount '
+      'new_id=${newPointId ?? '-'} '
+      'remaining_ids=$remainingIds '
+      '${_batchTotalsLabel()} '
+      'reason=$reason'
+      '${detail == null ? '' : ' | $detail'}'
+      '${uploadedIds == null ? '' : ' uploaded_ids=$uploadedIds'}',
+    );
+
+    if (queued.isNotEmpty && queued.length <= 25) {
+      _logBatchQueuePoints('remaining', queued);
+    }
+  }
+
+  void _logBatchQueuePoints(String label, List<Map<String, dynamic>> points) {
+    if (!kDebugMode || points.isEmpty) return;
+
+    for (var i = 0; i < points.length; i++) {
+      final point = points[i];
+      final id = _queueSeqLabel(point, fallbackIndex: i);
+      final ts = point['timestamp']?.toString() ?? '?';
+      final lat = point['latitude'];
+      final lng = point['longitude'];
+      final acc = point['accuracy'];
+      _batchConsoleLog('$label id=$id ts=$ts lat=$lat lng=$lng acc=$acc');
+    }
+  }
+
+  void _logBatchUploadResult({
+    required int batchRun,
+    required List<Map<String, dynamic>> uploadedBatch,
+    required Object? responseBody,
+  }) {
+    if (!kDebugMode) return;
+
+    final uploadedIds = _formatQueueSeqLabels(uploadedBatch);
+    final uploadedCount = uploadedBatch.length;
+    final remainingCount = _queuedPointCount();
+    final remaining = _peekQueuedPoints();
+    final remainingIds = _formatQueueSeqLabels(remaining);
+    final reason = _pendingQueueReason();
+
+    int? serverReceived;
+    int? serverHistorySaved;
+    int? serverHistorySkipped;
+    if (responseBody is Map) {
+      final received = responseBody['received_points_count'];
+      final saved = responseBody['history_saved_count'];
+      final skipped = responseBody['history_skipped_count'];
+      if (received is num) serverReceived = received.toInt();
+      if (saved is num) serverHistorySaved = saved.toInt();
+      if (skipped is num) serverHistorySkipped = skipped.toInt();
+    }
+
+    _batchConsoleLog(
+      'action=upload_ok batchRun=$batchRun '
+      'uploaded=$uploadedCount ids=$uploadedIds '
+      'server_received=${serverReceived ?? '?'} '
+      'server_saved=${serverHistorySaved ?? '?'} '
+      'server_skipped=${serverHistorySkipped ?? '?'} '
+      'remaining=$remainingCount ids=$remainingIds '
+      '${_batchTotalsLabel()} reason=$reason',
+    );
+
+    _logBatchQueuePoints('uploaded', uploadedBatch);
+
+    if (remaining.isNotEmpty && remaining.length <= 25) {
+      _logBatchQueuePoints('remaining_after_upload', remaining);
     }
   }
 
