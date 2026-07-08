@@ -109,7 +109,6 @@ class _WebViewShellState extends State<WebViewShell>
   final Map<int, StreamSubscription<Position>> _nativeGeoWatches = {};
   final _WebViewShellUiController _ui = _WebViewShellUiController();
   String? _pendingPushUrl;
-  String? _lastBottomBarHideReason;
   bool _nativeLogoutInFlight = false;
 
   Future<void> _performNativeLogout({
@@ -290,22 +289,6 @@ class _WebViewShellState extends State<WebViewShell>
     final next = _normalizePageUrl(nextUri);
     if (source == null || next == null) return true;
     return source == next;
-  }
-
-  Map<String, dynamic> _safeBridgePayloadForLog(Map payload) {
-    final copy = <String, dynamic>{};
-    payload.forEach((key, value) {
-      final k = key.toString().toLowerCase();
-      if (k.contains('password')) return;
-      copy[key.toString()] = value;
-    });
-    return copy;
-  }
-
-  String _safeTextForLog(Object? value, {int max = 800}) {
-    final text = value?.toString() ?? '';
-    if (text.length <= max) return text;
-    return '${text.substring(0, max)}...';
   }
 
   Map<String, dynamic> _toWebGeolocationPayloadFromBridgeLocation(
@@ -1155,11 +1138,7 @@ class _WebViewShellState extends State<WebViewShell>
         var nativeWatches = {};
         var nativeWatchCallbacks = {};
 
-        function log(message, data) {
-          try {
-            console.log('[SmartNPS360 Native GPS] ' + message, data || '');
-          } catch (_) {}
-        }
+        function log(message, data) {}
 
         function gpsError(message) {
           return {
@@ -1447,14 +1426,7 @@ class _WebViewShellState extends State<WebViewShell>
         };
 
         log('Flutter native GPS override installed successfully');
-      } catch (exception) {
-        try {
-          console.log(
-            '[SmartNPS360 Native GPS] Installation failed',
-            exception.message
-          );
-        } catch (_) {}
-      }
+      } catch (exception) {}
     })();
   ''',
     injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
@@ -1626,6 +1598,12 @@ class _WebViewShellState extends State<WebViewShell>
     DutyHeartbeatService.instance.backgroundLocationPermissionMissing
         .addListener(_onBackgroundLocationPermissionChanged);
 
+    unawaited(
+      NativePermissionStatusService.instance.uploadAppCycle(
+        appCycle: AppLifecycleState.resumed.name,
+      ),
+    );
+
     PushNotificationService.instance.setOnNotificationTap(
       _onPushNotificationTap,
     );
@@ -1763,6 +1741,12 @@ class _WebViewShellState extends State<WebViewShell>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    unawaited(
+      NativePermissionStatusService.instance.uploadAppCycle(
+        appCycle: state.name,
+      ),
+    );
+
     if (state == AppLifecycleState.resumed &&
         !AuthSessionManager.isLoginRoute(_ui.currentUri.value)) {
       DutyHeartbeatService.instance.reconcileDialogsAfterAppResume();
@@ -1906,8 +1890,7 @@ class _WebViewShellState extends State<WebViewShell>
       controller.addJavaScriptHandler(
         handlerName: 'iosPopoverFixDebug',
         callback: (args) {
-          final payload = args.isNotEmpty ? args.first : args;
-          debugPrint('[SmartNPS360][iOS PopoverFix] $payload');
+          debugPrint('[SmartNPS360][iOS PopoverFix] event received');
         },
       );
     }
@@ -1927,13 +1910,12 @@ class _WebViewShellState extends State<WebViewShell>
     controller.addJavaScriptHandler(
       handlerName: 'getCurrentLocation',
       callback: (args) async {
-        debugPrint(
-          '[SmartNPS360] JS callHandler: getCurrentLocation args=$args',
-        );
         final result = await _bridge.getCurrentLocation(
           args.isEmpty ? null : args.first,
         );
-        debugPrint('[SmartNPS360] getCurrentLocation result=$result');
+        debugPrint(
+          '[SmartNPS360] getCurrentLocation ok=${result['ok'] == true}',
+        );
         MockLocationGuard.maybeShowDialogFromBridgeResult(result);
         return result;
       },
@@ -2092,7 +2074,9 @@ class _WebViewShellState extends State<WebViewShell>
         final result = await _bridge.setPushNotificationsEnabled(
           args.isEmpty ? null : args.first,
         );
-        debugPrint('[SmartNPS360] setPushNotificationsEnabled result=$result');
+        debugPrint(
+          '[SmartNPS360] setPushNotificationsEnabled ok=${result['ok'] == true}',
+        );
         return result;
       },
     );
@@ -2102,7 +2086,9 @@ class _WebViewShellState extends State<WebViewShell>
         final result = await _bridge.getBackgroundLocationStatus(
           args.isEmpty ? null : args.first,
         );
-        debugPrint('[SmartNPS360] getBackgroundLocationStatus result=$result');
+        debugPrint(
+          '[SmartNPS360] getBackgroundLocationStatus ok=${result['ok'] == true}',
+        );
         return result;
       },
     );
@@ -2113,7 +2099,7 @@ class _WebViewShellState extends State<WebViewShell>
           final result = await _bridge.prepareClockIn(
             args.isEmpty ? null : args.first,
           );
-          debugPrint('[SmartNPS360] prepareClockIn result=$result');
+          debugPrint('[SmartNPS360] prepareClockIn ok=${result['ok'] == true}');
           return result;
         } catch (e, st) {
           debugPrint('[SmartNPS360] prepareClockIn failed: $e\n$st');
@@ -2145,7 +2131,7 @@ class _WebViewShellState extends State<WebViewShell>
         final currentHost = _ui.currentUri.value?.host;
         if (!AppConfig.isAllowedHost(currentHost)) {
           debugPrint(
-            '[SmartNPS360][Auth] denied loginWithSanctum from host=$currentHost args=$args',
+            '[SmartNPS360][Auth] denied loginWithSanctum from host=$currentHost',
           );
           return {
             'ok': false,
@@ -2181,7 +2167,7 @@ class _WebViewShellState extends State<WebViewShell>
         }
 
         debugPrint(
-          '[SmartNPS360][Auth] loginWithSanctum payload=${_safeBridgePayloadForLog(payload)}',
+          '[SmartNPS360][Auth] loginWithSanctum request host=$currentHost',
         );
 
         final ok = await _performSanctumLogin(
@@ -2208,7 +2194,7 @@ class _WebViewShellState extends State<WebViewShell>
         final currentHost = _ui.currentUri.value?.host;
         if (!AppConfig.isAllowedHost(currentHost)) {
           debugPrint(
-            '[SmartNPS360][Auth] denied authEvent from host=$currentHost args=$args',
+            '[SmartNPS360][Auth] denied authEvent from host=$currentHost',
           );
           return {
             'ok': false,
@@ -2263,29 +2249,13 @@ class _WebViewShellState extends State<WebViewShell>
           final Map<String, dynamic>? session = rawSession is Map
               ? Map<String, dynamic>.from(rawSession)
               : null;
-          if (session != null) {
-            AuthState.instance.setSession(session);
-          }
-          final accessToken =
-              (payload['accessToken'] ??
-                      payload['access_token'] ??
-                      payload['token'] ??
-                      payload['jwt'] ??
-                      session?['accessToken'] ??
-                      session?['access_token'] ??
-                      session?['token'] ??
-                      session?['jwt'])
-                  ?.toString();
-          final refreshToken =
-              (payload['refreshToken'] ??
-                      payload['refresh_token'] ??
-                      session?['refreshToken'] ??
-                      session?['refresh_token'])
-                  ?.toString();
-          await AuthRepository.instance.saveLogin(
+          final authMap = AuthRepository.mergeAuthPayload(
+            Map<String, dynamic>.from(payload),
+            session: session,
+          );
+          await AuthRepository.instance.saveLoginFromAuthResponse(
+            map: authMap,
             user: user,
-            accessToken: accessToken,
-            refreshToken: refreshToken,
           );
           _ui.setOfficerLoggedIn(true);
           _ui.setNativeAuthSession(true);
@@ -2307,26 +2277,13 @@ class _WebViewShellState extends State<WebViewShell>
             };
           }
           AuthState.instance.setSession(session);
-          final accessToken =
-              (payload['accessToken'] ??
-                      payload['access_token'] ??
-                      payload['token'] ??
-                      payload['jwt'] ??
-                      session['accessToken'] ??
-                      session['access_token'] ??
-                      session['token'] ??
-                      session['jwt'])
-                  ?.toString();
-          final refreshToken =
-              (payload['refreshToken'] ??
-                      payload['refresh_token'] ??
-                      session['refreshToken'] ??
-                      session['refresh_token'])
-                  ?.toString();
-          await AuthRepository.instance.saveLogin(
-            user: AuthState.instance.user.value ?? <String, dynamic>{},
-            accessToken: accessToken,
-            refreshToken: refreshToken,
+          final authMap = AuthRepository.mergeAuthPayload(
+            Map<String, dynamic>.from(payload),
+            session: session,
+          );
+          await AuthRepository.instance.saveLoginFromAuthResponse(
+            map: authMap,
+            user: AuthState.instance.user.value,
           );
           _ui.setOfficerLoggedIn(true);
           _ui.setNativeAuthSession(true);
@@ -2392,34 +2349,28 @@ class _WebViewShellState extends State<WebViewShell>
       );
 
       debugPrint(
-        '[SmartNPS360][Auth] sanctum login status=${response.statusCode} body=${_safeTextForLog(response.data)}',
+        '[SmartNPS360][Auth] sanctum login status=${response.statusCode}',
       );
 
       final dynamic body = response.data;
       final Map<String, dynamic>? map = body is Map
           ? Map<String, dynamic>.from(body)
           : null;
-      final token =
-          (map?['token'] ?? map?['access_token'] ?? map?['accessToken'])
-              ?.toString();
-      if (token == null || token.isEmpty) {
+      if (map == null || AuthRepository.extractAccessToken(map) == null) {
         debugPrint(
           '[SmartNPS360][Auth] sanctum login missing token in response',
         );
         return false;
       }
 
-      final dynamic rawUser = map?['user'] ?? map?['profile'];
-      final Map<String, dynamic>? user = rawUser is Map
-          ? Map<String, dynamic>.from(rawUser)
-          : null;
+      await AuthRepository.instance.saveLoginFromAuthResponse(map: map);
 
-      if (user != null && user.isNotEmpty) {
-        AuthState.instance.setLoggedInUser(user);
-        await AuthRepository.instance.saveLogin(user: user, accessToken: token);
-      } else {
-        await AuthRepository.instance.saveAccessToken(token);
-        AuthState.instance.setSession({'accessToken': token});
+      final token = await AuthRepository.instance.getAccessToken();
+      if (token == null || token.isEmpty) {
+        debugPrint(
+          '[SmartNPS360][Auth] sanctum login missing access token after save',
+        );
+        return false;
       }
 
       _ui.setOfficerLoggedIn(true);
@@ -2431,6 +2382,21 @@ class _WebViewShellState extends State<WebViewShell>
       return true;
     } catch (e) {
       debugPrint('[SmartNPS360][Auth] sanctum login failed: $e');
+      if (AuthRepository.instance.hasCachedAccessToken) {
+        final token = await AuthRepository.instance.getAccessToken();
+        if (token != null && token.isNotEmpty) {
+          debugPrint(
+            '[SmartNPS360][Auth] sanctum login recovered from memory cache',
+          );
+          _ui.setOfficerLoggedIn(true);
+          _ui.setNativeAuthSession(true);
+          if (syncPush) {
+            await PushNotificationService.instance.syncPushTokenAfterLogin();
+          }
+          await _maybeStartDutyHeartbeat();
+          return true;
+        }
+      }
       return false;
     }
   }
@@ -2446,7 +2412,7 @@ class _WebViewShellState extends State<WebViewShell>
   Future<void> _prepareIosPushAuthFromWeb() async {
     if (!Platform.isIOS) return;
 
-    var accessToken = await AuthRepository.instance.getAccessToken();
+    var accessToken = await AuthRepository.instance.ensureValidAccessToken();
     if (accessToken == null || accessToken.isEmpty) {
       accessToken = await _harvestWebAccessToken();
     }
@@ -2689,8 +2655,7 @@ class _WebViewShellState extends State<WebViewShell>
             return true;
           }
           debugPrint(
-            '[SmartNPS360][Push] ios web upload failed status=$status '
-            'error=${decoded['error']}',
+            '[SmartNPS360][Push] ios web upload failed status=$status',
           );
         }
       }
@@ -2757,8 +2722,7 @@ class _WebViewShellState extends State<WebViewShell>
             return true;
           }
           debugPrint(
-            '[SmartNPS360][Push] ios web delete failed status=$status '
-            'error=${decoded['error']}',
+            '[SmartNPS360][Push] ios web delete failed status=$status',
           );
         }
       }
@@ -2959,8 +2923,11 @@ class _WebViewShellState extends State<WebViewShell>
       final ua = await controller.evaluateJavascript(
         source: 'navigator.userAgent',
       );
-      debugPrint('[SmartNPS360][iOS WebView] userAgent=$ua');
-      final metrics = await controller.evaluateJavascript(
+      final userAgent = ua?.toString() ?? '';
+      debugPrint(
+        '[SmartNPS360][iOS WebView] userAgentLength=${userAgent.length}',
+      );
+      await controller.evaluateJavascript(
         source: '''
         (function () {
           var vv = window.visualViewport;
@@ -2973,7 +2940,7 @@ class _WebViewShellState extends State<WebViewShell>
         })();
       ''',
       );
-      debugPrint('[SmartNPS360][iOS WebView] metrics=$metrics');
+      debugPrint('[SmartNPS360][iOS WebView] metrics collected');
     } catch (e) {
       debugPrint('[SmartNPS360][iOS WebView] diagnostics failed: $e');
     }
@@ -3064,11 +3031,6 @@ class _WebViewShellState extends State<WebViewShell>
                                         _logIosWebViewDiagnostics(controller),
                                       );
                                       unawaited(_loadPendingPushUrl());
-                                    },
-                                    onConsoleMessage: (controller, message) {
-                                      debugPrint(
-                                        '[WebView][${message.messageLevel}] ${message.message}',
-                                      );
                                     },
                                     shouldOverrideUrlLoading:
                                         (controller, action) async =>
@@ -3353,12 +3315,8 @@ class _WebViewShellState extends State<WebViewShell>
                               !_ui.isKeyboardOpen &&
                               _isBottomBarRoute(_ui.currentUri.value);
                           if (!showBottomBar) {
-                            _logBottomBarHiddenIfNeeded(
-                              _bottomBarHideReasons(),
-                            );
                             return const SizedBox.shrink();
                           }
-                          _lastBottomBarHideReason = null;
                           return Align(
                             alignment: Alignment.bottomCenter,
                             child: _BottomBar(
@@ -3461,34 +3419,6 @@ class _WebViewShellState extends State<WebViewShell>
   }
 
   bool _isAuthRoute(Uri? uri) => AuthSessionManager.isLoginRoute(uri);
-
-  List<String> _bottomBarHideReasons() {
-    final reasons = <String>[];
-    if (_ui.showOffline.value) {
-      reasons.add('offline');
-    }
-    if (!_ui.firstPageLoaded.value) {
-      reasons.add('first_page_not_loaded');
-    }
-    if (!_ui.officerLoggedIn.value) {
-      reasons.add('officer_not_logged_in');
-    }
-    if (_ui.isKeyboardOpen) {
-      reasons.add('native_keyboard_inset(${_ui.flutterKeyboardInset.value})');
-    }
-    if (!_isBottomBarRoute(_ui.currentUri.value)) {
-      reasons.add('not_bottom_bar_route(${_ui.currentUri.value})');
-    }
-    return reasons;
-  }
-
-  void _logBottomBarHiddenIfNeeded(List<String> reasons) {
-    if (!kDebugMode) return;
-    final reasonKey = reasons.join('|');
-    if (_lastBottomBarHideReason == reasonKey) return;
-    _lastBottomBarHideReason = reasonKey;
-    debugPrint('[SmartNPS360][BottomBar] hidden: ${reasons.join(', ')}');
-  }
 }
 
 bool _isBottomBarRoute(Uri? uri) => _BottomItem.indexForUri(uri) != null;

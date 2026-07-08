@@ -46,32 +46,10 @@ const DarwinInitializationSettings kPushIosInitializationSettings =
 
 void debugPrintRemoteMessagePayload(String source, RemoteMessage message) {
   final notification = message.notification;
-  try {
-    final payload = <String, dynamic>{
-      'messageId': message.messageId,
-      'from': message.from,
-      'sentTime': message.sentTime?.toIso8601String(),
-      'collapseKey': message.collapseKey,
-      'messageType': message.messageType,
-      if (notification != null)
-        'notification': {
-          'title': notification.title,
-          'body': notification.body,
-        },
-      'data': message.data,
-    };
-    debugPrint('[SmartNPS360][Push][$source] payload=${jsonEncode(payload)}');
-  } catch (e, st) {
-    debugPrint(
-      '[SmartNPS360][Push][$source] payload='
-      'messageId=${message.messageId}, '
-      'title=${notification?.title}, '
-      'body=${notification?.body}, '
-      'data=${message.data}, '
-      'encodeError=$e',
-    );
-    debugPrint('$st');
-  }
+  debugPrint(
+    '[SmartNPS360][Push][$source] messageId=${message.messageId} '
+    'hasNotification=${notification != null} dataKeys=${message.data.length}',
+  );
 }
 
 Future<void> ensurePushLocalNotificationsReady(
@@ -189,6 +167,9 @@ class PushNotificationService {
       FlutterLocalNotificationsPlugin();
 
   String? _lastFcmToken;
+  String? _lastUploadedPushTokenFingerprint;
+  String? _pushTokenUploadInFlightFingerprint;
+  Future<bool>? _pushTokenUploadInFlight;
   bool? _pushNotificationsEnabled;
   bool _firebaseMessagingInitialized = false;
   bool _permissionPromptAttempted = false;
@@ -448,7 +429,7 @@ class PushNotificationService {
       ),
       onDidReceiveNotificationResponse: (details) {
         debugPrint(
-          '[SmartNPS360][Push] notification tapped payload=${details.payload}',
+          '[SmartNPS360][Push] notification tapped payloadPresent=${details.payload != null}',
         );
         _handleLocalNotificationTap(details.payload);
       },
@@ -643,7 +624,7 @@ class PushNotificationService {
   }
 
   Future<String?> _resolveAccessToken() async {
-    final stored = await AuthRepository.instance.getAccessToken();
+    final stored = await AuthRepository.instance.ensureValidAccessToken();
     if (stored != null && stored.isNotEmpty) return stored;
 
     if (!Platform.isIOS) return null;
@@ -739,11 +720,65 @@ class PushNotificationService {
     ApiClient.instance.ensureAuthInterceptorInstalled();
     final payload = await _buildPushTokenPayload(pushToken: token);
     final uri = Uri.parse(AppConfig.pushTokenUrl);
+    final fingerprint = _pushTokenUploadFingerprint(
+      payload,
+      useSessionCookies: useSessionCookies,
+    );
 
+    if (fingerprint == _lastUploadedPushTokenFingerprint) {
+      if (kDebugMode) {
+        debugPrint('[SmartNPS360][Push] skip upload (unchanged token)');
+      }
+      return true;
+    }
+
+    final inFlight = _pushTokenUploadInFlight;
+    if (inFlight != null &&
+        fingerprint == _pushTokenUploadInFlightFingerprint) {
+      if (kDebugMode) {
+        debugPrint('[SmartNPS360][Push] join upload (unchanged token)');
+      }
+      return inFlight;
+    }
+
+    final task = _uploadPushTokenNow(
+      uri: uri,
+      payload: payload,
+      useSessionCookies: useSessionCookies,
+      fingerprint: fingerprint,
+    );
+    _pushTokenUploadInFlight = task;
+    _pushTokenUploadInFlightFingerprint = fingerprint;
+    try {
+      return await task;
+    } finally {
+      if (identical(_pushTokenUploadInFlight, task)) {
+        _pushTokenUploadInFlight = null;
+        _pushTokenUploadInFlightFingerprint = null;
+      }
+    }
+  }
+
+  String _pushTokenUploadFingerprint(
+    Map<String, dynamic> payload, {
+    required bool useSessionCookies,
+  }) {
+    return jsonEncode({
+      'auth': useSessionCookies ? 'session-cookies' : 'bearer',
+      'payload': payload,
+    });
+  }
+
+  Future<bool> _uploadPushTokenNow({
+    required Uri uri,
+    required Map<String, dynamic> payload,
+    required bool useSessionCookies,
+    required String fingerprint,
+  }) async {
     try {
       if (kDebugMode) {
         debugPrint(
-          '[SmartNPS360][Push] POST $uri body=$payload '
+          '[SmartNPS360][Push] POST $uri '
           'auth=${useSessionCookies ? 'session-cookies' : 'bearer'}',
         );
       }
@@ -757,9 +792,14 @@ class PushNotificationService {
           '[SmartNPS360][Push] upload ok status=${response.statusCode}',
         );
       }
-      return response.statusCode != null &&
+      final ok =
+          response.statusCode != null &&
           response.statusCode! >= 200 &&
           response.statusCode! < 300;
+      if (ok) {
+        _lastUploadedPushTokenFingerprint = fingerprint;
+      }
+      return ok;
     } catch (e) {
       debugPrint('[SmartNPS360][Push] upload failed: $e');
       return false;
@@ -803,6 +843,8 @@ class PushNotificationService {
 
     if (!deleted) {
       debugPrint('[SmartNPS360][Push] delete failed or skipped (no auth)');
+    } else {
+      _lastUploadedPushTokenFingerprint = null;
     }
     return deleted;
   }
@@ -817,7 +859,7 @@ class PushNotificationService {
     try {
       if (kDebugMode) {
         debugPrint(
-          '[SmartNPS360][Push] DELETE $uri body=$payload '
+          '[SmartNPS360][Push] DELETE $uri '
           'auth=${useSessionCookies ? 'session-cookies' : 'bearer'}',
         );
       }
@@ -850,6 +892,7 @@ class PushNotificationService {
       'device_id': await _deviceId(),
       'push_token': pushToken,
       'app_version': await _appVersion(),
+      'build': AppVersionInfo.buildNumber,
     };
   }
 

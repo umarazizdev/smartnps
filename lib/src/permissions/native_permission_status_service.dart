@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:battery_plus/battery_plus.dart';
 import 'package:dio/dio.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
@@ -19,7 +21,9 @@ import '../utilities/device_identity.dart';
 ///
 /// Read-only: never requests permissions, only reports current OS state.
 class NativePermissionStatusService {
-  NativePermissionStatusService._();
+  NativePermissionStatusService._() {
+    _settingsChannel.setMethodCallHandler(_handleSettingsMethodCall);
+  }
 
   static final NativePermissionStatusService instance =
       NativePermissionStatusService._();
@@ -27,12 +31,21 @@ class NativePermissionStatusService {
   static const MethodChannel _settingsChannel = MethodChannel(
     'com.smartnps360.app/settings',
   );
+  static const Duration _appCycleDebounce = Duration(milliseconds: 350);
 
   String? _lastPayloadFingerprint;
+  String? _lastAppCycle;
+  String? _pendingAppCycle;
+  Future<bool>? _appCycleUploadInFlight;
   bool _syncInFlight = false;
+  bool _syncRequestedWhileInFlight = false;
 
   void resetSyncState() {
     _lastPayloadFingerprint = null;
+    _lastAppCycle = null;
+    _pendingAppCycle = null;
+    _appCycleUploadInFlight = null;
+    _syncRequestedWhileInFlight = false;
   }
 
   Future<Map<String, dynamic>> buildPayload() async {
@@ -40,36 +53,61 @@ class NativePermissionStatusService {
       'platform': DeviceIdentity.platformName(),
       'deviceId': await DeviceIdentity.getDeviceId(),
       'appVersion': AppVersionInfo.version,
+      'build': AppVersionInfo.buildNumber,
+      'battery_percentage': await _batteryPercentage(),
+      'low_power_mode': await _lowPowerModeStatus(),
       'permissions': await _readPermissions(),
       'checkedAt': DateTime.now().toUtc().toIso8601String(),
     };
+  }
+
+  Future<dynamic> _handleSettingsMethodCall(MethodCall call) async {
+    switch (call.method) {
+      case 'lowPowerModeChanged':
+        if (kDebugMode) {
+          debugPrint(
+            '[NativePermissionStatus] low_power_mode changed ${call.arguments}',
+          );
+        }
+        unawaited(syncIfChanged());
+        return null;
+      default:
+        throw MissingPluginException('No handler for ${call.method}');
+    }
   }
 
   /// Uploads only when the permission snapshot changed (ignores [checkedAt]).
   Future<void> syncIfChanged() async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
 
-    final accessToken = await AuthRepository.instance.getAccessToken();
+    final accessToken = await AuthRepository.instance.ensureValidAccessToken();
     if (accessToken == null || accessToken.isEmpty) return;
-    if (_syncInFlight) return;
+    if (_syncInFlight) {
+      _syncRequestedWhileInFlight = true;
+      return;
+    }
 
     _syncInFlight = true;
     try {
-      final payload = await buildPayload();
-      final fingerprint = _fingerprint(payload);
-      if (fingerprint == _lastPayloadFingerprint) {
-        if (kDebugMode) {
-          debugPrint(
-            '[NativePermissionStatus] skip upload (unchanged permissions)',
-          );
-        }
-        return;
-      }
+      do {
+        _syncRequestedWhileInFlight = false;
 
-      final uploaded = await _upload(payload);
-      if (uploaded) {
-        _lastPayloadFingerprint = fingerprint;
-      }
+        final payload = await buildPayload();
+        final fingerprint = _fingerprint(payload);
+        if (fingerprint == _lastPayloadFingerprint) {
+          if (kDebugMode) {
+            debugPrint(
+              '[NativePermissionStatus] skip upload (unchanged permissions)',
+            );
+          }
+          continue;
+        }
+
+        final uploaded = await _upload(payload);
+        if (uploaded) {
+          _lastPayloadFingerprint = fingerprint;
+        }
+      } while (_syncRequestedWhileInFlight);
     } finally {
       _syncInFlight = false;
     }
@@ -79,7 +117,7 @@ class NativePermissionStatusService {
   Future<bool> uploadPushToggle({required bool enabled}) async {
     if (!Platform.isAndroid && !Platform.isIOS) return false;
 
-    final accessToken = await AuthRepository.instance.getAccessToken();
+    final accessToken = await AuthRepository.instance.ensureValidAccessToken();
     if (accessToken == null || accessToken.isEmpty) return false;
 
     final payload = await buildPayload();
@@ -98,8 +136,78 @@ class NativePermissionStatusService {
     return _upload(payload);
   }
 
+  /// Posts app lifecycle state with the same snapshot used by permission sync.
+  Future<bool> uploadAppCycle({required String appCycle}) async {
+    if (!Platform.isAndroid && !Platform.isIOS) return false;
+
+    _pendingAppCycle = appCycle;
+    final inFlight = _appCycleUploadInFlight;
+    if (inFlight != null) {
+      if (kDebugMode) {
+        debugPrint('[NativePermissionStatus] queued app_cycle upload $appCycle');
+      }
+      return inFlight;
+    }
+
+    final task = _drainAppCycleUploads();
+    _appCycleUploadInFlight = task;
+    try {
+      return await task;
+    } finally {
+      if (identical(_appCycleUploadInFlight, task)) {
+        _appCycleUploadInFlight = null;
+      }
+    }
+  }
+
+  Future<bool> _drainAppCycleUploads() async {
+    var ok = true;
+
+    while (_pendingAppCycle != null) {
+      await Future<void>.delayed(_appCycleDebounce);
+
+      final appCycle = _pendingAppCycle;
+      _pendingAppCycle = null;
+      if (appCycle == null) continue;
+
+      final uploaded = await _uploadAppCycleNow(appCycle);
+      ok = ok && uploaded;
+    }
+
+    return ok;
+  }
+
+  Future<bool> _uploadAppCycleNow(String appCycle) async {
+    final accessToken = await AuthRepository.instance.ensureValidAccessToken();
+    if (accessToken == null || accessToken.isEmpty) return false;
+
+    if (appCycle == _lastAppCycle) {
+      if (kDebugMode) {
+        debugPrint(
+          '[NativePermissionStatus] skip app_cycle upload (unchanged $appCycle)',
+        );
+      }
+      return true;
+    }
+
+    final payload = await buildPayload();
+    payload['app_cycle'] = appCycle;
+
+    if (kDebugMode) {
+      debugPrint('[NativePermissionStatus] app_cycle upload $appCycle');
+    }
+    final uploaded = await _upload(payload);
+    if (uploaded) {
+      _lastAppCycle = appCycle;
+      _lastPayloadFingerprint = _fingerprint(payload);
+    }
+    return uploaded;
+  }
+
   String _fingerprint(Map<String, dynamic> payload) {
-    final copy = Map<String, dynamic>.from(payload)..remove('checkedAt');
+    final copy = Map<String, dynamic>.from(payload)
+      ..remove('app_cycle')
+      ..remove('checkedAt');
     final permissions = copy['permissions'];
     if (permissions is Map) {
       copy['permissions'] = Map<String, dynamic>.from(permissions)
@@ -121,7 +229,6 @@ class NativePermissionStatusService {
       'preciseLocation': await _preciseLocationStatus(),
       'notifications': await _notificationStatus(),
       'batteryOptimization': await _batteryOptimizationStatus(),
-      'motionActivity': await _motionActivityStatus(),
     };
   }
 
@@ -237,6 +344,23 @@ class NativePermissionStatusService {
 
   Future<String> _batteryOptimizationStatus() async {
     if (!Platform.isAndroid) return 'unknown';
+
+    try {
+      final status = await _settingsChannel.invokeMethod<String>(
+        'batteryOptimizationStatus',
+      );
+      if (status == 'granted' || status == 'denied') return status!;
+      if (status != null) return 'unknown';
+    } on MissingPluginException {
+      // Fall through for older native builds that only expose the boolean API.
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint(
+          '[NativePermissionStatus] battery optimization status check failed: $error',
+        );
+      }
+    }
+
     try {
       final ignoring = await _settingsChannel.invokeMethod<bool>(
         'isIgnoringBatteryOptimizations',
@@ -254,9 +378,35 @@ class NativePermissionStatusService {
     }
   }
 
-  Future<String> _motionActivityStatus() async {
-    // Motion/activity permission is not declared in app manifests (store-safe).
-    return 'unknown';
+  Future<String> _lowPowerModeStatus() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return 'unknown';
+
+    try {
+      final status = await _settingsChannel.invokeMethod<String>(
+        'lowPowerModeStatus',
+      );
+      if (status == 'enabled' || status == 'disabled') return status!;
+      return 'unknown';
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint('[NativePermissionStatus] low power mode check failed: $error');
+      }
+      return 'unknown';
+    }
+  }
+
+  Future<int?> _batteryPercentage() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return null;
+    try {
+      final level = await Battery().batteryLevel;
+      if (level < 0 || level > 100) return null;
+      return level;
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint('[NativePermissionStatus] battery level failed: $error');
+      }
+      return null;
+    }
   }
 
   String _mapPermissionStatus(PermissionStatus status) {

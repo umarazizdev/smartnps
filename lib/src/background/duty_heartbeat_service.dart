@@ -69,6 +69,9 @@ class DutyHeartbeatService {
       !PermissionSettingsHelper.settingsPromptVisible.value &&
       !disclosurePromptVisible.value;
 
+  bool get isOnDutyTrackingActive =>
+      _heartbeatActive && _lastAppliedStatus == onDuty;
+
   Future<void> refreshBackgroundLocationPermissionBannerState() async {
     if (_lastAppliedStatus != onDuty) {
       if (backgroundLocationPermissionMissing.value) {
@@ -132,7 +135,7 @@ class DutyHeartbeatService {
   Future<void> recheckOnDutyPrompts({bool pageReload = false}) async {
     if (!_heartbeatActive) return;
 
-    final token = await AuthRepository.instance.getAccessToken();
+    final token = await AuthRepository.instance.ensureValidAccessToken();
     if (token == null || token.isEmpty) return;
 
     if (!pageReload) {
@@ -280,7 +283,7 @@ class DutyHeartbeatService {
     try {
       if (!_heartbeatActive) return;
 
-      final token = await AuthRepository.instance.getAccessToken();
+      final token = await AuthRepository.instance.ensureValidAccessToken();
       if (token == null || token.isEmpty) {
         if (kDebugMode) {
           debugPrint(
@@ -359,9 +362,7 @@ class DutyHeartbeatService {
 
     if (statusCode < 200 || statusCode >= 300) {
       if (kDebugMode) {
-        debugPrint(
-          '[DutyHeartbeatService] heartbeat failed status=$statusCode body=${_truncate(response.data)}',
-        );
+        debugPrint('[DutyHeartbeatService] heartbeat failed status=$statusCode');
       }
       return null;
     }
@@ -429,7 +430,7 @@ class DutyHeartbeatService {
   }
 
   Future<bool> _hasActiveAuthToken() async {
-    final token = await AuthRepository.instance.getAccessToken();
+    final token = await AuthRepository.instance.ensureValidAccessToken();
     return token != null && token.isNotEmpty;
   }
 
@@ -465,7 +466,7 @@ class DutyHeartbeatService {
         await _runPostDisclosurePermissionStep();
         final result = await BackgroundLocationController.ensureStarted();
         debugPrint(
-          '[DutyHeartbeatService] ensureStarted (disclosure accepted) result=$result',
+          '[DutyHeartbeatService] ensureStarted (disclosure accepted) ok=${result['ok'] == true}',
         );
         if (result['ok'] == true) {
           await _syncPermissionReadyState();
@@ -505,7 +506,7 @@ class DutyHeartbeatService {
     final skipSettingsPrompt = backgroundReady;
 
     final result = await BackgroundLocationController.ensureStarted();
-    debugPrint('[DutyHeartbeatService] ensureStarted result=$result');
+    debugPrint('[DutyHeartbeatService] ensureStarted ok=${result['ok'] == true}');
 
     if (result['ok'] == true) {
       await _syncPermissionReadyState();
@@ -740,7 +741,9 @@ class DutyHeartbeatService {
     }
 
     final result = await BackgroundLocationController.ensureStarted();
-    debugPrint('[DutyHeartbeatService] retry ensureStarted result=$result');
+    debugPrint(
+      '[DutyHeartbeatService] retry ensureStarted ok=${result['ok'] == true}',
+    );
     if (result['ok'] == true) {
       await _syncPermissionReadyState();
     } else if (result['openSettings'] == true) {
@@ -770,7 +773,7 @@ class DutyHeartbeatService {
       '[DutyHeartbeatService] stopping location after flushing pending batches',
     );
     final result = await BackgroundLocationController.stop();
-    debugPrint('[DutyHeartbeatService] stop result=$result');
+    debugPrint('[DutyHeartbeatService] stop ok=${result['ok'] == true}');
     _lastAppliedStatus = offDuty;
     _resetDisclosureState();
     PermissionSettingsHelper.clearCooldown('background_location');
@@ -836,7 +839,7 @@ class DutyHeartbeatService {
     final result = await BackgroundLocationController.restart();
     if (kDebugMode) {
       debugPrint(
-        '[DutyHeartbeatService] tracking restarted after permission change: $result',
+        '[DutyHeartbeatService] tracking restarted after permission change ok=${result['ok'] == true}',
       );
     }
     if (result['ok'] == true) {
@@ -1117,9 +1120,4 @@ class DutyHeartbeatService {
     return shown;
   }
 
-  String _truncate(Object? value, {int max = 800}) {
-    final text = value?.toString() ?? '';
-    if (text.length <= max) return text;
-    return '${text.substring(0, max)}...';
-  }
 }

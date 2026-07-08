@@ -18,6 +18,11 @@ class ApiClient {
     dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (options, handler) async {
+          if (AuthRepository.isRefreshRequest(options)) {
+            handler.next(options);
+            return;
+          }
+
           final token = await AuthRepository.instance.getAccessToken();
           if (token != null && token.isNotEmpty) {
             options.headers['Authorization'] = 'Bearer $token';
@@ -38,7 +43,52 @@ class ApiClient {
           }
           handler.next(options);
         },
+        onResponse: (response, handler) async {
+          if (response.statusCode == 401) {
+            final retried = await _refreshAndRetryRequest(response.requestOptions);
+            if (retried != null) {
+              handler.resolve(retried);
+              return;
+            }
+          }
+          handler.next(response);
+        },
+        onError: (error, handler) async {
+          if (error.response?.statusCode == 401) {
+            final retried = await _refreshAndRetryRequest(error.requestOptions);
+            if (retried != null) {
+              handler.resolve(retried);
+              return;
+            }
+          }
+          handler.next(error);
+        },
       ),
     );
+  }
+
+  Future<Response<dynamic>?> _refreshAndRetryRequest(
+    RequestOptions request,
+  ) async {
+    if (AuthRepository.isRefreshRequest(request)) return null;
+    if (AuthRepository.hasRefreshRetry(request)) return null;
+
+    AuthRepository.markRefreshRetry(request);
+    final newToken = await AuthRepository.instance.refreshAccessToken();
+    if (newToken == null || newToken.isEmpty) return null;
+
+    final headers = Map<String, dynamic>.from(request.headers);
+    headers['Authorization'] = 'Bearer $newToken';
+
+    try {
+      return await dio.fetch<dynamic>(
+        request.copyWith(
+          headers: headers,
+          extra: Map<String, dynamic>.from(request.extra),
+        ),
+      );
+    } catch (_) {
+      return null;
+    }
   }
 }

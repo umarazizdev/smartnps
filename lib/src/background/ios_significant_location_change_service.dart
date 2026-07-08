@@ -162,9 +162,7 @@ class IosSignificantLocationChangeService {
 
     if (kDebugMode) {
       debugPrint(
-        '[IosSLC] wake event lat=${position.latitude} '
-        'lng=${position.longitude} acc=${position.accuracy} '
-        'ts=${position.timestamp.toIso8601String()}',
+        '[IosSLC] wake event acc=${position.accuracy}',
       );
     }
 

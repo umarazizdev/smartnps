@@ -7,6 +7,7 @@ import 'package:geolocator/geolocator.dart';
 import '../auth/auth_repository.dart';
 import '../location/mock_location_detection.dart';
 import '../location/mock_location_guard.dart';
+import '../location/speed_adaptive_gps_policy.dart';
 import 'background_location_accuracy.dart';
 import 'background_location_uploader.dart';
 import 'ios_background_location_notification.dart';
@@ -27,6 +28,8 @@ class IosDutyLocationPinger {
   static bool _running = false;
   static bool _stopping = false;
   static bool _recoverInFlight = false;
+  static final SpeedAdaptiveGpsPolicyTracker _policyTracker =
+      SpeedAdaptiveGpsPolicyTracker();
 
   static const Duration _recoverDelay = Duration(seconds: 2);
   static const Duration _staleLocationThreshold = Duration(minutes: 2);
@@ -288,16 +291,17 @@ class IosDutyLocationPinger {
       return;
     }
 
-    final token = await AuthRepository.instance.getAccessToken();
+    final token = await AuthRepository.instance.ensureValidAccessToken();
     if (token == null || token.isEmpty) {
       await stop();
       return;
     }
 
     final now = DateTime.now();
+    final policyDecision = _policyTracker.evaluate(pos);
     final last = _lastLocationAt;
     if (last != null &&
-        now.difference(last) < BackgroundLocationUploader.pingInterval) {
+        now.difference(last) < policyDecision.band.uploadInterval) {
       return;
     }
     _lastLocationAt = now;
@@ -313,9 +317,10 @@ class IosDutyLocationPinger {
     if (kDebugMode) {
       debugPrint(
         '[IosDutyLocationPinger] location '
-        'lat=${pos.latitude} lng=${pos.longitude} acc=${pos.accuracy} '
-        'mocked=${mockFlags.isMocked} simulated=${mockFlags.isSimulatedBySoftware} '
-        'ts=${pos.timestamp.toIso8601String()}',
+        'acc=${pos.accuracy} '
+        'speedBand=${policyDecision.band.label} '
+        'uploadEvery=${policyDecision.band.uploadInterval.inSeconds}s '
+        'mocked=${mockFlags.isMocked} simulated=${mockFlags.isSimulatedBySoftware}',
       );
     }
 
@@ -323,8 +328,8 @@ class IosDutyLocationPinger {
     if (uploader == null) return;
 
     try {
-      await uploader.pingNow(pos);
-      await uploader.add(pos);
+      await uploader.pingNow(pos, policyDecision: policyDecision);
+      await uploader.add(pos, policyDecision: policyDecision);
       _lastUploadAt = DateTime.now();
       await _flushBatchIfDue(uploader);
     } catch (e) {
