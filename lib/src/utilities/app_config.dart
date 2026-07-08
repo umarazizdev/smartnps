@@ -10,6 +10,7 @@ class AppConfig {
   static const String gpsBatchPath = 'batch';
 
   static const String sanctumLoginUrl = '${initialUrl}api/auth/login';
+  static const String refreshTokenUrl = '${initialUrl}api/auth/refresh';
   static const String heartbeatUrl = '${initialUrl}api/heartbeat';
   static const String pushTokenUrl = '${initialUrl}api/push-token';
   static const String permissionStatusUrl =

@@ -11,8 +11,10 @@ import 'package:path_provider/path_provider.dart';
 
 import '../api/api_client.dart';
 import '../auth/auth_repository.dart';
+import '../location/speed_adaptive_gps_policy.dart';
 import 'background_location_accuracy.dart';
 import '../utilities/app_config.dart';
+import '../utilities/app_version_info.dart';
 import '../utilities/device_identity.dart';
 
 class BackgroundLocationUploader {
@@ -41,9 +43,11 @@ class BackgroundLocationUploader {
   int _batchRunNumber = 0;
   int _totalBatchPointsQueued = 0;
   int _totalBatchPointsUploaded = 0;
+  final SpeedAdaptiveGpsPolicyTracker _policyTracker =
+      SpeedAdaptiveGpsPolicyTracker();
 
   static const int _maxBatchSize = 20;
-  static const Duration pingInterval = Duration(seconds: 3);
+  static const Duration pingInterval = Duration(seconds: 1);
   static const Duration _batchEvery = Duration(minutes: 1);
   static const Duration _maxBackoff = Duration(minutes: 2);
   static const Duration logoutFlushBudget = Duration(seconds: 15);
@@ -372,11 +376,16 @@ class BackgroundLocationUploader {
   /// Stores points for batch upload only (Hive).
   ///
   /// Ping uploads are sent live and are not persisted.
-  Future<void> add(Position position) async {
+  Future<void> add(
+    Position position, {
+    SpeedAdaptiveGpsPolicyDecision? policyDecision,
+  }) async {
     if (!BackgroundLocationAccuracy.isAcceptable(position)) return;
     if (!await _hasUploadAuth()) return;
     await _ensureStorage();
-    final point = _sanitizePoint(_buildPoint(position));
+    final point = _sanitizePoint(
+      await _buildPoint(position, policyDecision: policyDecision),
+    );
     _assignQueueSeq(point);
     final newPointId = _queueSeqLabel(point);
     _totalBatchPointsQueued++;
@@ -467,16 +476,23 @@ class BackgroundLocationUploader {
   }
 
   Future<bool> _hasUploadAuth() async {
-    final token = await AuthRepository.instance.getAccessToken();
+    final token = await AuthRepository.instance.ensureValidAccessToken();
     return token != null && token.isNotEmpty;
   }
 
   /// Sends the current point to the ping API immediately (no local storage).
-  Future<void> pingNow(Position position) async {
+  Future<void> pingNow(
+    Position position, {
+    SpeedAdaptiveGpsPolicyDecision? policyDecision,
+  }) async {
     if (!BackgroundLocationAccuracy.isAcceptable(position)) return;
     if (!await _hasUploadAuth()) return;
     _deviceId ??= await DeviceIdentity.getDeviceId();
-    final point = _apiPoint(_sanitizePoint(_buildPoint(position)));
+    final point = _apiPoint(
+      _sanitizePoint(
+        await _buildPoint(position, policyDecision: policyDecision),
+      ),
+    );
 
     final Options options = Options(
       headers: const {'Accept': 'application/json'},
@@ -487,10 +503,7 @@ class BackgroundLocationUploader {
 
     try {
       if (kDebugMode) {
-        debugPrint('[BackgroundLocationUploader] POST ${_pingUri()}');
-        debugPrint(
-          '[BackgroundLocationUploader] body=${_truncateForLog(point)}',
-        );
+        debugPrint('[BackgroundLocationUploader] ping start');
       }
       final response = await _dio.postUri(
         _pingUri(),
@@ -499,20 +512,12 @@ class BackgroundLocationUploader {
       );
       if (kDebugMode) {
         final status = response.statusCode;
-        final body = response.data;
-        var bodyText = body == null ? '' : body.toString();
-        if (bodyText.length > 800) {
-          bodyText = '${bodyText.substring(0, 800)}...';
-        }
-        debugPrint(
-          '[BackgroundLocationUploader] ping ok status=$status body=$bodyText',
-        );
+        debugPrint('[BackgroundLocationUploader] ping ok status=$status');
       }
     } on DioException catch (e) {
       if (kDebugMode) {
         debugPrint(
-          '[BackgroundLocationUploader] ping failed status=${e.response?.statusCode} '
-          'body=${_truncateForLog(e.response?.data)}',
+          '[BackgroundLocationUploader] ping failed status=${e.response?.statusCode}',
         );
       }
     } catch (e) {
@@ -522,7 +527,10 @@ class BackgroundLocationUploader {
     }
   }
 
-  Map<String, dynamic> _buildPoint(Position position) {
+  Future<Map<String, dynamic>> _buildPoint(
+    Position position, {
+    SpeedAdaptiveGpsPolicyDecision? policyDecision,
+  }) async {
     final dynamic p = position;
     final dynamic sourceInformation = _safeRead<dynamic>(
       () => p.sourceInformation,
@@ -533,12 +541,14 @@ class BackgroundLocationUploader {
 
     // Geolocator reports when the GPS fix was measured (UTC), not when we flush batch.
     final recordedAtUtc = position.timestamp.toUtc();
+    final policy = policyDecision ?? _policyTracker.evaluate(position);
 
     return {
       'app': AppConfig.appName,
       'platform': DeviceIdentity.platformName(),
       'device_id': _deviceId,
       'deviceId': _deviceId,
+      'build': AppVersionInfo.buildNumber,
       '_local_point_key': _localPointKey(position, recordedAtUtc),
       'latitude': position.latitude,
       'longitude': position.longitude,
@@ -553,6 +563,9 @@ class BackgroundLocationUploader {
       'headingAccuracy': _validSensorNumOrNull(() => position.headingAccuracy),
       'isMocked': position.isMocked,
       'isSimulatedBySoftware': isSimulatedBySoftware,
+      'motionActivity': policy.band.motionActivity,
+      'motionSource': 'speed_adaptive_gps_policy',
+      ...policy.toJson(),
       'floor': _numOrNull(() => p.floor),
     };
   }
@@ -761,18 +774,12 @@ class BackgroundLocationUploader {
     if (kDebugMode) {
       _batchConsoleLog(
         'batchRun=$batchRun START upload_count=${batch.length} '
-        'upload_ids=$uploadingIds queued_before=$queuedBeforeUpload '
+        'queued_before=$queuedBeforeUpload '
         '${_batchTotalsLabel()}',
       );
       debugPrint(
         '[BackgroundLocationUploader] flushBatch count=${apiBatch.length}',
       );
-      debugPrint('[BackgroundLocationUploader] POST ${_batchUri()} (batch)');
-      _logBatchTimestampSummary(apiBatch);
-      if (kDebugMode) {
-        _logBatchQueuePoints('uploading', batch);
-      }
-      _logFullJson('batch request', {'points': apiBatch});
     }
 
     final Options options = Options(
@@ -797,12 +804,8 @@ class BackgroundLocationUploader {
       if (kDebugMode) {
         final status = response.statusCode;
         final body = response.data;
-        var bodyText = body == null ? '' : body.toString();
-        if (bodyText.length > 800) {
-          bodyText = '${bodyText.substring(0, 800)}...';
-        }
         debugPrint(
-          '[BackgroundLocationUploader] batch upload ok status=$status body=$bodyText',
+          '[BackgroundLocationUploader] batch upload ok status=$status count=${batch.length}',
         );
         _logBatchUploadResult(
           batchRun: batchRun,
@@ -864,23 +867,6 @@ class BackgroundLocationUploader {
         .join(',');
   }
 
-  List<Map<String, dynamic>> _peekQueuedPoints() {
-    final box = _box;
-    if (box != null) {
-      return box.values
-          .map((v) => _sanitizePoint(Map<String, dynamic>.from(v)))
-          .where((m) => m.isNotEmpty)
-          .toList(growable: false);
-    }
-
-    if (_fallbackQueueCount > 0) {
-      // Best-effort preview; flush path reads file synchronously elsewhere.
-      return const [];
-    }
-
-    return List<Map<String, dynamic>>.from(_memoryBatch);
-  }
-
   String _pendingQueueReason({bool force = false}) {
     if (_isFlushing) return 'flush_in_progress';
     final nextAllowed = _nextBatchAllowedAt;
@@ -922,39 +908,17 @@ class BackgroundLocationUploader {
   }) {
     if (!kDebugMode) return;
 
-    final queued = _peekQueuedPoints();
     final queuedCount = _queuedPointCount();
-    final remainingIds = _formatQueueSeqLabels(queued);
     final reason = _pendingQueueReason();
 
     _batchConsoleLog(
       'action=$action batchRun=${batchRun ?? '-'} '
       'queued=$queuedCount '
-      'new_id=${newPointId ?? '-'} '
-      'remaining_ids=$remainingIds '
       '${_batchTotalsLabel()} '
       'reason=$reason'
       '${detail == null ? '' : ' | $detail'}'
-      '${uploadedIds == null ? '' : ' uploaded_ids=$uploadedIds'}',
+      '${uploadedIds == null ? '' : ' uploaded_count=${uploadedIds.split(',').length}'}',
     );
-
-    if (queued.isNotEmpty && queued.length <= 25) {
-      _logBatchQueuePoints('remaining', queued);
-    }
-  }
-
-  void _logBatchQueuePoints(String label, List<Map<String, dynamic>> points) {
-    if (!kDebugMode || points.isEmpty) return;
-
-    for (var i = 0; i < points.length; i++) {
-      final point = points[i];
-      final id = _queueSeqLabel(point, fallbackIndex: i);
-      final ts = point['timestamp']?.toString() ?? '?';
-      final lat = point['latitude'];
-      final lng = point['longitude'];
-      final acc = point['accuracy'];
-      _batchConsoleLog('$label id=$id ts=$ts lat=$lat lng=$lng acc=$acc');
-    }
   }
 
   void _logBatchUploadResult({
@@ -964,11 +928,8 @@ class BackgroundLocationUploader {
   }) {
     if (!kDebugMode) return;
 
-    final uploadedIds = _formatQueueSeqLabels(uploadedBatch);
     final uploadedCount = uploadedBatch.length;
     final remainingCount = _queuedPointCount();
-    final remaining = _peekQueuedPoints();
-    final remainingIds = _formatQueueSeqLabels(remaining);
     final reason = _pendingQueueReason();
 
     int? serverReceived;
@@ -985,97 +946,12 @@ class BackgroundLocationUploader {
 
     _batchConsoleLog(
       'action=upload_ok batchRun=$batchRun '
-      'uploaded=$uploadedCount ids=$uploadedIds '
+      'uploaded=$uploadedCount '
       'server_received=${serverReceived ?? '?'} '
       'server_saved=${serverHistorySaved ?? '?'} '
       'server_skipped=${serverHistorySkipped ?? '?'} '
-      'remaining=$remainingCount ids=$remainingIds '
+      'remaining=$remainingCount '
       '${_batchTotalsLabel()} reason=$reason',
     );
-
-    _logBatchQueuePoints('uploaded', uploadedBatch);
-
-    if (remaining.isNotEmpty && remaining.length <= 25) {
-      _logBatchQueuePoints('remaining_after_upload', remaining);
-    }
-  }
-
-  String _truncateForLog(Object? value, {int max = 1200}) {
-    final text = value?.toString() ?? '';
-    if (text.length <= max) return text;
-    return '${text.substring(0, max)}...';
-  }
-
-  /// Clarifies that batch `timestamp` values are per-point GPS fix times (UTC),
-  /// which can look "old" vs device local clock or vs batch flush time.
-  void _logBatchTimestampSummary(List<Map<String, dynamic>> batch) {
-    if (!kDebugMode || batch.isEmpty) return;
-
-    final nowUtc = DateTime.now().toUtc();
-    final nowLocal = DateTime.now();
-
-    DateTime? oldestUtc;
-    DateTime? newestUtc;
-    for (final point in batch) {
-      final ms = point['timestampMs'];
-      if (ms is! num) continue;
-      final at = DateTime.fromMillisecondsSinceEpoch(ms.toInt(), isUtc: true);
-      oldestUtc = oldestUtc == null || at.isBefore(oldestUtc) ? at : oldestUtc;
-      newestUtc = newestUtc == null || at.isAfter(newestUtc) ? at : newestUtc;
-    }
-
-    debugPrint(
-      '[BackgroundLocationUploader] device now '
-      'local=${nowLocal.toIso8601String()} utc=${nowUtc.toIso8601String()}',
-    );
-
-    if (oldestUtc == null || newestUtc == null) return;
-
-    final oldestAge = nowUtc.difference(oldestUtc);
-    final newestAge = nowUtc.difference(newestUtc);
-    debugPrint(
-      '[BackgroundLocationUploader] batch GPS fix times (UTC, not flush time): '
-      'oldest=${oldestUtc.toIso8601String()} '
-      '(local ${oldestUtc.toLocal().toIso8601String()}, '
-      '${oldestAge.inSeconds}s before flush) '
-      'newest=${newestUtc.toIso8601String()} '
-      '(local ${newestUtc.toLocal().toIso8601String()}, '
-      '${newestAge.inSeconds}s before flush)',
-    );
-  }
-
-  /// Logs the full JSON body in debug builds, split across lines so logcat
-  /// does not truncate payloads larger than ~4 KB (e.g. 20 GPS points).
-  void _logFullJson(String label, Object? value) {
-    if (!kDebugMode) return;
-
-    final String json;
-    try {
-      json = const JsonEncoder.withIndent('  ').convert(value);
-    } catch (e) {
-      debugPrint('[BackgroundLocationUploader] $label json encode failed: $e');
-      debugPrint(
-        '[BackgroundLocationUploader] $label fallback=${_truncateForLog(value)}',
-      );
-      return;
-    }
-
-    const chunkSize = 3500;
-    if (json.length <= chunkSize) {
-      debugPrint('[BackgroundLocationUploader] $label json:\n$json');
-      return;
-    }
-
-    final total = (json.length / chunkSize).ceil();
-    for (var i = 0; i < total; i++) {
-      final start = i * chunkSize;
-      final end = start + chunkSize < json.length
-          ? start + chunkSize
-          : json.length;
-      debugPrint(
-        '[BackgroundLocationUploader] $label json part ${i + 1}/$total:\n'
-        '${json.substring(start, end)}',
-      );
-    }
   }
 }

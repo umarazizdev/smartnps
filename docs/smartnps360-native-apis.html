@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SmartNPS360 Native API Reference</title>
+  <style>
+    @page {
+      margin: 22mm 18mm 24mm 18mm;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: #1a1a1a;
+      line-height: 1.55;
+      font-size: 11pt;
+      margin: 0;
+      padding: 0;
+    }
+
+    .cover {
+      min-height: 90vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      page-break-after: always;
+      padding: 12mm 0;
+    }
+
+    .cover h1 {
+      font-size: 28pt;
+      margin: 0 0 8px;
+      color: #022a67;
+      letter-spacing: -0.02em;
+    }
+
+    .cover .subtitle {
+      font-size: 13pt;
+      color: #4a5568;
+      margin-bottom: 28px;
+    }
+
+    .cover .meta {
+      font-size: 10pt;
+      color: #6b7280;
+      border-top: 1px solid #e5e7eb;
+      padding-top: 16px;
+      max-width: 520px;
+    }
+
+    h2 {
+      font-size: 16pt;
+      color: #022a67;
+      margin: 0 0 10px;
+      page-break-after: avoid;
+    }
+
+    h3 {
+      font-size: 11pt;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #374151;
+      margin: 18px 0 8px;
+      page-break-after: avoid;
+    }
+
+    p, li {
+      margin: 0 0 8px;
+    }
+
+    .toc {
+      page-break-after: always;
+      padding-top: 8mm;
+    }
+
+    .toc h2 {
+      margin-bottom: 16px;
+    }
+
+    .toc ol {
+      padding-left: 20px;
+    }
+
+    .toc li {
+      margin-bottom: 6px;
+    }
+
+    .api {
+      page-break-before: always;
+      padding-top: 4mm;
+    }
+
+    .api:first-of-type {
+      page-break-before: auto;
+    }
+
+    .endpoint {
+      background: #f8fafc;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin-bottom: 14px;
+    }
+
+    .method {
+      display: inline-block;
+      font-size: 9pt;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      padding: 3px 8px;
+      border-radius: 4px;
+      margin-right: 8px;
+      color: #fff;
+      vertical-align: middle;
+    }
+
+    .method.post { background: #2563eb; }
+    .method.get { background: #059669; }
+    .method.delete { background: #dc2626; }
+
+    .path {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 10pt;
+      word-break: break-all;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 8px 0 14px;
+      font-size: 10pt;
+    }
+
+    th, td {
+      border: 1px solid #e5e7eb;
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #f3f4f6;
+      font-weight: 600;
+    }
+
+    pre {
+      background: #0f172a;
+      color: #e2e8f0;
+      border-radius: 8px;
+      padding: 12px 14px;
+      overflow-x: auto;
+      font-size: 9pt;
+      line-height: 1.45;
+      margin: 8px 0 14px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .note {
+      background: #fffbeb;
+      border: 1px solid #fde68a;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 10pt;
+      margin: 10px 0 0;
+    }
+
+    .intro {
+      page-break-after: always;
+      padding-top: 4mm;
+    }
+
+    .footer-note {
+      font-size: 9pt;
+      color: #6b7280;
+      margin-top: 24px;
+      border-top: 1px solid #e5e7eb;
+      padding-top: 10px;
+    }
+  </style>
+</head>
+<body>
+
+  <section class="cover">
+    <h1>SmartNPS360 Native API Reference</h1>
+    <p class="subtitle">HTTP APIs used by the Flutter mobile app (Android &amp; iOS)</p>
+    <div class="meta">
+      <p><strong>Base URL:</strong> https://smartnps360.com/</p>
+      <p><strong>APIs documented:</strong> 8 active endpoints</p>
+    </div>
+  </section>
+
+  <section class="intro">
+    <h2>Overview</h2>
+    <p>
+      This document lists every backend API endpoint that the SmartNPS360 native app currently calls.
+      Request and response shapes are taken directly from the Flutter implementation.
+    </p>
+    <p>Authenticated endpoints use a Bearer token in the <code>Authorization</code> header unless noted otherwise.</p>
+    <h3>Active endpoints</h3>
+    <ol>
+      <li>Sanctum Login</li>
+      <li>Refresh Access Token</li>
+      <li>Duty Heartbeat</li>
+      <li>GPS Ping</li>
+      <li>GPS Batch Upload</li>
+      <li>Register Push Token</li>
+      <li>Delete Push Token</li>
+      <li>Native Permission Status</li>
+    </ol>
+    <p class="note">
+      <strong>For backend developers:</strong> The mobile app does not use
+      <code>POST /api/gauth/login</code> or <code>POST /api/gps/point</code>.
+      These endpoints are not part of the current Android and iOS integration.
+    </p>
+  </section>
+
+  <section class="toc">
+    <h2>Table of Contents</h2>
+    <ol>
+      <li>Sanctum Login</li>
+      <li>Refresh Access Token</li>
+      <li>Duty Heartbeat</li>
+      <li>GPS Ping</li>
+      <li>GPS Batch Upload</li>
+      <li>Register Push Token</li>
+      <li>Delete Push Token</li>
+      <li>Native Permission Status</li>
+    </ol>
+  </section>
+
+  <!-- 1. Sanctum Login -->
+  <section class="api">
+    <h2>1. Sanctum Login</h2>
+    <div class="endpoint">
+      <span class="method post">POST</span>
+      <span class="path">/api/auth/login</span>
+    </div>
+
+    <h3>Parameters</h3>
+    <table>
+      <thead>
+        <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>employee_no</td><td>string</td><td>Yes</td><td>Officer employee number</td></tr>
+        <tr><td>password</td><td>string</td><td>Yes</td><td>Officer account password</td></tr>
+        <tr><td>device_name</td><td>string</td><td>Yes</td><td>Client device name (app sends <code>mobile-app</code>)</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Request</h3>
+    <pre>{
+  "employee_no": "EMP00123",
+  "password": "your-password",
+  "device_name": "mobile-app"
+}</pre>
+
+    <h3>Success Response</h3>
+    <pre>{
+  "access_token": "1|exampleAccessToken",
+  "refresh_token": "2|exampleRefreshToken",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "expires_at": "2026-07-09T12:00:00.000000Z",
+  "refresh_expires_in": 2592000,
+  "refresh_expires_at": "2026-08-08T12:00:00.000000Z",
+  "user": {}
+}</pre>
+
+    <h3>Description</h3>
+    <p>Authenticates an officer and returns API tokens for native services. Used when the WebView calls <code>loginWithSanctum</code> or when iOS needs to mint a bearer token from stored credentials. On success, the app stores access and refresh tokens for later API calls.</p>
+    <p>The app also accepts <code>accessToken</code>, <code>token</code>, or <code>jwt</code> instead of <code>access_token</code>, and <code>refreshToken</code> instead of <code>refresh_token</code>. The payload may be nested under <code>data</code>.</p>
+  </section>
+
+  <!-- 2. Refresh Token -->
+  <section class="api">
+    <h2>2. Refresh Access Token</h2>
+    <div class="endpoint">
+      <span class="method post">POST</span>
+      <span class="path">/api/auth/refresh</span>
+    </div>
+
+    <h3>Parameters</h3>
+    <table>
+      <thead>
+        <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>refresh_token</td><td>string</td><td>Yes</td><td>Stored refresh token from login or a previous refresh</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Request</h3>
+    <pre>{
+  "refresh_token": "2|exampleRefreshToken"
+}</pre>
+
+    <h3>Success Response</h3>
+    <pre>{
+  "access_token": "3|newAccessToken",
+  "token": "3|newAccessToken",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "expires_at": "2026-07-09T13:00:00.000000Z",
+  "refresh_token": "4|newRefreshToken",
+  "refresh_expires_in": 2592000,
+  "refresh_expires_at": "2026-08-08T13:00:00.000000Z",
+  "user": {}
+}</pre>
+
+    <h3>Description</h3>
+    <p>Exchanges a valid refresh token for a new access token. Called automatically when the access token is missing or expired, and when an API call returns 401. On success, the app saves the new access token, rotated refresh token, and expiry fields.</p>
+  </section>
+
+  <!-- 3. Duty Heartbeat -->
+  <section class="api">
+    <h2>3. Duty Heartbeat</h2>
+    <div class="endpoint">
+      <span class="method get">GET</span>
+      <span class="path">/api/heartbeat</span>
+    </div>
+
+    <h3>Parameters</h3>
+    <table>
+      <thead>
+        <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td colspan="4">No request body. Requires Bearer authentication.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Request</h3>
+    <pre>GET /api/heartbeat
+Accept: application/json</pre>
+
+    <h3>Success Response</h3>
+    <pre>{
+  "status": "on_duty"
+}</pre>
+
+    <h3>Description</h3>
+    <p>Returns the officer's current duty status. Polled while the app is running to start or stop background GPS tracking. On success, the app reads <code>on_duty</code> or <code>off_duty</code> from <code>status</code>, <code>duty_status</code>, <code>dutyStatus</code>, <code>duty</code>, or <code>state</code>, including nested <code>data</code>, <code>payload</code>, or <code>result</code> objects. A plain string response is also supported.</p>
+  </section>
+
+  <!-- 4. GPS Ping -->
+  <section class="api">
+    <h2>4. GPS Ping</h2>
+    <div class="endpoint">
+      <span class="method post">POST</span>
+      <span class="path">/api/gps/ping</span>
+    </div>
+
+    <h3>Parameters</h3>
+    <table>
+      <thead>
+        <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>app</td><td>string</td><td>Yes</td><td>App name (<code>SmartNPS360</code>)</td></tr>
+        <tr><td>platform</td><td>string</td><td>Yes</td><td><code>android</code> or <code>ios</code></td></tr>
+        <tr><td>device_id</td><td>string</td><td>Yes</td><td>Device identifier</td></tr>
+        <tr><td>deviceId</td><td>string</td><td>Yes</td><td>Same value as <code>device_id</code></td></tr>
+        <tr><td>build</td><td>string</td><td>Yes</td><td>App build number</td></tr>
+        <tr><td>latitude</td><td>number</td><td>Yes</td><td>GPS latitude</td></tr>
+        <tr><td>longitude</td><td>number</td><td>Yes</td><td>GPS longitude</td></tr>
+        <tr><td>accuracy</td><td>number</td><td>Yes</td><td>Location accuracy in meters</td></tr>
+        <tr><td>timestampMs</td><td>number</td><td>Yes</td><td>Fix time in UTC milliseconds</td></tr>
+        <tr><td>timestamp</td><td>string</td><td>Yes</td><td>Fix time in ISO 8601 UTC</td></tr>
+        <tr><td>altitude</td><td>number</td><td>No</td><td>Altitude in meters</td></tr>
+        <tr><td>altitudeAccuracy</td><td>number</td><td>No</td><td>Altitude accuracy</td></tr>
+        <tr><td>speed</td><td>number</td><td>No</td><td>Speed in m/s (omitted if invalid)</td></tr>
+        <tr><td>speedAccuracy</td><td>number</td><td>No</td><td>Speed accuracy (omitted if invalid)</td></tr>
+        <tr><td>heading</td><td>number</td><td>No</td><td>Heading in degrees (omitted if invalid)</td></tr>
+        <tr><td>headingAccuracy</td><td>number</td><td>No</td><td>Heading accuracy (omitted if invalid)</td></tr>
+        <tr><td>isMocked</td><td>boolean</td><td>No</td><td>Whether the location is mocked</td></tr>
+        <tr><td>isSimulatedBySoftware</td><td>boolean</td><td>No</td><td>Whether location is software-simulated</td></tr>
+        <tr><td>motionActivity</td><td>string</td><td>No</td><td>Motion band label (e.g. <code>stationary</code>, <code>walking</code>)</td></tr>
+        <tr><td>motionSource</td><td>string</td><td>No</td><td>Always <code>speed_adaptive_gps_policy</code></td></tr>
+        <tr><td>speedBand</td><td>string</td><td>No</td><td>Speed band label</td></tr>
+        <tr><td>speedState</td><td>string</td><td>No</td><td>Human-readable speed state</td></tr>
+        <tr><td>speedKmh</td><td>number</td><td>No</td><td>Raw speed in km/h</td></tr>
+        <tr><td>smoothedSpeedKmh</td><td>number</td><td>No</td><td>Smoothed speed in km/h</td></tr>
+        <tr><td>gpsSpeedTrusted</td><td>boolean</td><td>No</td><td>Whether GPS speed is trusted</td></tr>
+        <tr><td>captureIntervalSeconds</td><td>number</td><td>No</td><td>Capture interval for current speed band</td></tr>
+        <tr><td>uploadIntervalSeconds</td><td>number</td><td>No</td><td>Upload interval for current speed band</td></tr>
+        <tr><td>distanceFilterMeters</td><td>number</td><td>No</td><td>Distance filter for current speed band</td></tr>
+        <tr><td>floor</td><td>number</td><td>No</td><td>Floor level when available</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Request</h3>
+    <pre>{
+  "app": "SmartNPS360",
+  "platform": "android",
+  "device_id": "samsung-galaxy-a12-abc123",
+  "deviceId": "samsung-galaxy-a12-abc123",
+  "build": "42",
+  "latitude": 24.8607,
+  "longitude": 67.0011,
+  "accuracy": 8.5,
+  "timestampMs": 1752019200000,
+  "timestamp": "2026-07-09T12:00:00.000Z",
+  "altitude": 12.4,
+  "speed": 1.2,
+  "isMocked": false,
+  "motionActivity": "walking",
+  "motionSource": "speed_adaptive_gps_policy",
+  "speedBand": "2-8 km/h",
+  "speedState": "Walking / patrol",
+  "speedKmh": 4.5,
+  "smoothedSpeedKmh": 4.2,
+  "gpsSpeedTrusted": true,
+  "captureIntervalSeconds": 10,
+  "uploadIntervalSeconds": 10,
+  "distanceFilterMeters": 5
+}</pre>
+
+    <h3>Success Response</h3>
+    <pre>HTTP 2xx</pre>
+
+    <h3>Description</h3>
+    <p>Uploads a single GPS fix immediately while the officer is on duty. Used for real-time location pings without local batching. On success, the app treats any HTTP 2xx response as accepted.</p>
+  </section>
+
+  <!-- 5. GPS Batch -->
+  <section class="api">
+    <h2>5. GPS Batch Upload</h2>
+    <div class="endpoint">
+      <span class="method post">POST</span>
+      <span class="path">/api/gps/batch</span>
+    </div>
+
+    <h3>Parameters</h3>
+    <table>
+      <thead>
+        <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>points</td><td>array</td><td>Yes</td><td>Array of GPS point objects (same fields as GPS Ping)</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Request</h3>
+    <pre>{
+  "points": [
+    {
+      "app": "SmartNPS360",
+      "platform": "ios",
+      "device_id": "ios-ABCDEF12-3456-7890-ABCD-EF1234567890",
+      "deviceId": "ios-ABCDEF12-3456-7890-ABCD-EF1234567890",
+      "build": "42",
+      "latitude": 24.8607,
+      "longitude": 67.0011,
+      "accuracy": 6.0,
+      "timestampMs": 1752019200000,
+      "timestamp": "2026-07-09T12:00:00.000Z",
+      "isMocked": false,
+      "motionActivity": "automotive",
+      "motionSource": "speed_adaptive_gps_policy"
+    }
+  ]
+}</pre>
+
+    <h3>Success Response</h3>
+    <pre>HTTP 2xx</pre>
+
+    <h3>Description</h3>
+    <p>Uploads multiple queued GPS points in one request. Used when background tracking batches location updates for efficiency. On success, the app treats any HTTP 2xx response as accepted and clears the uploaded points from the local queue.</p>
+  </section>
+
+  <!-- 6. Register Push Token -->
+  <section class="api">
+    <h2>6. Register Push Token</h2>
+    <div class="endpoint">
+      <span class="method post">POST</span>
+      <span class="path">/api/push-token</span>
+    </div>
+
+    <h3>Parameters</h3>
+    <table>
+      <thead>
+        <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>platform</td><td>string</td><td>Yes</td><td><code>android</code> or <code>ios</code></td></tr>
+        <tr><td>device_id</td><td>string</td><td>Yes</td><td>Device identifier</td></tr>
+        <tr><td>push_token</td><td>string</td><td>Yes</td><td>FCM push token</td></tr>
+        <tr><td>app_version</td><td>string</td><td>Yes</td><td>App version string</td></tr>
+        <tr><td>build</td><td>string</td><td>Yes</td><td>App build number</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Request</h3>
+    <pre>{
+  "platform": "android",
+  "device_id": "samsung-galaxy-a12-abc123",
+  "push_token": "fcm-device-token",
+  "app_version": "1.0.0",
+  "build": "42"
+}</pre>
+
+    <h3>Success Response</h3>
+    <pre>HTTP 2xx</pre>
+
+    <h3>Description</h3>
+    <p>Registers the device FCM token with the backend for push notifications. Called after login and when the FCM token changes. On iOS, the app may also post through the WebView session when bearer auth is unavailable. On success, any HTTP 2xx response is treated as registered.</p>
+  </section>
+
+  <!-- 7. Delete Push Token -->
+  <section class="api">
+    <h2>7. Delete Push Token</h2>
+    <div class="endpoint">
+      <span class="method delete">DELETE</span>
+      <span class="path">/api/push-token</span>
+    </div>
+
+    <h3>Parameters</h3>
+    <table>
+      <thead>
+        <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>platform</td><td>string</td><td>Yes</td><td><code>android</code> or <code>ios</code></td></tr>
+        <tr><td>device_id</td><td>string</td><td>Yes</td><td>Device identifier</td></tr>
+        <tr><td>push_token</td><td>string</td><td>Yes</td><td>FCM push token to remove</td></tr>
+        <tr><td>app_version</td><td>string</td><td>Yes</td><td>App version string</td></tr>
+        <tr><td>build</td><td>string</td><td>Yes</td><td>App build number</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Request</h3>
+    <pre>{
+  "platform": "ios",
+  "device_id": "ios-ABCDEF12-3456-7890-ABCD-EF1234567890",
+  "push_token": "fcm-device-token",
+  "app_version": "1.0.0",
+  "build": "42"
+}</pre>
+
+    <h3>Success Response</h3>
+    <pre>HTTP 2xx</pre>
+
+    <h3>Description</h3>
+    <p>Removes a registered FCM token from the backend. Called during logout to stop push delivery to the device. On success, any HTTP 2xx response is treated as deleted.</p>
+  </section>
+
+  <!-- 8. Permission Status -->
+  <section class="api">
+    <h2>8. Native Permission Status</h2>
+    <div class="endpoint">
+      <span class="method post">POST</span>
+      <span class="path">/api/native-app/permission-status</span>
+    </div>
+
+    <h3>Parameters</h3>
+    <table>
+      <thead>
+        <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>platform</td><td>string</td><td>Yes</td><td><code>android</code> or <code>ios</code></td></tr>
+        <tr><td>deviceId</td><td>string</td><td>Yes</td><td>Device identifier</td></tr>
+        <tr><td>appVersion</td><td>string</td><td>Yes</td><td>App version string</td></tr>
+        <tr><td>build</td><td>string</td><td>Yes</td><td>App build number</td></tr>
+        <tr><td>battery_percentage</td><td>number</td><td>No</td><td>Current battery level (0–100)</td></tr>
+        <tr><td>low_power_mode</td><td>boolean</td><td>No</td><td>Whether low power mode is enabled</td></tr>
+        <tr><td>permissions</td><td>object</td><td>Yes</td><td>OS permission snapshot (see below)</td></tr>
+        <tr><td>checkedAt</td><td>string</td><td>Yes</td><td>Snapshot time in ISO 8601 UTC</td></tr>
+        <tr><td>app_cycle</td><td>string</td><td>No</td><td>App lifecycle state (e.g. <code>resumed</code>, <code>paused</code>)</td></tr>
+      </tbody>
+    </table>
+
+    <h3>permissions object</h3>
+    <table>
+      <thead>
+        <tr><th>Field</th><th>Values</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>foregroundLocation</td><td>granted, denied, unknown</td><td>Foreground location permission</td></tr>
+        <tr><td>backgroundLocation</td><td>granted, denied, unknown</td><td>Background location permission</td></tr>
+        <tr><td>preciseLocation</td><td>granted, denied, unknown</td><td>Precise location permission</td></tr>
+        <tr><td>notifications</td><td>granted, denied, unknown</td><td>Notification permission</td></tr>
+        <tr><td>batteryOptimization</td><td>granted, denied, unknown</td><td>Battery optimization exemption</td></tr>
+        <tr><td>push</td><td>enabled, disabled</td><td>In-app push toggle state (when uploaded)</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Request</h3>
+    <pre>{
+  "platform": "android",
+  "deviceId": "samsung-galaxy-a12-abc123",
+  "appVersion": "1.0.0",
+  "build": "42",
+  "battery_percentage": 78,
+  "low_power_mode": false,
+  "permissions": {
+    "foregroundLocation": "granted",
+    "backgroundLocation": "granted",
+    "preciseLocation": "granted",
+    "notifications": "granted",
+    "batteryOptimization": "denied",
+    "push": "enabled"
+  },
+  "checkedAt": "2026-07-09T12:00:00.000Z",
+  "app_cycle": "resumed"
+}</pre>
+
+    <h3>Success Response</h3>
+    <pre>HTTP 2xx</pre>
+
+    <h3>Description</h3>
+    <p>Reports the device's current OS permission and battery snapshot to the backend. Sent when permissions change, when the app lifecycle changes, or when the in-app push toggle changes. On success, any HTTP 2xx response is treated as accepted.</p>
+  </section>
+
+  <p class="footer-note">
+    SmartNPS360 Native API Reference — endpoints used by the current mobile app release.
+  </p>
+
+</body>
+</html>

@@ -14,6 +14,7 @@ import UserNotifications
   private let slcPendingLocationsKey = "smartnps360.ios_slc.pending_locations"
   private var settingsChannelRegistered = false
   private var slcChannelRegistered = false
+  private var settingsMethodChannel: FlutterMethodChannel?
   private var slcLocationManager: CLLocationManager?
   private var slcEventSink: FlutterEventSink?
 
@@ -27,6 +28,7 @@ import UserNotifications
 
     let didLaunch = super.application(application, didFinishLaunchingWithOptions: launchOptions)
     registerPlatformChannelsIfNeeded()
+    observeLowPowerModeChanges()
     restoreSlcMonitoringIfNeeded(launchOptions: launchOptions)
     application.registerForRemoteNotifications()
 
@@ -87,15 +89,46 @@ import UserNotifications
       name: settingsChannel,
       binaryMessenger: messenger
     )
+    settingsMethodChannel = channel
     channel.setMethodCallHandler { [weak self] call, result in
       switch call.method {
       case "openAppSettings", "openLocationPermissionSettings":
         self?.openAppSettings(result: result)
+      case "lowPowerModeStatus":
+        result(self?.lowPowerModeStatus() ?? "unknown")
       default:
         result(FlutterMethodNotImplemented)
       }
     }
     settingsChannelRegistered = true
+  }
+
+  private func observeLowPowerModeChanges() {
+    NotificationCenter.default.removeObserver(
+      self,
+      name: .NSProcessInfoPowerStateDidChange,
+      object: nil
+    )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(lowPowerModeDidChange),
+      name: .NSProcessInfoPowerStateDidChange,
+      object: nil
+    )
+  }
+
+  @objc private func lowPowerModeDidChange() {
+    let status = lowPowerModeStatus()
+    DispatchQueue.main.async { [weak self] in
+      self?.settingsMethodChannel?.invokeMethod(
+        "lowPowerModeChanged",
+        arguments: ["low_power_mode": status]
+      )
+    }
+  }
+
+  private func lowPowerModeStatus() -> String {
+    return ProcessInfo.processInfo.isLowPowerModeEnabled ? "enabled" : "disabled"
   }
 
   private func registerSlcChannelIfNeeded(with messenger: FlutterBinaryMessenger) {

@@ -6,6 +6,7 @@ import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../location/mock_location_detection.dart';
+import '../location/speed_adaptive_gps_policy.dart';
 import '../auth/auth_repository.dart';
 import 'background_location_accuracy.dart';
 import 'background_location_uploader.dart';
@@ -59,6 +60,7 @@ class BackgroundLocationService {
 
     StreamSubscription<Position>? sub;
     var stopping = false;
+    final policyTracker = SpeedAdaptiveGpsPolicyTracker();
 
     Future<void> stop() async {
       if (stopping) return;
@@ -107,16 +109,17 @@ class BackgroundLocationService {
           return;
         }
 
-        final token = await AuthRepository.instance.getAccessToken();
+        final token = await AuthRepository.instance.ensureValidAccessToken();
         if (token == null || token.isEmpty) {
           await stop();
           return;
         }
 
+        final policyDecision = policyTracker.evaluate(pos);
         final now = DateTime.now();
         final last = lastUploadAt;
         if (last != null &&
-            now.difference(last) < BackgroundLocationUploader.pingInterval) {
+            now.difference(last) < policyDecision.band.uploadInterval) {
           return;
         }
         lastUploadAt = now;
@@ -134,14 +137,15 @@ class BackgroundLocationService {
           // ignore: avoid_print
           print(
             '[BackgroundLocationService] location '
-            'lat=${pos.latitude} lng=${pos.longitude} acc=${pos.accuracy} '
-            'mocked=${mockFlags.isMocked} simulated=${mockFlags.isSimulatedBySoftware} '
-            'ts=${pos.timestamp.toIso8601String()}',
+            'acc=${pos.accuracy} '
+            'speedBand=${policyDecision.band.label} '
+            'uploadEvery=${policyDecision.band.uploadInterval.inSeconds}s '
+            'mocked=${mockFlags.isMocked} simulated=${mockFlags.isSimulatedBySoftware}',
           );
         }
         try {
-          await uploader.pingNow(pos);
-          await uploader.add(pos);
+          await uploader.pingNow(pos, policyDecision: policyDecision);
+          await uploader.add(pos, policyDecision: policyDecision);
         } catch (e) {
           if (kDebugMode) {
             // ignore: avoid_print

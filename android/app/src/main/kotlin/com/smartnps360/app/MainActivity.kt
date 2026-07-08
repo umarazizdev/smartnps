@@ -3,8 +3,10 @@ package com.smartnps360.app
 import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.net.Uri
@@ -17,9 +19,18 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
   private val settingsChannel = "com.smartnps360.app/settings"
+  private var settingsMethodChannel: MethodChannel? = null
+  private var powerSaveReceiverRegistered = false
+  private val powerSaveModeReceiver = object : BroadcastReceiver() {
+    override fun onReceive(context: Context?, intent: Intent?) {
+      if (intent?.action != PowerManager.ACTION_POWER_SAVE_MODE_CHANGED) return
+      notifyLowPowerModeChanged()
+    }
+  }
 
   override fun onCreate(savedInstanceState: android.os.Bundle?) {
     super.onCreate(savedInstanceState)
+    observePowerSaveModeChanges()
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       val manager = getSystemService(NotificationManager::class.java)
@@ -54,10 +65,12 @@ class MainActivity : FlutterActivity() {
   override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
     super.configureFlutterEngine(flutterEngine)
 
-    MethodChannel(
+    val channel = MethodChannel(
       flutterEngine.dartExecutor.binaryMessenger,
       settingsChannel
-    ).setMethodCallHandler { call, result ->
+    )
+    settingsMethodChannel = channel
+    channel.setMethodCallHandler { call, result ->
       when (call.method) {
         "openAppSettings" -> {
           try {
@@ -84,9 +97,42 @@ class MainActivity : FlutterActivity() {
         "isIgnoringBatteryOptimizations" -> {
           result.success(isIgnoringBatteryOptimizations())
         }
+        "batteryOptimizationStatus" -> {
+          result.success(batteryOptimizationStatus())
+        }
+        "lowPowerModeStatus" -> {
+          result.success(lowPowerModeStatus())
+        }
         else -> result.notImplemented()
       }
     }
+  }
+
+  override fun onResume() {
+    super.onResume()
+    notifyLowPowerModeChanged()
+  }
+
+  override fun onDestroy() {
+    if (powerSaveReceiverRegistered) {
+      try {
+        unregisterReceiver(powerSaveModeReceiver)
+      } catch (_: Exception) {
+      }
+      powerSaveReceiverRegistered = false
+    }
+    super.onDestroy()
+  }
+
+  private fun observePowerSaveModeChanges() {
+    if (powerSaveReceiverRegistered) return
+    val filter = IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      registerReceiver(powerSaveModeReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+    } else {
+      registerReceiver(powerSaveModeReceiver, filter)
+    }
+    powerSaveReceiverRegistered = true
   }
 
   private fun hasBackgroundLocationPermission(): Boolean {
@@ -117,6 +163,75 @@ class MainActivity : FlutterActivity() {
     }
     val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
     return powerManager.isIgnoringBatteryOptimizations(packageName)
+  }
+
+  private fun batteryOptimizationStatus(): String {
+    return try {
+      if (isIgnoringBatteryOptimizations()) {
+        "granted"
+      } else {
+        "denied"
+      }
+    } catch (_: Exception) {
+      "unknown"
+    }
+  }
+
+  private fun lowPowerModeStatus(): String {
+    return try {
+      val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+      if (powerManager.isPowerSaveMode || isOemLowPowerModeEnabled()) {
+        "enabled"
+      } else {
+        "disabled"
+      }
+    } catch (_: Exception) {
+      "unknown"
+    }
+  }
+
+  private fun notifyLowPowerModeChanged() {
+    settingsMethodChannel?.invokeMethod(
+      "lowPowerModeChanged",
+      mapOf("low_power_mode" to lowPowerModeStatus())
+    )
+  }
+
+  private fun isOemLowPowerModeEnabled(): Boolean {
+    val keys = listOf(
+      "low_power",
+      "low_power_sticky",
+      "power_save_mode",
+      "power_saving_mode",
+      "powersaving_switch",
+      "psm_switch",
+      "vivo_low_power_mode",
+      "vivo_power_save_mode",
+      "smart_power_save_mode",
+      "super_power_save_mode"
+    )
+
+    for (key in keys) {
+      val global = settingEnabled(Settings.Global.getString(contentResolver, key))
+      if (global == true) return true
+
+      val system = settingEnabled(Settings.System.getString(contentResolver, key))
+      if (system == true) return true
+
+      val secure = settingEnabled(Settings.Secure.getString(contentResolver, key))
+      if (secure == true) return true
+    }
+
+    return false
+  }
+
+  private fun settingEnabled(value: String?): Boolean? {
+    val normalized = value?.trim()?.lowercase() ?: return null
+    return when (normalized) {
+      "1", "true", "on", "enabled", "yes" -> true
+      "0", "false", "off", "disabled", "no" -> false
+      else -> normalized.toIntOrNull()?.let { it > 0 }
+    }
   }
 
   private fun openAppSettings() {

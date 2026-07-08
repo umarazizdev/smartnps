@@ -36,6 +36,10 @@
 	<string>Photo library access is required to select profile and ID images during registration and to attach images to reports.</string>
 	<key>NSUserNotificationsUsageDescription</key>
 	<string>Enable notifications to receive important updates and messages related to your account and activity.</string>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>dev.flutter.background.refresh</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -61,6 +65,7 @@
 	<true/>
 	<key>UIBackgroundModes</key>
 	<array>
+		<string>fetch</string>
 		<string>location</string>
 		<string>remote-notification</string>
 	</array>

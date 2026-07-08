@@ -8,6 +8,23 @@ IOS_DIR="$(dirname "$SCRIPT_DIR")"
 PACKAGES_DIR="$IOS_DIR/Flutter/ephemeral/Packages"
 DEPLOYMENT_TARGET="${IOS_SWIFT_PACKAGE_DEPLOYMENT_TARGET:-15.0}"
 
+materialize_symlinked_packages() {
+  local linked_packages_dir="$PACKAGES_DIR/.packages"
+  [[ -d "$linked_packages_dir" ]] || return 0
+
+  while IFS= read -r -d '' package_link; do
+    local package_target
+    package_target="$(readlink "$package_link")" || continue
+    [[ -d "$package_target" ]] || continue
+
+    local tmp
+    tmp="$(mktemp -d)"
+    cp -R "$package_target"/. "$tmp"/
+    rm "$package_link"
+    mv "$tmp" "$package_link"
+  done < <(find "$linked_packages_dir" -maxdepth 1 -type l -print0)
+}
+
 patch_package_swift() {
   local manifest="$1"
   [[ -f "$manifest" ]] || return 0
@@ -21,6 +38,7 @@ patch_package_swift() {
   tmp="$(mktemp)"
   perl -0pe "
     s/\.iOS\\(\"\\d+\\.\\d+\"\\)/.iOS(\"${DEPLOYMENT_TARGET}\")/g;
+    s/\.iOS\\(\\.v\\d+\\)/.iOS(\"${DEPLOYMENT_TARGET}\")/g;
   " "$manifest" > "$tmp"
 
   if ! cmp -s "$manifest" "$tmp"; then
@@ -36,8 +54,10 @@ if [[ ! -d "$PACKAGES_DIR" ]]; then
   exit 0
 fi
 
+materialize_symlinked_packages
+
 while IFS= read -r -d '' manifest; do
   patch_package_swift "$manifest"
-done < <(find "$PACKAGES_DIR" -name Package.swift -print0)
+done < <(find -L "$PACKAGES_DIR" -name Package.swift -print0)
 
 echo "patch_swift_package_platform: done (iOS >= ${DEPLOYMENT_TARGET})."
