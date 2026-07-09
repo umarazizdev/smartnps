@@ -32,19 +32,26 @@ class NativePermissionStatusService {
     'com.smartnps360.app/settings',
   );
   static const Duration _appCycleDebounce = Duration(milliseconds: 350);
+  static const Duration _batteryMonitorInterval = Duration(minutes: 5);
 
   String? _lastPayloadFingerprint;
   String? _lastAppCycle;
   String? _pendingAppCycle;
   Future<bool>? _appCycleUploadInFlight;
+  Timer? _batteryMonitorTimer;
+  int? _lastUploadedBatteryPercentage;
+  bool _batteryUploadInFlight = false;
+  bool _batteryMonitoringActive = false;
   bool _syncInFlight = false;
   bool _syncRequestedWhileInFlight = false;
 
   void resetSyncState() {
+    stopBatteryMonitoring();
     _lastPayloadFingerprint = null;
     _lastAppCycle = null;
     _pendingAppCycle = null;
     _appCycleUploadInFlight = null;
+    _lastUploadedBatteryPercentage = null;
     _syncRequestedWhileInFlight = false;
   }
 
@@ -76,7 +83,29 @@ class NativePermissionStatusService {
     }
   }
 
-  /// Uploads only when the permission snapshot changed (ignores [checkedAt]).
+  /// Starts conservative live battery uploads while the app is active.
+  void startBatteryMonitoring({bool uploadImmediately = true}) {
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+    _batteryMonitoringActive = true;
+    if (_batteryMonitorTimer != null) return;
+
+    if (uploadImmediately) {
+      unawaited(_uploadBatteryIfChanged());
+    }
+    _batteryMonitorTimer = Timer.periodic(_batteryMonitorInterval, (_) {
+      unawaited(_uploadBatteryIfChanged());
+    });
+  }
+
+  void stopBatteryMonitoring() {
+    _batteryMonitoringActive = false;
+    _batteryMonitorTimer?.cancel();
+    _batteryMonitorTimer = null;
+  }
+
+  /// Uploads only when the OS-state snapshot changed.
+  ///
+  /// Ignores volatile fields that should not trigger permission-status syncs.
   Future<void> syncIfChanged() async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
 
@@ -104,9 +133,7 @@ class NativePermissionStatusService {
         }
 
         final uploaded = await _upload(payload);
-        if (uploaded) {
-          _lastPayloadFingerprint = fingerprint;
-        }
+        if (uploaded) _lastPayloadFingerprint = fingerprint;
       } while (_syncRequestedWhileInFlight);
     } finally {
       _syncInFlight = false;
@@ -133,7 +160,11 @@ class NativePermissionStatusService {
         'push=${permissions['push']}',
       );
     }
-    return _upload(payload);
+    final uploaded = await _upload(payload);
+    if (uploaded) {
+      _lastPayloadFingerprint = _fingerprint(payload);
+    }
+    return uploaded;
   }
 
   /// Posts app lifecycle state with the same snapshot used by permission sync.
@@ -204,9 +235,48 @@ class NativePermissionStatusService {
     return uploaded;
   }
 
+  Future<void> _uploadBatteryIfChanged() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+    if (_batteryUploadInFlight) return;
+
+    _batteryUploadInFlight = true;
+    try {
+      final accessToken = await AuthRepository.instance.ensureValidAccessToken();
+      if (accessToken == null || accessToken.isEmpty) {
+        stopBatteryMonitoring();
+        return;
+      }
+      if (!_batteryMonitoringActive) return;
+
+      final batteryPercentage = await _batteryPercentage();
+      if (batteryPercentage == null ||
+          batteryPercentage == _lastUploadedBatteryPercentage) {
+        return;
+      }
+      if (!_batteryMonitoringActive) return;
+
+      final payload = await buildPayload();
+      payload['battery_percentage'] = batteryPercentage;
+      if (!_batteryMonitoringActive) return;
+
+      if (kDebugMode) {
+        debugPrint(
+          '[NativePermissionStatus] battery upload $batteryPercentage%',
+        );
+      }
+      final uploaded = await _upload(payload);
+      if (uploaded) {
+        _lastPayloadFingerprint = _fingerprint(payload);
+      }
+    } finally {
+      _batteryUploadInFlight = false;
+    }
+  }
+
   String _fingerprint(Map<String, dynamic> payload) {
     final copy = Map<String, dynamic>.from(payload)
       ..remove('app_cycle')
+      ..remove('battery_percentage')
       ..remove('checkedAt');
     final permissions = copy['permissions'];
     if (permissions is Map) {
@@ -459,10 +529,20 @@ class NativePermissionStatusService {
           'status=${response.statusCode}',
         );
       }
+      if (ok) _rememberUploadedBattery(payload);
       return ok;
     } catch (error) {
       debugPrint('[NativePermissionStatus] upload failed: $error');
       return false;
+    }
+  }
+
+  void _rememberUploadedBattery(Map<String, dynamic> payload) {
+    final batteryPercentage = payload['battery_percentage'];
+    if (batteryPercentage is int &&
+        batteryPercentage >= 0 &&
+        batteryPercentage <= 100) {
+      _lastUploadedBatteryPercentage = batteryPercentage;
     }
   }
 }

@@ -300,8 +300,10 @@ class IosDutyLocationPinger {
     final now = DateTime.now();
     final policyDecision = _policyTracker.evaluate(pos);
     final last = _lastLocationAt;
-    if (last != null &&
-        now.difference(last) < policyDecision.band.uploadInterval) {
+    final uploadInterval = BackgroundLocationUploader.pingInterval;
+    // Restore this when switching back to speed-adaptive upload timing.
+    // final uploadInterval = policyDecision.band.uploadInterval;
+    if (last != null && now.difference(last) < uploadInterval) {
       return;
     }
     _lastLocationAt = now;
@@ -319,7 +321,7 @@ class IosDutyLocationPinger {
         '[IosDutyLocationPinger] location '
         'acc=${pos.accuracy} '
         'speedBand=${policyDecision.band.label} '
-        'uploadEvery=${policyDecision.band.uploadInterval.inSeconds}s '
+        'uploadEvery=${uploadInterval.inSeconds}s '
         'mocked=${mockFlags.isMocked} simulated=${mockFlags.isSimulatedBySoftware}',
       );
     }

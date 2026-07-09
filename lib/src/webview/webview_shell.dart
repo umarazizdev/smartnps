@@ -111,6 +111,15 @@ class _WebViewShellState extends State<WebViewShell>
   String? _pendingPushUrl;
   bool _nativeLogoutInFlight = false;
 
+  void _setNativeAuthSession(bool value) {
+    _ui.setNativeAuthSession(value);
+    if (value) {
+      NativePermissionStatusService.instance.startBatteryMonitoring();
+    } else {
+      NativePermissionStatusService.instance.stopBatteryMonitoring();
+    }
+  }
+
   Future<void> _performNativeLogout({
     required String reason,
     bool skipIfAlreadyLoggedOut = false,
@@ -128,7 +137,7 @@ class _WebViewShellState extends State<WebViewShell>
 
       // Instant UI — bottom bar hides immediately.
       _ui.setOfficerLoggedIn(false);
-      _ui.setNativeAuthSession(false);
+      _setNativeAuthSession(false);
       unawaited(
         _controller?.evaluateJavascript(
           source:
@@ -167,7 +176,7 @@ class _WebViewShellState extends State<WebViewShell>
     final loggedIn = await AuthRepository.instance.isOfficerLoggedIn();
     _ui.setOfficerLoggedIn(loggedIn);
     final token = await AuthRepository.instance.getAccessToken();
-    _ui.setNativeAuthSession(token != null && token.isNotEmpty);
+    _setNativeAuthSession(token != null && token.isNotEmpty);
   }
 
   bool _isSamePageReload(Uri? uriAtLoadStart, Uri? nextUri) {
@@ -1741,6 +1750,14 @@ class _WebViewShellState extends State<WebViewShell>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      if (_ui.hasNativeAuthSession.value) {
+        NativePermissionStatusService.instance.startBatteryMonitoring();
+      }
+    } else {
+      NativePermissionStatusService.instance.stopBatteryMonitoring();
+    }
+
     unawaited(
       NativePermissionStatusService.instance.uploadAppCycle(
         appCycle: state.name,
@@ -1785,6 +1802,7 @@ class _WebViewShellState extends State<WebViewShell>
     _connectivitySub?.cancel();
     DutyHeartbeatService.instance.backgroundLocationPermissionMissing
         .removeListener(_onBackgroundLocationPermissionChanged);
+    NativePermissionStatusService.instance.stopBatteryMonitoring();
     unawaited(_stopDutyHeartbeat());
     for (final sub in _nativeGeoWatches.values) {
       sub.cancel();
@@ -2258,7 +2276,7 @@ class _WebViewShellState extends State<WebViewShell>
             user: user,
           );
           _ui.setOfficerLoggedIn(true);
-          _ui.setNativeAuthSession(true);
+          _setNativeAuthSession(true);
           _syncPushTokenAfterLogin();
           unawaited(_maybeStartDutyHeartbeat());
           return {'ok': true, 'action': authAction};
@@ -2286,7 +2304,7 @@ class _WebViewShellState extends State<WebViewShell>
             user: AuthState.instance.user.value,
           );
           _ui.setOfficerLoggedIn(true);
-          _ui.setNativeAuthSession(true);
+          _setNativeAuthSession(true);
           _syncPushTokenAfterLogin();
           unawaited(_maybeStartDutyHeartbeat());
           return {'ok': true, 'action': 'session'};
@@ -2374,7 +2392,7 @@ class _WebViewShellState extends State<WebViewShell>
       }
 
       _ui.setOfficerLoggedIn(true);
-      _ui.setNativeAuthSession(true);
+      _setNativeAuthSession(true);
       if (syncPush) {
         await PushNotificationService.instance.syncPushTokenAfterLogin();
       }
@@ -2389,7 +2407,7 @@ class _WebViewShellState extends State<WebViewShell>
             '[SmartNPS360][Auth] sanctum login recovered from memory cache',
           );
           _ui.setOfficerLoggedIn(true);
-          _ui.setNativeAuthSession(true);
+          _setNativeAuthSession(true);
           if (syncPush) {
             await PushNotificationService.instance.syncPushTokenAfterLogin();
           }
@@ -2535,7 +2553,7 @@ class _WebViewShellState extends State<WebViewShell>
         AuthState.instance.setSession({'accessToken': result});
         await AuthRepository.instance.setOfficerLoggedIn(true);
         _ui.setOfficerLoggedIn(true);
-        _ui.setNativeAuthSession(true);
+        _setNativeAuthSession(true);
         debugPrint('[SmartNPS360][Push] ios harvested web access token');
         return result;
       }
