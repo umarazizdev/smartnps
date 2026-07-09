@@ -118,8 +118,10 @@ class BackgroundLocationService {
         final policyDecision = policyTracker.evaluate(pos);
         final now = DateTime.now();
         final last = lastUploadAt;
-        if (last != null &&
-            now.difference(last) < policyDecision.band.uploadInterval) {
+        final uploadInterval = BackgroundLocationUploader.pingInterval;
+        // Restore this when switching back to speed-adaptive upload timing.
+        // final uploadInterval = policyDecision.band.uploadInterval;
+        if (last != null && now.difference(last) < uploadInterval) {
           return;
         }
         lastUploadAt = now;
@@ -139,7 +141,7 @@ class BackgroundLocationService {
             '[BackgroundLocationService] location '
             'acc=${pos.accuracy} '
             'speedBand=${policyDecision.band.label} '
-            'uploadEvery=${policyDecision.band.uploadInterval.inSeconds}s '
+            'uploadEvery=${uploadInterval.inSeconds}s '
             'mocked=${mockFlags.isMocked} simulated=${mockFlags.isSimulatedBySoftware}',
           );
         }
