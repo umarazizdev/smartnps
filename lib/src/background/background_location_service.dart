@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:geolocator/geolocator.dart';
 
+import '../location/location_keep_point_gate.dart';
 import '../location/mock_location_detection.dart';
 import '../location/speed_adaptive_gps_policy.dart';
 import '../auth/auth_repository.dart';
@@ -61,14 +62,25 @@ class BackgroundLocationService {
     StreamSubscription<Position>? sub;
     var stopping = false;
     final policyTracker = SpeedAdaptiveGpsPolicyTracker();
+    final keepPointGate = LocationKeepPointGate();
 
     Future<void> stop() async {
       if (stopping) return;
       stopping = true;
+      if (kDebugMode) {
+        // ignore: avoid_print
+        print('[BackgroundLocationService] stopping (GPS first, then service)');
+      }
       await sub?.cancel();
       sub = null;
-      await uploader.stop();
+      // Stop collecting immediately; do not block stopSelf on open-network batch flush.
+      await uploader.stopCollectingOnly();
       service.stopSelf();
+      unawaited(
+        uploader.flushAllPendingBatchesBounded(
+          timeout: BackgroundLocationUploader.logoutFlushBudget,
+        ),
+      );
     }
 
     service.on('stop').listen((event) {
@@ -93,7 +105,6 @@ class BackgroundLocationService {
             allowBackgroundLocationUpdates: true,
           );
 
-    DateTime? lastUploadAt;
     sub = Geolocator.getPositionStream(locationSettings: settings).listen(
       (pos) async {
         if (stopping) return;
@@ -110,21 +121,17 @@ class BackgroundLocationService {
         }
 
         final token = await AuthRepository.instance.ensureValidAccessToken();
+        if (stopping) return;
         if (token == null || token.isEmpty) {
           await stop();
           return;
         }
 
         final policyDecision = policyTracker.evaluate(pos);
-        final now = DateTime.now();
-        final last = lastUploadAt;
-        final uploadInterval = BackgroundLocationUploader.pingInterval;
-        // Restore this when switching back to speed-adaptive upload timing.
-        // final uploadInterval = policyDecision.band.uploadInterval;
-        if (last != null && now.difference(last) < uploadInterval) {
+        final keepDecision = keepPointGate.evaluate(pos, policyDecision);
+        if (!keepDecision.shouldKeep) {
           return;
         }
-        lastUploadAt = now;
 
         final mockFlags = MockLocationDetection.flagsFor(pos);
         if (mockFlags.isDetected) {
@@ -141,7 +148,10 @@ class BackgroundLocationService {
             '[BackgroundLocationService] location '
             'acc=${pos.accuracy} '
             'speedBand=${policyDecision.band.label} '
-            'uploadEvery=${uploadInterval.inSeconds}s '
+            'uploadEvery=${keepDecision.uploadInterval?.inSeconds}s '
+            'trigger=${keepDecision.trigger?.name} '
+            'dist=${keepDecision.distanceMeters?.toStringAsFixed(1)}m '
+            'bearingDelta=${keepDecision.bearingDeltaDegrees?.toStringAsFixed(1)} '
             'mocked=${mockFlags.isMocked} simulated=${mockFlags.isSimulatedBySoftware}',
           );
         }

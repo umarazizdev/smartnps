@@ -9,7 +9,6 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../firebase_options.dart';
@@ -17,8 +16,11 @@ import '../api/api_client.dart';
 import '../auth/auth_repository.dart';
 import '../auth/auth_state.dart';
 import '../permissions/native_permission_status_service.dart';
+import '../permissions/os_notification_permission.dart';
+import 'push_notification_preferences.dart';
 import '../utilities/app_config.dart';
 import '../utilities/app_version_info.dart';
+import '../utilities/overlay_prompt_guard.dart';
 import '../utilities/permission_settings_helper.dart';
 
 const String kPushAndroidChannelId = 'smartnps360_default';
@@ -160,9 +162,6 @@ class PushNotificationService {
 
   static final PushNotificationService instance = PushNotificationService._();
 
-  static const _storage = FlutterSecureStorage();
-  static const _kPushEnabledKey = 'push.notifications_enabled';
-
   final FlutterLocalNotificationsPlugin _local =
       FlutterLocalNotificationsPlugin();
 
@@ -234,16 +233,16 @@ class PushNotificationService {
   }
 
   Future<void> _loadPushEnabledPreference() async {
-    final stored = await _storage.read(key: _kPushEnabledKey);
-    _pushNotificationsEnabled = stored != '0';
+    _pushNotificationsEnabled = await PushNotificationPreferences.readEnabled();
   }
 
   Future<void> _persistPushEnabledPreference(bool enabled) async {
     _pushNotificationsEnabled = enabled;
-    await _storage.write(key: _kPushEnabledKey, value: enabled ? '1' : '0');
+    await PushNotificationPreferences.writeEnabled(enabled);
   }
 
   Future<Map<String, dynamic>> getNotificationStatus() async {
+    await _loadPushEnabledPreference();
     final permissionGranted = await _hasNotificationPermission();
     final hasToken = _lastFcmToken != null && _lastFcmToken!.isNotEmpty;
     return {
@@ -272,13 +271,14 @@ class PushNotificationService {
     }
 
     final status = await getNotificationStatus();
-    unawaited(syncPushStateToPermissionApi());
+    await syncPushStateToPermissionApi();
     return status;
   }
 
   /// Uploads the current in-app push toggle to permission-status API.
   Future<void> syncPushStateToPermissionApi() async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
+    if (!await AuthRepository.instance.isOfficerLoggedIn()) return;
 
     await _loadPushEnabledPreference();
     await NativePermissionStatusService.instance.uploadPushToggle(
@@ -508,16 +508,7 @@ class PushNotificationService {
   }
 
   Future<bool> _hasNotificationPermission() async {
-    if (Platform.isAndroid) {
-      return (await Permission.notification.status).isGranted;
-    }
-    if (Platform.isIOS) {
-      final settings = await FirebaseMessaging.instance
-          .getNotificationSettings();
-      return settings.authorizationStatus == AuthorizationStatus.authorized ||
-          settings.authorizationStatus == AuthorizationStatus.provisional;
-    }
-    return true;
+    return OsNotificationPermission.isGranted();
   }
 
   Future<bool> _ensureNotificationPermission() async {
@@ -555,7 +546,9 @@ class PushNotificationService {
       }
     }
 
-    final status = await Permission.notification.request();
+    final status = await OverlayPromptGuard.runDuringOsPermissionPrompt(
+      Permission.notification.request,
+    );
     debugPrint('[SmartNPS360][Push] android notification permission=$status');
     if (!status.isGranted &&
         PermissionSettingsHelper.shouldOpenSettings(status) &&
@@ -583,11 +576,13 @@ class PushNotificationService {
       return true;
     }
 
-    final settings = await messaging.requestPermission(
-      alert: true,
-      badge: true,
-      sound: true,
-      provisional: false,
+    final settings = await OverlayPromptGuard.runDuringOsPermissionPrompt(
+      () => messaging.requestPermission(
+        alert: true,
+        badge: true,
+        sound: true,
+        provisional: false,
+      ),
     );
     debugPrint(
       '[SmartNPS360][Push] ios permission=${settings.authorizationStatus}',
@@ -776,22 +771,11 @@ class PushNotificationService {
     required String fingerprint,
   }) async {
     try {
-      if (kDebugMode) {
-        debugPrint(
-          '[SmartNPS360][Push] POST $uri '
-          'auth=${useSessionCookies ? 'session-cookies' : 'bearer'}',
-        );
-      }
       final response = await ApiClient.instance.dio.postUri(
         uri,
         data: payload,
         options: _jsonOptions(useSessionCookies: useSessionCookies),
       );
-      if (kDebugMode) {
-        debugPrint(
-          '[SmartNPS360][Push] upload ok status=${response.statusCode}',
-        );
-      }
       final ok =
           response.statusCode != null &&
           response.statusCode! >= 200 &&
@@ -800,8 +784,7 @@ class PushNotificationService {
         _lastUploadedPushTokenFingerprint = fingerprint;
       }
       return ok;
-    } catch (e) {
-      debugPrint('[SmartNPS360][Push] upload failed: $e');
+    } catch (_) {
       return false;
     }
   }
@@ -857,12 +840,6 @@ class PushNotificationService {
     final uri = Uri.parse(AppConfig.pushTokenUrl);
 
     try {
-      if (kDebugMode) {
-        debugPrint(
-          '[SmartNPS360][Push] DELETE $uri '
-          'auth=${useSessionCookies ? 'session-cookies' : 'bearer'}',
-        );
-      }
       final response = await ApiClient.instance.dio.deleteUri(
         uri,
         data: payload,
@@ -872,14 +849,8 @@ class PushNotificationService {
           response.statusCode != null &&
           response.statusCode! >= 200 &&
           response.statusCode! < 300;
-      if (kDebugMode) {
-        debugPrint(
-          '[SmartNPS360][Push] delete ok status=${response.statusCode}',
-        );
-      }
       return ok;
-    } catch (e) {
-      debugPrint('[SmartNPS360][Push] delete failed: $e');
+    } catch (_) {
       return false;
     }
   }

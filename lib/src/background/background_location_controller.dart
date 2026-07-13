@@ -112,13 +112,24 @@ class BackgroundLocationController {
       }
 
       final service = FlutterBackgroundService();
-      final bool running = await service.isRunning();
-      if (!running) {
-        return {'ok': true, 'stopped': false, 'running': false};
-      }
+      final bool runningBeforeStop = await service.isRunning();
+      // Always invoke stop: isRunning() can be false while the FGS is still active.
       service.invoke('stop');
-      await _waitUntilAndroidServiceStopped();
-      final stillRunning = await service.isRunning();
+      if (runningBeforeStop) {
+        await _waitUntilAndroidServiceStopped();
+      } else {
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+      }
+
+      var stillRunning = await service.isRunning();
+      if (stillRunning) {
+        service.invoke('stop');
+        await _waitUntilAndroidServiceStopped(
+          maxWait: const Duration(seconds: 15),
+        );
+        stillRunning = await service.isRunning();
+      }
+
       return {
         'ok': !stillRunning,
         'stopped': !stillRunning,
@@ -137,13 +148,22 @@ class BackgroundLocationController {
     }
   }
 
-  static Future<void> _waitUntilAndroidServiceStopped() async {
+  static Future<void> _waitUntilAndroidServiceStopped({
+    Duration maxWait = const Duration(seconds: 60),
+  }) async {
     final service = FlutterBackgroundService();
-    // Allow time for queued batch uploads to finish during logout teardown.
-    final deadline = DateTime.now().add(const Duration(seconds: 60));
+    final deadline = DateTime.now().add(maxWait);
     while (DateTime.now().isBefore(deadline)) {
       if (!await service.isRunning()) return;
       await Future<void>.delayed(const Duration(milliseconds: 100));
     }
+  }
+
+  /// True when platform background location collection is active.
+  static Future<bool> isTrackingRunning() async {
+    if (Platform.isIOS) {
+      return IosDutyLocationPinger.isRunning;
+    }
+    return FlutterBackgroundService().isRunning();
   }
 }

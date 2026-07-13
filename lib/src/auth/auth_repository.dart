@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../api/api_client.dart';
 import '../utilities/app_config.dart';
 import 'auth_state.dart';
 import 'location_disclosure_account_sync.dart';
@@ -432,12 +433,8 @@ class AuthRepository {
       );
 
       final statusCode = response.statusCode ?? 0;
+      ApiClient.logHttpResult('POST', Uri.parse(AppConfig.refreshTokenUrl), statusCode);
       if (statusCode < 200 || statusCode >= 300) {
-        if (kDebugMode) {
-          debugPrint(
-            '[SmartNPS360][AuthRepo] refresh failed status=$statusCode',
-          );
-        }
         if (statusCode == 401 || statusCode == 403) {
           await _notifyRefreshSessionExpired();
         }
@@ -453,27 +450,28 @@ class AuthRepository {
 
       await saveTokensFromAuthResponse(Map<String, dynamic>.from(body));
       final access = await getAccessToken();
-      if (kDebugMode) {
-        debugPrint(
-          '[SmartNPS360][AuthRepo] refresh ok hasAccess=${access != null && access.isNotEmpty}',
-        );
-      }
       completer.complete(access);
       return access;
     } on DioException catch (e) {
       final statusCode = e.response?.statusCode ?? 0;
-      if (kDebugMode) {
-        debugPrint('[SmartNPS360][AuthRepo] refresh dio failed status=$statusCode');
-      }
+      ApiClient.logHttpError(
+        'POST',
+        Uri.parse(AppConfig.refreshTokenUrl),
+        statusCode,
+        e.response?.data?.toString() ?? e.message ?? e.type.name,
+      );
       if (statusCode == 401 || statusCode == 403) {
         await _notifyRefreshSessionExpired();
       }
       completer.complete(null);
       return null;
     } catch (e) {
-      if (kDebugMode) {
-        debugPrint('[SmartNPS360][AuthRepo] refresh failed: $e');
-      }
+      ApiClient.logHttpError(
+        'POST',
+        Uri.parse(AppConfig.refreshTokenUrl),
+        0,
+        e.toString(),
+      );
       completer.complete(null);
       return null;
     } finally {

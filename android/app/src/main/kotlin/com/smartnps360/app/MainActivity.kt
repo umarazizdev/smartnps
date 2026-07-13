@@ -170,7 +170,8 @@ class MainActivity : FlutterActivity() {
       if (isIgnoringBatteryOptimizations()) {
         "granted"
       } else {
-        "denied"
+        // Default optimized state — not an explicit officer denial.
+        "unknown"
       }
     } catch (_: Exception) {
       "unknown"

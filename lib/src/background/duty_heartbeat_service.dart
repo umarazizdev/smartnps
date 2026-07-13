@@ -5,7 +5,6 @@ import 'dart:math';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../api/api_client.dart';
@@ -19,6 +18,7 @@ import '../utilities/permission_settings_helper.dart';
 import '../widgets/location_tracking_disclosure_dialog.dart';
 import 'background_location_controller.dart';
 import 'background_location_permissions.dart';
+import 'clock_in_gate_service.dart';
 import 'duty_tracking_preferences.dart';
 import 'ios_duty_location_pinger.dart';
 import 'location_disclosure_consent.dart';
@@ -67,10 +67,37 @@ class DutyHeartbeatService {
   bool get shouldShowBackgroundLocationBanner =>
       backgroundLocationPermissionMissing.value &&
       !PermissionSettingsHelper.settingsPromptVisible.value &&
-      !disclosurePromptVisible.value;
+      !disclosurePromptVisible.value &&
+      !_backgroundLocationSettingsDialogVisible &&
+      !_disclosurePromptInFlight &&
+      !ClockInGateService.instance.isPrepareInFlight &&
+      !OverlayPromptGuard.blocksTopBanner;
 
   bool get isOnDutyTrackingActive =>
       _heartbeatActive && _lastAppliedStatus == onDuty;
+
+  /// Fresh heartbeat read used before native logout teardown.
+  ///
+  /// Returns true only when the server reports [onDuty]. If the API is
+  /// unavailable, falls back to the last applied poll result.
+  Future<bool> isOnDutyAccordingToHeartbeat() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return false;
+    if (!await _hasActiveAuthToken()) return false;
+
+    try {
+      final status = await _fetchDutyStatus();
+      if (status == onDuty) return true;
+      if (status == offDuty) return false;
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint(
+          '[DutyHeartbeatService] on-duty logout check failed: $e',
+        );
+      }
+    }
+
+    return _lastAppliedStatus == onDuty;
+  }
 
   Future<void> refreshBackgroundLocationPermissionBannerState() async {
     if (_lastAppliedStatus != onDuty) {
@@ -186,10 +213,25 @@ class DutyHeartbeatService {
   }
 
   Future<bool> _isLocationTrackingRunning() async {
-    if (Platform.isIOS) {
-      return IosDutyLocationPinger.isRunning;
+    return BackgroundLocationController.isTrackingRunning();
+  }
+
+  /// Retries stop when heartbeat is off_duty but tracking is still active.
+  Future<void> _ensureOffDutyTrackingStopped() async {
+    if (_lastAppliedStatus != offDuty) return;
+
+    final running = await _isLocationTrackingRunning();
+    if (!running) return;
+
+    if (kDebugMode) {
+      debugPrint(
+        '[DutyHeartbeatService] off_duty but tracking still running; stopping',
+      );
     }
-    return FlutterBackgroundService().isRunning();
+    final result = await BackgroundLocationController.stop();
+    debugPrint(
+      '[DutyHeartbeatService] off_duty stop retry ok=${result['ok'] == true}',
+    );
   }
 
   Future<void> _ensureIosTrackingHealthy() async {
@@ -310,6 +352,11 @@ class DutyHeartbeatService {
             debugPrint('[DutyHeartbeatService] unchanged status=$status');
           }
           await refreshBackgroundLocationPermissionBannerState();
+        } else if (status == offDuty) {
+          await _ensureOffDutyTrackingStopped();
+          if (kDebugMode) {
+            debugPrint('[DutyHeartbeatService] unchanged status=$status');
+          }
         } else if (kDebugMode) {
           debugPrint('[DutyHeartbeatService] unchanged status=$status');
         }
@@ -352,18 +399,10 @@ class DutyHeartbeatService {
 
     final statusCode = response.statusCode ?? 0;
     if (statusCode == 401 || statusCode == 403) {
-      if (kDebugMode) {
-        debugPrint(
-          '[DutyHeartbeatService] heartbeat unauthorized status=$statusCode',
-        );
-      }
       return null;
     }
 
     if (statusCode < 200 || statusCode >= 300) {
-      if (kDebugMode) {
-        debugPrint('[DutyHeartbeatService] heartbeat failed status=$statusCode');
-      }
       return null;
     }
 

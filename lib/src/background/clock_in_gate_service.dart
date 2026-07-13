@@ -7,7 +7,6 @@ import 'package:geolocator/geolocator.dart';
 import '../auth/location_disclosure_account_sync.dart';
 import '../app/app_navigator.dart';
 import '../location/mock_location_guard.dart';
-import '../utilities/app_lifecycle_resume_gate.dart';
 import '../utilities/overlay_prompt_guard.dart';
 import '../utilities/permission_settings_helper.dart';
 import '../widgets/clock_in_blocked_dialog.dart';
@@ -27,10 +26,20 @@ class ClockInGateService {
   Future<bool>? _disclosurePromptFuture;
   _PendingClockInFailureDialog? _pendingFailureAfterSettings;
 
+  final ValueNotifier<bool> prepareInFlightVisible = ValueNotifier(false);
+
   bool get isGeoUnlockedForClockIn => _geoUnlockedForClockIn;
 
   /// True while [prepareClockIn] is running — blocks parallel GPS / clock-in.
   bool get isPrepareInFlight => _prepareInFlight;
+
+  void _setPrepareInFlight(bool value) {
+    if (_prepareInFlight == value) return;
+    _prepareInFlight = value;
+    if (prepareInFlightVisible.value != value) {
+      prepareInFlightVisible.value = value;
+    }
+  }
 
   void clearGeoUnlock() {
     _geoUnlockedForClockIn = false;
@@ -102,7 +111,7 @@ class ClockInGateService {
       );
     }
 
-    _prepareInFlight = true;
+    _setPrepareInFlight(true);
     _geoUnlockedForClockIn = false;
     _pendingFailureAfterSettings = null;
 
@@ -148,7 +157,7 @@ class ClockInGateService {
       _geoUnlockedForClockIn = true;
       return _gateResult(canClockIn: true);
     } finally {
-      _prepareInFlight = false;
+      _setPrepareInFlight(false);
     }
   }
 
@@ -186,9 +195,6 @@ class ClockInGateService {
       destination: ClockInBlockedDialog.settingsDestinationFor(blockReason),
       waitForReturn: true,
     );
-    if (!Platform.isAndroid) {
-      await AppLifecycleResumeGate.waitForResume();
-    }
     await BackgroundLocationPermissions.refreshPermissionStateFromOs();
     if (Platform.isAndroid) {
       PermissionSettingsHelper.dismissStaleModalRouteIfPresent();

@@ -586,7 +586,7 @@ Accept: application/json</pre>
         <tr><td>backgroundLocation</td><td>granted, denied, unknown</td><td>Background location permission</td></tr>
         <tr><td>preciseLocation</td><td>granted, denied, unknown</td><td>Precise location permission</td></tr>
         <tr><td>notifications</td><td>granted, denied, unknown</td><td>Notification permission</td></tr>
-        <tr><td>batteryOptimization</td><td>granted, denied, unknown</td><td>Battery optimization exemption</td></tr>
+        <tr><td>batteryOptimization</td><td>granted, unknown</td><td>Android battery optimization exemption (<code>granted</code> = exempt; <code>unknown</code> = default optimized state or iOS)</td></tr>
         <tr><td>push</td><td>enabled, disabled</td><td>In-app push toggle state (when uploaded)</td></tr>
       </tbody>
     </table>
@@ -604,7 +604,7 @@ Accept: application/json</pre>
     "backgroundLocation": "granted",
     "preciseLocation": "granted",
     "notifications": "granted",
-    "batteryOptimization": "denied",
+    "batteryOptimization": "unknown",
     "push": "enabled"
   },
   "checkedAt": "2026-07-09T12:00:00.000Z",

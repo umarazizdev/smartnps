@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../utilities/overlay_prompt_guard.dart';
 import '../utilities/permission_settings_helper.dart';
 
 enum LocationPermissionPhase { none, foregroundOnly, backgroundReady }
@@ -125,7 +126,9 @@ class BackgroundLocationPermissions {
     }
     final fg = fgBefore.isGranted
         ? fgBefore
-        : await Permission.location.request();
+        : await OverlayPromptGuard.runDuringOsPermissionPrompt(
+            Permission.location.request,
+          );
     if (!fg.isGranted) {
       return BackgroundPermissionOutcome(
         granted: false,
@@ -145,7 +148,9 @@ class BackgroundLocationPermissions {
       );
     }
     if (!notificationBefore.isGranted) {
-      final notification = await Permission.notification.request();
+      final notification = await OverlayPromptGuard.runDuringOsPermissionPrompt(
+        Permission.notification.request,
+      );
       if (kDebugMode) {
         // ignore: avoid_print
         print(
@@ -169,7 +174,9 @@ class BackgroundLocationPermissions {
     }
     final bg = bgBefore.isGranted
         ? bgBefore
-        : await Permission.locationAlways.request();
+        : await OverlayPromptGuard.runDuringOsPermissionPrompt(
+            Permission.locationAlways.request,
+          );
     if (kDebugMode) {
       // ignore: avoid_print
       print('[BackgroundLocationPermissions] android bg(after)=$bg');
@@ -215,7 +222,9 @@ class BackgroundLocationPermissions {
     }
 
     if (geoPermission == LocationPermission.denied) {
-      geoPermission = await Geolocator.requestPermission();
+      geoPermission = await OverlayPromptGuard.runDuringOsPermissionPrompt(
+        Geolocator.requestPermission,
+      );
       if (kDebugMode) {
         // ignore: avoid_print
         print(

@@ -4,7 +4,6 @@ import 'dart:io';
 
 import 'package:battery_plus/battery_plus.dart';
 import 'package:dio/dio.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
@@ -13,6 +12,8 @@ import 'package:permission_handler/permission_handler.dart';
 import '../api/api_client.dart';
 import '../auth/auth_repository.dart';
 import '../background/background_location_permissions.dart';
+import '../push/push_notification_preferences.dart';
+import 'os_notification_permission.dart';
 import '../utilities/app_config.dart';
 import '../utilities/app_version_info.dart';
 import '../utilities/device_identity.dart';
@@ -42,8 +43,10 @@ class NativePermissionStatusService {
   int? _lastUploadedBatteryPercentage;
   bool _batteryUploadInFlight = false;
   bool _batteryMonitoringActive = false;
-  bool _syncInFlight = false;
-  bool _syncRequestedWhileInFlight = false;
+  Future<void> _uploadSerial = Future<void>.value();
+  bool _syncCoalescePending = false;
+  bool _syncForceNext = false;
+  Future<void>? _syncInFlight;
 
   void resetSyncState() {
     stopBatteryMonitoring();
@@ -52,7 +55,9 @@ class NativePermissionStatusService {
     _pendingAppCycle = null;
     _appCycleUploadInFlight = null;
     _lastUploadedBatteryPercentage = null;
-    _syncRequestedWhileInFlight = false;
+    _syncCoalescePending = false;
+    _syncForceNext = false;
+    _syncInFlight = null;
   }
 
   Future<Map<String, dynamic>> buildPayload() async {
@@ -86,11 +91,24 @@ class NativePermissionStatusService {
   /// Starts conservative live battery uploads while the app is active.
   void startBatteryMonitoring({bool uploadImmediately = true}) {
     if (!Platform.isAndroid && !Platform.isIOS) return;
+    unawaited(
+      _startBatteryMonitoringImpl(uploadImmediately: uploadImmediately),
+    );
+  }
+
+  Future<void> _startBatteryMonitoringImpl({
+    required bool uploadImmediately,
+  }) async {
+    if (!await AuthRepository.instance.isOfficerLoggedIn()) {
+      stopBatteryMonitoring();
+      return;
+    }
+
     _batteryMonitoringActive = true;
     if (_batteryMonitorTimer != null) return;
 
     if (uploadImmediately) {
-      unawaited(_uploadBatteryIfChanged());
+      await _uploadBatteryIfChanged();
     }
     _batteryMonitorTimer = Timer.periodic(_batteryMonitorInterval, (_) {
       unawaited(_uploadBatteryIfChanged());
@@ -103,27 +121,44 @@ class NativePermissionStatusService {
     _batteryMonitorTimer = null;
   }
 
-  /// Uploads only when the OS-state snapshot changed.
-  ///
-  /// Ignores volatile fields that should not trigger permission-status syncs.
-  Future<void> syncIfChanged() async {
-    if (!Platform.isAndroid && !Platform.isIOS) return;
+  /// Uploads when the permission snapshot changed (includes in-app push toggle).
+  Future<bool> syncIfChanged({bool force = false}) async {
+    if (!Platform.isAndroid && !Platform.isIOS) return false;
 
-    final accessToken = await AuthRepository.instance.ensureValidAccessToken();
-    if (accessToken == null || accessToken.isEmpty) return;
-    if (_syncInFlight) {
-      _syncRequestedWhileInFlight = true;
-      return;
+    final accessToken = await _accessTokenForLoggedInOfficer();
+    if (accessToken == null || accessToken.isEmpty) return false;
+
+    if (force) _syncForceNext = true;
+
+    final inFlight = _syncInFlight;
+    if (inFlight != null) {
+      _syncCoalescePending = true;
+      if (force) _syncForceNext = true;
+      return inFlight.then((_) => true);
     }
 
-    _syncInFlight = true;
+    final task = _runSyncIfChanged();
+    _syncInFlight = task;
     try {
+      await task;
+      return true;
+    } finally {
+      if (identical(_syncInFlight, task)) {
+        _syncInFlight = null;
+      }
+    }
+  }
+
+  Future<void> _runSyncIfChanged() async {
+    await _serialized(() async {
       do {
-        _syncRequestedWhileInFlight = false;
+        _syncCoalescePending = false;
+        final force = _syncForceNext;
+        _syncForceNext = false;
 
         final payload = await buildPayload();
         final fingerprint = _fingerprint(payload);
-        if (fingerprint == _lastPayloadFingerprint) {
+        if (!force && fingerprint == _lastPayloadFingerprint) {
           if (kDebugMode) {
             debugPrint(
               '[NativePermissionStatus] skip upload (unchanged permissions)',
@@ -134,42 +169,29 @@ class NativePermissionStatusService {
 
         final uploaded = await _upload(payload);
         if (uploaded) _lastPayloadFingerprint = fingerprint;
-      } while (_syncRequestedWhileInFlight);
-    } finally {
-      _syncInFlight = false;
-    }
+      } while (_syncCoalescePending);
+    });
   }
 
-  /// Posts in-app push toggle state to the permission-status API (always uploads).
+  /// Posts in-app push toggle state to the permission-status API.
   Future<bool> uploadPushToggle({required bool enabled}) async {
     if (!Platform.isAndroid && !Platform.isIOS) return false;
 
-    final accessToken = await AuthRepository.instance.ensureValidAccessToken();
+    final accessToken = await _accessTokenForLoggedInOfficer();
     if (accessToken == null || accessToken.isEmpty) return false;
-
-    final payload = await buildPayload();
-    final permissions = Map<String, dynamic>.from(
-      payload['permissions'] as Map<String, dynamic>,
-    );
-    permissions['push'] = enabled ? 'enabled' : 'disabled';
-    payload['permissions'] = permissions;
 
     if (kDebugMode) {
       debugPrint(
-        '[NativePermissionStatus] push state upload '
-        'push=${permissions['push']}',
+        '[NativePermissionStatus] push state upload push=${enabled ? 'enabled' : 'disabled'}',
       );
     }
-    final uploaded = await _upload(payload);
-    if (uploaded) {
-      _lastPayloadFingerprint = _fingerprint(payload);
-    }
-    return uploaded;
+    return syncIfChanged(force: true);
   }
 
   /// Posts app lifecycle state with the same snapshot used by permission sync.
   Future<bool> uploadAppCycle({required String appCycle}) async {
     if (!Platform.isAndroid && !Platform.isIOS) return false;
+    if (!await AuthRepository.instance.isOfficerLoggedIn()) return false;
 
     _pendingAppCycle = appCycle;
     final inFlight = _appCycleUploadInFlight;
@@ -209,7 +231,7 @@ class NativePermissionStatusService {
   }
 
   Future<bool> _uploadAppCycleNow(String appCycle) async {
-    final accessToken = await AuthRepository.instance.ensureValidAccessToken();
+    final accessToken = await _accessTokenForLoggedInOfficer();
     if (accessToken == null || accessToken.isEmpty) return false;
 
     if (appCycle == _lastAppCycle) {
@@ -221,17 +243,20 @@ class NativePermissionStatusService {
       return true;
     }
 
-    final payload = await buildPayload();
-    payload['app_cycle'] = appCycle;
+    var uploaded = false;
+    await _serialized(() async {
+      final payload = await buildPayload();
+      payload['app_cycle'] = appCycle;
 
-    if (kDebugMode) {
-      debugPrint('[NativePermissionStatus] app_cycle upload $appCycle');
-    }
-    final uploaded = await _upload(payload);
-    if (uploaded) {
-      _lastAppCycle = appCycle;
-      _lastPayloadFingerprint = _fingerprint(payload);
-    }
+      if (kDebugMode) {
+        debugPrint('[NativePermissionStatus] app_cycle upload $appCycle');
+      }
+      uploaded = await _upload(payload);
+      if (uploaded) {
+        _lastAppCycle = appCycle;
+        _lastPayloadFingerprint = _fingerprint(payload);
+      }
+    });
     return uploaded;
   }
 
@@ -241,7 +266,7 @@ class NativePermissionStatusService {
 
     _batteryUploadInFlight = true;
     try {
-      final accessToken = await AuthRepository.instance.ensureValidAccessToken();
+      final accessToken = await _accessTokenForLoggedInOfficer();
       if (accessToken == null || accessToken.isEmpty) {
         stopBatteryMonitoring();
         return;
@@ -255,22 +280,44 @@ class NativePermissionStatusService {
       }
       if (!_batteryMonitoringActive) return;
 
-      final payload = await buildPayload();
-      payload['battery_percentage'] = batteryPercentage;
-      if (!_batteryMonitoringActive) return;
+      await _serialized(() async {
+        if (!_batteryMonitoringActive) return;
 
-      if (kDebugMode) {
-        debugPrint(
-          '[NativePermissionStatus] battery upload $batteryPercentage%',
-        );
-      }
-      final uploaded = await _upload(payload);
-      if (uploaded) {
-        _lastPayloadFingerprint = _fingerprint(payload);
-      }
+        final payload = await buildPayload();
+        payload['battery_percentage'] = batteryPercentage;
+
+        if (kDebugMode) {
+          debugPrint(
+            '[NativePermissionStatus] battery upload $batteryPercentage%',
+          );
+        }
+        final uploaded = await _upload(payload);
+        if (uploaded) {
+          _lastPayloadFingerprint = _fingerprint(payload);
+        }
+      });
     } finally {
       _batteryUploadInFlight = false;
     }
+  }
+
+  Future<T> _serialized<T>(Future<T> Function() action) {
+    final completer = Completer<T>();
+    _uploadSerial = _uploadSerial.then((_) async {
+      try {
+        completer.complete(await action());
+      } catch (error, stackTrace) {
+        if (!completer.isCompleted) {
+          completer.completeError(error, stackTrace);
+        }
+      }
+    });
+    return completer.future;
+  }
+
+  Future<String?> _accessTokenForLoggedInOfficer() async {
+    if (!await AuthRepository.instance.isOfficerLoggedIn()) return null;
+    return AuthRepository.instance.ensureValidAccessToken();
   }
 
   String _fingerprint(Map<String, dynamic> payload) {
@@ -278,11 +325,6 @@ class NativePermissionStatusService {
       ..remove('app_cycle')
       ..remove('battery_percentage')
       ..remove('checkedAt');
-    final permissions = copy['permissions'];
-    if (permissions is Map) {
-      copy['permissions'] = Map<String, dynamic>.from(permissions)
-        ..remove('push');
-    }
     return jsonEncode(copy);
   }
 
@@ -299,14 +341,21 @@ class NativePermissionStatusService {
       'preciseLocation': await _preciseLocationStatus(),
       'notifications': await _notificationStatus(),
       'batteryOptimization': await _batteryOptimizationStatus(),
+      'push': await _pushToggleStatus(),
     };
+  }
+
+  Future<String> _pushToggleStatus() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return 'disabled';
+    final enabled = await PushNotificationPreferences.readEnabled();
+    return enabled ? 'enabled' : 'disabled';
   }
 
   Future<String> _foregroundLocationStatus() async {
     if (!Platform.isAndroid && !Platform.isIOS) return 'unknown';
 
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) return 'denied';
+    if (!serviceEnabled) return 'unknown';
 
     if (Platform.isAndroid) {
       return _mapPermissionStatus(await Permission.location.status);
@@ -322,7 +371,7 @@ class NativePermissionStatusService {
     if (!Platform.isAndroid && !Platform.isIOS) return 'unknown';
 
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) return 'denied';
+    if (!serviceEnabled) return 'unknown';
 
     if (Platform.isAndroid) {
       try {
@@ -351,10 +400,9 @@ class NativePermissionStatusService {
 
     if (Platform.isAndroid) {
       final foreground = await Permission.location.status;
-      if (foreground.isDenied || foreground.isPermanentlyDenied) {
-        return 'denied';
+      if (!foreground.isGranted) {
+        return _mapPermissionStatus(foreground);
       }
-      if (!foreground.isGranted) return 'unknown';
       try {
         final precise = await _settingsChannel.invokeMethod<bool>(
           'hasPreciseLocationPermission',
@@ -372,11 +420,11 @@ class NativePermissionStatusService {
 
     final locationPermission =
         await BackgroundLocationPermissions.readIosLocationPermission();
-    if (locationPermission == LocationPermission.denied ||
-        locationPermission == LocationPermission.deniedForever) {
+    if (locationPermission == LocationPermission.deniedForever) {
       return 'denied';
     }
-    if (locationPermission == LocationPermission.unableToDetermine) {
+    if (locationPermission == LocationPermission.denied ||
+        locationPermission == LocationPermission.unableToDetermine) {
       return 'unknown';
     }
 
@@ -396,20 +444,7 @@ class NativePermissionStatusService {
   }
 
   Future<String> _notificationStatus() async {
-    if (Platform.isAndroid) {
-      return _mapPermissionStatus(await Permission.notification.status);
-    }
-    if (Platform.isIOS) {
-      final settings = await FirebaseMessaging.instance
-          .getNotificationSettings();
-      return switch (settings.authorizationStatus) {
-        AuthorizationStatus.authorized ||
-        AuthorizationStatus.provisional => 'granted',
-        AuthorizationStatus.denied => 'denied',
-        AuthorizationStatus.notDetermined => 'unknown',
-      };
-    }
-    return 'unknown';
+    return OsNotificationPermission.permissionApiStatus();
   }
 
   Future<String> _batteryOptimizationStatus() async {
@@ -419,7 +454,10 @@ class NativePermissionStatusService {
       final status = await _settingsChannel.invokeMethod<String>(
         'batteryOptimizationStatus',
       );
-      if (status == 'granted' || status == 'denied') return status!;
+      if (status == 'granted') return 'granted';
+      if (status == 'unknown') return 'unknown';
+      // Legacy native builds reported "denied" for the default optimized state.
+      if (status == 'denied') return 'unknown';
       if (status != null) return 'unknown';
     } on MissingPluginException {
       // Fall through for older native builds that only expose the boolean API.
@@ -436,8 +474,8 @@ class NativePermissionStatusService {
         'isIgnoringBatteryOptimizations',
       );
       if (ignoring == null) return 'unknown';
-      // Exempt from battery optimization = granted for background reliability.
-      return ignoring ? 'granted' : 'denied';
+      // Default OS state is not exempt; that is not an explicit officer denial.
+      return ignoring ? 'granted' : 'unknown';
     } catch (error) {
       if (kDebugMode) {
         debugPrint(
@@ -483,7 +521,9 @@ class NativePermissionStatusService {
     if (status.isGranted || status.isLimited || status.isProvisional) {
       return 'granted';
     }
-    if (status.isPermanentlyDenied || status.isRestricted || status.isDenied) {
+    // permanentlyDenied/restricted = officer explicitly blocked access.
+    // denied alone often means "not granted yet" before the first OS prompt.
+    if (status.isPermanentlyDenied || status.isRestricted) {
       return 'denied';
     }
     return 'unknown';
@@ -495,9 +535,11 @@ class NativePermissionStatusService {
   }) {
     return switch (permission) {
       LocationPermission.always => 'granted',
-      LocationPermission.whileInUse => foreground ? 'granted' : 'denied',
-      LocationPermission.denied || LocationPermission.deniedForever => 'denied',
-      LocationPermission.unableToDetermine => 'unknown',
+      LocationPermission.whileInUse =>
+        foreground ? 'granted' : 'unknown',
+      LocationPermission.deniedForever => 'denied',
+      LocationPermission.denied || LocationPermission.unableToDetermine =>
+        'unknown',
     };
   }
 
@@ -507,7 +549,9 @@ class NativePermissionStatusService {
 
     try {
       if (kDebugMode) {
-        debugPrint('[NativePermissionStatus] POST $uri body=$payload');
+        debugPrint(
+          '[NativePermissionStatus] POST ${uri.path} body=$payload',
+        );
       }
       final response = await ApiClient.instance.dio.postUri(
         uri,
@@ -523,16 +567,9 @@ class NativePermissionStatusService {
           response.statusCode != null &&
           response.statusCode! >= 200 &&
           response.statusCode! < 300;
-      if (kDebugMode) {
-        debugPrint(
-          '[NativePermissionStatus] upload ${ok ? 'ok' : 'failed'} '
-          'status=${response.statusCode}',
-        );
-      }
       if (ok) _rememberUploadedBattery(payload);
       return ok;
-    } catch (error) {
-      debugPrint('[NativePermissionStatus] upload failed: $error');
+    } catch (_) {
       return false;
     }
   }

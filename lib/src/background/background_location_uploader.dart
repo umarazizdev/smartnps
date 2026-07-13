@@ -47,6 +47,7 @@ class BackgroundLocationUploader {
       SpeedAdaptiveGpsPolicyTracker();
 
   static const int _maxBatchSize = 20;
+  /// Minimum GPS stream poll interval (not upload throttle).
   static const Duration pingInterval = Duration(seconds: 1);
   static const Duration _batchEvery = Duration(minutes: 1);
   static const Duration _maxBackoff = Duration(minutes: 2);
@@ -383,9 +384,13 @@ class BackgroundLocationUploader {
     if (!BackgroundLocationAccuracy.isAcceptable(position)) return;
     if (!await _hasUploadAuth()) return;
     await _ensureStorage();
-    final point = _sanitizePoint(
-      await _buildPoint(position, policyDecision: policyDecision),
+    final recordedAtUtc = position.timestamp.toUtc();
+    final apiPoint = await _buildApiPoint(
+      position,
+      policyDecision: policyDecision,
     );
+    final point = Map<String, dynamic>.from(apiPoint)
+      ..['_local_point_key'] = _localPointKey(position, recordedAtUtc);
     _assignQueueSeq(point);
     final newPointId = _queueSeqLabel(point);
     _totalBatchPointsQueued++;
@@ -487,11 +492,9 @@ class BackgroundLocationUploader {
   }) async {
     if (!BackgroundLocationAccuracy.isAcceptable(position)) return;
     if (!await _hasUploadAuth()) return;
-    _deviceId ??= await DeviceIdentity.getDeviceId();
-    final point = _apiPoint(
-      _sanitizePoint(
-        await _buildPoint(position, policyDecision: policyDecision),
-      ),
+    final point = await _buildApiPoint(
+      position,
+      policyDecision: policyDecision,
     );
 
     final Options options = Options(
@@ -502,29 +505,27 @@ class BackgroundLocationUploader {
     );
 
     try {
-      if (kDebugMode) {
-        debugPrint('[BackgroundLocationUploader] ping start');
-      }
-      final response = await _dio.postUri(
+      await _dio.postUri(
         _pingUri(),
         data: point,
         options: options,
       );
-      if (kDebugMode) {
-        final status = response.statusCode;
-        debugPrint('[BackgroundLocationUploader] ping ok status=$status');
-      }
-    } on DioException catch (e) {
-      if (kDebugMode) {
-        debugPrint(
-          '[BackgroundLocationUploader] ping failed status=${e.response?.statusCode}',
-        );
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        debugPrint('[BackgroundLocationUploader] ping failed: $e');
-      }
+    } on DioException {
+      // ApiClient logs path, status, and error.
+    } catch (_) {
+      // ApiClient logs path, status, and error.
     }
+  }
+
+  /// Canonical API payload shared by ping and each batch point.
+  Future<Map<String, dynamic>> _buildApiPoint(
+    Position position, {
+    SpeedAdaptiveGpsPolicyDecision? policyDecision,
+  }) async {
+    _deviceId ??= await DeviceIdentity.getDeviceId();
+    return _sanitizePoint(
+      await _buildPoint(position, policyDecision: policyDecision),
+    );
   }
 
   Future<Map<String, dynamic>> _buildPoint(
@@ -549,7 +550,6 @@ class BackgroundLocationUploader {
       'device_id': _deviceId,
       'deviceId': _deviceId,
       'build': AppVersionInfo.buildNumber,
-      '_local_point_key': _localPointKey(position, recordedAtUtc),
       'latitude': position.latitude,
       'longitude': position.longitude,
       'accuracy': position.accuracy,
@@ -802,15 +802,10 @@ class BackgroundLocationUploader {
       _totalBatchPointsUploaded += batch.length;
 
       if (kDebugMode) {
-        final status = response.statusCode;
-        final body = response.data;
-        debugPrint(
-          '[BackgroundLocationUploader] batch upload ok status=$status count=${batch.length}',
-        );
         _logBatchUploadResult(
           batchRun: batchRun,
           uploadedBatch: batch,
-          responseBody: body,
+          responseBody: response.data,
         );
       }
     } catch (e) {
@@ -823,15 +818,11 @@ class BackgroundLocationUploader {
       if (delay > _maxBackoff) delay = _maxBackoff;
 
       if (kDebugMode) {
-        debugPrint(
-          '[BackgroundLocationUploader] batch upload failed (will retry in ${delay.inSeconds}s): $e',
-        );
         _logBatchQueueSnapshot(
           'upload_failed',
           batchRun: batchRun,
           uploadedIds: uploadingIds,
-          detail:
-              'still queued after failure; retry in ${delay.inSeconds}s; error=$e',
+          detail: 'still queued after failure; retry in ${delay.inSeconds}s',
         );
       }
       _nextBatchAllowedAt = DateTime.now().add(delay);

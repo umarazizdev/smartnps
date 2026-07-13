@@ -32,6 +32,7 @@ import '../background/clock_in_gate_service.dart';
 import '../background/background_location_permissions.dart';
 import '../background/ios_duty_location_pinger.dart';
 import '../utilities/app_lifecycle_resume_gate.dart';
+import '../utilities/overlay_prompt_guard.dart';
 import '../utilities/permission_settings_helper.dart';
 import '../app/native_theme_controller.dart';
 import '../push/push_notification_service.dart';
@@ -112,25 +113,43 @@ class _WebViewShellState extends State<WebViewShell>
   bool _nativeLogoutInFlight = false;
 
   void _setNativeAuthSession(bool value) {
-    _ui.setNativeAuthSession(value);
-    if (value) {
+    final active = value && _ui.officerLoggedIn.value;
+    _ui.setNativeAuthSession(active);
+    if (_shouldUploadNativePermissionStatus) {
       NativePermissionStatusService.instance.startBatteryMonitoring();
     } else {
       NativePermissionStatusService.instance.stopBatteryMonitoring();
     }
   }
 
-  Future<void> _performNativeLogout({
+  /// Clears native logged-in state for upload/monitoring while the web login
+  /// screen is active. Does not erase stored tokens until explicit logout.
+  Future<void> _pauseNativeSessionForLoginScreen() async {
+    await AuthRepository.instance.setOfficerLoggedIn(false);
+    _ui.setOfficerLoggedIn(false);
+    _setNativeAuthSession(false);
+    NativePermissionStatusService.instance.stopBatteryMonitoring();
+  }
+
+  Future<bool> _performNativeLogout({
     required String reason,
     bool skipIfAlreadyLoggedOut = false,
   }) async {
-    if (_nativeLogoutInFlight) return;
+    if (_nativeLogoutInFlight) return false;
     if (skipIfAlreadyLoggedOut && !await _hasActiveNativeSession()) {
       debugPrint(
         '[SmartNPS360][Auth] $reason skipped (session already cleared)',
       );
-      return;
+      return false;
     }
+
+    if (await DutyHeartbeatService.instance.isOnDutyAccordingToHeartbeat()) {
+      debugPrint(
+        '[SmartNPS360][Auth] logout skipped ($reason): officer on duty per heartbeat',
+      );
+      return false;
+    }
+
     _nativeLogoutInFlight = true;
     try {
       debugPrint('[SmartNPS360][Auth] native logout ($reason)');
@@ -151,6 +170,7 @@ class _WebViewShellState extends State<WebViewShell>
         '[SmartNPS360][Auth] native logout completed '
         '(officerLoggedIn=false, session cleared)',
       );
+      return true;
     } finally {
       _nativeLogoutInFlight = false;
     }
@@ -173,10 +193,17 @@ class _WebViewShellState extends State<WebViewShell>
   }
 
   Future<void> _refreshNativeAuthSessionFromStorage() async {
+    if (AuthSessionManager.isLoginRoute(_ui.currentUri.value)) {
+      await _pauseNativeSessionForLoginScreen();
+      return;
+    }
+
     final loggedIn = await AuthRepository.instance.isOfficerLoggedIn();
-    _ui.setOfficerLoggedIn(loggedIn);
     final token = await AuthRepository.instance.getAccessToken();
-    _setNativeAuthSession(token != null && token.isNotEmpty);
+    final activeSession = loggedIn && token != null && token.isNotEmpty;
+
+    _ui.setOfficerLoggedIn(activeSession);
+    _setNativeAuthSession(activeSession);
   }
 
   bool _isSamePageReload(Uri? uriAtLoadStart, Uri? nextUri) {
@@ -1607,11 +1634,13 @@ class _WebViewShellState extends State<WebViewShell>
     DutyHeartbeatService.instance.backgroundLocationPermissionMissing
         .addListener(_onBackgroundLocationPermissionChanged);
 
-    unawaited(
-      NativePermissionStatusService.instance.uploadAppCycle(
-        appCycle: AppLifecycleState.resumed.name,
-      ),
-    );
+    if (_shouldUploadNativePermissionStatus) {
+      unawaited(
+        NativePermissionStatusService.instance.uploadAppCycle(
+          appCycle: AppLifecycleState.resumed.name,
+        ),
+      );
+    }
 
     PushNotificationService.instance.setOnNotificationTap(
       _onPushNotificationTap,
@@ -1624,7 +1653,6 @@ class _WebViewShellState extends State<WebViewShell>
         _deletePushTokenViaWebView,
       );
     }
-    unawaited(_refreshNativeAuthSessionFromStorage());
   }
 
   void _onPushNotificationTap(String url) {
@@ -1665,11 +1693,16 @@ class _WebViewShellState extends State<WebViewShell>
   }
 
   void _onBackgroundLocationPermissionChanged() {
-    unawaited(_notifyWebBackgroundLocationStatus());
+    unawaited(() async {
+      await _notifyWebBackgroundLocationStatus();
+      if (_shouldUploadNativePermissionStatus) {
+        await NativePermissionStatusService.instance.syncIfChanged();
+      }
+    }());
   }
 
   Future<void> _notifyWebBackgroundLocationStatus() async {
-    if (!_ui.hasNativeAuthSession.value) return;
+    if (!_shouldUploadNativePermissionStatus) return;
     final controller = _controller;
     if (controller == null) return;
     if (!Platform.isAndroid && !Platform.isIOS) return;
@@ -1701,11 +1734,10 @@ class _WebViewShellState extends State<WebViewShell>
         '[SmartNPS360] notify web background location status failed: $e',
       );
     }
-    unawaited(NativePermissionStatusService.instance.syncIfChanged());
   }
 
   Future<void> _notifyWebPushNotificationStatus({bool reconcile = true}) async {
-    if (!_ui.hasNativeAuthSession.value) return;
+    if (!_shouldUploadNativePermissionStatus) return;
     final controller = _controller;
     if (controller == null) return;
     if (!Platform.isAndroid && !Platform.isIOS) return;
@@ -1738,7 +1770,6 @@ class _WebViewShellState extends State<WebViewShell>
     } catch (e) {
       debugPrint('[SmartNPS360][Push] notify web status failed: $e');
     }
-    unawaited(PushNotificationService.instance.syncPushStateToPermissionApi());
   }
 
   @override
@@ -1750,19 +1781,20 @@ class _WebViewShellState extends State<WebViewShell>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      if (_ui.hasNativeAuthSession.value) {
-        NativePermissionStatusService.instance.startBatteryMonitoring();
-      }
+    if (state == AppLifecycleState.resumed &&
+        _shouldUploadNativePermissionStatus) {
+      NativePermissionStatusService.instance.startBatteryMonitoring();
     } else {
       NativePermissionStatusService.instance.stopBatteryMonitoring();
     }
 
-    unawaited(
-      NativePermissionStatusService.instance.uploadAppCycle(
-        appCycle: state.name,
-      ),
-    );
+    if (_shouldUploadNativePermissionStatus) {
+      unawaited(
+        NativePermissionStatusService.instance.uploadAppCycle(
+          appCycle: state.name,
+        ),
+      );
+    }
 
     if (state == AppLifecycleState.resumed &&
         !AuthSessionManager.isLoginRoute(_ui.currentUri.value)) {
@@ -1785,7 +1817,7 @@ class _WebViewShellState extends State<WebViewShell>
         await ClockInGateService.instance.recheckAfterAppResume();
         await _notifyWebBackgroundLocationStatus();
         await _notifyWebPushNotificationStatus();
-        unawaited(NativePermissionStatusService.instance.syncIfChanged());
+        await NativePermissionStatusService.instance.syncIfChanged();
       }());
     }
   }
@@ -2238,7 +2270,20 @@ class _WebViewShellState extends State<WebViewShell>
             '[SmartNPS360][Auth] authEvent logout received from web (primary) '
             '(host=$currentHost path=${_ui.currentUri.value?.path})',
           );
-          await _performNativeLogout(reason: 'primary: authEvent');
+          final completed = await _performNativeLogout(
+            reason: 'primary: authEvent',
+          );
+          if (!completed) {
+            return {
+              'ok': false,
+              'action': 'logout',
+              'error': {
+                'code': 'logout_blocked_on_duty',
+                'message':
+                    'You are still on duty. End your shift before logging out.',
+              },
+            };
+          }
           return {'ok': true, 'action': 'logout'};
         }
 
@@ -2364,10 +2409,6 @@ class _WebViewShellState extends State<WebViewShell>
           sendTimeout: const Duration(seconds: 12),
           receiveTimeout: const Duration(seconds: 12),
         ),
-      );
-
-      debugPrint(
-        '[SmartNPS360][Auth] sanctum login status=${response.statusCode}',
       );
 
       final dynamic body = response.data;
@@ -2933,37 +2974,6 @@ class _WebViewShellState extends State<WebViewShell>
     } catch (_) {}
   }
 
-  Future<void> _logIosWebViewDiagnostics(
-    InAppWebViewController controller,
-  ) async {
-    if (!Platform.isIOS || !kDebugMode) return;
-    try {
-      final ua = await controller.evaluateJavascript(
-        source: 'navigator.userAgent',
-      );
-      final userAgent = ua?.toString() ?? '';
-      debugPrint(
-        '[SmartNPS360][iOS WebView] userAgentLength=${userAgent.length}',
-      );
-      await controller.evaluateJavascript(
-        source: '''
-        (function () {
-          var vv = window.visualViewport;
-          return JSON.stringify({
-            innerWidth: window.innerWidth,
-            clientWidth: document.documentElement.clientWidth,
-            visualViewportWidth: vv ? vv.width : null,
-            visualViewportOffsetLeft: vv ? vv.offsetLeft : null
-          });
-        })();
-      ''',
-      );
-      debugPrint('[SmartNPS360][iOS WebView] metrics collected');
-    } catch (e) {
-      debugPrint('[SmartNPS360][iOS WebView] diagnostics failed: $e');
-    }
-  }
-
   /// iOS: keep default Mobile Safari UA and append [AppConfig.webViewAppSignature].
   /// Android: full custom UA with the same app signature token.
   InAppWebViewSettings _createWebViewSettings() {
@@ -3014,6 +3024,8 @@ class _WebViewShellState extends State<WebViewShell>
               DutyHeartbeatService.instance.backgroundLocationPermissionMissing,
               DutyHeartbeatService.instance.disclosurePromptVisible,
               PermissionSettingsHelper.settingsPromptVisible,
+              OverlayPromptGuard.overlayVisibilityListenable,
+              ClockInGateService.instance.prepareInFlightVisible,
             ]),
             builder: (context, _) {
               final showBanner =
@@ -3045,9 +3057,6 @@ class _WebViewShellState extends State<WebViewShell>
                                     onWebViewCreated: (controller) {
                                       _controller = controller;
                                       _installJsHandlers(controller);
-                                      unawaited(
-                                        _logIosWebViewDiagnostics(controller),
-                                      );
                                       unawaited(_loadPendingPushUrl());
                                     },
                                     shouldOverrideUrlLoading:
@@ -3164,9 +3173,6 @@ class _WebViewShellState extends State<WebViewShell>
                                           await _installThemeListener(
                                             controller,
                                           );
-                                          await _logIosWebViewDiagnostics(
-                                            controller,
-                                          );
                                           await _runIosPopoverFix(controller);
                                           if (isSamePageReload) {
                                             _restoreUriAfterReload(
@@ -3186,13 +3192,14 @@ class _WebViewShellState extends State<WebViewShell>
                                               'logout_route onLoadStop',
                                             );
                                           }
-                                          await _refreshNativeAuthSessionFromStorage();
                                           if (AuthSessionManager.isLoginRoute(
                                                 nextUri,
                                               ) &&
                                               !isSamePageReload) {
+                                            await _pauseNativeSessionForLoginScreen();
                                             await _stopDutyHeartbeat();
                                           } else {
+                                            await _refreshNativeAuthSessionFromStorage();
                                             await _requestNotificationPermissionForRoute(
                                               nextUri,
                                             );
@@ -3202,14 +3209,10 @@ class _WebViewShellState extends State<WebViewShell>
                                                   pageReload: isSamePageReload,
                                                 );
                                             await _notifyWebBackgroundLocationStatus();
-                                            await _notifyWebPushNotificationStatus(
-                                              reconcile: false,
-                                            );
-                                            unawaited(
-                                              NativePermissionStatusService
-                                                  .instance
-                                                  .syncIfChanged(),
-                                            );
+                                            await _notifyWebPushNotificationStatus();
+                                            await NativePermissionStatusService
+                                                .instance
+                                                .syncIfChanged();
                                           }
                                         } catch (_) {}
                                       }
@@ -3437,6 +3440,10 @@ class _WebViewShellState extends State<WebViewShell>
   }
 
   bool _isAuthRoute(Uri? uri) => AuthSessionManager.isLoginRoute(uri);
+
+  bool get _shouldUploadNativePermissionStatus {
+    return _ui.officerLoggedIn.value && _ui.hasNativeAuthSession.value;
+  }
 }
 
 bool _isBottomBarRoute(Uri? uri) => _BottomItem.indexForUri(uri) != null;

@@ -213,7 +213,9 @@ class PermissionSettingsHelper {
       if (shouldOpenSettings(foreground)) {
         return LocationPermissionRequestResult.promptShown;
       }
-      await Permission.location.request();
+      await OverlayPromptGuard.runDuringOsPermissionPrompt(
+        Permission.location.request,
+      );
       return LocationPermissionRequestResult.promptShown;
     }
 
@@ -226,7 +228,9 @@ class PermissionSettingsHelper {
       if (permission == LocationPermission.deniedForever) {
         return LocationPermissionRequestResult.promptShown;
       }
-      await Geolocator.requestPermission();
+      await OverlayPromptGuard.runDuringOsPermissionPrompt(
+        Geolocator.requestPermission,
+      );
       return LocationPermissionRequestResult.promptShown;
     }
 
@@ -265,7 +269,9 @@ class PermissionSettingsHelper {
       if (shouldOpenSettings(foreground)) {
         return LocationPermissionRequestResult.promptShown;
       }
-      await Permission.location.request();
+      await OverlayPromptGuard.runDuringOsPermissionPrompt(
+        Permission.location.request,
+      );
       return LocationPermissionRequestResult.promptShown;
     }
 
@@ -287,7 +293,9 @@ class PermissionSettingsHelper {
     }
 
     if (permission == LocationPermission.denied) {
-      await Geolocator.requestPermission();
+      await OverlayPromptGuard.runDuringOsPermissionPrompt(
+        Geolocator.requestPermission,
+      );
       return LocationPermissionRequestResult.promptShown;
     }
 

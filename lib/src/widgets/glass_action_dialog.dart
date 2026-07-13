@@ -2,6 +2,8 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 
+import '../utilities/overlay_prompt_guard.dart';
+
 enum GlassActionDialogVariant { normal, error }
 
 class GlassActionDialog extends StatelessWidget {
@@ -44,6 +46,7 @@ class GlassActionDialog extends StatelessWidget {
     bool barrierDismissible = false,
     double messageMaxHeightFactor = _defaultMessageMaxHeightFactor,
   }) {
+    OverlayPromptGuard.registerBlockingOverlay();
     return showDialog<bool>(
       context: context,
       barrierDismissible: barrierDismissible,
@@ -58,7 +61,7 @@ class GlassActionDialog extends StatelessWidget {
         destructiveSecondary: destructiveSecondary,
         messageMaxHeightFactor: messageMaxHeightFactor,
       ),
-    );
+    ).whenComplete(OverlayPromptGuard.unregisterBlockingOverlay);
   }
 
   @override

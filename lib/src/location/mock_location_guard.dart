@@ -6,6 +6,7 @@ import 'package:geolocator/geolocator.dart';
 
 import '../app/app_navigator.dart';
 import '../widgets/mock_location_dialog.dart';
+import '../utilities/overlay_prompt_guard.dart';
 import 'mock_location_detection.dart';
 
 class MockLocationGuard {
@@ -94,15 +95,18 @@ class MockLocationGuard {
 
       _pendingShowAttempts = 0;
       _dialogVisible = true;
+      OverlayPromptGuard.registerBlockingOverlay();
 
       await showDialog<void>(
         context: context,
         barrierDismissible: false,
         barrierColor: Colors.black.withValues(alpha: 0.32),
         builder: (context) => const MockLocationDialog(),
-      );
+      ).whenComplete(() {
+        OverlayPromptGuard.unregisterBlockingOverlay();
+        _dialogVisible = false;
+      });
 
-      _dialogVisible = false;
       return;
     }
   }
@@ -141,6 +145,7 @@ class MockLocationGuard {
     _pendingShowAttempts = 0;
     _lastDialogAt = DateTime.now();
     _dialogVisible = true;
+    OverlayPromptGuard.registerBlockingOverlay();
 
     showDialog<void>(
       context: context,
@@ -148,6 +153,7 @@ class MockLocationGuard {
       barrierColor: Colors.black.withValues(alpha: 0.32),
       builder: (context) => const MockLocationDialog(),
     ).whenComplete(() {
+      OverlayPromptGuard.unregisterBlockingOverlay();
       _dialogVisible = false;
     });
   }

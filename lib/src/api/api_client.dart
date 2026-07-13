@@ -27,44 +27,82 @@ class ApiClient {
           if (token != null && token.isNotEmpty) {
             options.headers['Authorization'] = 'Bearer $token';
           }
-          if (kDebugMode) {
-            final safeHeaders = Map<String, dynamic>.from(options.headers);
-            final auth = safeHeaders['Authorization']?.toString();
-            if (auth != null && auth.startsWith('Bearer ')) {
-              final raw = auth.substring('Bearer '.length);
-              final redacted = raw.length <= 10
-                  ? 'Bearer ***'
-                  : 'Bearer ${raw.substring(0, 6)}…${raw.substring(raw.length - 4)}';
-              safeHeaders['Authorization'] = redacted;
-            }
-            debugPrint(
-              '[ApiClient] ${options.method} ${options.uri} headers=$safeHeaders',
-            );
-          }
           handler.next(options);
         },
         onResponse: (response, handler) async {
           if (response.statusCode == 401) {
             final retried = await _refreshAndRetryRequest(response.requestOptions);
             if (retried != null) {
+              _logApiResult(retried.requestOptions, retried.statusCode);
               handler.resolve(retried);
               return;
             }
           }
+          _logApiResult(response.requestOptions, response.statusCode);
           handler.next(response);
         },
         onError: (error, handler) async {
           if (error.response?.statusCode == 401) {
             final retried = await _refreshAndRetryRequest(error.requestOptions);
             if (retried != null) {
+              _logApiResult(retried.requestOptions, retried.statusCode);
               handler.resolve(retried);
               return;
             }
           }
+          _logApiError(error);
           handler.next(error);
         },
       ),
     );
+  }
+
+  static void _logApiResult(RequestOptions options, int? statusCode) {
+    logHttpResult(options.method, options.uri, statusCode);
+  }
+
+  static void _logApiError(DioException error) {
+    logHttpError(
+      error.requestOptions.method,
+      error.requestOptions.uri,
+      error.response?.statusCode ?? 0,
+      _errorMessage(error),
+    );
+  }
+
+  /// Shared concise API log: path + status only (no headers).
+  static void logHttpResult(String method, Uri uri, int? statusCode) {
+    if (!kDebugMode) return;
+    debugPrint(
+      '[ApiClient] $method ${_pathFromUri(uri)} status=${statusCode ?? 0}',
+    );
+  }
+
+  /// Shared concise API error log: path + status + error (no headers).
+  static void logHttpError(
+    String method,
+    Uri uri,
+    int statusCode,
+    String error,
+  ) {
+    if (!kDebugMode) return;
+    debugPrint(
+      '[ApiClient] $method ${_pathFromUri(uri)} status=$statusCode error=$error',
+    );
+  }
+
+  static String _pathFromUri(Uri uri) {
+    if (uri.hasQuery) return '${uri.path}?${uri.query}';
+    return uri.path;
+  }
+
+  static String _errorMessage(DioException error) {
+    final data = error.response?.data;
+    if (data != null) return data.toString();
+    if (error.message != null && error.message!.isNotEmpty) {
+      return error.message!;
+    }
+    return error.type.name;
   }
 
   Future<Response<dynamic>?> _refreshAndRetryRequest(

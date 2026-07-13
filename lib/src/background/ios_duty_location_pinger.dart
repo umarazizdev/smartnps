@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../auth/auth_repository.dart';
+import '../location/location_keep_point_gate.dart';
 import '../location/mock_location_detection.dart';
 import '../location/mock_location_guard.dart';
 import '../location/speed_adaptive_gps_policy.dart';
@@ -21,8 +22,8 @@ class IosDutyLocationPinger {
   static StreamSubscription<Position>? _subscription;
   static Timer? _pingTimer;
   static BackgroundLocationUploader? _uploader;
-  static DateTime? _lastLocationAt;
   static DateTime? _lastUploadAt;
+  static final LocationKeepPointGate _keepPointGate = LocationKeepPointGate();
   static DateTime? _startedAt;
   static DateTime? _lastForcedBatchFlushAttemptAt;
   static bool _running = false;
@@ -132,7 +133,7 @@ class IosDutyLocationPinger {
   }
 
   /// iOS may not emit stream events when the device is stationary (simulator).
-  /// Poll explicitly so ping/batch keep running on the duty ping interval.
+  /// Poll explicitly so ping/batch keep running when the stream is quiet.
   static void _startPeriodicPing() {
     _pingTimer?.cancel();
     _pingTimer = Timer.periodic(BackgroundLocationUploader.pingInterval, (_) {
@@ -297,16 +298,11 @@ class IosDutyLocationPinger {
       return;
     }
 
-    final now = DateTime.now();
     final policyDecision = _policyTracker.evaluate(pos);
-    final last = _lastLocationAt;
-    final uploadInterval = BackgroundLocationUploader.pingInterval;
-    // Restore this when switching back to speed-adaptive upload timing.
-    // final uploadInterval = policyDecision.band.uploadInterval;
-    if (last != null && now.difference(last) < uploadInterval) {
+    final keepDecision = _keepPointGate.evaluate(pos, policyDecision);
+    if (!keepDecision.shouldKeep) {
       return;
     }
-    _lastLocationAt = now;
 
     final mockFlags = MockLocationDetection.flagsFor(pos);
     if (mockFlags.isDetected) {
@@ -321,7 +317,10 @@ class IosDutyLocationPinger {
         '[IosDutyLocationPinger] location '
         'acc=${pos.accuracy} '
         'speedBand=${policyDecision.band.label} '
-        'uploadEvery=${uploadInterval.inSeconds}s '
+        'uploadEvery=${keepDecision.uploadInterval?.inSeconds}s '
+        'trigger=${keepDecision.trigger?.name} '
+        'dist=${keepDecision.distanceMeters?.toStringAsFixed(1)}m '
+        'bearingDelta=${keepDecision.bearingDeltaDegrees?.toStringAsFixed(1)} '
         'mocked=${mockFlags.isMocked} simulated=${mockFlags.isSimulatedBySoftware}',
       );
     }
@@ -388,10 +387,10 @@ class IosDutyLocationPinger {
     _subscription = null;
     await _uploader?.stop();
     _uploader = null;
-    _lastLocationAt = null;
     _lastUploadAt = null;
     _startedAt = null;
     _lastForcedBatchFlushAttemptAt = null;
+    _keepPointGate.reset();
 
     try {
       await IosBackgroundLocationNotification.dismiss();
@@ -421,10 +420,10 @@ class IosDutyLocationPinger {
     _subscription = null;
     await _uploader?.stopCollectingOnly();
     _uploader = null;
-    _lastLocationAt = null;
     _lastUploadAt = null;
     _startedAt = null;
     _lastForcedBatchFlushAttemptAt = null;
+    _keepPointGate.reset();
 
     try {
       await IosBackgroundLocationNotification.dismiss();
