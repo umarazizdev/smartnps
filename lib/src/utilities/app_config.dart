@@ -3,7 +3,6 @@ class AppConfig {
 
   static const String initialUrl = 'https://smartnps360.com/';
 
-  static const String login = '${initialUrl}api/gauth/login';
   static const String gpsApiBaseUrl = '${initialUrl}api/gps/';
   static const String gpsPointPath = 'point';
   static const String gpsPingPath = 'ping';

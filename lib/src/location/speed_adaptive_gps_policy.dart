@@ -112,6 +112,18 @@ class SpeedAdaptiveGpsPolicyDecision {
   final double? speedAccuracyMetersPerSecond;
   final bool isTrusted;
 
+  /// Stationary / below 2 km/h points stay on the live ping path only.
+  ///
+  /// They are not queued for `/api/gps/batch`.
+  bool get shouldQueueForBatch {
+    if (band.motionActivity == 'stationary') return false;
+    final maxKmh = band.maxKmh;
+    if (maxKmh != null && maxKmh <= 2) return false;
+    final speedKmh = smoothedSpeedKmh ?? rawSpeedKmh;
+    if (speedKmh != null && speedKmh < 2) return false;
+    return true;
+  }
+
   Map<String, dynamic> toJson() {
     return {
       'speedBand': band.label,

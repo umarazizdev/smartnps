@@ -191,6 +191,8 @@
     <div class="meta">
       <p><strong>Base URL:</strong> https://smartnps360.com/</p>
       <p><strong>APIs documented:</strong> 8 active endpoints</p>
+      <p><strong>App version:</strong> 1.0.0+41</p>
+      <p><strong>Last updated:</strong> 14 July 2026</p>
     </div>
   </section>
 
@@ -198,7 +200,7 @@
     <h2>Overview</h2>
     <p>
       This document lists every backend API endpoint that the SmartNPS360 native app currently calls.
-      Request and response shapes are taken directly from the Flutter implementation.
+      Request and response shapes match the live Android and iOS client traffic.
     </p>
     <p>Authenticated endpoints use a Bearer token in the <code>Authorization</code> header unless noted otherwise.</p>
     <h3>Active endpoints</h3>
@@ -214,8 +216,8 @@
     </ol>
     <p class="note">
       <strong>For backend developers:</strong> The mobile app does not use
-      <code>POST /api/gauth/login</code> or <code>POST /api/gps/point</code>.
-      These endpoints are not part of the current Android and iOS integration.
+      <code>POST /api/gps/point</code>. That endpoint is not part of the current
+      Android and iOS integration.
     </p>
   </section>
 
@@ -374,13 +376,13 @@ Accept: application/json</pre>
         <tr><td>timestamp</td><td>string</td><td>Yes</td><td>Fix time in ISO 8601 UTC</td></tr>
         <tr><td>altitude</td><td>number</td><td>No</td><td>Altitude in meters</td></tr>
         <tr><td>altitudeAccuracy</td><td>number</td><td>No</td><td>Altitude accuracy</td></tr>
-        <tr><td>speed</td><td>number</td><td>No</td><td>Speed in m/s (omitted if invalid)</td></tr>
-        <tr><td>speedAccuracy</td><td>number</td><td>No</td><td>Speed accuracy (omitted if invalid)</td></tr>
-        <tr><td>heading</td><td>number</td><td>No</td><td>Heading in degrees (omitted if invalid)</td></tr>
-        <tr><td>headingAccuracy</td><td>number</td><td>No</td><td>Heading accuracy (omitted if invalid)</td></tr>
+        <tr><td>speed</td><td>number|null</td><td>No</td><td>Speed in m/s (<code>null</code> when invalid or unavailable)</td></tr>
+        <tr><td>speedAccuracy</td><td>number|null</td><td>No</td><td>Speed accuracy (<code>null</code> when invalid or unavailable)</td></tr>
+        <tr><td>heading</td><td>number|null</td><td>No</td><td>Heading in degrees (<code>null</code> when invalid or unavailable)</td></tr>
+        <tr><td>headingAccuracy</td><td>number|null</td><td>No</td><td>Heading accuracy (<code>null</code> when invalid or unavailable)</td></tr>
         <tr><td>isMocked</td><td>boolean</td><td>No</td><td>Whether the location is mocked</td></tr>
         <tr><td>isSimulatedBySoftware</td><td>boolean</td><td>No</td><td>Whether location is software-simulated</td></tr>
-        <tr><td>motionActivity</td><td>string</td><td>No</td><td>Motion band label (e.g. <code>stationary</code>, <code>walking</code>)</td></tr>
+        <tr><td>motionActivity</td><td>string</td><td>No</td><td>Motion band label: <code>stationary</code>, <code>walking</code>, <code>running</code>, or <code>automotive</code></td></tr>
         <tr><td>motionSource</td><td>string</td><td>No</td><td>Always <code>speed_adaptive_gps_policy</code></td></tr>
         <tr><td>speedBand</td><td>string</td><td>No</td><td>Speed band label</td></tr>
         <tr><td>speedState</td><td>string</td><td>No</td><td>Human-readable speed state</td></tr>
@@ -400,15 +402,20 @@ Accept: application/json</pre>
   "platform": "android",
   "device_id": "samsung-galaxy-a12-abc123",
   "deviceId": "samsung-galaxy-a12-abc123",
-  "build": "42",
+  "build": "41",
   "latitude": 24.8607,
   "longitude": 67.0011,
   "accuracy": 8.5,
-  "timestampMs": 1752019200000,
-  "timestamp": "2026-07-09T12:00:00.000Z",
+  "altitudeAccuracy": null,
+  "timestampMs": 1752494400000,
+  "timestamp": "2026-07-14T12:00:00.000Z",
   "altitude": 12.4,
   "speed": 1.2,
+  "speedAccuracy": null,
+  "heading": null,
+  "headingAccuracy": null,
   "isMocked": false,
+  "isSimulatedBySoftware": false,
   "motionActivity": "walking",
   "motionSource": "speed_adaptive_gps_policy",
   "speedBand": "2-8 km/h",
@@ -418,14 +425,15 @@ Accept: application/json</pre>
   "gpsSpeedTrusted": true,
   "captureIntervalSeconds": 10,
   "uploadIntervalSeconds": 10,
-  "distanceFilterMeters": 5
+  "distanceFilterMeters": 5,
+  "floor": null
 }</pre>
 
     <h3>Success Response</h3>
     <pre>HTTP 2xx</pre>
 
     <h3>Description</h3>
-    <p>Uploads a single GPS fix immediately while the officer is on duty. Used for real-time location pings without local batching. On success, the app treats any HTTP 2xx response as accepted.</p>
+    <p>Uploads a single GPS fix immediately while the officer is on duty. Used for real-time location updates. Stationary / below <code>2 km/h</code> fixes are still uploaded here but are not queued for GPS Batch. On success, the app treats any HTTP 2xx response as accepted.</p>
   </section>
 
   <!-- 5. GPS Batch -->
@@ -442,7 +450,45 @@ Accept: application/json</pre>
         <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
       </thead>
       <tbody>
-        <tr><td>points</td><td>array</td><td>Yes</td><td>Array of GPS point objects (same fields as GPS Ping)</td></tr>
+        <tr><td>points</td><td>array</td><td>Yes</td><td>Array of GPS point objects. Each object uses the same fields as GPS Ping (listed below). App sends up to 20 points per request.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Point object fields (each item in <code>points</code>)</h3>
+    <table>
+      <thead>
+        <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>app</td><td>string</td><td>Yes</td><td>App name (<code>SmartNPS360</code>)</td></tr>
+        <tr><td>platform</td><td>string</td><td>Yes</td><td><code>android</code> or <code>ios</code></td></tr>
+        <tr><td>device_id</td><td>string</td><td>Yes</td><td>Device identifier</td></tr>
+        <tr><td>deviceId</td><td>string</td><td>Yes</td><td>Same value as <code>device_id</code></td></tr>
+        <tr><td>build</td><td>string</td><td>Yes</td><td>App build number</td></tr>
+        <tr><td>latitude</td><td>number</td><td>Yes</td><td>GPS latitude</td></tr>
+        <tr><td>longitude</td><td>number</td><td>Yes</td><td>GPS longitude</td></tr>
+        <tr><td>accuracy</td><td>number</td><td>Yes</td><td>Location accuracy in meters</td></tr>
+        <tr><td>timestampMs</td><td>number</td><td>Yes</td><td>Fix time in UTC milliseconds</td></tr>
+        <tr><td>timestamp</td><td>string</td><td>Yes</td><td>Fix time in ISO 8601 UTC</td></tr>
+        <tr><td>altitude</td><td>number</td><td>No</td><td>Altitude in meters</td></tr>
+        <tr><td>altitudeAccuracy</td><td>number|null</td><td>No</td><td>Altitude accuracy</td></tr>
+        <tr><td>speed</td><td>number|null</td><td>No</td><td>Speed in m/s (<code>null</code> when invalid or unavailable)</td></tr>
+        <tr><td>speedAccuracy</td><td>number|null</td><td>No</td><td>Speed accuracy (<code>null</code> when invalid or unavailable)</td></tr>
+        <tr><td>heading</td><td>number|null</td><td>No</td><td>Heading in degrees (<code>null</code> when invalid or unavailable)</td></tr>
+        <tr><td>headingAccuracy</td><td>number|null</td><td>No</td><td>Heading accuracy (<code>null</code> when invalid or unavailable)</td></tr>
+        <tr><td>isMocked</td><td>boolean</td><td>No</td><td>Whether the location is mocked</td></tr>
+        <tr><td>isSimulatedBySoftware</td><td>boolean|null</td><td>No</td><td>Whether location is software-simulated</td></tr>
+        <tr><td>motionActivity</td><td>string</td><td>No</td><td>Motion band label: <code>stationary</code>, <code>walking</code>, <code>running</code>, or <code>automotive</code></td></tr>
+        <tr><td>motionSource</td><td>string</td><td>No</td><td>Always <code>speed_adaptive_gps_policy</code></td></tr>
+        <tr><td>speedBand</td><td>string</td><td>No</td><td>Speed band label (e.g. <code>2-8 km/h</code>, <code>30-60 km/h</code>, <code>100+ km/h</code>)</td></tr>
+        <tr><td>speedState</td><td>string</td><td>No</td><td>Human-readable speed state (e.g. <code>Walking / patrol</code>)</td></tr>
+        <tr><td>speedKmh</td><td>number|null</td><td>No</td><td>Raw speed in km/h</td></tr>
+        <tr><td>smoothedSpeedKmh</td><td>number|null</td><td>No</td><td>Smoothed speed in km/h</td></tr>
+        <tr><td>gpsSpeedTrusted</td><td>boolean</td><td>No</td><td>Whether GPS speed is trusted</td></tr>
+        <tr><td>captureIntervalSeconds</td><td>number</td><td>No</td><td>Capture interval for current speed band</td></tr>
+        <tr><td>uploadIntervalSeconds</td><td>number</td><td>No</td><td>Upload interval for current speed band</td></tr>
+        <tr><td>distanceFilterMeters</td><td>number</td><td>No</td><td>Distance filter for current speed band</td></tr>
+        <tr><td>floor</td><td>number|null</td><td>No</td><td>Floor level when available</td></tr>
       </tbody>
     </table>
 
@@ -451,18 +497,65 @@ Accept: application/json</pre>
   "points": [
     {
       "app": "SmartNPS360",
-      "platform": "ios",
-      "device_id": "ios-ABCDEF12-3456-7890-ABCD-EF1234567890",
-      "deviceId": "ios-ABCDEF12-3456-7890-ABCD-EF1234567890",
-      "build": "42",
+      "platform": "android",
+      "device_id": "samsung-galaxy-a12-abc123",
+      "deviceId": "samsung-galaxy-a12-abc123",
+      "build": "41",
       "latitude": 24.8607,
       "longitude": 67.0011,
-      "accuracy": 6.0,
-      "timestampMs": 1752019200000,
-      "timestamp": "2026-07-09T12:00:00.000Z",
+      "accuracy": 8.5,
+      "altitudeAccuracy": null,
+      "timestampMs": 1752494400000,
+      "timestamp": "2026-07-14T12:00:00.000Z",
+      "altitude": 12.4,
+      "speed": 1.2,
+      "speedAccuracy": null,
+      "heading": null,
+      "headingAccuracy": null,
       "isMocked": false,
+      "isSimulatedBySoftware": false,
+      "motionActivity": "walking",
+      "motionSource": "speed_adaptive_gps_policy",
+      "speedBand": "2-8 km/h",
+      "speedState": "Walking / patrol",
+      "speedKmh": 4.5,
+      "smoothedSpeedKmh": 4.2,
+      "gpsSpeedTrusted": true,
+      "captureIntervalSeconds": 10,
+      "uploadIntervalSeconds": 10,
+      "distanceFilterMeters": 5,
+      "floor": null
+    },
+    {
+      "app": "SmartNPS360",
+      "platform": "android",
+      "device_id": "samsung-galaxy-a12-abc123",
+      "deviceId": "samsung-galaxy-a12-abc123",
+      "build": "41",
+      "latitude": 24.8610,
+      "longitude": 67.0015,
+      "accuracy": 7.0,
+      "altitudeAccuracy": 3.2,
+      "timestampMs": 1752494460000,
+      "timestamp": "2026-07-14T12:01:00.000Z",
+      "altitude": 12.6,
+      "speed": 9.7,
+      "speedAccuracy": 0.8,
+      "heading": 95.0,
+      "headingAccuracy": 5.0,
+      "isMocked": false,
+      "isSimulatedBySoftware": false,
       "motionActivity": "automotive",
-      "motionSource": "speed_adaptive_gps_policy"
+      "motionSource": "speed_adaptive_gps_policy",
+      "speedBand": "30-60 km/h",
+      "speedState": "Vehicle movement",
+      "speedKmh": 35.2,
+      "smoothedSpeedKmh": 34.8,
+      "gpsSpeedTrusted": true,
+      "captureIntervalSeconds": 3,
+      "uploadIntervalSeconds": 3,
+      "distanceFilterMeters": 3,
+      "floor": null
     }
   ]
 }</pre>
@@ -471,7 +564,7 @@ Accept: application/json</pre>
     <pre>HTTP 2xx</pre>
 
     <h3>Description</h3>
-    <p>Uploads multiple queued GPS points in one request. Used when background tracking batches location updates for efficiency. On success, the app treats any HTTP 2xx response as accepted and clears the uploaded points from the local queue.</p>
+    <p>Uploads multiple queued GPS points in one request. Body shape is <code>{ "points": [ ... ] }</code>. Each point uses the same fields as GPS Ping. Stationary / below <code>2 km/h</code> fixes are sent on GPS Ping only and are not included in this queue. The app flushes when at least 2 points are queued and either 1 minute has elapsed or the queue reaches 20 points. On success, the app treats any HTTP 2xx response as accepted and removes the uploaded points from its local queue.</p>
   </section>
 
   <!-- 6. Register Push Token -->
@@ -502,7 +595,7 @@ Accept: application/json</pre>
   "device_id": "samsung-galaxy-a12-abc123",
   "push_token": "fcm-device-token",
   "app_version": "1.0.0",
-  "build": "42"
+  "build": "41"
 }</pre>
 
     <h3>Success Response</h3>
@@ -540,7 +633,7 @@ Accept: application/json</pre>
   "device_id": "ios-ABCDEF12-3456-7890-ABCD-EF1234567890",
   "push_token": "fcm-device-token",
   "app_version": "1.0.0",
-  "build": "42"
+  "build": "41"
 }</pre>
 
     <h3>Success Response</h3>
@@ -568,11 +661,11 @@ Accept: application/json</pre>
         <tr><td>deviceId</td><td>string</td><td>Yes</td><td>Device identifier</td></tr>
         <tr><td>appVersion</td><td>string</td><td>Yes</td><td>App version string</td></tr>
         <tr><td>build</td><td>string</td><td>Yes</td><td>App build number</td></tr>
-        <tr><td>battery_percentage</td><td>number</td><td>No</td><td>Current battery level (0–100)</td></tr>
-        <tr><td>low_power_mode</td><td>boolean</td><td>No</td><td>Whether low power mode is enabled</td></tr>
+        <tr><td>battery_percentage</td><td>number|null</td><td>No</td><td>Current battery level (0–100); <code>null</code> if unavailable</td></tr>
+        <tr><td>low_power_mode</td><td>string</td><td>No</td><td><code>enabled</code>, <code>disabled</code>, or <code>unknown</code></td></tr>
         <tr><td>permissions</td><td>object</td><td>Yes</td><td>OS permission snapshot (see below)</td></tr>
         <tr><td>checkedAt</td><td>string</td><td>Yes</td><td>Snapshot time in ISO 8601 UTC</td></tr>
-        <tr><td>app_cycle</td><td>string</td><td>No</td><td>App lifecycle state (e.g. <code>resumed</code>, <code>paused</code>)</td></tr>
+        <tr><td>app_cycle</td><td>string</td><td>No</td><td>App lifecycle state (e.g. <code>resumed</code>, <code>paused</code>, <code>inactive</code>, <code>detached</code>, <code>hidden</code>)</td></tr>
       </tbody>
     </table>
 
@@ -596,9 +689,9 @@ Accept: application/json</pre>
   "platform": "android",
   "deviceId": "samsung-galaxy-a12-abc123",
   "appVersion": "1.0.0",
-  "build": "42",
+  "build": "41",
   "battery_percentage": 78,
-  "low_power_mode": false,
+  "low_power_mode": "disabled",
   "permissions": {
     "foregroundLocation": "granted",
     "backgroundLocation": "granted",
@@ -607,7 +700,7 @@ Accept: application/json</pre>
     "batteryOptimization": "unknown",
     "push": "enabled"
   },
-  "checkedAt": "2026-07-09T12:00:00.000Z",
+  "checkedAt": "2026-07-14T12:00:00.000Z",
   "app_cycle": "resumed"
 }</pre>
 
@@ -615,11 +708,11 @@ Accept: application/json</pre>
     <pre>HTTP 2xx</pre>
 
     <h3>Description</h3>
-    <p>Reports the device's current OS permission and battery snapshot to the backend. Sent when permissions change, when the app lifecycle changes, or when the in-app push toggle changes. On success, any HTTP 2xx response is treated as accepted.</p>
+    <p>Reports the device's current OS permission and battery snapshot to the backend. Sent when permissions change, when battery or low-power mode changes, when the app lifecycle changes, or when the in-app push toggle changes. On success, any HTTP 2xx response is treated as accepted.</p>
   </section>
 
   <p class="footer-note">
-    SmartNPS360 Native API Reference — endpoints used by the current mobile app release.
+    SmartNPS360 Native API Reference — endpoints used by mobile app 1.0.0+41 (updated 14 July 2026).
   </p>
 
 </body>

@@ -377,17 +377,31 @@ class BackgroundLocationUploader {
   /// Stores points for batch upload only (Hive).
   ///
   /// Ping uploads are sent live and are not persisted.
+  /// Stationary / below 2 km/h points are ping-only and never queued here.
   Future<void> add(
     Position position, {
     SpeedAdaptiveGpsPolicyDecision? policyDecision,
   }) async {
     if (!BackgroundLocationAccuracy.isAcceptable(position)) return;
     if (!await _hasUploadAuth()) return;
+    final policy = policyDecision ?? _policyTracker.evaluate(position);
+    if (!policy.shouldQueueForBatch) {
+      if (kDebugMode) {
+        _batchConsoleLog(
+          'skipped batch queue '
+          'band=${policy.band.label} '
+          'motion=${policy.band.motionActivity} '
+          'speedKmh=${(policy.smoothedSpeedKmh ?? policy.rawSpeedKmh)?.toStringAsFixed(1)} '
+          '(ping-only)',
+        );
+      }
+      return;
+    }
     await _ensureStorage();
     final recordedAtUtc = position.timestamp.toUtc();
     final apiPoint = await _buildApiPoint(
       position,
-      policyDecision: policyDecision,
+      policyDecision: policy,
     );
     final point = Map<String, dynamic>.from(apiPoint)
       ..['_local_point_key'] = _localPointKey(position, recordedAtUtc);

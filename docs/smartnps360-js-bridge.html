@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SmartNPS360 JavaScript Bridge Reference</title>
+  <style>
+    @page {
+      margin: 22mm 18mm 24mm 18mm;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: #1a1a1a;
+      line-height: 1.55;
+      font-size: 11pt;
+      margin: 0;
+      padding: 0;
+    }
+
+    .cover {
+      min-height: 90vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      page-break-after: always;
+      padding: 12mm 0;
+    }
+
+    .cover h1 {
+      font-size: 28pt;
+      margin: 0 0 8px;
+      color: #022a67;
+      letter-spacing: -0.02em;
+    }
+
+    .cover .subtitle {
+      font-size: 13pt;
+      color: #4a5568;
+      margin-bottom: 28px;
+    }
+
+    .cover .meta {
+      font-size: 10pt;
+      color: #6b7280;
+      border-top: 1px solid #e5e7eb;
+      padding-top: 16px;
+      max-width: 520px;
+    }
+
+    h2 {
+      font-size: 16pt;
+      color: #022a67;
+      margin: 0 0 10px;
+      page-break-after: avoid;
+    }
+
+    h3 {
+      font-size: 11pt;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #374151;
+      margin: 18px 0 8px;
+      page-break-after: avoid;
+    }
+
+    p, li {
+      margin: 0 0 8px;
+    }
+
+    .toc {
+      page-break-after: always;
+      padding-top: 8mm;
+    }
+
+    .toc h2 {
+      margin-bottom: 16px;
+    }
+
+    .toc ol {
+      padding-left: 20px;
+    }
+
+    .toc li {
+      margin-bottom: 6px;
+    }
+
+    .api {
+      page-break-before: always;
+      padding-top: 4mm;
+    }
+
+    .api:first-of-type {
+      page-break-before: auto;
+    }
+
+    .endpoint {
+      background: #f8fafc;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin-bottom: 14px;
+    }
+
+    .direction {
+      display: inline-block;
+      font-size: 9pt;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      padding: 3px 8px;
+      border-radius: 4px;
+      margin-right: 8px;
+      color: #fff;
+      vertical-align: middle;
+    }
+
+    .direction.web-native { background: #2563eb; }
+    .direction.native-web { background: #059669; }
+    .direction.both { background: #7c3aed; }
+
+    .name {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 10pt;
+      word-break: break-all;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 8px 0 14px;
+      font-size: 10pt;
+    }
+
+    th, td {
+      border: 1px solid #e5e7eb;
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #f3f4f6;
+      font-weight: 600;
+    }
+
+    pre {
+      background: #0f172a;
+      color: #e2e8f0;
+      border-radius: 8px;
+      padding: 12px 14px;
+      overflow-x: auto;
+      font-size: 9pt;
+      line-height: 1.45;
+      margin: 8px 0 14px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .note {
+      background: #fffbeb;
+      border: 1px solid #fde68a;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 10pt;
+      margin: 10px 0 0;
+    }
+
+    .intro {
+      page-break-after: always;
+      padding-top: 4mm;
+    }
+
+    .footer-note {
+      font-size: 9pt;
+      color: #6b7280;
+      margin-top: 24px;
+      border-top: 1px solid #e5e7eb;
+      padding-top: 10px;
+    }
+  </style>
+</head>
+<body>
+
+  <section class="cover">
+    <h1>SmartNPS360 JavaScript Bridge Reference</h1>
+    <p class="subtitle">Web ↔ native communication for the Android and iOS mobile app</p>
+    <div class="meta">
+      <p><strong>Host:</strong> https://smartnps360.com/</p>
+      <p><strong>Bridge handlers documented:</strong> 18</p>
+      <p><strong>App version:</strong> 1.0.0+41</p>
+      <p><strong>Last updated:</strong> 14 July 2026</p>
+    </div>
+  </section>
+
+  <section class="intro">
+    <h2>Overview</h2>
+    <p>
+      The SmartNPS360 mobile app loads the web app inside an in-app WebView. JavaScript on the page
+      can call native features (GPS, files, push, auth, clock-in) through a bridge. The native app
+      can also push status updates and geolocation fixes back into the page.
+    </p>
+    <p>
+      All bridge calls use <code>window.flutter_inappwebview.callHandler(handlerName, payload)</code>
+      and return a Promise. Injected scripts also expose higher-level helpers on
+      <code>window.SmartNPS360</code> and <code>window.SmartNPSNativeAuth</code>.
+    </p>
+
+    <h3>Native app detection</h3>
+    <ul>
+      <li>User-Agent contains <code>SmartNPS360App</code></li>
+      <li><code>window.SmartNPS360.isNativeApp()</code> returns <code>true</code> in the mobile shell</li>
+    </ul>
+
+    <h3>Trusted origins</h3>
+    <p>
+      Most handlers only accept calls when the current page host is
+      <code>smartnps360.com</code>, <code>www.smartnps360.com</code>, or a subdomain of
+      <code>smartnps360.com</code>. Untrusted callers receive:
+    </p>
+    <pre>{
+  "ok": false,
+  "error": { "code": "untrusted_origin", "message": "Untrusted origin" }
+}</pre>
+
+    <h3>Common response envelope</h3>
+    <pre>{ "ok": true, /* payload fields */ }
+{ "ok": false, "error": { "code": "string", "message": "string" } }</pre>
+
+    <h3>Injected scripts (at page load)</h3>
+    <table>
+      <thead>
+        <tr><th>Script</th><th>Purpose</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>SmartNPS360</code> bridge</td><td>Auth helpers, push toggles, clock-in gate, theme, legacy location bridge</td></tr>
+        <tr><td>Geolocation override</td><td>Replaces <code>navigator.geolocation</code> with native GPS</td></tr>
+        <tr><td>iOS popover fix</td><td>Layout fix for notification UI on iOS (internal)</td></tr>
+      </tbody>
+    </table>
+
+    <p class="note">
+      <strong>For web developers:</strong> Use <code>bindClockInGate</code> or
+      <code>ensureCanClockIn()</code> before clock-in. Do not submit attendance directly on button
+      click without the native background-location gate. See the clock-in integration example in
+      <code>web_integration/clock_in_page.example.js</code>.
+    </p>
+  </section>
+
+  <section class="toc">
+    <h2>Table of Contents</h2>
+    <ol>
+      <li>Auth &amp; session</li>
+      <li>Location &amp; clock-in</li>
+      <li>Push notifications</li>
+      <li>Files &amp; sharing</li>
+      <li>Device &amp; navigation</li>
+      <li>Theme</li>
+      <li>Native → Web events &amp; callbacks</li>
+      <li>Web helper API (<code>window.SmartNPS360</code>)</li>
+      <li>Geolocation override</li>
+      <li>Legacy location bridge</li>
+    </ol>
+  </section>
+
+  <!-- AUTH -->
+  <section class="api">
+    <h2>1. Auth &amp; Session</h2>
+
+    <div class="endpoint">
+      <span class="direction web-native">Web → Native</span>
+      <span class="name">authEvent</span>
+    </div>
+    <h3>Web entry points</h3>
+    <ul>
+      <li><code>SmartNPSNativeAuth.login(user, session)</code></li>
+      <li><code>SmartNPSNativeAuth.setSession(session)</code></li>
+      <li><code>SmartNPSNativeAuth.logout()</code></li>
+    </ul>
+    <h3>Request</h3>
+    <table>
+      <thead>
+        <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>action or type</td><td>string</td><td>Yes</td><td><code>login</code>, <code>signup</code>, <code>register</code>, <code>session</code>, or <code>logout</code></td></tr>
+        <tr><td>user or profile</td><td>object</td><td>For login/signup</td><td>Officer profile object</td></tr>
+        <tr><td>session, auth, or tokens</td><td>object</td><td>For login/session</td><td>Token bundle (access token, refresh token, expiry fields)</td></tr>
+      </tbody>
+    </table>
+    <h3>Example — login</h3>
+    <pre>{
+  "action": "login",
+  "user": { "id": 42, "name": "Officer Smith" },
+  "session": { "accessToken": "eyJ...", "refreshToken": "..." }
+}</pre>
+    <h3>Responses</h3>
+    <table>
+      <thead>
+        <tr><th>Action</th><th>Success</th><th>Failure</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>login / signup</td><td><code>{ "ok": true, "action": "login" }</code></td><td><code>invalid_args</code> if user missing</td></tr>
+        <tr><td>session</td><td><code>{ "ok": true, "action": "session" }</code></td><td><code>invalid_args</code> if session missing</td></tr>
+        <tr><td>logout</td><td><code>{ "ok": true, "action": "logout" }</code></td><td><code>logout_blocked_on_duty</code> if officer is still on duty</td></tr>
+      </tbody>
+    </table>
+    <h3>Native side effects</h3>
+    <p>
+      On login/session: stores tokens, marks officer logged in, starts duty heartbeat, syncs push token.
+      On logout: clears session, stops tracking, removes push token (blocked while on duty).
+    </p>
+
+    <div class="endpoint">
+      <span class="direction web-native">Web → Native</span>
+      <span class="name">loginWithSanctum</span>
+    </div>
+    <h3>Description</h3>
+    <p>
+      Native Sanctum login. Also auto-triggered when a login form with
+      <code>employee_no</code> and <code>password</code> fields is submitted.
+    </p>
+    <h3>Request</h3>
+    <pre>{ "username": "EMP001", "password": "secret" }</pre>
+    <p><code>username</code> is sent to the API as <code>employee_no</code>.</p>
+    <h3>Response</h3>
+    <pre>{ "ok": true, "hasToken": true }
+{ "ok": false, "error": { "code": "request_failed", "message": "Sanctum login failed" } }</pre>
+  </section>
+
+  <!-- LOCATION -->
+  <section class="api">
+    <h2>2. Location &amp; Clock-in</h2>
+
+    <div class="endpoint">
+      <span class="direction web-native">Web → Native</span>
+      <span class="name">getCurrentLocation</span>
+    </div>
+    <h3>Web entry points</h3>
+    <ul>
+      <li>Direct <code>callHandler('getCurrentLocation', payload)</code></li>
+      <li><code>navigator.geolocation.getCurrentPosition</code> (injected override)</li>
+      <li><code>SmartNPSBridge.postMessage</code> / <code>SmartNPSAndroid.postMessage</code> with <code>request_current_location</code></li>
+    </ul>
+    <h3>Request options</h3>
+    <table>
+      <thead>
+        <tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>timeout_ms</td><td>number</td><td>12000</td><td>Clamped 5000–45000</td></tr>
+        <tr><td>required_accuracy_meters</td><td>number</td><td>50</td><td>Clamped 5–500</td></tr>
+        <tr><td>for_clock_in or purpose</td><td>bool / string</td><td>false</td><td>Enables clock-in disclosure and mock-location checks</td></tr>
+        <tr><td>allow_foreground_only</td><td>boolean</td><td>false</td><td>Skips background-location gate</td></tr>
+      </tbody>
+    </table>
+    <h3>Success response</h3>
+    <pre>{
+  "ok": true,
+  "location": {
+    "latitude": 24.8607,
+    "longitude": 67.0011,
+    "accuracy": 12.5,
+    "altitude": 45.0,
+    "speed": 0.0,
+    "heading": 0.0,
+    "timestampMs": 1752494400000,
+    "timestamp": "2026-07-14T12:00:00.000Z",
+    "isMocked": false,
+    "isSimulatedBySoftware": false,
+    "acceptedFromLiveStream": true,
+    "isFreshLiveLocation": true,
+    "isCachedLocation": false,
+    "ageMsWhenAccepted": 0,
+    "maxAllowedAccuracyMeters": 50,
+    "timeoutMs": 12000
+  }
+}</pre>
+    <h3>Common error codes</h3>
+    <p>
+      <code>untrusted_origin</code>, <code>clock_in_gate_in_progress</code>,
+      <code>location_services_disabled</code>, <code>background_location_required</code>,
+      <code>disclosure_required</code>, <code>permission_denied</code>,
+      <code>permission_denied_forever</code>, <code>mock_location</code>,
+      <code>fresh_location_unavailable</code>, <code>get_location_failed</code>
+    </p>
+
+    <div class="endpoint">
+      <span class="direction both">Web ↔ Native</span>
+      <span class="name">startLocationWatch</span>
+    </div>
+    <h3>Description</h3>
+    <p>Starts a native GPS stream. Native pushes updates via <code>__smartnps_native_geo_emit</code>.</p>
+    <h3>Request</h3>
+    <pre>{
+  "watchId": 900001,
+  "options": {
+    "required_accuracy_meters": 50,
+    "timeout_ms": 12000,
+    "interval_ms": 1000,
+    "for_clock_in": true,
+    "allow_foreground_only": false
+  }
+}</pre>
+    <h3>Response</h3>
+    <pre>{ "ok": true, "watchId": 900001, "intervalMs": 1000 }</pre>
+
+    <div class="endpoint">
+      <span class="direction web-native">Web → Native</span>
+      <span class="name">clearLocationWatch</span>
+    </div>
+    <h3>Request</h3>
+    <pre>{ "watchId": 900001 }</pre>
+    <h3>Response</h3>
+    <pre>{ "ok": true, "watchId": 900001 }</pre>
+
+    <div class="endpoint">
+      <span class="direction web-native">Web → Native</span>
+      <span class="name">prepareClockIn</span>
+    </div>
+    <h3>Web entry point</h3>
+    <p><code>SmartNPS360.ensureCanClockIn()</code></p>
+    <h3>Description</h3>
+    <p>Runs the store-safe clock-in gate: disclosure, permissions, background location readiness.</p>
+    <h3>Response — ready</h3>
+    <pre>{ "ok": true, "canClockIn": true, "prepareInFlight": false }</pre>
+    <h3>Response — blocked</h3>
+    <pre>{
+  "ok": true,
+  "canClockIn": false,
+  "prepareInFlight": false,
+  "reason": "background_location_required",
+  "title": "Background location required for shift attendance",
+  "message": "Enable background location (Always / Allow all the time) ..."
+}</pre>
+
+    <div class="endpoint">
+      <span class="direction web-native">Web → Native</span>
+      <span class="name">getBackgroundLocationStatus</span>
+    </div>
+    <h3>Web entry point</h3>
+    <p><code>SmartNPS360.getBackgroundLocationStatus()</code></p>
+    <h3>Response</h3>
+    <pre>{
+  "ok": true,
+  "backgroundReady": false,
+  "phase": "foregroundOnly",
+  "deniedReason": "background_location_required",
+  "disclosureAccepted": true,
+  "serviceEnabled": true,
+  "canClockIn": false,
+  "prepareInFlight": false,
+  "title": "Background location required...",
+  "message": "Enable Always...",
+  "platform": "android"
+}</pre>
+    <p><code>phase</code>: <code>none</code> | <code>foregroundOnly</code> | <code>backgroundReady</code></p>
+  </section>
+
+  <!-- PUSH -->
+  <section class="api">
+    <h2>3. Push Notifications</h2>
+
+    <div class="endpoint">
+      <span class="direction web-native">Web → Native</span>
+      <span class="name">getPushNotificationToken</span>
+    </div>
+    <h3>Response</h3>
+    <pre>{ "ok": true, "token": "fcm_token_string_or_null" }</pre>
+
+    <div class="endpoint">
+      <span class="direction web-native">Web → Native</span>
+      <span class="name">getPushNotificationStatus</span>
+    </div>
+    <h3>Web entry points</h3>
+    <p><code>SmartNPS360.getPushNotificationStatus()</code>, <code>syncPushNotifications()</code></p>
+    <h3>Response</h3>
+    <pre>{
+  "ok": true,
+  "enabled": true,
+  "permissionGranted": true,
+  "hasToken": true
+}</pre>
+
+    <div class="endpoint">
+      <span class="direction web-native">Web → Native</span>
+      <span class="name">setPushNotificationsEnabled</span>
+    </div>
+    <h3>Web entry point</h3>
+    <p><code>SmartNPS360.setPushNotificationsEnabled(enabled)</code></p>
+    <h3>Request</h3>
+    <p><code>true</code> / <code>false</code> or <code>{ "enabled": true }</code></p>
+    <h3>Response</h3>
+    <p>Same shape as <code>getPushNotificationStatus</code>. May include <code>"unchanged": true</code>.</p>
+  </section>
+
+  <!-- FILES -->
+  <section class="api">
+    <h2>4. Files &amp; Sharing</h2>
+
+    <div class="endpoint">
+      <span class="direction web-native">Web → Native</span>
+      <span class="name">pickFile</span>
+    </div>
+    <h3>Response — selected</h3>
+    <pre>{
+  "ok": true,
+  "canceled": false,
+  "file": { "path": "/path/to/file.pdf", "name": "file.pdf", "size": 12345, "extension": "pdf" }
+}</pre>
+    <h3>Response — canceled</h3>
+    <pre>{ "ok": true, "canceled": true }</pre>
+
+    <div class="endpoint">
+      <span class="direction web-native">Web → Native</span>
+      <span class="name">pickImage</span>
+    </div>
+    <h3>Response</h3>
+    <pre>{ "ok": true, "canceled": false, "image": { "path": "...", "name": "..." } }</pre>
+
+    <div class="endpoint">
+      <span class="direction web-native">Web → Native</span>
+      <span class="name">takePhoto</span>
+    </div>
+    <h3>Response</h3>
+    <pre>{ "ok": true, "canceled": false, "photo": { "path": "...", "name": "..." } }</pre>
+
+    <div class="endpoint">
+      <span class="direction web-native">Web → Native</span>
+      <span class="name">downloadFile</span>
+    </div>
+    <h3>Request</h3>
+    <p>URL string or <code>{ "url": "https://...", "filename": "report.pdf" }</code></p>
+    <h3>Response</h3>
+    <pre>{ "ok": true, "file": { "path": "/app/documents/downloads/report.pdf", "name": "report.pdf" } }</pre>
+
+    <div class="endpoint">
+      <span class="direction web-native">Web → Native</span>
+      <span class="name">shareContent</span>
+    </div>
+    <h3>Request</h3>
+    <p>Text string or <code>{ "text": "...", "subject": "..." }</code></p>
+    <h3>Response</h3>
+    <pre>{ "ok": true }</pre>
+  </section>
+
+  <!-- DEVICE -->
+  <section class="api">
+    <h2>5. Device &amp; Navigation</h2>
+
+    <div class="endpoint">
+      <span class="direction web-native">Web → Native</span>
+      <span class="name">getDeviceInfo</span>
+    </div>
+    <h3>Response (Android example)</h3>
+    <pre>{
+  "ok": true,
+  "platform": "android",
+  "device": { "brand": "Google", "manufacturer": "Google", "model": "Pixel 8", "sdkInt": 34 }
+}</pre>
+
+    <div class="endpoint">
+      <span class="direction web-native">Web → Native</span>
+      <span class="name">openExternalUrl</span>
+    </div>
+    <h3>Request</h3>
+    <p>URL string or <code>{ "url": "https://..." }</code></p>
+    <h3>Response</h3>
+    <pre>{ "ok": true, "launched": true }</pre>
+
+    <h3>Navigation (native, not a handler)</h3>
+    <table>
+      <thead>
+        <tr><th>Behavior</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Internal URLs</td><td>Loaded inside the WebView</td></tr>
+        <tr><td>External http(s) links</td><td>Opened in the system browser</td></tr>
+        <tr><td>Logout routes (<code>/officer/logout</code>, <code>*/logout</code>)</td><td>Trigger native logout if officer is not on duty</td></tr>
+        <tr><td>Login routes</td><td>Pause native session and stop duty heartbeat</td></tr>
+        <tr><td>Push notification tap</td><td>Native app loads deep-link URL directly</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- THEME -->
+  <section class="api">
+    <h2>6. Theme</h2>
+
+    <div class="endpoint">
+      <span class="direction web-native">Web → Native</span>
+      <span class="name">themeChanged</span>
+    </div>
+    <h3>Web entry points</h3>
+    <ul>
+      <li><code>SmartNPS360.notifyTheme('dark')</code> or <code>notifyTheme('light')</code></li>
+      <li>Auto-detected via DOM <code>MutationObserver</code> on page theme classes</li>
+    </ul>
+    <h3>Request</h3>
+    <p>Boolean or <code>{ "isDark": true, "theme": "dark", "mode": "dark" }</code></p>
+    <h3>Response</h3>
+    <pre>{ "ok": true, "isDark": true }</pre>
+    <p>Updates native status bar and navigation bar colors.</p>
+  </section>
+
+  <!-- NATIVE TO WEB -->
+  <section class="api">
+    <h2>7. Native → Web Events &amp; Callbacks</h2>
+
+    <h3>Custom DOM events</h3>
+    <table>
+      <thead>
+        <tr><th>Event</th><th>Detail</th><th>When fired</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>smartnps360:background-location</code></td><td><code>getBackgroundLocationStatus</code> result</td><td>Permission changes, page load</td></tr>
+        <tr><td><code>smartnps360:push-notifications</code></td><td>Push status object</td><td>Page load, app resume</td></tr>
+        <tr><td><code>smartnps360:push-token</code></td><td><code>{ "token": "fcm..." }</code></td><td>iOS after login / token sync</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Callback hooks on <code>window.SmartNPS360</code></h3>
+    <table>
+      <thead>
+        <tr><th>Callback</th><th>Argument</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>onBackgroundLocationStatusChanged(status)</code></td><td>Background location status object</td></tr>
+        <tr><td><code>onPushNotificationStatusChanged(status)</code></td><td>Push status object</td></tr>
+        <tr><td><code>onPushTokenReady(token)</code></td><td>FCM token string (iOS)</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Geolocation watch callbacks</h3>
+    <table>
+      <thead>
+        <tr><th>Function</th><th>Payload</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>window.__smartnps_native_geo_emit(watchId, position)</code></td><td>Standard Geolocation position object with native metadata</td></tr>
+        <tr><td><code>window.__smartnps_native_geo_error(watchId, err)</code></td><td><code>{ "code": 2, "message": "..." }</code></td></tr>
+      </tbody>
+    </table>
+
+    <h3>Watch position payload</h3>
+    <pre>{
+  "coords": {
+    "latitude": 24.8607,
+    "longitude": 67.0011,
+    "accuracy": 12.5,
+    "altitude": 45.0,
+    "altitudeAccuracy": null,
+    "heading": 0.0,
+    "speed": 0.0
+  },
+  "timestamp": 1752494400000,
+  "nativeSource": true,
+  "provider": "flutter_geolocator",
+  "is_mocked": false,
+  "is_simulated_by_software": false,
+  "accepted_from_live_stream": true,
+  "max_allowed_accuracy_meters": 50
+}</pre>
+  </section>
+
+  <!-- SMARTNPS360 API -->
+  <section class="api">
+    <h2>8. Web Helper API (<code>window.SmartNPS360</code>)</h2>
+    <p>Injected at document start. All methods are no-ops or return rejected promises in a normal browser.</p>
+    <table>
+      <thead>
+        <tr><th>Method</th><th>Handler / behavior</th><th>Category</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>isNativeApp()</code></td><td>User-Agent check</td><td>Detection</td></tr>
+        <tr><td><code>notifyTheme(mode)</code></td><td><code>themeChanged</code></td><td>Theme</td></tr>
+        <tr><td><code>getBackgroundLocationStatus()</code></td><td><code>getBackgroundLocationStatus</code></td><td>Clock-in</td></tr>
+        <tr><td><code>ensureCanClockIn()</code></td><td><code>prepareClockIn</code></td><td>Clock-in</td></tr>
+        <tr><td><code>bindClockInGate(button, onAllowed, onBlocked)</code></td><td>Gate + status listener</td><td>Clock-in</td></tr>
+        <tr><td><code>getPushNotificationStatus()</code></td><td><code>getPushNotificationStatus</code></td><td>Push</td></tr>
+        <tr><td><code>setPushNotificationsEnabled(enabled)</code></td><td><code>setPushNotificationsEnabled</code></td><td>Push</td></tr>
+        <tr><td><code>syncPushNotifications()</code></td><td>Get status + broadcast</td><td>Push</td></tr>
+        <tr><td><code>broadcastPushNotificationStatus(status)</code></td><td>DOM event + UI sync</td><td>Push</td></tr>
+        <tr><td><code>bindPushNotificationToggle(input)</code></td><td>Auto-binds <code>[data-smartnps-push-toggle]</code></td><td>Push</td></tr>
+        <tr><td><code>bindAlpinePushNotificationToggle(button)</code></td><td>Alpine.js toggle helper</td><td>Push</td></tr>
+      </tbody>
+    </table>
+
+    <h3><code>window.SmartNPSNativeAuth</code></h3>
+    <table>
+      <thead>
+        <tr><th>Method</th><th>Sends to <code>authEvent</code></th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>login(user, session)</code></td><td><code>{ action: "login", user, session }</code></td></tr>
+        <tr><td><code>setSession(session)</code></td><td><code>{ action: "session", session }</code></td></tr>
+        <tr><td><code>logout()</code></td><td><code>{ action: "logout" }</code></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- GEOLOCATION -->
+  <section class="api">
+    <h2>9. Geolocation Override</h2>
+    <p>
+      Browser geolocation is disabled in WebView settings. The injected script replaces
+      <code>navigator.geolocation</code> with native GPS.
+    </p>
+    <table>
+      <thead>
+        <tr><th>Browser API</th><th>Native behavior</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>getCurrentPosition(success, error, options)</code></td><td>Runs clock-in gate (unless <code>allow_foreground_only</code>), then <code>getCurrentLocation</code></td></tr>
+        <tr><td><code>watchPosition(success, error, options)</code></td><td><code>startLocationWatch</code> + <code>__smartnps_native_geo_emit</code></td></tr>
+        <tr><td><code>clearWatch(id)</code></td><td><code>clearLocationWatch</code></td></tr>
+      </tbody>
+    </table>
+
+    <h3>Web options → native options</h3>
+    <table>
+      <thead>
+        <tr><th>Web option</th><th>Native option</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>enableHighAccuracy: false</code></td><td><code>required_accuracy_meters: 100</code></td></tr>
+        <tr><td><code>timeout</code></td><td><code>timeout_ms</code> (5000–45000)</td></tr>
+        <tr><td><code>required_accuracy_meters</code></td><td>Passed through (5–500)</td></tr>
+        <tr><td><code>allow_foreground_only: true</code></td><td>Skips clock-in gate</td></tr>
+        <tr><td>Clock-in gate unlocked</td><td>Sets <code>for_clock_in: true</code></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- LEGACY -->
+  <section class="api">
+    <h2>10. Legacy Location Bridge</h2>
+    <p>For older web integrations that do not use the geolocation override.</p>
+
+    <div class="endpoint">
+      <span class="direction web-native">Web → Native</span>
+      <span class="name">SmartNPSBridge.postMessage / SmartNPSAndroid.postMessage</span>
+    </div>
+    <h3>Request</h3>
+    <pre>{ "action": "request_current_location" }</pre>
+
+    <div class="endpoint">
+      <span class="direction native-web">Native → Web</span>
+      <span class="name">SmartNPSWeb.receiveLocation / receiveLocationError</span>
+    </div>
+    <h3>Success callback payload</h3>
+    <pre>{
+  "latitude": 24.8607,
+  "longitude": 67.0011,
+  "accuracy": 12.5,
+  "provider": "flutter_geolocator",
+  "timestamp": 1752494400000,
+  "timestamp_iso": "2026-07-14T12:00:00.000Z",
+  "altitude": 45.0,
+  "speed": 0.0,
+  "heading": 0.0,
+  "is_mocked": false
+}</pre>
+    <h3>Error callback payload</h3>
+    <pre>{ "code": "NATIVE_GPS_FAILED", "message": "..." }</pre>
+
+    <p class="footer-note">
+      Handler registration summary:
+      <code>pickFile</code>, <code>pickImage</code>, <code>takePhoto</code>,
+      <code>getCurrentLocation</code>, <code>startLocationWatch</code>, <code>clearLocationWatch</code>,
+      <code>getDeviceInfo</code>, <code>openExternalUrl</code>, <code>shareContent</code>,
+      <code>downloadFile</code>, <code>getPushNotificationToken</code>, <code>getPushNotificationStatus</code>,
+      <code>setPushNotificationsEnabled</code>, <code>getBackgroundLocationStatus</code>,
+      <code>prepareClockIn</code>, <code>themeChanged</code>, <code>loginWithSanctum</code>, <code>authEvent</code>.
+    </p>
+  </section>
+
+</body>
+</html>
