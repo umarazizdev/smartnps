@@ -35,6 +35,7 @@ import '../utilities/app_lifecycle_resume_gate.dart';
 import '../utilities/overlay_prompt_guard.dart';
 import '../utilities/permission_settings_helper.dart';
 import '../app/native_theme_controller.dart';
+import '../push/officer_announcement_coordinator.dart';
 import '../push/push_notification_service.dart';
 import '../permissions/native_permission_status_service.dart';
 
@@ -1645,6 +1646,11 @@ class _WebViewShellState extends State<WebViewShell>
     PushNotificationService.instance.setOnNotificationTap(
       _onPushNotificationTap,
     );
+    OfficerAnnouncementCoordinator.instance.attach(
+      deliverToWebView: _deliverAnnouncementToWebView,
+      isDeliveryReady: _isReadyForAnnouncementDelivery,
+      ensureOfficerWebViewVisible: _ensureOfficerWebViewForAnnouncement,
+    );
     if (Platform.isIOS) {
       PushNotificationService.instance.setIosWebPushUploadHandler(
         _uploadPushTokenViaWebView,
@@ -1658,6 +1664,40 @@ class _WebViewShellState extends State<WebViewShell>
   void _onPushNotificationTap(String url) {
     _pendingPushUrl = url;
     unawaited(_loadPendingPushUrl());
+  }
+
+  bool _isReadyForAnnouncementDelivery() {
+    if (_controller == null) return false;
+    final uri = _ui.currentUri.value;
+    if (!AuthSessionManager.isOfficerApplicationUrl(uri)) return false;
+    if (AuthSessionManager.isLoginRoute(uri)) return false;
+    return true;
+  }
+
+  void _ensureOfficerWebViewForAnnouncement(Uri? destinationUrl) {
+    if (_isReadyForAnnouncementDelivery()) return;
+
+    final target = destinationUrl?.toString() ?? AppConfig.defaultPushUrl;
+    final normalized = PushNotificationService.normalizeNotificationUrl(target);
+    _pendingPushUrl = normalized;
+    unawaited(_loadPendingPushUrl());
+  }
+
+  Future<bool> _deliverAnnouncementToWebView(String recipientPublicId) async {
+    final controller = _controller;
+    if (controller == null) return false;
+    if (!_isReadyForAnnouncementDelivery()) return false;
+
+    final javascript = OfficerAnnouncementCoordinator.buildDeliveryJavaScript(
+      recipientPublicId,
+    );
+    try {
+      final result = await controller.evaluateJavascript(source: javascript);
+      return OfficerAnnouncementCoordinator.normalizeJavaScriptBoolean(result);
+    } catch (e) {
+      debugPrint('[SmartNPS360][Announcement] evaluateJavascript failed: $e');
+      return false;
+    }
   }
 
   Future<void> _loadPendingPushUrl() async {
@@ -1818,6 +1858,9 @@ class _WebViewShellState extends State<WebViewShell>
         await _notifyWebBackgroundLocationStatus();
         await _notifyWebPushNotificationStatus();
         await NativePermissionStatusService.instance.syncIfChanged();
+        await OfficerAnnouncementCoordinator.instance.tryDeliverPending(
+          source: 'resumed',
+        );
       }());
     }
   }
@@ -1825,6 +1868,7 @@ class _WebViewShellState extends State<WebViewShell>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    OfficerAnnouncementCoordinator.instance.detach();
     PushNotificationService.instance.setDeferPermissionPromptWhile(null);
     PushNotificationService.instance.setOnNotificationTap(null);
     if (Platform.isIOS) {
@@ -2324,6 +2368,11 @@ class _WebViewShellState extends State<WebViewShell>
           _setNativeAuthSession(true);
           _syncPushTokenAfterLogin();
           unawaited(_maybeStartDutyHeartbeat());
+          unawaited(
+            OfficerAnnouncementCoordinator.instance.tryDeliverPending(
+              source: 'auth-ready',
+            ),
+          );
           return {'ok': true, 'action': authAction};
         }
 
@@ -2352,6 +2401,11 @@ class _WebViewShellState extends State<WebViewShell>
           _setNativeAuthSession(true);
           _syncPushTokenAfterLogin();
           unawaited(_maybeStartDutyHeartbeat());
+          unawaited(
+            OfficerAnnouncementCoordinator.instance.tryDeliverPending(
+              source: 'auth-ready',
+            ),
+          );
           return {'ok': true, 'action': 'session'};
         }
 
@@ -2438,6 +2492,9 @@ class _WebViewShellState extends State<WebViewShell>
         await PushNotificationService.instance.syncPushTokenAfterLogin();
       }
       await _maybeStartDutyHeartbeat();
+      await OfficerAnnouncementCoordinator.instance.tryDeliverPending(
+        source: 'auth-ready',
+      );
       return true;
     } catch (e) {
       debugPrint('[SmartNPS360][Auth] sanctum login failed: $e');
@@ -2453,6 +2510,9 @@ class _WebViewShellState extends State<WebViewShell>
             await PushNotificationService.instance.syncPushTokenAfterLogin();
           }
           await _maybeStartDutyHeartbeat();
+          await OfficerAnnouncementCoordinator.instance.tryDeliverPending(
+            source: 'auth-ready',
+          );
           return true;
         }
       }
@@ -3227,6 +3287,13 @@ class _WebViewShellState extends State<WebViewShell>
                                       await _reconcileBottomBarFromWebView(
                                         controller,
                                       );
+                                      if (!ignoreEvent) {
+                                        await OfficerAnnouncementCoordinator
+                                            .instance
+                                            .tryDeliverPending(
+                                              source: 'webview-ready',
+                                            );
+                                      }
                                     },
                                     onReceivedError:
                                         (controller, request, error) async {

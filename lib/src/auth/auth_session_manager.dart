@@ -37,6 +37,16 @@ class AuthSessionManager {
     return path.contains('officer/logout') || path.endsWith('/logout');
   }
 
+  /// Authenticated officer application surface (not login/logout/admin).
+  static bool isOfficerApplicationUrl(Uri? uri) {
+    if (uri == null) return false;
+    if (!AppConfig.isAllowedHost(uri.host)) return false;
+    if (isLoginRoute(uri) || isLogoutRoute(uri)) return false;
+
+    final path = uri.path.toLowerCase();
+    return path.contains('/officer') || path.startsWith('officer');
+  }
+
   /// Logout phases:
   /// 1. Instant — logged-out flag + stop tracking + start FCM delete
   /// 2. Drain — flush/discard GPS batches (token still in secure storage)

@@ -17,6 +17,8 @@ import '../auth/auth_repository.dart';
 import '../auth/auth_state.dart';
 import '../permissions/native_permission_status_service.dart';
 import '../permissions/os_notification_permission.dart';
+import 'officer_announcement_coordinator.dart';
+import 'officer_announcement_push.dart';
 import 'push_notification_preferences.dart';
 import '../utilities/app_config.dart';
 import '../utilities/app_version_info.dart';
@@ -216,6 +218,7 @@ class PushNotificationService {
 
   void Function(String url)? _onNotificationTap;
   String? _pendingNotificationUrl;
+  bool _initialMessageHandled = false;
 
   void setOnNotificationTap(void Function(String url)? handler) {
     _onNotificationTap = handler;
@@ -491,17 +494,21 @@ class PushNotificationService {
       debugPrintRemoteMessagePayload('foreground', message);
       if (!pushNotificationsEnabled) return;
       await _showLocalFromRemoteMessage(message);
+      _handleForegroundAnnouncement(message);
     });
 
     FirebaseMessaging.onMessageOpenedApp.listen((message) {
       debugPrintRemoteMessagePayload('openedApp', message);
-      _handleRemoteMessageTap(message);
+      _handleRemoteMessageOpened(message, source: 'opened-app');
     });
 
-    final initial = await messaging.getInitialMessage();
-    if (initial != null) {
-      debugPrintRemoteMessagePayload('initialMessage', initial);
-      _handleRemoteMessageTap(initial);
+    if (!_initialMessageHandled) {
+      _initialMessageHandled = true;
+      final initial = await messaging.getInitialMessage();
+      if (initial != null) {
+        debugPrintRemoteMessagePayload('initialMessage', initial);
+        _handleRemoteMessageOpened(initial, source: 'cold-launch');
+      }
     }
 
     debugPrint('[SmartNPS360][Push] Firebase messaging listeners ready');
@@ -940,9 +947,11 @@ class PushNotificationService {
       if (decoded is Map) {
         final data = decoded['data'];
         if (data is Map) {
-          _dispatchNotificationTap(
-            resolveNotificationUrl(Map<String, dynamic>.from(data)),
-          );
+          final map = Map<String, dynamic>.from(data);
+          if (_consumeAnnouncementOpen(map, source: 'local-tap')) {
+            return;
+          }
+          _dispatchNotificationTap(resolveNotificationUrl(map));
           return;
         }
       }
@@ -953,8 +962,36 @@ class PushNotificationService {
     _dispatchNotificationTap(AppConfig.defaultPushUrl);
   }
 
-  void _handleRemoteMessageTap(RemoteMessage message) {
-    _dispatchNotificationTap(resolveNotificationUrl(message.data));
+  void _handleRemoteMessageOpened(
+    RemoteMessage message, {
+    required String source,
+  }) {
+    final data = Map<String, dynamic>.from(message.data);
+    if (_consumeAnnouncementOpen(data, source: source)) {
+      return;
+    }
+    _dispatchNotificationTap(resolveNotificationUrl(data));
+  }
+
+  void _handleForegroundAnnouncement(RemoteMessage message) {
+    final announcement = OfficerAnnouncementPush.tryParse(
+      Map<String, dynamic>.from(message.data),
+    );
+    if (announcement == null) return;
+    OfficerAnnouncementCoordinator.instance.onForeground(announcement);
+  }
+
+  bool _consumeAnnouncementOpen(
+    Map<String, dynamic> data, {
+    required String source,
+  }) {
+    final announcement = OfficerAnnouncementPush.tryParse(data);
+    if (announcement == null) return false;
+    OfficerAnnouncementCoordinator.instance.onOpened(
+      announcement,
+      source: source,
+    );
+    return true;
   }
 
   void _dispatchNotificationTap(String url) {
