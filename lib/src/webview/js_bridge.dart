@@ -251,12 +251,16 @@ class JsBridge {
             'Location disclosure must be accepted to use GPS',
           );
         }
-      } else if (requiresBackgroundForClockIn &&
-          !await LocationDisclosureConsent.hasAccepted()) {
-        return _err(
-          'disclosure_required',
-          'Shift attendance location disclosure must be accepted',
-        );
+      } else if (requiresBackgroundForClockIn) {
+        await BackgroundLocationPermissions.refreshPermissionStateFromOs();
+        if (await BackgroundLocationPermissions.isClockInBackgroundReady()) {
+          await LocationDisclosureConsent.reconcileFromOsIfBackgroundReady();
+        } else if (!await LocationDisclosureConsent.hasAccepted()) {
+          return _err(
+            'disclosure_required',
+            'Shift attendance location disclosure must be accepted',
+          );
+        }
       } else {
         final disclosureReady = await DutyHeartbeatService.instance
             .ensureDisclosureBeforeWebLocationAccess();
@@ -582,9 +586,13 @@ class JsBridge {
       });
     }
 
+    await BackgroundLocationPermissions.refreshPermissionStateFromOs();
     final phase = await BackgroundLocationPermissions.currentPermissionPhase();
     final backgroundReady =
         await BackgroundLocationPermissions.isClockInBackgroundReady();
+    if (backgroundReady) {
+      await LocationDisclosureConsent.reconcileFromOsIfBackgroundReady();
+    }
     final deniedReason =
         await BackgroundLocationPermissions.settingsDeniedReasonIfAny();
     final disclosureAccepted = await LocationDisclosureConsent.hasAccepted();
@@ -603,7 +611,8 @@ class JsBridge {
       'deniedReason': deniedReason,
       'disclosureAccepted': disclosureAccepted,
       'serviceEnabled': serviceEnabled,
-      'canClockIn': backgroundReady && disclosureAccepted && !prepareInFlight,
+      'canClockIn':
+          backgroundReady && serviceEnabled && !prepareInFlight,
       'prepareInFlight': prepareInFlight,
       'title': backgroundReady
           ? null

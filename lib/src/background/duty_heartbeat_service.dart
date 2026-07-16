@@ -122,6 +122,13 @@ class DutyHeartbeatService {
 
   /// Clears modal routes left behind when returning from Settings.
   void reconcileDialogsAfterAppResume() {
+    // While Settings-return settle is in progress, do not clear/pop overlays —
+    // that briefly flashed "Unable to verify attendance" on Android.
+    if (Platform.isAndroid &&
+        (ClockInGateService.instance.isPrepareInFlight ||
+            PermissionSettingsHelper.isAwaitingSettingsReturn)) {
+      return;
+    }
     PermissionSettingsHelper.reconcilePromptsAfterAppResume();
     _backgroundLocationSettingsDialogVisible = false;
     if (!_disclosurePromptInFlight) {

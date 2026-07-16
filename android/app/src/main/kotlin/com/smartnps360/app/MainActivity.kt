@@ -94,6 +94,9 @@ class MainActivity : FlutterActivity() {
         "hasPreciseLocationPermission" -> {
           result.success(hasPreciseLocationPermission())
         }
+        "hasOneTimeLocationPermission" -> {
+          result.success(hasOneTimeLocationPermission())
+        }
         "isIgnoringBatteryOptimizations" -> {
           result.success(isIgnoringBatteryOptimizations())
         }
@@ -157,6 +160,56 @@ class MainActivity : FlutterActivity() {
       PackageManager.PERMISSION_GRANTED
   }
 
+  /// True when OS granted location only for this session ("Allow only this time").
+  private fun hasOneTimeLocationPermission(): Boolean {
+    // API 30+ (R). Use numeric flag — compileSdk stubs may lack
+    // PackageManager.FLAG_PERMISSION_ONE_TIME / getPermissionFlags symbols.
+    if (Build.VERSION.SDK_INT < 30) {
+      return false
+    }
+    val fineGranted =
+      checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
+    val coarseGranted =
+      checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
+    if (!fineGranted && !coarseGranted) {
+      return false
+    }
+    // PackageManager.FLAG_PERMISSION_ONE_TIME == 1 << 16
+    val oneTimeFlag = 0x00010000
+    val fineOneTime =
+      (permissionFlags(Manifest.permission.ACCESS_FINE_LOCATION) and oneTimeFlag) != 0
+    val coarseOneTime =
+      (permissionFlags(Manifest.permission.ACCESS_COARSE_LOCATION) and oneTimeFlag) != 0
+    return fineOneTime || coarseOneTime
+  }
+
+  /** Reflective read of PackageManager.getPermissionFlags (API 23+). */
+  private fun permissionFlags(permission: String): Int {
+    return try {
+      val method = PackageManager::class.java.getMethod(
+        "getPermissionFlags",
+        String::class.java,
+        String::class.java,
+        android.os.UserHandle::class.java,
+      )
+      val result = method.invoke(
+        packageManager,
+        permission,
+        packageName,
+        android.os.Process.myUserHandle(),
+      )
+      when (result) {
+        is Int -> result
+        is Number -> result.toInt()
+        else -> 0
+      }
+    } catch (_: Exception) {
+      0
+    }
+  }
+
   private fun isIgnoringBatteryOptimizations(): Boolean {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
       return true
@@ -178,10 +231,13 @@ class MainActivity : FlutterActivity() {
     }
   }
 
+  /// System Battery Saver only ([PowerManager.isPowerSaveMode]).
+  /// Do not scan OEM Settings keys — on Vivo/etc those often read as on
+  /// even when the user-facing Battery Saver toggle is off.
   private fun lowPowerModeStatus(): String {
     return try {
       val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-      if (powerManager.isPowerSaveMode || isOemLowPowerModeEnabled()) {
+      if (powerManager.isPowerSaveMode) {
         "enabled"
       } else {
         "disabled"
@@ -196,43 +252,6 @@ class MainActivity : FlutterActivity() {
       "lowPowerModeChanged",
       mapOf("low_power_mode" to lowPowerModeStatus())
     )
-  }
-
-  private fun isOemLowPowerModeEnabled(): Boolean {
-    val keys = listOf(
-      "low_power",
-      "low_power_sticky",
-      "power_save_mode",
-      "power_saving_mode",
-      "powersaving_switch",
-      "psm_switch",
-      "vivo_low_power_mode",
-      "vivo_power_save_mode",
-      "smart_power_save_mode",
-      "super_power_save_mode"
-    )
-
-    for (key in keys) {
-      val global = settingEnabled(Settings.Global.getString(contentResolver, key))
-      if (global == true) return true
-
-      val system = settingEnabled(Settings.System.getString(contentResolver, key))
-      if (system == true) return true
-
-      val secure = settingEnabled(Settings.Secure.getString(contentResolver, key))
-      if (secure == true) return true
-    }
-
-    return false
-  }
-
-  private fun settingEnabled(value: String?): Boolean? {
-    val normalized = value?.trim()?.lowercase() ?: return null
-    return when (normalized) {
-      "1", "true", "on", "enabled", "yes" -> true
-      "0", "false", "off", "disabled", "no" -> false
-      else -> normalized.toIntOrNull()?.let { it > 0 }
-    }
   }
 
   private fun openAppSettings() {

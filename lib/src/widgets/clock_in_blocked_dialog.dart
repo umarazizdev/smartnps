@@ -43,17 +43,49 @@ class ClockInBlockedDialog {
     _dialogVisible = true;
 
     try {
-      final accepted = await GlassActionDialog.show(
-        context: readyContext,
-        icon: Icons.location_on_rounded,
-        title: BackgroundLocationPermissions.clockInTitleFor(deniedReason),
-        message: BackgroundLocationPermissions.clockInSettingsMessageFor(
-          deniedReason,
-        ),
-        secondaryLabel: cancelClockInLabel,
-        primaryLabel: 'Open Settings',
-        destructiveSecondary: true,
-      );
+      final bool? accepted;
+      if (Platform.isAndroid) {
+        // Zero-duration route so "Open Settings" launches immediately on Android.
+        // iOS keeps the normal GlassActionDialog transition.
+        OverlayPromptGuard.registerBlockingOverlay();
+        try {
+          accepted = await showGeneralDialog<bool>(
+            context: readyContext,
+            barrierDismissible: false,
+            barrierLabel: 'Dismiss',
+            barrierColor: Colors.black54,
+            transitionDuration: Duration.zero,
+            pageBuilder: (dialogContext, animation, secondaryAnimation) {
+              return GlassActionDialog(
+                icon: Icons.location_on_rounded,
+                title: BackgroundLocationPermissions.clockInTitleFor(
+                  deniedReason,
+                ),
+                message: BackgroundLocationPermissions.clockInSettingsMessageFor(
+                  deniedReason,
+                ),
+                secondaryLabel: cancelClockInLabel,
+                primaryLabel: 'Open Settings',
+                destructiveSecondary: false,
+              );
+            },
+          );
+        } finally {
+          OverlayPromptGuard.unregisterBlockingOverlay();
+        }
+      } else {
+        accepted = await GlassActionDialog.show(
+          context: readyContext,
+          icon: Icons.location_on_rounded,
+          title: BackgroundLocationPermissions.clockInTitleFor(deniedReason),
+          message: BackgroundLocationPermissions.clockInSettingsMessageFor(
+            deniedReason,
+          ),
+          secondaryLabel: cancelClockInLabel,
+          primaryLabel: 'Open Settings',
+          destructiveSecondary: false,
+        );
+      }
       if (accepted != true) return ClockInBlockedAction.cancelled;
       return ClockInBlockedAction.openSettings;
     } finally {
@@ -68,6 +100,12 @@ class ClockInBlockedDialog {
     required String message,
     bool bypassCooldown = false,
   }) async {
+    // Never paint the failure dialog while we are settling after Settings —
+    // Android restores leftover routes and caused a brief error flash.
+    if (Platform.isAndroid &&
+        PermissionSettingsHelper.isAwaitingSettingsReturn) {
+      return null;
+    }
     if (_dialogVisible) return null;
     if (PermissionSettingsHelper.settingsPromptVisible.value) return null;
     if (!bypassCooldown && _isInCooldown(reason)) return null;
@@ -76,6 +114,12 @@ class ClockInBlockedDialog {
     if (context == null || !context.mounted) return null;
 
     await OverlayPromptGuard.waitUntilReady();
+
+    // Re-check after await — permission may have settled meanwhile.
+    if (Platform.isAndroid &&
+        PermissionSettingsHelper.isAwaitingSettingsReturn) {
+      return null;
+    }
 
     final readyContext = AppNavigator.key.currentContext;
     if (readyContext == null || !readyContext.mounted) return null;
@@ -109,11 +153,20 @@ class ClockInBlockedDialog {
   }
 
   /// Android may keep a modal route after opening Settings from this dialog.
+  /// Only clears dialog flags; route pop is gated by [PermissionSettingsHelper]
+  /// so a newly shown failure is not dismissed immediately.
   static void reconcileAfterAppResume() {
     if (!Platform.isAndroid) return;
 
     PermissionSettingsHelper.dismissStaleModalRouteIfPresent();
-    _dialogVisible = false;
+    if (!_dialogVisible) {
+      return;
+    }
+    // Do not force-clear while a dialog is actively presented unless we are
+    // still in the settings-return window (stale education route cleanup).
+    if (PermissionSettingsHelper.isAwaitingSettingsReturn) {
+      _dialogVisible = false;
+    }
   }
 
   static StoreSafeSettingsDestination settingsDestinationFor(String reason) {

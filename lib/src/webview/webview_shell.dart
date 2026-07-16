@@ -15,6 +15,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../utilities/app_config.dart';
+import '../utilities/app_upgrade_reconciler.dart';
 import '../utilities/app_version_info.dart';
 import 'js_bridge.dart';
 import '../app/offline_screen.dart';
@@ -30,6 +31,7 @@ import '../api/api_client.dart';
 import '../background/duty_heartbeat_service.dart';
 import '../background/clock_in_gate_service.dart';
 import '../background/background_location_permissions.dart';
+import '../background/location_disclosure_consent.dart';
 import '../background/ios_duty_location_pinger.dart';
 import '../utilities/app_lifecycle_resume_gate.dart';
 import '../utilities/overlay_prompt_guard.dart';
@@ -52,6 +54,8 @@ class _WebViewShellUiController extends GetxController {
   final loadProgress = 0.obs;
   final firstPageLoaded = false.obs;
   final showOffline = false.obs;
+  final offlineRetrying = false.obs;
+  final offlineStatusMessage = RxnString();
   final hasNativeAuthSession = false.obs;
   final officerLoggedIn = false.obs;
   final webPrefersDark = false.obs;
@@ -112,6 +116,22 @@ class _WebViewShellState extends State<WebViewShell>
   final _WebViewShellUiController _ui = _WebViewShellUiController();
   String? _pendingPushUrl;
   bool _nativeLogoutInFlight = false;
+  /// When true, reconnect / retry must reload the WebView (page never loaded
+  /// or last main-frame load failed). When false, dismissing offline is safe.
+  bool _offlineNeedsReload = false;
+
+  /// Set on main-frame network errors so a following onLoadStop (Android error
+  /// document / failed URL) cannot dismiss OfflineScreen until we intentionally
+  /// start a recovery load.
+  bool _holdOfflineUntilReload = false;
+
+  /// True after retry/reconnect calls loadUrl; cleared on that load's onLoadStart
+  /// so a stale error onLoadStop cannot clear the hold early.
+  bool _awaitingOfflineRecoveryLoad = false;
+
+  /// Debounces transient ConnectivityResult.none / empty reports that
+  /// connectivity_plus emits on cold start, hot restart, and resume (esp. iOS).
+  Timer? _offlineConnectivityDebounce;
 
   void _setNativeAuthSession(bool value) {
     final active = value && _ui.officerLoggedIn.value;
@@ -1597,6 +1617,8 @@ class _WebViewShellState extends State<WebViewShell>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Android MethodChannel is ready here; re-sync disclosure from live OS grant.
+    unawaited(AppUpgradeReconciler.reconcileOsAfterEngineReady());
     PushNotificationService.instance.setDeferPermissionPromptWhile(
       () => _isAuthRoute(_ui.currentUri.value),
     );
@@ -1622,14 +1644,11 @@ class _WebViewShellState extends State<WebViewShell>
       );
     }
 
+    unawaited(_syncOfflineFromConnectivity());
     _connectivitySub = Connectivity().onConnectivityChanged.listen((
       results,
-    ) async {
-      final hasInternet = results.any((r) => r != ConnectivityResult.none);
-      if (hasInternet && _ui.showOffline.value) {
-        _ui.showOffline.value = false;
-        unawaited(_controller?.reload());
-      }
+    ) {
+      unawaited(_handleConnectivityChanged(results));
     });
 
     DutyHeartbeatService.instance.backgroundLocationPermissionMissing
@@ -1836,15 +1855,33 @@ class _WebViewShellState extends State<WebViewShell>
       );
     }
 
+    if (state == AppLifecycleState.resumed) {
+      // iOS (and Android) may miss connectivity events while suspended.
+      unawaited(_syncOfflineFromConnectivity());
+    }
+
     if (state == AppLifecycleState.resumed &&
         !AuthSessionManager.isLoginRoute(_ui.currentUri.value)) {
+      // Strip Activity-restored dialogs only while returning from Settings —
+      // not during the Open Settings education prompt itself.
+      if (Platform.isAndroid &&
+          PermissionSettingsHelper.isAwaitingSettingsReturn) {
+        PermissionSettingsHelper.clearPopupRoutesImmediately();
+      }
       DutyHeartbeatService.instance.reconcileDialogsAfterAppResume();
-      if (Platform.isAndroid) {
+      // Avoid popping/flashing clock-in dialogs while prepareClockIn owns the
+      // Settings-return flow on Android.
+      if (Platform.isAndroid &&
+          !ClockInGateService.instance.isPrepareInFlight &&
+          !PermissionSettingsHelper.isAwaitingSettingsReturn) {
         ClockInBlockedDialog.reconcileAfterAppResume();
       }
       AppLifecycleResumeGate.notifyResumed();
       final controller = _controller;
       unawaited(() async {
+        // Android may return from Settings with updated "Allow all the time".
+        await AppUpgradeReconciler.reconcileOsAfterEngineReady();
+        await LocationDisclosureConsent.reconcileFromOsIfBackgroundReady();
         if (controller != null) {
           await _reconcileBottomBarFromWebView(controller);
         }
@@ -1857,7 +1894,11 @@ class _WebViewShellState extends State<WebViewShell>
         await ClockInGateService.instance.recheckAfterAppResume();
         await _notifyWebBackgroundLocationStatus();
         await _notifyWebPushNotificationStatus();
-        await NativePermissionStatusService.instance.syncIfChanged();
+        // After resume settle (disclosure, Settings, one-time grants): ensure
+        // latest OS permissions are on the API. Coalesces with app_cycle when
+        // still pending; otherwise uploads only if the snapshot changed.
+        await NativePermissionStatusService.instance
+            .ensureLatestPermissionsSynced();
         await OfficerAnnouncementCoordinator.instance.tryDeliverPending(
           source: 'resumed',
         );
@@ -1876,6 +1917,7 @@ class _WebViewShellState extends State<WebViewShell>
       PushNotificationService.instance.setIosWebPushDeleteHandler(null);
     }
     _connectivitySub?.cancel();
+    _offlineConnectivityDebounce?.cancel();
     DutyHeartbeatService.instance.backgroundLocationPermissionMissing
         .removeListener(_onBackgroundLocationPermissionChanged);
     NativePermissionStatusService.instance.stopBatteryMonitoring();
@@ -1888,11 +1930,179 @@ class _WebViewShellState extends State<WebViewShell>
     super.dispose();
   }
 
-  Future<void> _retry() async {
+  static bool _hasNetworkInterface(List<ConnectivityResult> results) {
+    // Empty lists are transient/unknown (common at startup) — not "offline".
+    if (results.isEmpty) return true;
+    return results.any((r) => r != ConnectivityResult.none);
+  }
+
+  void _cancelOfflineConnectivityDebounce() {
+    _offlineConnectivityDebounce?.cancel();
+    _offlineConnectivityDebounce = null;
+  }
+
+  static bool _isNetworkLoadError(WebResourceError error) {
+    final type = error.type;
+    if (type == WebResourceErrorType.HOST_LOOKUP ||
+        type == WebResourceErrorType.CANNOT_CONNECT_TO_HOST ||
+        type == WebResourceErrorType.TIMEOUT ||
+        type == WebResourceErrorType.NETWORK_CONNECTION_LOST ||
+        type == WebResourceErrorType.NOT_CONNECTED_TO_INTERNET ||
+        type == WebResourceErrorType.IO ||
+        type == WebResourceErrorType.CONNECTION_ABORTED ||
+        type == WebResourceErrorType.RESET ||
+        type == WebResourceErrorType.SERVER_UNREACHABLE ||
+        type == WebResourceErrorType.CANNOT_LOAD_FROM_NETWORK ||
+        type == WebResourceErrorType.INTERNATIONAL_ROAMING_OFF ||
+        type == WebResourceErrorType.DATA_NOT_ALLOWED ||
+        type == WebResourceErrorType.CALL_IS_ACTIVE ||
+        // iOS URLError.resourceUnavailable (-1008)
+        type == WebResourceErrorType.RESOURCE_UNAVAILABLE ||
+        type == WebResourceErrorType.UNKNOWN) {
+      return true;
+    }
+    // iOS WKWebView may report offline via localized description when the
+    // typed code is less specific than Android's net::ERR_* mapping.
+    final desc = error.description.toLowerCase();
+    return desc.contains('internet connection appears to be offline') ||
+        desc.contains('not connected to the internet') ||
+        desc.contains('network connection was lost') ||
+        desc.contains('the internet connection appears to be offline') ||
+        desc.contains('err_internet_disconnected') ||
+        desc.contains('err_name_not_resolved') ||
+        desc.contains('err_connection_timed_out');
+  }
+
+  Future<void> _syncOfflineFromConnectivity() async {
+    final results = await Connectivity().checkConnectivity();
+    if (!mounted) return;
+    // Bidirectional: show offline when down, recover when back (needed on
+    // iOS after background where connectivity events can be missed).
+    await _handleConnectivityChanged(results);
+  }
+
+  void _clearOfflineRetryUi() {
+    _ui.offlineRetrying.value = false;
+    _ui.offlineStatusMessage.value = null;
+  }
+
+  void _dismissOfflineScreen() {
+    _cancelOfflineConnectivityDebounce();
+    _holdOfflineUntilReload = false;
     _ui.showOffline.value = false;
-    await _controller?.loadUrl(
-      urlRequest: URLRequest(url: WebUri(AppConfig.initialUrl)),
+    _clearOfflineRetryUi();
+  }
+
+  void _showOffline({required bool needsReload}) {
+    if (needsReload) _offlineNeedsReload = true;
+    _ui.showOffline.value = true;
+    _ui.endNavigation();
+  }
+
+  Future<void> _handleConnectivityChanged(
+    List<ConnectivityResult> results,
+  ) async {
+    if (!mounted) return;
+    final hasInternet = _hasNetworkInterface(results);
+    if (hasInternet) {
+      _cancelOfflineConnectivityDebounce();
+      if (!_ui.showOffline.value) return;
+      _ui.offlineRetrying.value = true;
+      _ui.offlineStatusMessage.value = null;
+      await _recoverFromOffline();
+      return;
+    }
+
+    // connectivity_plus often emits a brief `none` on cold start / resume /
+    // hot restart even when the radio is fine (documented iOS NWPathMonitor
+    // behavior; similar flashes on Android). Confirm before covering the UI.
+    _offlineConnectivityDebounce?.cancel();
+    _offlineConnectivityDebounce = Timer(
+      const Duration(milliseconds: 500),
+      () => unawaited(_confirmOfflineFromConnectivity()),
     );
+  }
+
+  Future<void> _confirmOfflineFromConnectivity() async {
+    _offlineConnectivityDebounce = null;
+    if (!mounted) return;
+    final results = await Connectivity().checkConnectivity();
+    if (!mounted) return;
+    if (_hasNetworkInterface(results)) {
+      // False negative — do not flash OfflineScreen.
+      if (_ui.showOffline.value) {
+        _ui.offlineRetrying.value = true;
+        _ui.offlineStatusMessage.value = null;
+        await _recoverFromOffline();
+      }
+      return;
+    }
+    if (_ui.showOffline.value) return;
+    _clearOfflineRetryUi();
+    _showOffline(needsReload: !_ui.firstPageLoaded.value);
+  }
+
+  Future<void> _recoverFromOffline() async {
+    if (!mounted) return;
+    final needsReload = _offlineNeedsReload || !_ui.firstPageLoaded.value;
+    if (!needsReload) {
+      // Page was already loaded and no failed navigation — safe to reveal.
+      _dismissOfflineScreen();
+      return;
+    }
+
+    final controller = _controller;
+    if (controller == null) {
+      // WebView not ready yet; leave offline UI + Retry until it is.
+      _ui.offlineRetrying.value = false;
+      _ui.offlineStatusMessage.value =
+          'Unable to reconnect right now. Please try again.';
+      return;
+    }
+
+    final target =
+        _ui.currentUri.value?.toString() ?? AppConfig.initialUrl;
+    try {
+      // Keep hold until this load's onLoadStart so a stale error onLoadStop
+      // cannot dismiss OfflineScreen early.
+      _awaitingOfflineRecoveryLoad = true;
+      // Keep OfflineScreen up until onLoadStop succeeds (or error re-shows it).
+      await controller.loadUrl(
+        urlRequest: URLRequest(url: WebUri(target)),
+      );
+    } catch (_) {
+      _awaitingOfflineRecoveryLoad = false;
+      _holdOfflineUntilReload = true;
+      _ui.offlineRetrying.value = false;
+      _ui.offlineStatusMessage.value =
+          'Couldn\'t reconnect. Check your connection and try again.';
+      _showOffline(needsReload: true);
+    }
+  }
+
+  Future<void> _retry() async {
+    if (_ui.offlineRetrying.value) return;
+    _ui.offlineRetrying.value = true;
+    _ui.offlineStatusMessage.value = null;
+
+    var connectivity = await Connectivity().checkConnectivity();
+    if (!mounted) return;
+    if (!_hasNetworkInterface(connectivity)) {
+      // One short re-check — same transient `none` flash as startup/resume.
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      if (!mounted) return;
+      connectivity = await Connectivity().checkConnectivity();
+    }
+    if (!_hasNetworkInterface(connectivity)) {
+      _holdOfflineUntilReload = true;
+      _showOffline(needsReload: true);
+      _ui.offlineRetrying.value = false;
+      _ui.offlineStatusMessage.value =
+          'Still no internet connection. Please check your network and try again.';
+      return;
+    }
+    _offlineNeedsReload = true;
+    await _recoverFromOffline();
   }
 
   bool _isInternalUrl(Uri uri) => AppConfig.isAllowedHost(uri.host);
@@ -2007,8 +2217,14 @@ class _WebViewShellState extends State<WebViewShell>
         final result = await _bridge.getCurrentLocation(
           args.isEmpty ? null : args.first,
         );
+        final error = result['error'];
+        final errorCode = error is Map ? error['code']?.toString() : null;
+        final errorMessage = error is Map ? error['message']?.toString() : null;
         debugPrint(
-          '[SmartNPS360] getCurrentLocation ok=${result['ok'] == true}',
+          '[SmartNPS360] getCurrentLocation ok=${result['ok'] == true}'
+          '${errorCode != null ? ' error=$errorCode' : ''}'
+          '${errorMessage != null ? ' message=$errorMessage' : ''}'
+          '${result['bestAccuracySeenMeters'] != null ? ' bestAccuracy=${result['bestAccuracySeenMeters']}' : ''}',
         );
         MockLocationGuard.maybeShowDialogFromBridgeResult(result);
         return result;
@@ -2181,7 +2397,13 @@ class _WebViewShellState extends State<WebViewShell>
           args.isEmpty ? null : args.first,
         );
         debugPrint(
-          '[SmartNPS360] getBackgroundLocationStatus ok=${result['ok'] == true}',
+          '[SmartNPS360] getBackgroundLocationStatus '
+          'ok=${result['ok'] == true} '
+          'canClockIn=${result['canClockIn'] == true} '
+          'backgroundReady=${result['backgroundReady'] == true} '
+          'disclosureAccepted=${result['disclosureAccepted'] == true} '
+          'serviceEnabled=${result['serviceEnabled'] == true}'
+          '${result['deniedReason'] != null ? ' deniedReason=${result['deniedReason']}' : ''}',
         );
         return result;
       },
@@ -2193,7 +2415,15 @@ class _WebViewShellState extends State<WebViewShell>
           final result = await _bridge.prepareClockIn(
             args.isEmpty ? null : args.first,
           );
-          debugPrint('[SmartNPS360] prepareClockIn ok=${result['ok'] == true}');
+          final canClockIn = result['canClockIn'] == true;
+          final reason = result['reason']?.toString();
+          final message = result['message']?.toString();
+          debugPrint(
+            '[SmartNPS360] prepareClockIn ok=${result['ok'] == true} '
+            'canClockIn=$canClockIn'
+            '${reason != null ? ' reason=$reason' : ''}'
+            '${message != null ? ' message=$message' : ''}',
+          );
           return result;
         } catch (e, st) {
           debugPrint('[SmartNPS360] prepareClockIn failed: $e\n$st');
@@ -3061,6 +3291,8 @@ class _WebViewShellState extends State<WebViewShell>
       allowsBackForwardNavigationGestures: true,
       verticalScrollBarEnabled: true,
       horizontalScrollBarEnabled: false,
+      // Hide Android's built-in "Webpage not available" chrome; we show OfflineScreen.
+      disableDefaultErrorPage: Platform.isAndroid ? true : null,
     );
   }
 
@@ -3101,12 +3333,9 @@ class _WebViewShellState extends State<WebViewShell>
                   Expanded(
                     child: Stack(
                       children: [
-                        Obx(
-                          () => _ui.showOffline.value
-                              ? OfflineScreen(onRetry: _retry)
-                              : Padding(
-                                  padding: EdgeInsets.only(bottom: 0),
-                                  child: InAppWebView(
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 0),
+                          child: InAppWebView(
                                     initialUrlRequest: URLRequest(
                                       url: WebUri(AppConfig.initialUrl),
                                     ),
@@ -3118,11 +3347,25 @@ class _WebViewShellState extends State<WebViewShell>
                                       _controller = controller;
                                       _installJsHandlers(controller);
                                       unawaited(_loadPendingPushUrl());
+                                      if (_ui.showOffline.value) {
+                                        unawaited(() async {
+                                          final results = await Connectivity()
+                                              .checkConnectivity();
+                                          if (!mounted) return;
+                                          if (_hasNetworkInterface(results)) {
+                                            await _recoverFromOffline();
+                                          }
+                                        }());
+                                      }
                                     },
                                     shouldOverrideUrlLoading:
                                         (controller, action) async =>
                                             _handleNavigation(action),
                                     onLoadStart: (controller, url) {
+                                      if (_awaitingOfflineRecoveryLoad) {
+                                        _awaitingOfflineRecoveryLoad = false;
+                                        _holdOfflineUntilReload = false;
+                                      }
                                       if (!_ui.pullToRefreshActive.value) {
                                         final startUri = url?.uriValue;
                                         // Android (and sometimes iOS) emit load events
@@ -3242,6 +3485,16 @@ class _WebViewShellState extends State<WebViewShell>
                                             _syncCurrentUriFromWebView(nextUri);
                                           }
                                           _ui.firstPageLoaded.value = true;
+                                          // After a network error, Android may still
+                                          // fire onLoadStop for the failed URL / error
+                                          // document. Keep OfflineScreen until we
+                                          // intentionally reload (_recoverFromOffline).
+                                          if (!_holdOfflineUntilReload) {
+                                            _offlineNeedsReload = false;
+                                            if (_ui.showOffline.value) {
+                                              _dismissOfflineScreen();
+                                            }
+                                          }
                                           _setNativeThemeFromWeb(
                                             webThemeIsDark ??
                                                 _ui.webPrefersDark.value,
@@ -3303,16 +3556,49 @@ class _WebViewShellState extends State<WebViewShell>
                                           _webReloadInProgress = false;
                                           _finishBottomTabNavigation();
                                           _ui.endNavigation();
-                                          if (!_ui.firstPageLoaded.value) {
-                                            final connectivity =
-                                                await Connectivity()
-                                                    .checkConnectivity();
-                                            if (!connectivity.any(
-                                              (r) =>
-                                                  r != ConnectivityResult.none,
-                                            )) {
-                                              _ui.showOffline.value = true;
+                                          // Ignore cancelled loads and non-main-frame assets.
+                                          // iOS failed navigations default isForMainFrame=true;
+                                          // only skip when explicitly a subframe.
+                                          if (error.type ==
+                                              WebResourceErrorType.CANCELLED) {
+                                            return;
+                                          }
+                                          if (request.isForMainFrame == false) {
+                                            return;
+                                          }
+                                          // Show native OfflineScreen synchronously
+                                          // before any await so onLoadStop cannot
+                                          // race and reveal platform error chrome
+                                          // (Android) or a blank WKWebView (iOS).
+                                          if (_isNetworkLoadError(error)) {
+                                            final wasRetrying =
+                                                _ui.offlineRetrying.value;
+                                            _cancelOfflineConnectivityDebounce();
+                                            _holdOfflineUntilReload = true;
+                                            _ui.offlineRetrying.value = false;
+                                            if (wasRetrying) {
+                                              _ui.offlineStatusMessage.value =
+                                                  'Couldn\'t reconnect. Check your connection and try again.';
                                             }
+                                            _showOffline(needsReload: true);
+                                            return;
+                                          }
+                                          final connectivity =
+                                              await Connectivity()
+                                                  .checkConnectivity();
+                                          if (!_hasNetworkInterface(
+                                            connectivity,
+                                          )) {
+                                            final wasRetrying =
+                                                _ui.offlineRetrying.value;
+                                            _cancelOfflineConnectivityDebounce();
+                                            _holdOfflineUntilReload = true;
+                                            _ui.offlineRetrying.value = false;
+                                            if (wasRetrying) {
+                                              _ui.offlineStatusMessage.value =
+                                                  'Still no internet connection. Please check your network and try again.';
+                                            }
+                                            _showOffline(needsReload: true);
                                           }
                                         },
                                     onGeolocationPermissionsShowPrompt: (controller, origin) async {
@@ -3370,7 +3656,19 @@ class _WebViewShellState extends State<WebViewShell>
                                           );
                                         },
                                   ),
-                                ),
+                        ),
+                        Obx(
+                          () => _ui.showOffline.value
+                              ? Positioned.fill(
+                                  child: OfflineScreen(
+                                    onRetry: _retry,
+                                    isDark: _ui.webPrefersDark.value,
+                                    isRetrying: _ui.offlineRetrying.value,
+                                    statusMessage:
+                                        _ui.offlineStatusMessage.value,
+                                  ),
+                                )
+                              : const SizedBox.shrink(),
                         ),
                         Obx(() {
                           if (!_ui.firstPageLoaded.value &&

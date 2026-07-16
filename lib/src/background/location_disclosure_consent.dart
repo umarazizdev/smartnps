@@ -1,236 +1,167 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-import '../auth/auth_repository.dart';
+import 'background_location_permissions.dart';
 
-/// Store-safe location disclosure consent scoped to each officer account.
+/// Device-wide location disclosure consent (not per officer account).
 ///
 /// Google Play and Apple require disclosure before the first background location
-/// request for each user of the app. Persist acceptance per officer id so a
-/// different login on the same device sees disclosure again.
+/// request on this device. Acceptance persists across logins and app updates.
 class LocationDisclosureConsent {
   LocationDisclosureConsent._();
 
   static const _storage = FlutterSecureStorage();
-  static const _kRecords = 'location.disclosure.records.v1';
-  static const _kLastOfficerId = 'location.disclosure.last_officer_id';
-  static const _kPendingAccept = 'location.disclosure.pending_accept';
+
+  static const _kDutyState = 'location.disclosure.duty.v2';
+  static const _kClockInState = 'location.disclosure.clockin.v2';
+
+  // Legacy keys migrated on first read.
+  static const _kLegacyRecords = 'location.disclosure.records.v1';
+  static const _kLegacyLastOfficerId = 'location.disclosure.last_officer_id';
+  static const _kLegacyPendingAccept = 'location.disclosure.pending_accept';
   static const _legacyDutyState = 'duty.disclosure_state';
   static const _legacyClockInState = 'clockin.disclosure_state';
 
   static const String accepted = 'accepted';
   static const String dismissed = 'dismissed';
 
-  static const _dutyScope = 'duty';
-  static const _clockInScope = 'clockin';
-
-  static String? _activeOfficerId;
-
-  static String? get activeOfficerId => _activeOfficerId;
+  static bool _migrationComplete = false;
 
   static Future<bool> hasAccepted() async {
+    await ensureMigrated();
     return await isDutyAccepted() || await isClockInAccepted();
   }
 
-  /// True when the in-app disclosure must still be shown for this officer.
+  /// True when the in-app disclosure must still be shown on this device.
   static Future<bool> shouldShowLocationDisclosure() async {
     return !await hasAccepted();
   }
 
   static Future<bool> isDutyAccepted() async {
-    return (await _readScopeState(_dutyScope)) == accepted;
+    await ensureMigrated();
+    return (await _storage.read(key: _kDutyState)) == accepted;
   }
 
   static Future<bool> isClockInAccepted() async {
-    return (await _readScopeState(_clockInScope)) == accepted;
+    await ensureMigrated();
+    return (await _storage.read(key: _kClockInState)) == accepted;
   }
 
   static Future<void> markDutyAccepted() async {
-    await _writeScopeState(_dutyScope, accepted);
+    await ensureMigrated();
+    await _storage.write(key: _kDutyState, value: accepted);
+    if (kDebugMode) {
+      debugPrint('[LocationDisclosureConsent] stored duty=accepted (device-wide)');
+    }
   }
 
   static Future<void> markClockInAccepted() async {
-    await _writeScopeState(_clockInScope, accepted);
+    await ensureMigrated();
+    await _storage.write(key: _kClockInState, value: accepted);
+    if (kDebugMode) {
+      debugPrint(
+        '[LocationDisclosureConsent] stored clockin=accepted (device-wide)',
+      );
+    }
   }
 
   static Future<void> markAcceptedForAll() async {
-    final officerId = await _resolveOfficerId();
-    if (officerId == null) {
-      await _storage.write(key: _kPendingAccept, value: '1');
-      if (kDebugMode) {
-        debugPrint(
-          '[LocationDisclosureConsent] queued pending accept (no officer id yet)',
-        );
-      }
-      return;
-    }
-    await _storage.delete(key: _kPendingAccept);
     await markDutyAccepted();
     await markClockInAccepted();
   }
 
-  /// Returns true only when switching from one officer account to another.
-  static Future<bool> resolveActiveOfficerAccount() async {
-    await _applyPendingAcceptIfNeeded();
-    await _migrateLegacyIfNeeded();
+  /// When the OS already grants background location, align storage with OS truth.
+  static Future<void> reconcileFromOsIfBackgroundReady() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return;
 
-    final officerId = await AuthRepository.instance.getOfficerAccountId();
-    if (officerId == null || officerId.isEmpty) return false;
-    if (_activeOfficerId == officerId) return false;
-
-    final storedLast = await _storage.read(key: _kLastOfficerId);
-    final previous =
-        (_activeOfficerId != null && _activeOfficerId!.isNotEmpty)
-            ? _activeOfficerId
-            : storedLast;
-
-    _activeOfficerId = officerId;
-    await _storage.write(key: _kLastOfficerId, value: officerId);
-
-    if (previous == null || previous.isEmpty || previous == officerId) {
-      return false;
-    }
-
-    if (kDebugMode) {
-      debugPrint(
-        '[LocationDisclosureConsent] officer account switched '
-        'from=$previous to=$officerId',
-      );
-    }
-    return true;
-  }
-
-  static void clearActiveOfficerAccount() {
-    _activeOfficerId = null;
-  }
-
-  static Future<String?> _readScopeState(String scope) async {
-    await _migrateLegacyIfNeeded();
-    final officerId = await _resolveOfficerId();
-    if (officerId == null) return null;
-
-    final records = await _loadRecords();
-    final officerRecord = records[officerId];
-    if (officerRecord is! Map) return null;
-    final state = officerRecord[scope]?.toString();
-    if (state == accepted || state == dismissed) return state;
-    return null;
-  }
-
-  static Future<void> _writeScopeState(String scope, String state) async {
-    await _migrateLegacyIfNeeded();
-    final officerId = await _resolveOfficerId();
-    if (officerId == null) {
-      if (kDebugMode) {
-        debugPrint(
-          '[LocationDisclosureConsent] skip persist scope=$scope (no officer id)',
-        );
-      }
+    await ensureMigrated();
+    await BackgroundLocationPermissions.refreshPermissionStateFromOs();
+    if (!await BackgroundLocationPermissions.isClockInBackgroundReady()) {
       return;
     }
+    if (await isDutyAccepted() || await isClockInAccepted()) return;
 
-    final records = await _loadRecords();
-    final officerRecord = Map<String, dynamic>.from(
-      records[officerId] is Map
-          ? Map<String, dynamic>.from(records[officerId] as Map)
-          : {},
-    );
-    officerRecord[scope] = state;
-    records[officerId] = officerRecord;
-    await _saveRecords(records);
-    _activeOfficerId = officerId;
-
+    await _storage.write(key: _kDutyState, value: accepted);
+    await _storage.write(key: _kClockInState, value: accepted);
     if (kDebugMode) {
       debugPrint(
-        '[LocationDisclosureConsent] stored scope=$scope state=$state '
-        'officerId=$officerId',
+        '[LocationDisclosureConsent] reconciled disclosure from OS background grant',
       );
     }
   }
 
-  static Future<String?> _resolveOfficerId() async {
-    if (_activeOfficerId != null && _activeOfficerId!.isNotEmpty) {
-      return _activeOfficerId;
-    }
-    final officerId = await AuthRepository.instance.getOfficerAccountId();
-    _activeOfficerId = officerId;
-    return officerId;
+  /// Migrates legacy per-account and flat keys into device-wide storage once.
+  static Future<void> ensureMigrated() async {
+    if (_migrationComplete) return;
+
+    await _migrateLegacyFlatKeysIfNeeded();
+    await _migrateLegacyPerAccountRecordsIfNeeded();
+    await _storage.delete(key: _kLegacyLastOfficerId);
+    await _storage.delete(key: _kLegacyPendingAccept);
+    await _storage.delete(key: _kLegacyRecords);
+
+    _migrationComplete = true;
   }
 
-  static Future<Map<String, dynamic>> _loadRecords() async {
-    final raw = await _storage.read(key: _kRecords);
-    if (raw == null || raw.isEmpty) return {};
+  static Future<void> _migrateLegacyFlatKeysIfNeeded() async {
+    final legacyDuty = await _storage.read(key: _legacyDutyState);
+    final legacyClockIn = await _storage.read(key: _legacyClockInState);
+    final currentDuty = await _storage.read(key: _kDutyState);
+    final currentClockIn = await _storage.read(key: _kClockInState);
+
+    if (legacyDuty == accepted && currentDuty != accepted) {
+      await _storage.write(key: _kDutyState, value: accepted);
+    }
+    if (legacyClockIn == accepted && currentClockIn != accepted) {
+      await _storage.write(key: _kClockInState, value: accepted);
+    }
+
+    if (legacyDuty != null) {
+      await _storage.delete(key: _legacyDutyState);
+    }
+    if (legacyClockIn != null) {
+      await _storage.delete(key: _legacyClockInState);
+    }
+  }
+
+  static Future<void> _migrateLegacyPerAccountRecordsIfNeeded() async {
+    final currentDuty = await _storage.read(key: _kDutyState);
+    final currentClockIn = await _storage.read(key: _kClockInState);
+    if (currentDuty == accepted || currentClockIn == accepted) return;
+
+    final raw = await _storage.read(key: _kLegacyRecords);
+    if (raw == null || raw.isEmpty) return;
+
     try {
       final decoded = jsonDecode(raw);
-      if (decoded is Map) {
-        return Map<String, dynamic>.from(decoded);
+      if (decoded is! Map) return;
+
+      for (final entry in decoded.entries) {
+        if (entry.value is! Map) continue;
+        final record = Map<String, dynamic>.from(entry.value as Map);
+        final duty = record['duty']?.toString();
+        final clockIn = record['clockin']?.toString();
+        if (duty == accepted || clockIn == accepted) {
+          await _storage.write(key: _kDutyState, value: accepted);
+          await _storage.write(key: _kClockInState, value: accepted);
+          if (kDebugMode) {
+            debugPrint(
+              '[LocationDisclosureConsent] migrated per-account acceptance '
+              'to device-wide (officerId=${entry.key})',
+            );
+          }
+          return;
+        }
       }
     } catch (error) {
       if (kDebugMode) {
-        debugPrint('[LocationDisclosureConsent] corrupt records: $error');
+        debugPrint(
+          '[LocationDisclosureConsent] legacy per-account migration failed: $error',
+        );
       }
-    }
-    return {};
-  }
-
-  static Future<void> _saveRecords(Map<String, dynamic> records) async {
-    await _storage.write(key: _kRecords, value: jsonEncode(records));
-  }
-
-  static Future<void> _applyPendingAcceptIfNeeded() async {
-    if ((await _storage.read(key: _kPendingAccept)) != '1') return;
-
-    final officerId = await AuthRepository.instance.getOfficerAccountId();
-    if (officerId == null || officerId.isEmpty) return;
-
-    await _storage.delete(key: _kPendingAccept);
-    await markDutyAccepted();
-    await markClockInAccepted();
-
-    if (kDebugMode) {
-      debugPrint(
-        '[LocationDisclosureConsent] applied pending accept for officerId=$officerId',
-      );
-    }
-  }
-
-  static Future<void> _migrateLegacyIfNeeded() async {
-    final legacyDuty = await _storage.read(key: _legacyDutyState);
-    final legacyClockIn = await _storage.read(key: _legacyClockInState);
-    if (legacyDuty == null && legacyClockIn == null) return;
-
-    final officerId = await AuthRepository.instance.getOfficerAccountId();
-    if (officerId == null) return;
-
-    final records = await _loadRecords();
-    final officerRecord = Map<String, dynamic>.from(
-      records[officerId] is Map
-          ? Map<String, dynamic>.from(records[officerId] as Map)
-          : {},
-    );
-
-    if (legacyDuty != null &&
-        legacyDuty.isNotEmpty &&
-        officerRecord[_dutyScope] == null) {
-      officerRecord[_dutyScope] = legacyDuty;
-    }
-    if (legacyClockIn != null &&
-        legacyClockIn.isNotEmpty &&
-        officerRecord[_clockInScope] == null) {
-      officerRecord[_clockInScope] = legacyClockIn;
-    }
-
-    records[officerId] = officerRecord;
-    await _saveRecords(records);
-    await _storage.delete(key: _legacyDutyState);
-    await _storage.delete(key: _legacyClockInState);
-
-    if (kDebugMode) {
-      debugPrint(
-        '[LocationDisclosureConsent] migrated legacy disclosure for officerId=$officerId',
-      );
     }
   }
 }

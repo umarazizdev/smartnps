@@ -48,6 +48,9 @@ class BackgroundLocationPermissions {
 
   /// Strict clock-in check: reads background permission from the OS only.
   /// Foreground / "While using the app" is never treated as clock-in ready.
+  ///
+  /// Android uses the native OS check with plugin fallbacks so Play updates
+  /// and cold-start (before MethodChannel is ready) still resolve correctly.
   static Future<bool> isClockInBackgroundReady() async {
     if (!Platform.isAndroid && !Platform.isIOS) return true;
     await refreshPermissionStateFromOs();
@@ -56,19 +59,7 @@ class BackgroundLocationPermissions {
       return permission == LocationPermission.always;
     }
     if (Platform.isAndroid) {
-      try {
-        final nativeGranted = await _nativeSettingsChannel.invokeMethod<bool>(
-          'hasBackgroundLocationPermission',
-        );
-        return nativeGranted == true;
-      } catch (error) {
-        if (kDebugMode) {
-          debugPrint(
-            '[BackgroundLocationPermissions] clock-in bg check failed: $error',
-          );
-        }
-        return false;
-      }
+      return androidHasBackgroundLocationAccess();
     }
     return false;
   }

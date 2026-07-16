@@ -55,17 +55,33 @@ class MockLocationGuard {
   static Future<bool> ensureClearForClockIn() async {
     final position = await _readPositionOrNull();
     if (position == null) {
+      debugPrint(
+        '[MockLocationGuard] ensureClearForClockIn: GPS unavailable/timeout',
+      );
       return false;
     }
 
     final flags = MockLocationDetection.flagsFor(position);
     if (!flags.isDetected) return true;
 
+    debugPrint(
+      '[MockLocationGuard] ensureClearForClockIn: mock detected '
+      'isMocked=${flags.isMocked} isSimulated=${flags.isSimulatedBySoftware}',
+    );
     await _presentBlockingDialog();
 
     final recheck = await _readPositionOrNull();
-    if (recheck == null) return false;
-    return !MockLocationDetection.isDetected(recheck);
+    if (recheck == null) {
+      debugPrint(
+        '[MockLocationGuard] ensureClearForClockIn: GPS unavailable after dialog',
+      );
+      return false;
+    }
+    final clear = !MockLocationDetection.isDetected(recheck);
+    debugPrint(
+      '[MockLocationGuard] ensureClearForClockIn: after dialog clear=$clear',
+    );
+    return clear;
   }
 
   static Future<Position?> _readPositionOrNull() async {

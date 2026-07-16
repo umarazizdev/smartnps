@@ -11,6 +11,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../api/api_client.dart';
 import '../auth/auth_repository.dart';
+import '../location/batch_displacement_gate.dart';
 import '../location/speed_adaptive_gps_policy.dart';
 import 'background_location_accuracy.dart';
 import '../utilities/app_config.dart';
@@ -45,6 +46,7 @@ class BackgroundLocationUploader {
   int _totalBatchPointsUploaded = 0;
   final SpeedAdaptiveGpsPolicyTracker _policyTracker =
       SpeedAdaptiveGpsPolicyTracker();
+  final BatchDisplacementGate _batchDisplacementGate = BatchDisplacementGate();
 
   static const int _maxBatchSize = 20;
   /// Minimum GPS stream poll interval (not upload throttle).
@@ -358,6 +360,7 @@ class BackgroundLocationUploader {
     _batchTimer?.cancel();
     _batchTimer = null;
     _batchTimerStartedAt = null;
+    _batchDisplacementGate.reset();
 
     await _connectivitySub?.cancel();
     _connectivitySub = null;
@@ -370,6 +373,7 @@ class BackgroundLocationUploader {
     _batchTimer?.cancel();
     _batchTimer = null;
     _batchTimerStartedAt = null;
+    _batchDisplacementGate.reset();
     await _connectivitySub?.cancel();
     _connectivitySub = null;
   }
@@ -378,6 +382,8 @@ class BackgroundLocationUploader {
   ///
   /// Ping uploads are sent live and are not persisted.
   /// Stationary / below 2 km/h points are ping-only and never queued here.
+  /// Points that have not moved far enough (GPS drift while standing) are also
+  /// skipped here without affecting ping.
   Future<void> add(
     Position position, {
     SpeedAdaptiveGpsPolicyDecision? policyDecision,
@@ -397,6 +403,17 @@ class BackgroundLocationUploader {
       }
       return;
     }
+    if (!_batchDisplacementGate.shouldQueue(position)) {
+      if (kDebugMode) {
+        _batchConsoleLog(
+          'skipped batch queue '
+          'dist=${_batchDisplacementGate.distanceFromLastQueuedMeters(position).toStringAsFixed(1)}m '
+          'need=${_batchDisplacementGate.requiredMetersFor(position).toStringAsFixed(1)}m '
+          '(not moved)',
+        );
+      }
+      return;
+    }
     await _ensureStorage();
     final recordedAtUtc = position.timestamp.toUtc();
     final apiPoint = await _buildApiPoint(
@@ -408,6 +425,7 @@ class BackgroundLocationUploader {
     _assignQueueSeq(point);
     final newPointId = _queueSeqLabel(point);
     _totalBatchPointsQueued++;
+    _batchDisplacementGate.markQueued(position);
     final box = _box;
     if (box != null) {
       await box.add(point);
