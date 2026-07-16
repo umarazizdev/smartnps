@@ -11,6 +11,7 @@ import 'src/api/api_client.dart';
 import 'src/auth/auth_repository.dart';
 import 'src/auth/auth_session_manager.dart';
 import 'src/location/mock_location_guard.dart';
+import 'src/utilities/app_upgrade_reconciler.dart';
 import 'src/utilities/app_version_info.dart';
 
 Future<void> main() async {
@@ -21,6 +22,7 @@ Future<void> main() async {
   SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.dark);
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   await AppVersionInfo.init();
+  await AppUpgradeReconciler.reconcileIfNeeded();
   ApiClient.instance.ensureAuthInterceptorInstalled();
   AuthRepository.instance.onRefreshSessionExpired =
       AuthSessionManager.clearNativeSession;
