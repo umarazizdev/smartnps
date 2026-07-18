@@ -293,6 +293,7 @@ class IosDutyLocationPinger {
     }
 
     final token = await AuthRepository.instance.ensureValidAccessToken();
+    if (_stopping) return;
     if (token == null || token.isEmpty) {
       await stop();
       return;
@@ -303,6 +304,7 @@ class IosDutyLocationPinger {
     if (!keepDecision.shouldKeep) {
       return;
     }
+    if (_stopping) return;
 
     final mockFlags = MockLocationDetection.flagsFor(pos);
     if (mockFlags.isDetected) {
@@ -326,10 +328,12 @@ class IosDutyLocationPinger {
     }
 
     final uploader = _uploader;
-    if (uploader == null) return;
+    if (uploader == null || _stopping) return;
 
     try {
+      if (_stopping) return;
       await uploader.pingNow(pos, policyDecision: policyDecision);
+      if (_stopping) return;
       await uploader.add(pos, policyDecision: policyDecision);
       _lastUploadAt = DateTime.now();
       await _flushBatchIfDue(uploader);
@@ -412,6 +416,7 @@ class IosDutyLocationPinger {
     if (!Platform.isIOS) return;
     if (!_running && _subscription == null && _uploader == null) return;
 
+    _stopping = true;
     _running = false;
     _pingTimer?.cancel();
     _pingTimer = null;
@@ -436,5 +441,7 @@ class IosDutyLocationPinger {
     if (kDebugMode) {
       debugPrint('[IosDutyLocationPinger] stopped collecting (instant logout)');
     }
+
+    _stopping = false;
   }
 }

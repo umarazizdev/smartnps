@@ -132,6 +132,7 @@ class BackgroundLocationService {
         if (!keepDecision.shouldKeep) {
           return;
         }
+        if (stopping) return;
 
         final mockFlags = MockLocationDetection.flagsFor(pos);
         if (mockFlags.isDetected) {
@@ -156,7 +157,9 @@ class BackgroundLocationService {
           );
         }
         try {
+          if (stopping) return;
           await uploader.pingNow(pos, policyDecision: policyDecision);
+          if (stopping) return;
           await uploader.add(pos, policyDecision: policyDecision);
         } catch (e) {
           if (kDebugMode) {

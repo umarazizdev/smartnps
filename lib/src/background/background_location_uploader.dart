@@ -36,6 +36,8 @@ class BackgroundLocationUploader {
   Timer? _batchTimer;
   int _consecutiveBatchFailures = 0;
   bool _isFlushing = false;
+  /// When false, [pingNow]/[add] no-op so off-duty flush cannot record new points.
+  bool _acceptingNewPoints = true;
   DateTime? _nextBatchAllowedAt;
   DateTime? _lastSuccessfulBatchFlushAt;
   DateTime? _batchTimerStartedAt;
@@ -220,6 +222,7 @@ class BackgroundLocationUploader {
   }
 
   void start() {
+    _acceptingNewPoints = true;
     _batchTimerStartedAt ??= DateTime.now();
 
     _batchTimer ??= Timer.periodic(_batchEvery, (_) => unawaited(flushBatch()));
@@ -357,6 +360,8 @@ class BackgroundLocationUploader {
   }
 
   Future<void> stop() async {
+    // Reject new ping/queue first; flush already-queued batches only.
+    _acceptingNewPoints = false;
     _batchTimer?.cancel();
     _batchTimer = null;
     _batchTimerStartedAt = null;
@@ -369,7 +374,11 @@ class BackgroundLocationUploader {
   }
 
   /// Stops timers/connectivity without flushing (logout instant phase).
+  ///
+  /// Also closes [pingNow]/[add] so in-flight GPS callbacks cannot record
+  /// new points while a pending-batch flush runs.
   Future<void> stopCollectingOnly() async {
+    _acceptingNewPoints = false;
     _batchTimer?.cancel();
     _batchTimer = null;
     _batchTimerStartedAt = null;
@@ -388,8 +397,10 @@ class BackgroundLocationUploader {
     Position position, {
     SpeedAdaptiveGpsPolicyDecision? policyDecision,
   }) async {
+    if (!_acceptingNewPoints) return;
     if (!BackgroundLocationAccuracy.isAcceptable(position)) return;
     if (!await _hasUploadAuth()) return;
+    if (!_acceptingNewPoints) return;
     final policy = policyDecision ?? _policyTracker.evaluate(position);
     if (!policy.shouldQueueForBatch) {
       if (kDebugMode) {
@@ -415,11 +426,13 @@ class BackgroundLocationUploader {
       return;
     }
     await _ensureStorage();
+    if (!_acceptingNewPoints) return;
     final recordedAtUtc = position.timestamp.toUtc();
     final apiPoint = await _buildApiPoint(
       position,
       policyDecision: policy,
     );
+    if (!_acceptingNewPoints) return;
     final point = Map<String, dynamic>.from(apiPoint)
       ..['_local_point_key'] = _localPointKey(position, recordedAtUtc);
     _assignQueueSeq(point);
@@ -522,12 +535,15 @@ class BackgroundLocationUploader {
     Position position, {
     SpeedAdaptiveGpsPolicyDecision? policyDecision,
   }) async {
+    if (!_acceptingNewPoints) return;
     if (!BackgroundLocationAccuracy.isAcceptable(position)) return;
     if (!await _hasUploadAuth()) return;
+    if (!_acceptingNewPoints) return;
     final point = await _buildApiPoint(
       position,
       policyDecision: policyDecision,
     );
+    if (!_acceptingNewPoints) return;
 
     final Options options = Options(
       headers: const {'Accept': 'application/json'},
