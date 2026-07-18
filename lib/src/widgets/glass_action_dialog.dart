@@ -105,121 +105,123 @@ class GlassActionDialog extends StatelessWidget {
                 ? Colors.white.withValues(alpha: 0.18)
                 : Colors.black.withValues(alpha: 0.12);
 
-    return Dialog(
-      elevation: 0,
-      backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 28),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(26),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-          child: Container(
-            padding: const EdgeInsets.fromLTRB(22, 22, 22, 16),
-            decoration: BoxDecoration(
-              color: surfaceColor,
-              borderRadius: BorderRadius.circular(26),
-              border: Border.all(color: borderColor, width: 1.2),
-              boxShadow: [
-                BoxShadow(
-                  color: shadowColor,
-                  blurRadius: 28,
-                  offset: const Offset(0, 14),
-                ),
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  height: 52,
-                  width: 52,
-                  decoration: BoxDecoration(
-                    color: effectiveIconColor.withValues(alpha: 0.12),
-                    shape: BoxShape.circle,
+    return SafeArea(
+      child: Dialog(
+        elevation: 0,
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 28),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(26),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(22, 22, 22, 16),
+              decoration: BoxDecoration(
+                color: surfaceColor,
+                borderRadius: BorderRadius.circular(26),
+                border: Border.all(color: borderColor, width: 1.2),
+                boxShadow: [
+                  BoxShadow(
+                    color: shadowColor,
+                    blurRadius: 28,
+                    offset: const Offset(0, 14),
                   ),
-                  child: Icon(
-                    icon,
-                    color: effectiveIconColor,
-                    size: 27,
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    height: 52,
+                    width: 52,
+                    decoration: BoxDecoration(
+                      color: effectiveIconColor.withValues(alpha: 0.12),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      icon,
+                      color: effectiveIconColor,
+                      size: 27,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  title,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: titleColor,
-                    fontSize: 19,
-                    fontWeight: FontWeight.w700,
+                  const SizedBox(height: 16),
+                  Text(
+                    title,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: titleColor,
+                      fontSize: 19,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 9),
-                ConstrainedBox(
-                  constraints: BoxConstraints(
-                    maxHeight: MediaQuery.sizeOf(context).height *
-                        messageMaxHeightFactor,
-                  ),
-                  child: SingleChildScrollView(
-                    child: Text(
-                      message,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: bodyColor,
-                        fontSize: 14,
-                        height: 1.45,
-                        fontWeight: FontWeight.w400,
+                  const SizedBox(height: 9),
+                  ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxHeight: MediaQuery.sizeOf(context).height *
+                          messageMaxHeightFactor,
+                    ),
+                    child: SingleChildScrollView(
+                      child: Text(
+                        message,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: bodyColor,
+                          fontSize: 14,
+                          height: 1.45,
+                          fontWeight: FontWeight.w400,
+                        ),
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(height: 22),
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    final stackVertically = _shouldStackActionsVertically(
-                      secondaryLabel: secondaryLabel,
-                      primaryLabel: primaryLabel,
-                      maxWidth: constraints.maxWidth,
-                    );
+                  const SizedBox(height: 22),
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final stackVertically = _shouldStackActionsVertically(
+                        secondaryLabel: secondaryLabel,
+                        primaryLabel: primaryLabel,
+                        maxWidth: constraints.maxWidth,
+                      );
 
-                    final secondaryButton = _ActionButton(
-                      label: secondaryLabel,
-                      onPressed: () => Navigator.of(context).pop(false),
-                      filled: false,
-                      foregroundColor: secondaryFg,
-                      borderColor: secondaryBorder,
-                      backgroundColor: Colors.transparent,
-                    );
+                      final secondaryButton = _ActionButton(
+                        label: secondaryLabel,
+                        onPressed: () => Navigator.of(context).pop(false),
+                        filled: false,
+                        foregroundColor: secondaryFg,
+                        borderColor: secondaryBorder,
+                        backgroundColor: Colors.transparent,
+                      );
 
-                    final primaryButton = _ActionButton(
-                      label: primaryLabel,
-                      onPressed: () => Navigator.of(context).pop(true),
-                      filled: true,
-                      foregroundColor: primaryButtonFg,
-                      borderColor: primaryButtonBg,
-                      backgroundColor: primaryButtonBg,
-                    );
+                      final primaryButton = _ActionButton(
+                        label: primaryLabel,
+                        onPressed: () => Navigator.of(context).pop(true),
+                        filled: true,
+                        foregroundColor: primaryButtonFg,
+                        borderColor: primaryButtonBg,
+                        backgroundColor: primaryButtonBg,
+                      );
 
-                    if (stackVertically) {
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                      if (stackVertically) {
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            primaryButton,
+                            const SizedBox(height: 10),
+                            secondaryButton,
+                          ],
+                        );
+                      }
+
+                      return Row(
                         children: [
-                          primaryButton,
-                          const SizedBox(height: 10),
-                          secondaryButton,
+                          Expanded(child: secondaryButton),
+                          const SizedBox(width: 12),
+                          Expanded(child: primaryButton),
                         ],
                       );
-                    }
-
-                    return Row(
-                      children: [
-                        Expanded(child: secondaryButton),
-                        const SizedBox(width: 12),
-                        Expanded(child: primaryButton),
-                      ],
-                    );
-                  },
-                ),
-              ],
+                    },
+                  ),
+                ],
+              ),
             ),
           ),
         ),

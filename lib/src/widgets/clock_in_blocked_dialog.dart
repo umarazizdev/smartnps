@@ -199,6 +199,15 @@ class ClockInBlockedDialog {
         return 'Shift attendance was not completed. Open Settings and set '
             'location to $alwaysAccessLabel. Attendance cannot be verified without '
             'background location.';
+      case 'location_precise':
+        if (Platform.isIOS) {
+          return 'Shift attendance was not completed. Open Settings, tap '
+              'SmartNPS360, choose Location, then turn on Precise Location. '
+              'Attendance cannot be verified without precise location.';
+        }
+        return 'Shift attendance was not completed. Open Settings and turn on '
+            'Precise location for SmartNPS360. Attendance cannot be verified '
+            'without precise location.';
       default:
         return 'Shift attendance was not completed. Background location '
             '($alwaysAccessLabel) is required for shift attendance from the '
@@ -213,6 +222,7 @@ class ClockInBlockedDialog {
       case 'location_when_in_use':
       case 'location_background':
       case 'location_always':
+      case 'location_precise':
       case 'background_location_required':
         return const _FailureDialogLabels(
           icon: Icons.error_outline_rounded,

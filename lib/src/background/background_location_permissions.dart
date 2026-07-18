@@ -271,17 +271,107 @@ class BackgroundLocationPermissions {
       if (permission == LocationPermission.whileInUse) {
         return 'location_always';
       }
+      if (!await hasPreciseLocationAccess()) {
+        return 'location_precise';
+      }
       return null;
     }
 
     if (Platform.isAndroid) {
-      if (await androidHasBackgroundLocationAccess()) return null;
-      final foreground = await Permission.location.status;
-      if (!foreground.isGranted) return 'location_foreground';
-      return 'location_background';
+      if (!await androidHasBackgroundLocationAccess()) {
+        final foreground = await Permission.location.status;
+        if (!foreground.isGranted) return 'location_foreground';
+        return 'location_background';
+      }
+      if (!await hasPreciseLocationAccess()) {
+        return 'location_precise';
+      }
+      return null;
     }
 
     return null;
+  }
+
+  /// True when the OS grants precise / fine location (not Approximate / Reduced).
+  ///
+  /// Uses the native Settings channel (same pattern as background location OS
+  /// checks): Android ACCESS_FINE, iOS CLAccuracyAuthorization.fullAccuracy.
+  static Future<bool> hasPreciseLocationAccess() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return true;
+
+    if (Platform.isAndroid) {
+      return _androidHasFineLocationPermission();
+    }
+
+    return _iosHasPreciseLocationPermission();
+  }
+
+  static Future<bool> _iosHasPreciseLocationPermission() async {
+    try {
+      final precise = await _nativeSettingsChannel.invokeMethod<bool>(
+        'hasPreciseLocationPermission',
+      );
+      if (precise != null) {
+        if (kDebugMode) {
+          debugPrint(
+            '[BackgroundLocationPermissions] ios native precise=$precise',
+          );
+        }
+        return precise;
+      }
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint(
+          '[BackgroundLocationPermissions] ios native precise check failed: '
+          '$error',
+        );
+      }
+    }
+
+    // Fallback if native channel is not ready yet (cold start).
+    try {
+      final accuracy = await Geolocator.getLocationAccuracy();
+      final granted = accuracy == LocationAccuracyStatus.precise;
+      if (kDebugMode) {
+        debugPrint(
+          '[BackgroundLocationPermissions] ios geolocator precise=$granted '
+          '($accuracy)',
+        );
+      }
+      return granted;
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint(
+          '[BackgroundLocationPermissions] ios geolocator precise failed: '
+          '$error',
+        );
+      }
+      // Authorized but unreadable → treat as missing so banner can recover.
+      return !(await hasForegroundLocationAccess());
+    }
+  }
+
+  static Future<bool> _androidHasFineLocationPermission() async {
+    try {
+      final precise = await _nativeSettingsChannel.invokeMethod<bool>(
+        'hasPreciseLocationPermission',
+      );
+      if (precise != null) return precise;
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint(
+          '[BackgroundLocationPermissions] android precise check failed: '
+          '$error',
+        );
+      }
+    }
+    // Do not use Permission.location here — it is granted for Approximate-only.
+    try {
+      final accuracy = await Geolocator.getLocationAccuracy();
+      return accuracy == LocationAccuracyStatus.precise;
+    } catch (_) {
+      return false;
+    }
   }
 
   static Future<LocationPermissionPhase> currentPermissionPhase() async {
@@ -405,13 +495,20 @@ class BackgroundLocationPermissions {
         return 'Turn on location services';
       case 'location_foreground':
       case 'location_when_in_use':
+        if (Platform.isAndroid) return 'Location access required';
         return 'Enable location access';
       case 'location_background':
       case 'location_always':
         if (Platform.isIOS) return 'Enable Always location';
-        if (Platform.isAndroid) return 'Enable all-the-time location';
+        if (Platform.isAndroid) {
+          return '${alwaysAccessLabel()} required';
+        }
         return 'Enable ${alwaysAccessLabel()} location';
+      case 'location_precise':
+        if (Platform.isAndroid) return 'Precise location required';
+        return 'Enable Precise location';
       case 'notification':
+        if (Platform.isAndroid) return 'Notifications required';
         return 'Enable notifications';
       default:
         return 'Permission needed';
@@ -427,7 +524,12 @@ class BackgroundLocationPermissions {
         return 'Location permission needed';
       case 'location_background':
       case 'location_always':
+        if (Platform.isAndroid) {
+          return 'Allow all-the-time location';
+        }
         return 'Background location required';
+      case 'location_precise':
+        return 'Precise location required';
       default:
         return 'Location permission needed';
     }
@@ -443,6 +545,8 @@ class BackgroundLocationPermissions {
       case 'location_background':
       case 'location_always':
         return 'Background location required for shift attendance';
+      case 'location_precise':
+        return 'Precise location required for shift attendance';
       default:
         return 'Location required for shift attendance';
     }
@@ -470,6 +574,13 @@ class BackgroundLocationPermissions {
         return 'Set location to $alwaysLabel to verify shift attendance '
             'from this app. Without background location, attendance verification '
             'is not available.';
+      case 'location_precise':
+        if (Platform.isIOS) {
+          return 'Shift attendance requires Precise Location. Open Settings, '
+              'tap SmartNPS360, choose Location, then turn on Precise Location.';
+        }
+        return 'Shift attendance requires Precise location. Open Settings and '
+            'turn on Precise location for SmartNPS360.';
       default:
         return 'Background location is required for shift attendance from the '
             'mobile app.';
@@ -488,6 +599,8 @@ class BackgroundLocationPermissions {
         }
         return 'Shift attendance requires location set to $alwaysLabel. Open '
             'Settings and choose $alwaysLabel for SmartNPS360.';
+      case 'location_precise':
+        return clockInMessageFor(deniedReason);
       default:
         return clockInMessageFor(deniedReason);
     }
@@ -497,12 +610,16 @@ class BackgroundLocationPermissions {
     final alwaysLabel = alwaysAccessLabel();
     switch (deniedReason) {
       case 'location_services_disabled':
+        if (Platform.isAndroid) {
+          return 'Device location is off. Turn it on to continue duty tracking.';
+        }
         return 'Location services are turned off. Turn them on to continue '
             'duty tracking while you are on duty.';
       case 'location_foreground':
-        return 'Tap Allow Location to grant access. Your location is used only '
-            'while you are on duty.';
       case 'location_when_in_use':
+        if (Platform.isAndroid) {
+          return 'Allow location, then set it to $alwaysLabel for duty tracking.';
+        }
         return 'Tap Allow Location to grant access. Your location is used only '
             'while you are on duty.';
       case 'location_background':
@@ -512,9 +629,17 @@ class BackgroundLocationPermissions {
             trailingClause: 'Your location is used only while you are on duty.',
           );
         }
-        return 'Background location is required while you are on duty. Open '
-            'Settings and set location to $alwaysLabel.';
+        return 'Set Location to $alwaysLabel so duty tracking works in background.';
+      case 'location_precise':
+        if (Platform.isIOS) {
+          return 'Open Settings, tap SmartNPS360, choose Location, then turn on '
+              'Precise Location. Your location is used only while you are on duty.';
+        }
+        return 'Turn on Precise location for accurate duty tracking.';
       default:
+        if (Platform.isAndroid) {
+          return 'Enable location for SmartNPS360 to continue duty tracking.';
+        }
         return 'Location access is required while you are on duty.';
     }
   }
@@ -524,6 +649,7 @@ class BackgroundLocationPermissions {
       case 'location_services_disabled':
       case 'location_background':
       case 'location_always':
+      case 'location_precise':
         return 'Open Settings';
       case 'location_foreground':
       case 'location_when_in_use':
@@ -537,10 +663,16 @@ class BackgroundLocationPermissions {
     final alwaysLabel = alwaysAccessLabel();
     switch (deniedReason) {
       case 'location_services_disabled':
+        if (Platform.isAndroid) {
+          return 'Device location is turned off. Please enable Location in Settings to continue.';
+        }
         return 'Location services are turned off on this device. Turn them on '
             'to continue duty tracking.';
       case 'location_foreground':
       case 'location_when_in_use':
+        if (Platform.isAndroid) {
+          return 'Location access is not enabled. Please allow Location for SmartNPS360 in Settings.';
+        }
         return 'Location access is required while you are on duty. Please '
             'enable location for SmartNPS360.';
       case 'location_background':
@@ -550,12 +682,23 @@ class BackgroundLocationPermissions {
             trailingClause: 'Your location is used only while you are on duty.',
           );
         }
-        return 'Background location is required while you are on duty. '
-            'Please set location to $alwaysLabel.';
+        return 'Background location is not enabled. Please set Location to $alwaysLabel in Settings.';
+      case 'location_precise':
+        if (Platform.isIOS) {
+          return 'Open Settings, tap SmartNPS360, choose Location, then turn on '
+              'Precise Location. Your location is used only while you are on duty.';
+        }
+        return 'Precise location is not enabled. Please turn on Precise location in Settings.';
       case 'notification':
+        if (Platform.isAndroid) {
+          return 'Notifications are not enabled. Please allow notifications for SmartNPS360 in Settings.';
+        }
         return 'Notifications are required for shift alerts. Please enable '
             'notifications for SmartNPS360.';
       default:
+        if (Platform.isAndroid) {
+          return 'A required location permission is not enabled. Please update it in Settings.';
+        }
         return 'A required permission is missing. Please enable it to '
             'continue duty tracking.';
     }
@@ -566,8 +709,7 @@ class BackgroundLocationPermissions {
       return 'Location Services are turned off. Open Settings, go to Privacy & '
           'Security, tap Location Services, and turn them on. Then return here.';
     }
-    return 'Location services are turned off on this device. Turn them on '
-        'to continue duty tracking.';
+    return 'Device location is turned off. Please enable Location in Settings to continue.';
   }
 
   /// Where Open Settings should navigate after the user confirms in-app.

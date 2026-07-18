@@ -62,6 +62,10 @@ class _WebViewShellUiController extends GetxController {
   final pullToRefreshActive = false.obs;
   final selectedBottomTabIndex = 0.obs;
   final bottomTabNavigationActive = false.obs;
+
+  /// Keeps the native bottom bar visible across in-web redirects whose
+  /// intermediate URLs are not exact tab landing paths.
+  final preserveBottomBarDuringLoad = false.obs;
   final flutterKeyboardInset = 0.0.obs;
 
   void setFlutterKeyboardInset(double inset) {
@@ -116,6 +120,7 @@ class _WebViewShellState extends State<WebViewShell>
   final _WebViewShellUiController _ui = _WebViewShellUiController();
   String? _pendingPushUrl;
   bool _nativeLogoutInFlight = false;
+
   /// When true, reconnect / retry must reload the WebView (page never loaded
   /// or last main-frame load failed). When false, dismissing offline is safe.
   bool _offlineNeedsReload = false;
@@ -299,6 +304,74 @@ class _WebViewShellState extends State<WebViewShell>
   void _finishBottomTabNavigation() {
     _ui.bottomTabNavigationActive.value = false;
     _pendingBottomTabLoadStarted = false;
+  }
+
+  void _clearBottomBarLoadPreserve() {
+    _ui.preserveBottomBarDuringLoad.value = false;
+  }
+
+  /// Arm bar visibility for the in-flight main-frame load when leaving or
+  /// targeting a bottom-tab landing URL. Sticky until load completion so
+  /// multi-hop redirects cannot clear it mid-navigation.
+  ///
+  /// Does not arm when leaving the login/auth screen — login → dashboard must
+  /// wait until the dashboard URL is current (late show), same as before
+  /// [preserveBottomBarDuringLoad] existed.
+  void _armBottomBarPreserveForNavigation({Uri? from, Uri? to}) {
+    if (_ui.preserveBottomBarDuringLoad.value) return;
+    // Login / auth → tab: keep bar hidden until the tab URL actually lands.
+    if (_isAuthRoute(from)) return;
+    if (_isBottomBarRoute(from) || _isBottomBarRoute(to)) {
+      _ui.preserveBottomBarDuringLoad.value = true;
+      return;
+    }
+    // Hot restart / first frame: [currentUri] may still be null while the
+    // WebView is already on a logged-in tab page.
+    if (from == null &&
+        _ui.officerLoggedIn.value &&
+        _ui.firstPageLoaded.value &&
+        !_isAuthRoute(_ui.currentUri.value)) {
+      _ui.preserveBottomBarDuringLoad.value = true;
+    }
+  }
+
+  /// When an in-web navigation targets a tab landing URL, keep the bar up and
+  /// select that tab early. Does not use [bottomTabNavigationActive] so
+  /// intermediate redirect URLs are still synced normally.
+  ///
+  /// Skipped while still on login/auth so post-login auth success cannot
+  /// reveal the bar before the dashboard URL is current.
+  void _onInWebBottomTabDestination(Uri uri) {
+    final tabIndex = _bottomTabIndexFromUri(uri);
+    if (tabIndex == null) return;
+    if (_isAuthRoute(_ui.currentUri.value)) return;
+    _ui.preserveBottomBarDuringLoad.value = true;
+    if (_ui.bottomTabNavigationActive.value) return;
+    if (_ui.selectedBottomTabIndex.value != tabIndex) {
+      _ui.selectedBottomTabIndex.value = tabIndex;
+    }
+  }
+
+  /// Android (and sometimes iOS) can deliver loadStop for the page being left
+  /// after the next navigation has already started. That must not clear the
+  /// preserve flag or the bar flickers on the first in-web redirect.
+  bool _isStalePreviousPageLoadStopDuringPreserve(
+    Uri? nextUri,
+    Uri? loadStartUri,
+  ) {
+    if (!_ui.preserveBottomBarDuringLoad.value) return false;
+    if (loadStartUri == null || nextUri == null) return false;
+    if (_normalizePageUrl(nextUri) != _normalizePageUrl(loadStartUri)) {
+      return false;
+    }
+    return _isBottomBarRoute(loadStartUri);
+  }
+
+  void _endMainFrameNavigationChrome({bool clearPreserve = true}) {
+    if (clearPreserve) {
+      _clearBottomBarLoadPreserve();
+    }
+    _ui.endNavigation();
   }
 
   bool _shouldIgnoreWebViewNavigationEvent(Uri? uri) {
@@ -1645,9 +1718,7 @@ class _WebViewShellState extends State<WebViewShell>
     }
 
     unawaited(_syncOfflineFromConnectivity());
-    _connectivitySub = Connectivity().onConnectivityChanged.listen((
-      results,
-    ) {
+    _connectivitySub = Connectivity().onConnectivityChanged.listen((results) {
       unawaited(_handleConnectivityChanged(results));
     });
 
@@ -1879,6 +1950,10 @@ class _WebViewShellState extends State<WebViewShell>
       AppLifecycleResumeGate.notifyResumed();
       final controller = _controller;
       unawaited(() async {
+        // Refresh banner immediately so Precise / Always changes show as soon
+        // as the app returns from Settings (before slower prompt rechecks).
+        await DutyHeartbeatService.instance
+            .refreshBackgroundLocationPermissionBannerState();
         // Android may return from Settings with updated "Allow all the time".
         await AppUpgradeReconciler.reconcileOsAfterEngineReady();
         await LocationDisclosureConsent.reconcileFromOsIfBackgroundReady();
@@ -1996,7 +2071,7 @@ class _WebViewShellState extends State<WebViewShell>
   void _showOffline({required bool needsReload}) {
     if (needsReload) _offlineNeedsReload = true;
     _ui.showOffline.value = true;
-    _ui.endNavigation();
+    _endMainFrameNavigationChrome();
   }
 
   Future<void> _handleConnectivityChanged(
@@ -2060,16 +2135,13 @@ class _WebViewShellState extends State<WebViewShell>
       return;
     }
 
-    final target =
-        _ui.currentUri.value?.toString() ?? AppConfig.initialUrl;
+    final target = _ui.currentUri.value?.toString() ?? AppConfig.initialUrl;
     try {
       // Keep hold until this load's onLoadStart so a stale error onLoadStop
       // cannot dismiss OfflineScreen early.
       _awaitingOfflineRecoveryLoad = true;
       // Keep OfflineScreen up until onLoadStop succeeds (or error re-shows it).
-      await controller.loadUrl(
-        urlRequest: URLRequest(url: WebUri(target)),
-      );
+      await controller.loadUrl(urlRequest: URLRequest(url: WebUri(target)));
     } catch (_) {
       _awaitingOfflineRecoveryLoad = false;
       _holdOfflineUntilReload = true;
@@ -2116,11 +2188,13 @@ class _WebViewShellState extends State<WebViewShell>
     final scheme = uri.scheme.toLowerCase();
     if (scheme == 'http' || scheme == 'https') {
       if (_isInternalUrl(uri)) {
-        if (action.isForMainFrame == true &&
-            AuthSessionManager.isLogoutRoute(uri)) {
-          unawaited(
-            _maybePerformLogoutForRoute(uri, 'logout_route navigation'),
-          );
+        if (action.isForMainFrame == true) {
+          _onInWebBottomTabDestination(uri);
+          if (AuthSessionManager.isLogoutRoute(uri)) {
+            unawaited(
+              _maybePerformLogoutForRoute(uri, 'logout_route navigation'),
+            );
+          }
         }
         return NavigationActionPolicy.ALLOW;
       }
@@ -3307,107 +3381,116 @@ class _WebViewShellState extends State<WebViewShell>
           SystemNavigator.pop();
         }
       },
-      child: Scaffold(
-        body: SafeArea(
-          top: true,
-          bottom: false,
-          child: AnimatedBuilder(
-            animation: Listenable.merge([
-              DutyHeartbeatService.instance.backgroundLocationPermissionMissing,
-              DutyHeartbeatService.instance.disclosurePromptVisible,
-              PermissionSettingsHelper.settingsPromptVisible,
-              OverlayPromptGuard.overlayVisibilityListenable,
-              ClockInGateService.instance.prepareInFlightVisible,
-            ]),
-            builder: (context, _) {
-              final showBanner =
+      child: Obx(() {
+        final isDark = _ui.webPrefersDark.value;
+        // Match OfflineScreen / splash fill so notch + home-indicator strips
+        // use the same native chrome colors.
+        final safeAreaColor = isDark
+            ? const Color(0xFF0F1724)
+            : const Color(AppConfig.cSurface);
+        return Scaffold(
+          backgroundColor: safeAreaColor,
+          body: ColoredBox(
+            color: safeAreaColor,
+            child: SafeArea(
+              // iOS: let WebView + floating tab bar draw into the home-indicator
+              // region so the web gradient isn't cut by a solid chrome strip.
+              // Android: keep bottom inset for the system nav / gesture bar.
+              bottom: Platform.isAndroid,
+              child: AnimatedBuilder(
+                animation: Listenable.merge([
                   DutyHeartbeatService
                       .instance
-                      .shouldShowBackgroundLocationBanner &&
-                  (Platform.isAndroid || Platform.isIOS) &&
-                  _ui.officerLoggedIn.value;
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  if (showBanner) const BackgroundLocationRequiredBanner(),
-                  Expanded(
-                    child: Stack(
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 0),
-                          child: InAppWebView(
-                                    initialUrlRequest: URLRequest(
-                                      url: WebUri(AppConfig.initialUrl),
-                                    ),
-                                    initialUserScripts: _initialUserScripts(),
-                                    pullToRefreshController:
-                                        _pullToRefreshController,
-                                    initialSettings: _createWebViewSettings(),
-                                    onWebViewCreated: (controller) {
-                                      _controller = controller;
-                                      _installJsHandlers(controller);
-                                      unawaited(_loadPendingPushUrl());
-                                      if (_ui.showOffline.value) {
-                                        unawaited(() async {
-                                          final results = await Connectivity()
-                                              .checkConnectivity();
-                                          if (!mounted) return;
-                                          if (_hasNetworkInterface(results)) {
-                                            await _recoverFromOffline();
-                                          }
-                                        }());
+                      .backgroundLocationPermissionMissing,
+                  DutyHeartbeatService.instance.disclosurePromptVisible,
+                  PermissionSettingsHelper.settingsPromptVisible,
+                  OverlayPromptGuard.overlayVisibilityListenable,
+                  ClockInGateService.instance.prepareInFlightVisible,
+                ]),
+                builder: (context, _) {
+                  final showBanner =
+                      DutyHeartbeatService
+                          .instance
+                          .shouldShowBackgroundLocationBanner &&
+                      (Platform.isAndroid || Platform.isIOS) &&
+                      _ui.officerLoggedIn.value;
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (showBanner) const BackgroundLocationRequiredBanner(),
+                      Expanded(
+                        child: Stack(
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 0),
+                              child: InAppWebView(
+                                initialUrlRequest: URLRequest(
+                                  url: WebUri(AppConfig.initialUrl),
+                                ),
+                                initialUserScripts: _initialUserScripts(),
+                                pullToRefreshController:
+                                    _pullToRefreshController,
+                                initialSettings: _createWebViewSettings(),
+                                onWebViewCreated: (controller) {
+                                  _controller = controller;
+                                  _installJsHandlers(controller);
+                                  unawaited(_loadPendingPushUrl());
+                                  if (_ui.showOffline.value) {
+                                    unawaited(() async {
+                                      final results = await Connectivity()
+                                          .checkConnectivity();
+                                      if (!mounted) return;
+                                      if (_hasNetworkInterface(results)) {
+                                        await _recoverFromOffline();
                                       }
-                                    },
-                                    shouldOverrideUrlLoading:
-                                        (controller, action) async =>
-                                            _handleNavigation(action),
-                                    onLoadStart: (controller, url) {
-                                      if (_awaitingOfflineRecoveryLoad) {
-                                        _awaitingOfflineRecoveryLoad = false;
-                                        _holdOfflineUntilReload = false;
-                                      }
-                                      if (!_ui.pullToRefreshActive.value) {
-                                        final startUri = url?.uriValue;
-                                        // Android (and sometimes iOS) emit load events
-                                        // for the page being left during bottom-tab switches.
-                                        if (_shouldIgnoreWebViewNavigationEvent(
-                                          startUri,
-                                        )) {
-                                          return;
-                                        }
-                                        _uriAtLoadStart =
-                                            _ui.currentUri.value ?? startUri;
-                                        _syncCurrentUriFromWebView(startUri);
-                                        unawaited(
-                                          _maybePerformLogoutForRoute(
-                                            startUri,
-                                            'logout_route onLoadStart',
-                                          ),
-                                        );
-                                        _pendingBottomTabLoadStarted = true;
-                                        _ui.beginNavigation();
+                                    }());
+                                  }
+                                },
+                                shouldOverrideUrlLoading:
+                                    (controller, action) async =>
+                                        _handleNavigation(action),
+                                onLoadStart: (controller, url) {
+                                  if (_awaitingOfflineRecoveryLoad) {
+                                    _awaitingOfflineRecoveryLoad = false;
+                                    _holdOfflineUntilReload = false;
+                                  }
+                                  if (!_ui.pullToRefreshActive.value) {
+                                    final startUri = url?.uriValue;
+                                    // Android (and sometimes iOS) emit load events
+                                    // for the page being left during bottom-tab switches.
+                                    if (_shouldIgnoreWebViewNavigationEvent(
+                                      startUri,
+                                    )) {
+                                      return;
+                                    }
+                                    // Arm before syncing so intermediate non-tab
+                                    // URLs cannot hide the bar during redirects.
+                                    _armBottomBarPreserveForNavigation(
+                                      from: _ui.currentUri.value,
+                                      to: startUri,
+                                    );
+                                    _uriAtLoadStart =
+                                        _ui.currentUri.value ?? startUri;
+                                    _syncCurrentUriFromWebView(startUri);
+                                    unawaited(
+                                      _maybePerformLogoutForRoute(
+                                        startUri,
+                                        'logout_route onLoadStart',
+                                      ),
+                                    );
+                                    _pendingBottomTabLoadStarted = true;
+                                    _ui.beginNavigation();
+                                    return;
+                                  }
+                                  // iOS can emit transient URLs during reload;
+                                  // keep the last known route until loadStop.
+                                },
+                                onUpdateVisitedHistory:
+                                    (controller, url, isReload) {
+                                      if (_ui.pullToRefreshActive.value ||
+                                          _webReloadInProgress) {
                                         return;
                                       }
-                                      // iOS can emit transient URLs during reload;
-                                      // keep the last known route until loadStop.
-                                    },
-                                    onUpdateVisitedHistory:
-                                        (controller, url, isReload) {
-                                          if (_ui.pullToRefreshActive.value ||
-                                              _webReloadInProgress) {
-                                            return;
-                                          }
-                                          if (_shouldIgnoreWebViewNavigationEvent(
-                                            url?.uriValue,
-                                          )) {
-                                            return;
-                                          }
-                                          _onWebViewUrlCommitted(
-                                            controller,
-                                            url?.uriValue,
-                                          );
-                                        },
-                                    onPageCommitVisible: (controller, url) {
                                       if (_shouldIgnoreWebViewNavigationEvent(
                                         url?.uriValue,
                                       )) {
@@ -3418,310 +3501,335 @@ class _WebViewShellState extends State<WebViewShell>
                                         url?.uriValue,
                                       );
                                     },
-                                    onProgressChanged: (controller, progress) {
-                                      if (_ui.bottomTabNavigationActive.value &&
-                                          !_pendingBottomTabLoadStarted) {
-                                        return;
-                                      }
-                                      if (progress > 0 && progress < 100) {
-                                        _ui.setLoadProgress(progress);
-                                      }
-                                      if (progress == 100) {
-                                        _pullToRefreshController
-                                            ?.endRefreshing();
-                                      }
-                                    },
-                                    onLoadStop: (controller, url) async {
-                                      _pullToRefreshController?.endRefreshing();
-                                      final nextUri = url?.uriValue;
-                                      // Android fires loadStop for the previous page when
-                                      // switching bottom tabs; ignore until the target tab loads.
-                                      final ignoreEvent =
-                                          _shouldIgnoreWebViewNavigationEvent(
-                                            nextUri,
-                                          );
-                                      var isSamePageReload = false;
-                                      Uri? preservedUri;
+                                onPageCommitVisible: (controller, url) {
+                                  if (_shouldIgnoreWebViewNavigationEvent(
+                                    url?.uriValue,
+                                  )) {
+                                    return;
+                                  }
+                                  _onWebViewUrlCommitted(
+                                    controller,
+                                    url?.uriValue,
+                                  );
+                                },
+                                onProgressChanged: (controller, progress) {
+                                  if (_ui.bottomTabNavigationActive.value &&
+                                      !_pendingBottomTabLoadStarted) {
+                                    return;
+                                  }
+                                  if (progress > 0 && progress < 100) {
+                                    _ui.setLoadProgress(progress);
+                                  }
+                                  if (progress == 100) {
+                                    _pullToRefreshController?.endRefreshing();
+                                  }
+                                },
+                                onLoadStop: (controller, url) async {
+                                  _pullToRefreshController?.endRefreshing();
+                                  final nextUri = url?.uriValue;
+                                  // Android fires loadStop for the previous page when
+                                  // switching bottom tabs; ignore until the target tab loads.
+                                  final ignoreEvent =
+                                      _shouldIgnoreWebViewNavigationEvent(
+                                        nextUri,
+                                      );
+                                  var isSamePageReload = false;
+                                  Uri? preservedUri;
+                                  var androidBottomTabNavComplete = false;
 
-                                      if (!ignoreEvent) {
-                                        final isBottomTabNavigationComplete =
-                                            _ui
-                                                .bottomTabNavigationActive
-                                                .value &&
-                                            _bottomTabIndexFromUri(nextUri) ==
-                                                _ui
-                                                    .selectedBottomTabIndex
-                                                    .value;
-                                        if (isBottomTabNavigationComplete) {
-                                          _finishBottomTabNavigation();
-                                        }
-                                        isSamePageReload =
-                                            !isBottomTabNavigationComplete &&
-                                            (_isPullToRefreshReload(nextUri) ||
-                                                _isSamePageReload(
-                                                  _uriAtLoadStart,
-                                                  nextUri,
-                                                ));
-                                        preservedUri =
-                                            _pullToRefreshSourceUri ??
-                                            _uriAtLoadStart ??
-                                            _ui.currentUri.value;
-                                        try {
-                                          final webThemeIsDark =
-                                              _hasWebThemeSignal
-                                              ? null
-                                              : await _readWebThemeIsDark(
-                                                  controller,
-                                                );
-                                          await _installThemeListener(
-                                            controller,
-                                          );
-                                          await _runIosPopoverFix(controller);
-                                          if (isSamePageReload) {
-                                            _restoreUriAfterReload(
-                                              preservedUri,
-                                            );
-                                          } else {
-                                            _syncCurrentUriFromWebView(nextUri);
-                                          }
-                                          _ui.firstPageLoaded.value = true;
-                                          // After a network error, Android may still
-                                          // fire onLoadStop for the failed URL / error
-                                          // document. Keep OfflineScreen until we
-                                          // intentionally reload (_recoverFromOffline).
-                                          if (!_holdOfflineUntilReload) {
-                                            _offlineNeedsReload = false;
-                                            if (_ui.showOffline.value) {
-                                              _dismissOfflineScreen();
-                                            }
-                                          }
-                                          _setNativeThemeFromWeb(
-                                            webThemeIsDark ??
-                                                _ui.webPrefersDark.value,
-                                          );
-                                          if (!isSamePageReload) {
-                                            await _maybePerformLogoutForRoute(
+                                  if (!ignoreEvent) {
+                                    final isBottomTabNavigationComplete =
+                                        _ui.bottomTabNavigationActive.value &&
+                                        _bottomTabIndexFromUri(nextUri) ==
+                                            _ui.selectedBottomTabIndex.value;
+                                    androidBottomTabNavComplete =
+                                        Platform.isAndroid &&
+                                        isBottomTabNavigationComplete;
+                                    // iOS: finish immediately. Android: defer
+                                    // until after awaits — clearing early lets
+                                    // stale previous-tab URLs (e.g. dashboard)
+                                    // steal selectedBottomTabIndex while
+                                    // timesheet/profile is still settling.
+                                    if (isBottomTabNavigationComplete &&
+                                        !Platform.isAndroid) {
+                                      _finishBottomTabNavigation();
+                                    }
+                                    isSamePageReload =
+                                        !isBottomTabNavigationComplete &&
+                                        (_isPullToRefreshReload(nextUri) ||
+                                            _isSamePageReload(
+                                              _uriAtLoadStart,
                                               nextUri,
-                                              'logout_route onLoadStop',
+                                            ));
+                                    preservedUri =
+                                        _pullToRefreshSourceUri ??
+                                        _uriAtLoadStart ??
+                                        _ui.currentUri.value;
+                                    try {
+                                      final webThemeIsDark = _hasWebThemeSignal
+                                          ? null
+                                          : await _readWebThemeIsDark(
+                                              controller,
                                             );
-                                          }
-                                          if (AuthSessionManager.isLoginRoute(
-                                                nextUri,
-                                              ) &&
-                                              !isSamePageReload) {
-                                            await _pauseNativeSessionForLoginScreen();
-                                            await _stopDutyHeartbeat();
-                                          } else {
-                                            await _refreshNativeAuthSessionFromStorage();
-                                            await _requestNotificationPermissionForRoute(
-                                              nextUri,
-                                            );
-                                            await _maybeStartDutyHeartbeat();
-                                            await DutyHeartbeatService.instance
-                                                .recheckOnDutyPrompts(
-                                                  pageReload: isSamePageReload,
-                                                );
-                                            await _notifyWebBackgroundLocationStatus();
-                                            await _notifyWebPushNotificationStatus();
-                                            await NativePermissionStatusService
-                                                .instance
-                                                .syncIfChanged();
-                                          }
-                                        } catch (_) {}
-                                      }
-
-                                      _clearPullToRefreshState();
-                                      _webReloadInProgress = false;
-                                      _uriAtLoadStart = null;
-                                      if (!ignoreEvent && isSamePageReload) {
+                                      await _installThemeListener(controller);
+                                      await _runIosPopoverFix(controller);
+                                      if (isSamePageReload) {
                                         _restoreUriAfterReload(preservedUri);
+                                      } else {
+                                        _syncCurrentUriFromWebView(nextUri);
                                       }
-                                      _ui.endNavigation();
-                                      await _reconcileBottomBarFromWebView(
-                                        controller,
-                                      );
-                                      if (!ignoreEvent) {
-                                        await OfficerAnnouncementCoordinator
-                                            .instance
-                                            .tryDeliverPending(
-                                              source: 'webview-ready',
-                                            );
-                                      }
-                                    },
-                                    onReceivedError:
-                                        (controller, request, error) async {
-                                          _pullToRefreshController
-                                              ?.endRefreshing();
-                                          _clearPullToRefreshState();
-                                          _webReloadInProgress = false;
-                                          _finishBottomTabNavigation();
-                                          _ui.endNavigation();
-                                          // Ignore cancelled loads and non-main-frame assets.
-                                          // iOS failed navigations default isForMainFrame=true;
-                                          // only skip when explicitly a subframe.
-                                          if (error.type ==
-                                              WebResourceErrorType.CANCELLED) {
-                                            return;
-                                          }
-                                          if (request.isForMainFrame == false) {
-                                            return;
-                                          }
-                                          // Show native OfflineScreen synchronously
-                                          // before any await so onLoadStop cannot
-                                          // race and reveal platform error chrome
-                                          // (Android) or a blank WKWebView (iOS).
-                                          if (_isNetworkLoadError(error)) {
-                                            final wasRetrying =
-                                                _ui.offlineRetrying.value;
-                                            _cancelOfflineConnectivityDebounce();
-                                            _holdOfflineUntilReload = true;
-                                            _ui.offlineRetrying.value = false;
-                                            if (wasRetrying) {
-                                              _ui.offlineStatusMessage.value =
-                                                  'Couldn\'t reconnect. Check your connection and try again.';
-                                            }
-                                            _showOffline(needsReload: true);
-                                            return;
-                                          }
-                                          final connectivity =
-                                              await Connectivity()
-                                                  .checkConnectivity();
-                                          if (!_hasNetworkInterface(
-                                            connectivity,
-                                          )) {
-                                            final wasRetrying =
-                                                _ui.offlineRetrying.value;
-                                            _cancelOfflineConnectivityDebounce();
-                                            _holdOfflineUntilReload = true;
-                                            _ui.offlineRetrying.value = false;
-                                            if (wasRetrying) {
-                                              _ui.offlineStatusMessage.value =
-                                                  'Still no internet connection. Please check your network and try again.';
-                                            }
-                                            _showOffline(needsReload: true);
-                                          }
-                                        },
-                                    onGeolocationPermissionsShowPrompt: (controller, origin) async {
-                                      final uri = Uri.tryParse(origin);
-                                      final allow = uri == null
-                                          ? false
-                                          : AppConfig.isAllowedHost(uri.host);
-                                      if (!allow) {
-                                        return GeolocationPermissionShowPromptResponse(
-                                          origin: origin,
-                                          allow: false,
-                                          retain: false,
-                                        );
-                                      }
-
-                                      final disclosureReady =
-                                          await DutyHeartbeatService.instance
-                                              .ensureDisclosureBeforeWebLocationAccess();
-                                      if (!disclosureReady) {
-                                        return GeolocationPermissionShowPromptResponse(
-                                          origin: origin,
-                                          allow: false,
-                                          retain: false,
-                                        );
-                                      }
-
-                                      if (!await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled()) {
-                                        if (!await BackgroundLocationPermissions.hasForegroundLocationAccess()) {
-                                          await PermissionSettingsHelper.requestForegroundLocationStep();
-                                          await BackgroundLocationPermissions.refreshPermissionStateFromOs();
+                                      _ui.firstPageLoaded.value = true;
+                                      // After a network error, Android may still
+                                      // fire onLoadStop for the failed URL / error
+                                      // document. Keep OfflineScreen until we
+                                      // intentionally reload (_recoverFromOffline).
+                                      if (!_holdOfflineUntilReload) {
+                                        _offlineNeedsReload = false;
+                                        if (_ui.showOffline.value) {
+                                          _dismissOfflineScreen();
                                         }
                                       }
+                                      _setNativeThemeFromWeb(
+                                        webThemeIsDark ??
+                                            _ui.webPrefersDark.value,
+                                      );
+                                      if (!isSamePageReload) {
+                                        await _maybePerformLogoutForRoute(
+                                          nextUri,
+                                          'logout_route onLoadStop',
+                                        );
+                                      }
+                                      if (AuthSessionManager.isLoginRoute(
+                                            nextUri,
+                                          ) &&
+                                          !isSamePageReload) {
+                                        await _pauseNativeSessionForLoginScreen();
+                                        await _stopDutyHeartbeat();
+                                      } else {
+                                        await _refreshNativeAuthSessionFromStorage();
+                                        await _requestNotificationPermissionForRoute(
+                                          nextUri,
+                                        );
+                                        await _maybeStartDutyHeartbeat();
+                                        await DutyHeartbeatService.instance
+                                            .recheckOnDutyPrompts(
+                                              pageReload: isSamePageReload,
+                                            );
+                                        await _notifyWebBackgroundLocationStatus();
+                                        await _notifyWebPushNotificationStatus();
+                                        await NativePermissionStatusService
+                                            .instance
+                                            .syncIfChanged();
+                                      }
+                                    } catch (_) {}
+                                  }
 
+                                  _clearPullToRefreshState();
+                                  _webReloadInProgress = false;
+                                  final loadStartUri = _uriAtLoadStart;
+                                  _uriAtLoadStart = null;
+                                  if (!ignoreEvent && isSamePageReload) {
+                                    _restoreUriAfterReload(preservedUri);
+                                  }
+                                  final clearPreserve =
+                                      !ignoreEvent &&
+                                      !_isStalePreviousPageLoadStopDuringPreserve(
+                                        nextUri,
+                                        loadStartUri,
+                                      );
+                                  _endMainFrameNavigationChrome(
+                                    clearPreserve: clearPreserve,
+                                  );
+                                  await _reconcileBottomBarFromWebView(
+                                    controller,
+                                  );
+                                  // Android only: keep bottomTabNavigationActive
+                                  // through awaits + reconcile so stale
+                                  // previous-tab URLs cannot change selection.
+                                  if (Platform.isAndroid &&
+                                      androidBottomTabNavComplete) {
+                                    _finishBottomTabNavigation();
+                                  }
+                                  if (!ignoreEvent) {
+                                    await OfficerAnnouncementCoordinator
+                                        .instance
+                                        .tryDeliverPending(
+                                          source: 'webview-ready',
+                                        );
+                                  }
+                                },
+                                onReceivedError: (controller, request, error) async {
+                                  _pullToRefreshController?.endRefreshing();
+                                  _clearPullToRefreshState();
+                                  _webReloadInProgress = false;
+                                  _finishBottomTabNavigation();
+                                  _endMainFrameNavigationChrome();
+                                  // Ignore cancelled loads and non-main-frame assets.
+                                  // iOS failed navigations default isForMainFrame=true;
+                                  // only skip when explicitly a subframe.
+                                  if (error.type ==
+                                      WebResourceErrorType.CANCELLED) {
+                                    return;
+                                  }
+                                  if (request.isForMainFrame == false) {
+                                    return;
+                                  }
+                                  // Show native OfflineScreen synchronously
+                                  // before any await so onLoadStop cannot
+                                  // race and reveal platform error chrome
+                                  // (Android) or a blank WKWebView (iOS).
+                                  if (_isNetworkLoadError(error)) {
+                                    final wasRetrying =
+                                        _ui.offlineRetrying.value;
+                                    _cancelOfflineConnectivityDebounce();
+                                    _holdOfflineUntilReload = true;
+                                    _ui.offlineRetrying.value = false;
+                                    if (wasRetrying) {
+                                      _ui.offlineStatusMessage.value =
+                                          'Couldn\'t reconnect. Check your connection and try again.';
+                                    }
+                                    _showOffline(needsReload: true);
+                                    return;
+                                  }
+                                  final connectivity = await Connectivity()
+                                      .checkConnectivity();
+                                  if (!_hasNetworkInterface(connectivity)) {
+                                    final wasRetrying =
+                                        _ui.offlineRetrying.value;
+                                    _cancelOfflineConnectivityDebounce();
+                                    _holdOfflineUntilReload = true;
+                                    _ui.offlineRetrying.value = false;
+                                    if (wasRetrying) {
+                                      _ui.offlineStatusMessage.value =
+                                          'Still no internet connection. Please check your network and try again.';
+                                    }
+                                    _showOffline(needsReload: true);
+                                  }
+                                },
+                                onGeolocationPermissionsShowPrompt: (controller, origin) async {
+                                  final uri = Uri.tryParse(origin);
+                                  final allow = uri == null
+                                      ? false
+                                      : AppConfig.isAllowedHost(uri.host);
+                                  if (!allow) {
+                                    return GeolocationPermissionShowPromptResponse(
+                                      origin: origin,
+                                      allow: false,
+                                      retain: false,
+                                    );
+                                  }
+
+                                  final disclosureReady = await DutyHeartbeatService
+                                      .instance
+                                      .ensureDisclosureBeforeWebLocationAccess();
+                                  if (!disclosureReady) {
+                                    return GeolocationPermissionShowPromptResponse(
+                                      origin: origin,
+                                      allow: false,
+                                      retain: false,
+                                    );
+                                  }
+
+                                  if (!await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled()) {
+                                    if (!await BackgroundLocationPermissions.hasForegroundLocationAccess()) {
+                                      await PermissionSettingsHelper.requestForegroundLocationStep();
                                       await BackgroundLocationPermissions.refreshPermissionStateFromOs();
-                                      final granted =
-                                          await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled();
-                                      return GeolocationPermissionShowPromptResponse(
-                                        origin: origin,
-                                        allow: granted,
-                                        retain: granted,
+                                    }
+                                  }
+
+                                  await BackgroundLocationPermissions.refreshPermissionStateFromOs();
+                                  final granted =
+                                      await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled();
+                                  return GeolocationPermissionShowPromptResponse(
+                                    origin: origin,
+                                    allow: granted,
+                                    retain: granted,
+                                  );
+                                },
+                                onReceivedServerTrustAuthRequest:
+                                    (controller, challenge) async =>
+                                        _handleServerTrustAuthRequest(
+                                          challenge,
+                                        ),
+                                onDownloadStartRequest:
+                                    (controller, request) async {
+                                      final uri = request.url.uriValue;
+                                      await launchUrl(
+                                        uri,
+                                        mode: LaunchMode.externalApplication,
                                       );
                                     },
-                                    onReceivedServerTrustAuthRequest:
-                                        (controller, challenge) async =>
-                                            _handleServerTrustAuthRequest(
-                                              challenge,
-                                            ),
-                                    onDownloadStartRequest:
-                                        (controller, request) async {
-                                          final uri = request.url.uriValue;
-                                          await launchUrl(
-                                            uri,
-                                            mode:
-                                                LaunchMode.externalApplication,
-                                          );
-                                        },
-                                  ),
-                        ),
-                        Obx(
-                          () => _ui.showOffline.value
-                              ? Positioned.fill(
-                                  child: OfflineScreen(
-                                    onRetry: _retry,
-                                    isDark: _ui.webPrefersDark.value,
-                                    isRetrying: _ui.offlineRetrying.value,
-                                    statusMessage:
-                                        _ui.offlineStatusMessage.value,
-                                  ),
-                                )
-                              : const SizedBox.shrink(),
-                        ),
-                        Obx(() {
-                          if (!_ui.firstPageLoaded.value &&
-                              !_ui.showOffline.value) {
-                            return _SplashOverlay(
-                              isDark: _ui.webPrefersDark.value,
-                            );
-                          }
-                          return const SizedBox.shrink();
-                        }),
-                        Obx(() {
-                          if (!_ui.isNavigating.value ||
-                              !_ui.firstPageLoaded.value ||
-                              _ui.pullToRefreshActive.value ||
-                              _ui.showOffline.value) {
-                            return const SizedBox.shrink();
-                          }
-                          return Align(
-                            alignment: Alignment.topCenter,
-                            child: _NavigationProgressBar(
-                              progress: _ui.loadProgress.value,
+                              ),
                             ),
-                          );
-                        }),
-                        Obx(() {
-                          final showBottomBar =
-                              !_ui.showOffline.value &&
-                              _ui.firstPageLoaded.value &&
-                              _ui.officerLoggedIn.value &&
-                              !_ui.isKeyboardOpen &&
-                              _isBottomBarRoute(_ui.currentUri.value);
-                          if (!showBottomBar) {
-                            return const SizedBox.shrink();
-                          }
-                          return Align(
-                            alignment: Alignment.bottomCenter,
-                            child: _BottomBar(
-                              selectedTabIndex:
-                                  _ui.selectedBottomTabIndex.value,
-                              isDark: _ui.webPrefersDark.value,
-                              onTap: _onBottomTap,
+                            Obx(
+                              () => _ui.showOffline.value
+                                  ? Positioned.fill(
+                                      child: OfflineScreen(
+                                        onRetry: _retry,
+                                        isDark: _ui.webPrefersDark.value,
+                                        isRetrying: _ui.offlineRetrying.value,
+                                        statusMessage:
+                                            _ui.offlineStatusMessage.value,
+                                      ),
+                                    )
+                                  : const SizedBox.shrink(),
                             ),
-                          );
-                        }),
-                      ],
-                    ),
-                  ),
-                ],
-              );
-            },
+                            Obx(() {
+                              if (!_ui.firstPageLoaded.value &&
+                                  !_ui.showOffline.value) {
+                                return _SplashOverlay(
+                                  isDark: _ui.webPrefersDark.value,
+                                );
+                              }
+                              return const SizedBox.shrink();
+                            }),
+                            Obx(() {
+                              if (!_ui.isNavigating.value ||
+                                  !_ui.firstPageLoaded.value ||
+                                  _ui.pullToRefreshActive.value ||
+                                  _ui.showOffline.value) {
+                                return const SizedBox.shrink();
+                              }
+                              return Align(
+                                alignment: Alignment.topCenter,
+                                child: _NavigationProgressBar(
+                                  progress: _ui.loadProgress.value,
+                                ),
+                              );
+                            }),
+                            Obx(() {
+                              final showBottomBar =
+                                  !_ui.showOffline.value &&
+                                  _ui.firstPageLoaded.value &&
+                                  _ui.officerLoggedIn.value &&
+                                  !_ui.isKeyboardOpen &&
+                                  !_isAuthRoute(_ui.currentUri.value) &&
+                                  (_isBottomBarRoute(_ui.currentUri.value) ||
+                                      _ui.preserveBottomBarDuringLoad.value);
+                              if (!showBottomBar) {
+                                return const SizedBox.shrink();
+                              }
+                              return Align(
+                                alignment: Alignment.bottomCenter,
+                                child: _BottomBar(
+                                  selectedTabIndex:
+                                      _ui.selectedBottomTabIndex.value,
+                                  isDark: _ui.webPrefersDark.value,
+                                  onTap: _onBottomTap,
+                                ),
+                              );
+                            }),
+                          ],
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
           ),
-        ),
-      ),
+        );
+      }),
     );
   }
 
@@ -3846,10 +3954,9 @@ class _SplashOverlay extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final logoWidth = MediaQuery.sizeOf(context).width * 0.7;
+    // Same fill as OfflineScreen / shell SafeArea chrome.
     return ColoredBox(
-      color: isDark
-          ? const Color(AppConfig.cDarkCardColor)
-          : const Color(AppConfig.cSurface),
+      color: isDark ? const Color(0xFF0F1724) : const Color(AppConfig.cSurface),
       child: SafeArea(
         child: Center(
           child: Column(

@@ -79,7 +79,11 @@ class _BackgroundLocationRequiredBannerState
         ClockInBlockedDialog.reconcileAfterAppResume();
       }
       AppLifecycleResumeGate.notifyResumed();
-      unawaited(_refreshBannerContent());
+      unawaited(() async {
+        await DutyHeartbeatService.instance
+            .refreshBackgroundLocationPermissionBannerState();
+        await _refreshBannerContent();
+      }());
     }
   }
 

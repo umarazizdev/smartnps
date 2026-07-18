@@ -34,26 +34,32 @@ class NativePermissionStatusService {
   static const MethodChannel _settingsChannel = MethodChannel(
     'com.smartnps360.app/settings',
   );
+
   /// Legacy Keychain keys — cleared once so uninstall leftovers cannot remap.
   static const FlutterSecureStorage _legacySecureStorage =
       FlutterSecureStorage();
+
   /// App-local history flags (SharedPreferences). Cleared on uninstall, unlike
   /// iOS Keychain, so a fresh install reports `unknown` until the user acts.
   /// Device-wide flag: background location was granted at least once.
   /// Used so a later revoke reports API `denied` instead of `unknown`.
   static const String _kBackgroundLocationEverGranted =
       'permission.background_location.ever_granted.v1';
+
   /// Device-wide flag: officer declined enabling background location
   /// (e.g. Cancel on Open Settings) — even on first prompt.
   static const String _kBackgroundLocationUserDenied =
       'permission.background_location.user_denied.v1';
+
   /// Device-wide flag: foreground location was granted at least once
   /// (While using, Always, or Allow only this time). Revoke → API denied.
   static const String _kForegroundLocationEverGranted =
       'permission.foreground_location.ever_granted.v1';
+
   /// Device-wide flag: officer tapped Don't Allow on the foreground OS dialog.
   static const String _kForegroundLocationUserDenied =
       'permission.foreground_location.user_denied.v1';
+
   /// iOS only: whenInUse survived a real background (paused/hidden → resumed),
   /// so it is lasting "While Using" — not temporary "Allow Once".
   static const String _kIosForegroundLastingConfirmed =
@@ -111,6 +117,7 @@ class NativePermissionStatusService {
   bool _syncCoalescePending = false;
   bool _syncForceNext = false;
   Future<bool>? _syncInFlight;
+
   /// Prefer one POST: if mark-denied lands while app_cycle is queued, sync after.
   bool _deferredSyncAfterAppCycle = false;
 
@@ -146,6 +153,14 @@ class NativePermissionStatusService {
         if (kDebugMode) {
           debugPrint(
             '[NativePermissionStatus] low_power_mode changed ${call.arguments}',
+          );
+        }
+        unawaited(syncIfChanged());
+        return null;
+      case 'backgroundAppRefreshChanged':
+        if (kDebugMode) {
+          debugPrint(
+            '[NativePermissionStatus] backgroundAppRefresh changed ${call.arguments}',
           );
         }
         unawaited(syncIfChanged());
@@ -339,7 +354,9 @@ class NativePermissionStatusService {
     final inFlight = _appCycleUploadInFlight;
     if (inFlight != null) {
       if (kDebugMode) {
-        debugPrint('[NativePermissionStatus] queued app_cycle upload $appCycle');
+        debugPrint(
+          '[NativePermissionStatus] queued app_cycle upload $appCycle',
+        );
       }
       return inFlight;
     }
@@ -511,6 +528,7 @@ class NativePermissionStatusService {
       'preciseLocation': await _preciseLocationStatus(),
       'notifications': await _notificationStatus(),
       'batteryOptimization': await _batteryOptimizationStatus(),
+      'backgroundAppRefresh': await _backgroundAppRefreshStatus(),
       'push': await _pushToggleStatus(),
     };
   }
@@ -554,32 +572,20 @@ class NativePermissionStatusService {
 
   /// API-only iOS foregroundLocation mapping (does not change clock-in).
   ///
-  /// Allow Once and While Using both appear as [LocationPermission.whileInUse]
-  /// while the session is active. Until lasting While Using is confirmed after a
-  /// real background, whenInUse is reported as API `denied` (covers Allow Once).
+  /// While Using / Always → `granted`. Allow Once also appears as whenInUse
+  /// while active, so it reports `granted` until it expires (then `denied`).
+  /// `denied` only when OS access is actually denied / revoked.
   Future<String> _resolveIosForegroundLocationApiStatus(
     LocationPermission permission,
   ) async {
-    if (permission == LocationPermission.always) {
+    if (permission == LocationPermission.always ||
+        permission == LocationPermission.whileInUse) {
       await _markForegroundLocationEverGranted();
       await _clearForegroundLocationUserDenied();
-      await _setIosForegroundLastingConfirmed(true);
+      if (permission == LocationPermission.always) {
+        await _setIosForegroundLastingConfirmed(true);
+      }
       return 'granted';
-    }
-    if (permission == LocationPermission.whileInUse) {
-      await _markForegroundLocationEverGranted();
-      if (await _hasIosForegroundLastingConfirmed()) {
-        await _clearForegroundLocationUserDenied();
-        return 'granted';
-      }
-      // Temporary Allow Once (or While Using not yet confirmed after background).
-      if (kDebugMode) {
-        debugPrint(
-          '[NativePermissionStatus] iOS foregroundLocation=denied '
-          '(Allow Once / unconfirmed whenInUse)',
-        );
-      }
-      return 'denied';
     }
     // Expired Allow Once / Ask Next Time → notDetermined (Geolocator: denied).
     await _setIosForegroundLastingConfirmed(false);
@@ -647,8 +653,9 @@ class NativePermissionStatusService {
     await _setIosForegroundLastingConfirmed(false);
   }
 
-  /// Android "Allow only this time" flag (API 30+). iOS Allow Once is detected
-  /// via unconfirmed whenInUse (see [_resolveIosForegroundLocationApiStatus]).
+  /// Android "Allow only this time" flag (API 30+).
+  /// iOS Allow Once is indistinguishable from While Using while whenInUse is
+  /// active; foregroundLocation reports granted until Allow Once expires.
   Future<bool> _isAndroidOneTimeLocationPermission() async {
     if (!Platform.isAndroid) return false;
     try {
@@ -774,9 +781,8 @@ class NativePermissionStatusService {
   }
 
   /// Call after the system foreground location dialog closes.
-  /// API only: lasting While Using / Always → granted path; Don't Allow,
-  /// Allow only this time / Allow Once (non-lasting), or any other choice →
-  /// foregroundLocation + preciseLocation denied.
+  /// API only: While Using / Always → granted path; Don't Allow or no access →
+  /// foregroundLocation (+ precise via existing precise mapping) denied.
   Future<void> syncForegroundLocationAfterOsPrompt() async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
 
@@ -786,7 +792,7 @@ class NativePermissionStatusService {
       await _clearForegroundLocationUserDenied();
       if (kDebugMode) {
         debugPrint(
-          '[NativePermissionStatus] OS FG prompt → lasting grant; API granted',
+          '[NativePermissionStatus] OS FG prompt → whenInUse/Always; API granted',
         );
       }
       await syncIfChanged(force: true);
@@ -804,6 +810,9 @@ class NativePermissionStatusService {
   }
 
   /// True when OS has a lasting foreground grant (not one-time / Allow Once).
+  ///
+  /// iOS: whenInUse and always both count as a foreground grant for API sync
+  /// after the OS prompt (Allow Once also appears as whenInUse while active).
   Future<bool> _hasLastingForegroundOsGrant() async {
     if (Platform.isAndroid) {
       if (await _isAndroidOneTimeLocationPermission()) return false;
@@ -813,12 +822,8 @@ class NativePermissionStatusService {
     if (Platform.isIOS) {
       final permission =
           await BackgroundLocationPermissions.readIosLocationPermission();
-      if (permission == LocationPermission.always) return true;
-      // whenInUse is lasting only after it survived a real background.
-      if (permission == LocationPermission.whileInUse) {
-        return _hasIosForegroundLastingConfirmed();
-      }
-      return false;
+      return permission == LocationPermission.always ||
+          permission == LocationPermission.whileInUse;
     }
     return false;
   }
@@ -900,7 +905,10 @@ class NativePermissionStatusService {
     }
   }
 
-  Future<void> _writeHistoryFlag(String key, {required String debugLabel}) async {
+  Future<void> _writeHistoryFlag(
+    String key, {
+    required String debugLabel,
+  }) async {
     await _clearLegacyKeychainHistoryIfNeeded();
     try {
       final prefs = await _prefs();
@@ -989,31 +997,37 @@ class NativePermissionStatusService {
 
     if (Platform.isAndroid) {
       final foreground = await Permission.location.status;
-      // Settings revoke / Don't Allow / Allow only this time → precise denied.
-      if (await _isAndroidOneTimeLocationPermission() ||
-          await _androidLocationIsDeniedForApi(foreground) ||
+      // "Allow only this time" — temporary; API precise = denied.
+      if (await _isAndroidOneTimeLocationPermission()) {
+        return 'denied';
+      }
+      // Lasting FG grant: report real Precise / Approximate (ignore stale deny flags).
+      if (foreground.isGranted ||
+          foreground.isLimited ||
+          foreground.isProvisional) {
+        try {
+          final precise = await _settingsChannel.invokeMethod<bool>(
+            'hasPreciseLocationPermission',
+          );
+          return precise == true ? 'granted' : 'denied';
+        } catch (error) {
+          if (kDebugMode) {
+            debugPrint(
+              '[NativePermissionStatus] android precise check failed: $error',
+            );
+          }
+          return 'granted';
+        }
+      }
+      // Settings revoke / Don't Allow → denied when applicable.
+      if (await _androidLocationIsDeniedForApi(foreground) ||
           await _hasForegroundLocationUserDenied() ||
           (foreground.isDenied &&
               await Permission.location.shouldShowRequestRationale)) {
         return 'denied';
       }
-      if (!foreground.isGranted) {
-        // Not granted yet and never previously granted → unknown.
-        return _mapPermissionStatus(foreground);
-      }
-      try {
-        final precise = await _settingsChannel.invokeMethod<bool>(
-          'hasPreciseLocationPermission',
-        );
-        return precise == true ? 'granted' : 'denied';
-      } catch (error) {
-        if (kDebugMode) {
-          debugPrint(
-            '[NativePermissionStatus] android precise check failed: $error',
-          );
-        }
-        return _mapPermissionStatus(foreground);
-      }
+      // Not granted yet and never previously granted → unknown.
+      return _mapPermissionStatus(foreground);
     }
 
     final locationPermission =
@@ -1038,31 +1052,43 @@ class NativePermissionStatusService {
       }
       return 'unknown';
     }
-    // Allow Once / unconfirmed whenInUse → same as FG API denied.
-    if (locationPermission == LocationPermission.whileInUse &&
-        !await _hasIosForegroundLastingConfirmed()) {
-      if (kDebugMode) {
-        debugPrint(
-          '[NativePermissionStatus] iOS preciseLocation=denied '
-          '(Allow Once / unconfirmed whenInUse)',
+
+    // whileInUse / always: report real Precise Location (same as FG — do not
+    // force denied for unconfirmed whenInUse / Allow Once while active).
+    if (locationPermission == LocationPermission.whileInUse ||
+        locationPermission == LocationPermission.always) {
+      try {
+        final precise = await _settingsChannel.invokeMethod<bool>(
+          'hasPreciseLocationPermission',
         );
+        if (precise != null) {
+          return precise ? 'granted' : 'denied';
+        }
+      } catch (error) {
+        if (kDebugMode) {
+          debugPrint(
+            '[NativePermissionStatus] ios native precise check failed: $error',
+          );
+        }
       }
-      return 'denied';
+      try {
+        final accuracy = await Geolocator.getLocationAccuracy();
+        return switch (accuracy) {
+          LocationAccuracyStatus.precise => 'granted',
+          LocationAccuracyStatus.reduced => 'denied',
+          LocationAccuracyStatus.unknown => 'unknown',
+        };
+      } catch (error) {
+        if (kDebugMode) {
+          debugPrint(
+            '[NativePermissionStatus] ios precise check failed: $error',
+          );
+        }
+        return 'unknown';
+      }
     }
 
-    try {
-      final accuracy = await Geolocator.getLocationAccuracy();
-      return switch (accuracy) {
-        LocationAccuracyStatus.precise => 'granted',
-        LocationAccuracyStatus.reduced => 'denied',
-        LocationAccuracyStatus.unknown => 'unknown',
-      };
-    } catch (error) {
-      if (kDebugMode) {
-        debugPrint('[NativePermissionStatus] ios precise check failed: $error');
-      }
-      return 'unknown';
-    }
+    return 'unknown';
   }
 
   Future<String> _notificationStatus() async {
@@ -1119,7 +1145,35 @@ class NativePermissionStatusService {
       return 'unknown';
     } catch (error) {
       if (kDebugMode) {
-        debugPrint('[NativePermissionStatus] low power mode check failed: $error');
+        debugPrint(
+          '[NativePermissionStatus] low power mode check failed: $error',
+        );
+      }
+      return 'unknown';
+    }
+  }
+
+  /// iOS: Settings → Background App Refresh (`UIBackgroundRefreshStatus`).
+  /// Android: closest equivalent — app background restriction
+  /// (`ActivityManager.isBackgroundRestricted`, API 28+).
+  Future<String> _backgroundAppRefreshStatus() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return 'unknown';
+
+    try {
+      final status = await _settingsChannel.invokeMethod<String>(
+        'backgroundAppRefreshStatus',
+      );
+      if (status == 'enabled' ||
+          status == 'disabled' ||
+          status == 'restricted') {
+        return status!;
+      }
+      return 'unknown';
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint(
+          '[NativePermissionStatus] backgroundAppRefresh check failed: $error',
+        );
       }
       return 'unknown';
     }
@@ -1157,11 +1211,10 @@ class NativePermissionStatusService {
   }) {
     return switch (permission) {
       LocationPermission.always => 'granted',
-      LocationPermission.whileInUse =>
-        foreground ? 'granted' : 'unknown',
+      LocationPermission.whileInUse => foreground ? 'granted' : 'unknown',
       LocationPermission.deniedForever => 'denied',
-      LocationPermission.denied || LocationPermission.unableToDetermine =>
-        'unknown',
+      LocationPermission.denied ||
+      LocationPermission.unableToDetermine => 'unknown',
     };
   }
 
@@ -1171,9 +1224,7 @@ class NativePermissionStatusService {
 
     try {
       if (kDebugMode) {
-        debugPrint(
-          '[NativePermissionStatus] POST ${uri.path} body=$payload',
-        );
+        debugPrint('[NativePermissionStatus] POST ${uri.path} body=$payload');
       }
       final response = await ApiClient.instance.dio.postUri(
         uri,

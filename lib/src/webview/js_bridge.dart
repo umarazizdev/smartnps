@@ -191,7 +191,8 @@ class JsBridge {
 
       if ((Platform.isAndroid || Platform.isIOS) &&
           ClockInGateService.instance.isPrepareInFlight &&
-          !await BackgroundLocationPermissions.isClockInBackgroundReady()) {
+          (!await BackgroundLocationPermissions.isClockInBackgroundReady() ||
+              !await BackgroundLocationPermissions.hasPreciseLocationAccess())) {
         ClockInGateService.instance.clearGeoUnlock();
         return _err(
           'clock_in_gate_in_progress',
@@ -211,7 +212,10 @@ class JsBridge {
 
       if ((Platform.isAndroid || Platform.isIOS) && !allowForegroundOnly) {
         await BackgroundLocationPermissions.refreshPermissionStateFromOs();
-        if (!await BackgroundLocationPermissions.isClockInBackgroundReady()) {
+        final clockInLocationReady =
+            await BackgroundLocationPermissions.isClockInBackgroundReady() &&
+            await BackgroundLocationPermissions.hasPreciseLocationAccess();
+        if (!clockInLocationReady) {
           if (!ClockInGateService.instance.isGeoUnlockedForClockIn) {
             final gate = await ClockInGateService.instance.prepareClockIn();
             if (gate['canClockIn'] != true) {
@@ -227,13 +231,14 @@ class JsBridge {
           }
 
           await BackgroundLocationPermissions.refreshPermissionStateFromOs();
-          if (!await BackgroundLocationPermissions.isClockInBackgroundReady()) {
+          if (!await BackgroundLocationPermissions.isClockInBackgroundReady() ||
+              !await BackgroundLocationPermissions.hasPreciseLocationAccess()) {
             ClockInGateService.instance.clearGeoUnlock();
+            final deniedReason = await BackgroundLocationPermissions
+                .settingsDeniedReasonIfAny();
             return _err(
-              'background_location_required',
-              BackgroundLocationPermissions.clockInMessageFor(
-                await BackgroundLocationPermissions.settingsDeniedReasonIfAny(),
-              ),
+              deniedReason ?? 'background_location_required',
+              BackgroundLocationPermissions.clockInMessageFor(deniedReason),
             );
           }
         }
@@ -590,6 +595,8 @@ class JsBridge {
     final phase = await BackgroundLocationPermissions.currentPermissionPhase();
     final backgroundReady =
         await BackgroundLocationPermissions.isClockInBackgroundReady();
+    final preciseReady =
+        await BackgroundLocationPermissions.hasPreciseLocationAccess();
     if (backgroundReady) {
       await LocationDisclosureConsent.reconcileFromOsIfBackgroundReady();
     }
@@ -598,6 +605,8 @@ class JsBridge {
     final disclosureAccepted = await LocationDisclosureConsent.hasAccepted();
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     final prepareInFlight = ClockInGateService.instance.isPrepareInFlight;
+    final canClockIn =
+        backgroundReady && preciseReady && serviceEnabled && !prepareInFlight;
 
     final phaseName = switch (phase) {
       LocationPermissionPhase.none => 'none',
@@ -611,13 +620,12 @@ class JsBridge {
       'deniedReason': deniedReason,
       'disclosureAccepted': disclosureAccepted,
       'serviceEnabled': serviceEnabled,
-      'canClockIn':
-          backgroundReady && serviceEnabled && !prepareInFlight,
+      'canClockIn': canClockIn,
       'prepareInFlight': prepareInFlight,
-      'title': backgroundReady
+      'title': canClockIn
           ? null
           : BackgroundLocationPermissions.clockInTitleFor(deniedReason),
-      'message': backgroundReady
+      'message': canClockIn
           ? null
           : BackgroundLocationPermissions.clockInMessageFor(deniedReason),
       'platform': Platform.isIOS ? 'ios' : 'android',

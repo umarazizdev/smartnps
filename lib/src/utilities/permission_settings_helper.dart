@@ -504,7 +504,11 @@ class PermissionSettingsHelper {
     if (!_shouldOpenLocationPermissionSettings(dialogKey)) {
       return false;
     }
-    return BackgroundLocationPermissions.isBackgroundLocationFullyEnabled();
+    if (!await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled()) {
+      return false;
+    }
+    // Always/background OK — still show Settings when Precise Location is off.
+    return BackgroundLocationPermissions.hasPreciseLocationAccess();
   }
 
   static bool _isInCooldown(String dialogKey) {

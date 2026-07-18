@@ -107,8 +107,18 @@ class DutyHeartbeatService {
       return;
     }
 
-    final missing =
+    await BackgroundLocationPermissions.refreshPermissionStateFromOs();
+    final backgroundMissing =
         !await BackgroundLocationPermissions.hasSufficientBackgroundAccess();
+    final preciseMissing =
+        !await BackgroundLocationPermissions.hasPreciseLocationAccess();
+    final missing = backgroundMissing || preciseMissing;
+    if (kDebugMode) {
+      debugPrint(
+        '[DutyHeartbeatService] banner missing=$missing '
+        'bgMissing=$backgroundMissing preciseMissing=$preciseMissing',
+      );
+    }
     if (backgroundLocationPermissionMissing.value != missing) {
       backgroundLocationPermissionMissing.value = missing;
     }
@@ -191,9 +201,14 @@ class DutyHeartbeatService {
     }
 
     await _ensureIosTrackingHealthy();
+    await _handleIosPermissionChangeIfNeeded();
 
     final running = await _isLocationTrackingRunning();
     if (_lastAppliedStatus == onDuty && running) {
+      // Re-read Precise / Always after Settings return (same path as FG/BG).
+      await refreshBackgroundLocationPermissionBannerState();
+      // iOS Precise Location authorization can settle slightly after resume.
+      await Future<void>.delayed(const Duration(milliseconds: 300));
       await refreshBackgroundLocationPermissionBannerState();
       return;
     }
@@ -605,6 +620,7 @@ class DutyHeartbeatService {
   /// Handles the top banner primary action with the correct next step per state.
   Future<void> handleBannerEnableLocationAction(BuildContext context) async {
     if (await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled() &&
+        await BackgroundLocationPermissions.hasPreciseLocationAccess() &&
         await LocationDisclosureConsent.hasAccepted()) {
       final result = await BackgroundLocationController.ensureStarted();
       if (result['ok'] == true) {
@@ -623,7 +639,8 @@ class DutyHeartbeatService {
     await BackgroundLocationPermissions.refreshPermissionStateFromOs();
     await _advanceBannerLocationPermissionStep(context);
 
-    if (await BackgroundLocationPermissions.hasSufficientBackgroundAccess()) {
+    if (await BackgroundLocationPermissions.hasSufficientBackgroundAccess() &&
+        await BackgroundLocationPermissions.hasPreciseLocationAccess()) {
       final result = await BackgroundLocationController.ensureStarted();
       if (result['ok'] == true) {
         await _syncPermissionReadyState();
@@ -636,7 +653,8 @@ class DutyHeartbeatService {
   Future<void> _advanceBannerLocationPermissionStep(
     BuildContext context,
   ) async {
-    if (await BackgroundLocationPermissions.hasSufficientBackgroundAccess()) {
+    if (await BackgroundLocationPermissions.hasSufficientBackgroundAccess() &&
+        await BackgroundLocationPermissions.hasPreciseLocationAccess()) {
       return;
     }
 
@@ -656,6 +674,7 @@ class DutyHeartbeatService {
       case 'location_services_disabled':
       case 'location_always':
       case 'location_background':
+      case 'location_precise':
         await showSettingsDialog();
         return;
       case 'location_foreground':
@@ -666,7 +685,8 @@ class DutyHeartbeatService {
         }
         await PermissionSettingsHelper.requestForegroundLocationStep();
         await BackgroundLocationPermissions.refreshPermissionStateFromOs();
-        if (await BackgroundLocationPermissions.hasSufficientBackgroundAccess()) {
+        if (await BackgroundLocationPermissions.hasSufficientBackgroundAccess() &&
+            await BackgroundLocationPermissions.hasPreciseLocationAccess()) {
           return;
         }
         deniedReason =
@@ -685,7 +705,9 @@ class DutyHeartbeatService {
             !await PermissionSettingsHelper.foregroundRequiresSettingsPrompt()) {
           await PermissionSettingsHelper.requestForegroundLocationStep();
           await BackgroundLocationPermissions.refreshPermissionStateFromOs();
-          if (await BackgroundLocationPermissions.hasSufficientBackgroundAccess()) {
+          if (await BackgroundLocationPermissions
+                  .hasSufficientBackgroundAccess() &&
+              await BackgroundLocationPermissions.hasPreciseLocationAccess()) {
             return;
           }
         }
@@ -1062,7 +1084,8 @@ class DutyHeartbeatService {
       return false;
     }
 
-    if (await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled()) {
+    if (await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled() &&
+        await BackgroundLocationPermissions.hasPreciseLocationAccess()) {
       await _syncPermissionReadyState();
       await refreshBackgroundLocationPermissionBannerState();
       return false;
@@ -1099,7 +1122,8 @@ class DutyHeartbeatService {
 
       await _reconcileBgLocationReadyFlag();
       await _handleIosPermissionChangeIfNeeded();
-      if (await BackgroundLocationPermissions.hasSufficientBackgroundAccess()) {
+      if (await BackgroundLocationPermissions.hasSufficientBackgroundAccess() &&
+          await BackgroundLocationPermissions.hasPreciseLocationAccess()) {
         await _syncPermissionReadyState();
         if (await _isLocationTrackingRunning()) {
           await _restartTrackingWithCurrentPermission();
@@ -1134,7 +1158,8 @@ class DutyHeartbeatService {
       return false;
     }
 
-    if (await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled()) {
+    if (await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled() &&
+        await BackgroundLocationPermissions.hasPreciseLocationAccess()) {
       await _syncPermissionReadyState();
       await refreshBackgroundLocationPermissionBannerState();
       return false;

@@ -29,6 +29,7 @@ import UserNotifications
     let didLaunch = super.application(application, didFinishLaunchingWithOptions: launchOptions)
     registerPlatformChannelsIfNeeded()
     observeLowPowerModeChanges()
+    observeBackgroundAppRefreshChanges()
     restoreSlcMonitoringIfNeeded(launchOptions: launchOptions)
     application.registerForRemoteNotifications()
 
@@ -96,11 +97,33 @@ import UserNotifications
         self?.openAppSettings(result: result)
       case "lowPowerModeStatus":
         result(self?.lowPowerModeStatus() ?? "unknown")
+      case "backgroundAppRefreshStatus":
+        result(self?.backgroundAppRefreshStatus() ?? "unknown")
+      case "hasPreciseLocationPermission":
+        result(self?.hasPreciseLocationPermission() ?? false)
       default:
         result(FlutterMethodNotImplemented)
       }
     }
     settingsChannelRegistered = true
+  }
+
+  /// Mirrors Android ACCESS_FINE check: iOS 14+ Precise Location from Settings.
+  private func hasPreciseLocationPermission() -> Bool {
+    if #available(iOS 14.0, *) {
+      // Always use a fresh manager so Settings changes are not stale vs SLC.
+      let manager = CLLocationManager()
+      switch manager.authorizationStatus {
+      case .authorizedAlways, .authorizedWhenInUse:
+        return manager.accuracyAuthorization == .fullAccuracy
+      case .denied, .restricted, .notDetermined:
+        return false
+      @unknown default:
+        return false
+      }
+    }
+    // Pre-iOS 14 has no Precise Location toggle.
+    return true
   }
 
   private func observeLowPowerModeChanges() {
@@ -129,6 +152,44 @@ import UserNotifications
 
   private func lowPowerModeStatus() -> String {
     return ProcessInfo.processInfo.isLowPowerModeEnabled ? "enabled" : "disabled"
+  }
+
+  private func observeBackgroundAppRefreshChanges() {
+    NotificationCenter.default.removeObserver(
+      self,
+      name: UIApplication.backgroundRefreshStatusDidChangeNotification,
+      object: nil
+    )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(backgroundAppRefreshDidChange),
+      name: UIApplication.backgroundRefreshStatusDidChangeNotification,
+      object: nil
+    )
+  }
+
+  @objc private func backgroundAppRefreshDidChange() {
+    let status = backgroundAppRefreshStatus()
+    DispatchQueue.main.async { [weak self] in
+      self?.settingsMethodChannel?.invokeMethod(
+        "backgroundAppRefreshChanged",
+        arguments: ["backgroundAppRefresh": status]
+      )
+    }
+  }
+
+  /// Settings → General → Background App Refresh (and Low Power Mode effects).
+  private func backgroundAppRefreshStatus() -> String {
+    switch UIApplication.shared.backgroundRefreshStatus {
+    case .available:
+      return "enabled"
+    case .denied:
+      return "disabled"
+    case .restricted:
+      return "restricted"
+    @unknown default:
+      return "unknown"
+    }
   }
 
   private func registerSlcChannelIfNeeded(with messenger: FlutterBinaryMessenger) {

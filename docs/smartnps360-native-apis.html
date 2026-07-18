@@ -680,6 +680,7 @@ Accept: application/json</pre>
         <tr><td>preciseLocation</td><td>granted, denied, unknown</td><td>Precise location permission</td></tr>
         <tr><td>notifications</td><td>granted, denied, unknown</td><td>Notification permission</td></tr>
         <tr><td>batteryOptimization</td><td>granted, unknown</td><td>Android battery optimization exemption (<code>granted</code> = exempt; <code>unknown</code> = default optimized state or iOS)</td></tr>
+        <tr><td>backgroundAppRefresh</td><td>enabled, disabled, restricted, unknown</td><td>iOS Background App Refresh (<code>UIBackgroundRefreshStatus</code>). Android closest equivalent: app background restriction (<code>enabled</code> = not restricted; <code>disabled</code> = restricted; <code>restricted</code> is iOS-only)</td></tr>
         <tr><td>push</td><td>enabled, disabled</td><td>In-app push toggle state (when uploaded)</td></tr>
       </tbody>
     </table>
@@ -698,6 +699,7 @@ Accept: application/json</pre>
     "preciseLocation": "granted",
     "notifications": "granted",
     "batteryOptimization": "unknown",
+    "backgroundAppRefresh": "enabled",
     "push": "enabled"
   },
   "checkedAt": "2026-07-14T12:00:00.000Z",

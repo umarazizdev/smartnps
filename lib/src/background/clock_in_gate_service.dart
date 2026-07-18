@@ -94,14 +94,19 @@ class ClockInGateService {
 
     final backgroundReady =
         await BackgroundLocationPermissions.isClockInBackgroundReady();
-    if (backgroundReady) {
-      await LocationDisclosureConsent.reconcileFromOsIfBackgroundReady();
-      _disclosureAccepted = true;
-      return await MockLocationGuard.ensureClearForClockIn();
+    if (!backgroundReady) {
+      if (!await LocationDisclosureConsent.hasAccepted()) return false;
+      return false;
     }
 
-    if (!await LocationDisclosureConsent.hasAccepted()) return false;
-    return false;
+    await LocationDisclosureConsent.reconcileFromOsIfBackgroundReady();
+    _disclosureAccepted = true;
+
+    if (!await BackgroundLocationPermissions.hasPreciseLocationAccess()) {
+      return false;
+    }
+
+    return await MockLocationGuard.ensureClearForClockIn();
   }
 
   Future<void> _hydrateFromStorage() async {
@@ -173,6 +178,13 @@ class ClockInGateService {
         return _runLocationSettingsPromptFlow(deniedReason: deniedReason);
       }
 
+      if (!await BackgroundLocationPermissions.hasPreciseLocationAccess()) {
+        debugPrint(
+          '[ClockInGateService] prepareClockIn blocked: location_precise',
+        );
+        return _runLocationSettingsPromptFlow(deniedReason: 'location_precise');
+      }
+
       if (!await MockLocationGuard.ensureClearForClockIn()) {
         debugPrint(
           '[ClockInGateService] prepareClockIn blocked: mock_location '
@@ -207,10 +219,13 @@ class ClockInGateService {
     if (action != ClockInBlockedAction.openSettings) {
       _pendingFailureAfterSettings = null;
       // First-time Cancel on Open Settings = user denied background location.
-      unawaited(
-        NativePermissionStatusService.instance
-            .markBackgroundLocationDeniedByUser(),
-      );
+      // Do not treat Precise Location cancel as a background denial.
+      if (blockReason != 'location_precise') {
+        unawaited(
+          NativePermissionStatusService.instance
+              .markBackgroundLocationDeniedByUser(),
+        );
+      }
       return _cancelledBlocked(reason: blockReason);
     }
 
@@ -280,6 +295,10 @@ class ClockInGateService {
           }
         }
 
+        if (!await BackgroundLocationPermissions.hasPreciseLocationAccess()) {
+          return _showPreciseLocationFailureAfterSettings();
+        }
+
         if (!await MockLocationGuard.ensureClearForClockIn()) {
           return _blocked(
             reason: 'mock_location',
@@ -303,6 +322,9 @@ class ClockInGateService {
         if (await BackgroundLocationPermissions.isClockInBackgroundReady()) {
           await LocationDisclosureConsent.reconcileFromOsIfBackgroundReady();
           PermissionSettingsHelper.endAwaitingSettingsReturn();
+          if (!await BackgroundLocationPermissions.hasPreciseLocationAccess()) {
+            return _showPreciseLocationFailureAfterSettings();
+          }
           if (await MockLocationGuard.ensureClearForClockIn()) {
             _geoUnlockedForClockIn = true;
             debugPrint(
@@ -319,10 +341,13 @@ class ClockInGateService {
       }
 
       // Returned from Settings without Always / Allow all the time.
-      unawaited(
-        NativePermissionStatusService.instance
-            .markBackgroundLocationDeniedByUser(),
-      );
+      // Precise-only blocks are not background denials.
+      if (blockReason != 'location_precise') {
+        unawaited(
+          NativePermissionStatusService.instance
+              .markBackgroundLocationDeniedByUser(),
+        );
+      }
 
       final failureAction = await ClockInBlockedDialog.showFailure(
         reason: blockReason,
@@ -342,6 +367,21 @@ class ClockInGateService {
       }
       _pendingFailureAfterSettings = null;
     }
+  }
+
+  /// After Settings return: background is OK but Precise Location is still off.
+  Future<Map<String, dynamic>> _showPreciseLocationFailureAfterSettings() async {
+    const preciseReason = 'location_precise';
+    final failureAction = await ClockInBlockedDialog.showFailure(
+      reason: preciseReason,
+      title: ClockInBlockedDialog.failureTitle,
+      message: ClockInBlockedDialog.failureMessageFor(preciseReason),
+      bypassCooldown: true,
+    );
+    if (failureAction == ClockInBlockedAction.openSettings) {
+      return _openSettingsRecheckOrShowFailure(blockReason: preciseReason);
+    }
+    return _cancelledBlocked(reason: preciseReason);
   }
 
   /// Retries OS background readiness after Settings (Android OEM grant lag).

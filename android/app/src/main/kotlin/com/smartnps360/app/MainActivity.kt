@@ -1,6 +1,7 @@
 package com.smartnps360.app
 
 import android.Manifest
+import android.app.ActivityManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.BroadcastReceiver
@@ -105,6 +106,9 @@ class MainActivity : FlutterActivity() {
         }
         "lowPowerModeStatus" -> {
           result.success(lowPowerModeStatus())
+        }
+        "backgroundAppRefreshStatus" -> {
+          result.success(backgroundAppRefreshStatus())
         }
         else -> result.notImplemented()
       }
@@ -252,6 +256,30 @@ class MainActivity : FlutterActivity() {
       "lowPowerModeChanged",
       mapOf("low_power_mode" to lowPowerModeStatus())
     )
+  }
+
+  /**
+   * Closest Android parallel to iOS Background App Refresh:
+   * [ActivityManager.isBackgroundRestricted] (API 28+) — user put the app under
+   * restricted battery / background usage so background work is blocked.
+   */
+  private fun backgroundAppRefreshStatus(): String {
+    return try {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        val activityManager =
+          getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        if (activityManager.isBackgroundRestricted) {
+          "disabled"
+        } else {
+          "enabled"
+        }
+      } else {
+        // No per-app background-restriction API below P.
+        "enabled"
+      }
+    } catch (_: Exception) {
+      "unknown"
+    }
   }
 
   private fun openAppSettings() {
