@@ -12,7 +12,7 @@ class GlassActionDialog extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.message,
-    required this.secondaryLabel,
+    this.secondaryLabel,
     required this.primaryLabel,
     this.iconColor = const Color(0xFF2563EB),
     this.variant = GlassActionDialogVariant.normal,
@@ -26,7 +26,7 @@ class GlassActionDialog extends StatelessWidget {
   final IconData icon;
   final String title;
   final String message;
-  final String secondaryLabel;
+  final String? secondaryLabel;
   final String primaryLabel;
   final Color iconColor;
   final GlassActionDialogVariant variant;
@@ -38,7 +38,7 @@ class GlassActionDialog extends StatelessWidget {
     required IconData icon,
     required String title,
     required String message,
-    required String secondaryLabel,
+    String? secondaryLabel,
     required String primaryLabel,
     Color iconColor = const Color(0xFF2563EB),
     GlassActionDialogVariant variant = GlassActionDialogVariant.normal,
@@ -176,21 +176,6 @@ class GlassActionDialog extends StatelessWidget {
                   const SizedBox(height: 22),
                   LayoutBuilder(
                     builder: (context, constraints) {
-                      final stackVertically = _shouldStackActionsVertically(
-                        secondaryLabel: secondaryLabel,
-                        primaryLabel: primaryLabel,
-                        maxWidth: constraints.maxWidth,
-                      );
-
-                      final secondaryButton = _ActionButton(
-                        label: secondaryLabel,
-                        onPressed: () => Navigator.of(context).pop(false),
-                        filled: false,
-                        foregroundColor: secondaryFg,
-                        borderColor: secondaryBorder,
-                        backgroundColor: Colors.transparent,
-                      );
-
                       final primaryButton = _ActionButton(
                         label: primaryLabel,
                         onPressed: () => Navigator.of(context).pop(true),
@@ -198,6 +183,26 @@ class GlassActionDialog extends StatelessWidget {
                         foregroundColor: primaryButtonFg,
                         borderColor: primaryButtonBg,
                         backgroundColor: primaryButtonBg,
+                      );
+
+                      final secondary = secondaryLabel;
+                      if (secondary == null) {
+                        return primaryButton;
+                      }
+
+                      final stackVertically = _shouldStackActionsVertically(
+                        secondaryLabel: secondary,
+                        primaryLabel: primaryLabel,
+                        maxWidth: constraints.maxWidth,
+                      );
+
+                      final secondaryButton = _ActionButton(
+                        label: secondary,
+                        onPressed: () => Navigator.of(context).pop(false),
+                        filled: false,
+                        foregroundColor: secondaryFg,
+                        borderColor: secondaryBorder,
+                        backgroundColor: Colors.transparent,
                       );
 
                       if (stackVertically) {

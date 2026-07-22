@@ -22,8 +22,45 @@ class ClockInBlockedDialog {
   static const String cancelClockInLabel = 'Cancel';
 
   static const String failureTitle = 'Unable to verify attendance';
+  static const String gpsAccuracyLowReason = 'gps_accuracy_low';
+  static const String gpsAccuracyFailureTitle = 'Weak GPS signal';
+  static const String gpsAccuracyFailureMessage =
+      'Make sure you turn on Wi-Fi and Bluetooth to improve accuracy, '
+      'then try again later.';
   static const String cancelReason = 'clock_in_cancelled';
   static const String cancelMessage = 'Shift attendance was not completed.';
+
+  /// Clock-in only: shown when GPS is refused due to low accuracy (no JS payload).
+  static Future<void> showGpsAccuracyFailureForClockIn() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+    if (_dialogVisible) return;
+    if (PermissionSettingsHelper.settingsPromptVisible.value) return;
+    if (_isInCooldown(gpsAccuracyLowReason)) return;
+
+    final context = AppNavigator.key.currentContext;
+    if (context == null || !context.mounted) return;
+
+    await OverlayPromptGuard.waitUntilReady();
+
+    final readyContext = AppNavigator.key.currentContext;
+    if (readyContext == null || !readyContext.mounted) return;
+
+    _dialogVisible = true;
+    _lastShownAtByReason[gpsAccuracyLowReason] = DateTime.now();
+
+    try {
+      await GlassActionDialog.show(
+        context: readyContext,
+        icon: Icons.gps_not_fixed_rounded,
+        title: gpsAccuracyFailureTitle,
+        message: gpsAccuracyFailureMessage,
+        primaryLabel: 'OK',
+        variant: GlassActionDialogVariant.error,
+      );
+    } finally {
+      _dialogVisible = false;
+    }
+  }
 
   /// First step: education prompt before opening Settings.
   static Future<ClockInBlockedAction?> showLocationSettingsPrompt(

@@ -13,6 +13,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../background/background_location_permissions.dart';
 import '../background/clock_in_gate_service.dart';
+import '../widgets/clock_in_blocked_dialog.dart';
 import '../background/location_disclosure_consent.dart';
 import '../background/duty_heartbeat_service.dart';
 import '../location/mock_location_detection.dart';
@@ -168,6 +169,8 @@ class JsBridge {
     final requestStopwatch = Stopwatch()..start();
     Duration requestTimeout = const Duration(milliseconds: 12000);
     Position? bestSeen;
+    var forClockIn = false;
+    var requiresBackgroundForClockIn = false;
 
     try {
       final Map? argsMap = args is Map ? args : null;
@@ -181,7 +184,7 @@ class JsBridge {
           options != null && options['required_accuracy_meters'] is num
           ? (options['required_accuracy_meters'] as num).toDouble()
           : null;
-      final bool forClockIn =
+      forClockIn =
           options != null &&
           (options['for_clock_in'] == true ||
               options['purpose'] == 'clockIn' ||
@@ -234,8 +237,8 @@ class JsBridge {
           if (!await BackgroundLocationPermissions.isClockInBackgroundReady() ||
               !await BackgroundLocationPermissions.hasPreciseLocationAccess()) {
             ClockInGateService.instance.clearGeoUnlock();
-            final deniedReason = await BackgroundLocationPermissions
-                .settingsDeniedReasonIfAny();
+            final deniedReason =
+                await BackgroundLocationPermissions.settingsDeniedReasonIfAny();
             return _err(
               deniedReason ?? 'background_location_required',
               BackgroundLocationPermissions.clockInMessageFor(deniedReason),
@@ -244,7 +247,7 @@ class JsBridge {
         }
       }
 
-      final requiresBackgroundForClockIn =
+      requiresBackgroundForClockIn =
           forClockIn || ClockInGateService.instance.isGeoUnlockedForClockIn;
 
       if (allowForegroundOnly) {
@@ -418,6 +421,14 @@ class JsBridge {
       });
     } on TimeoutException {
       requestStopwatch.stop();
+      final refusedDueToLowAccuracy =
+          bestSeen == null || bestSeen!.accuracy > maxAllowedAccuracyMeters;
+      if ((Platform.isAndroid || Platform.isIOS) &&
+          (forClockIn || requiresBackgroundForClockIn) &&
+          refusedDueToLowAccuracy) {
+        ClockInGateService.instance.clearGeoUnlock();
+        await ClockInBlockedDialog.showGpsAccuracyFailureForClockIn();
+      }
       return {
         ..._err(
           'fresh_location_unavailable',
