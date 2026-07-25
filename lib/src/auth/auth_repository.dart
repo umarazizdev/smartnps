@@ -393,10 +393,11 @@ class AuthRepository {
     return body;
   }
 
-  /// Preloads tokens while the device is unlocked (e.g. app launch).
+  /// Preloads tokens + login flag while the device is unlocked (e.g. app launch).
   Future<void> warmAccessTokenCache() async {
     await getAccessToken();
     await getRefreshToken();
+    await isOfficerLoggedIn();
   }
 
   /// Returns a usable access token, refreshing silently when missing/expired.

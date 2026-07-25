@@ -155,10 +155,13 @@ class _WebViewShellState extends State<WebViewShell>
     }
   }
 
-  /// Clears native logged-in state for upload/monitoring while the web login
-  /// screen is active. Does not erase stored tokens until explicit logout.
+  /// Pauses native UI/monitoring while a web login screen is visible.
+  ///
+  /// Does **not** clear [AuthRepository] login flag or tokens — after an app
+  /// update the WebView often loads `/` / [AppConfig.initialUrl] (treated as
+  /// login), and persisting `false` was wiping `isOfficerLoggedIn` across upgrades.
+  /// Storage is only cleared on explicit logout via [AuthSessionManager].
   Future<void> _pauseNativeSessionForLoginScreen() async {
-    await AuthRepository.instance.setOfficerLoggedIn(false);
     _ui.setOfficerLoggedIn(false);
     _setNativeAuthSession(false);
     NativePermissionStatusService.instance.stopBatteryMonitoring();
@@ -233,7 +236,12 @@ class _WebViewShellState extends State<WebViewShell>
 
     final loggedIn = await AuthRepository.instance.isOfficerLoggedIn();
     final token = await AuthRepository.instance.getAccessToken();
-    final activeSession = loggedIn && token != null && token.isNotEmpty;
+    final hasToken = token != null && token.isNotEmpty;
+    // Token is source of truth; heal flag if an older build wiped it on `/`.
+    if (hasToken && !loggedIn) {
+      await AuthRepository.instance.setOfficerLoggedIn(true);
+    }
+    final activeSession = hasToken;
 
     _ui.setOfficerLoggedIn(activeSession);
     _setNativeAuthSession(activeSession);
@@ -4092,7 +4100,7 @@ class _BottomBar extends StatelessWidget {
     return PlatformBottomBar(
       tabs: tabs,
       currentIndex: selectedTabIndex,
-      tint: const Color(AppConfig.cPrimary),
+      tint: const Color(AppConfig.cBottomBarActive),
       surface: const Color(AppConfig.cSurface),
       darkSurface: const Color(AppConfig.cDarkCardColor),
       isDark: isDark,

@@ -72,6 +72,15 @@ class RequiredPermissionsGate {
   final ValueNotifier<bool> isBlocking = ValueNotifier(false);
   final ValueNotifier<bool> isRefreshing = ValueNotifier(false);
 
+  /// True while the full-screen permission blocker owns the UI.
+  /// Competing disclosure / Settings / clock-in dialogs must not appear on top.
+  /// Mock-location dialogs are intentionally not gated by this.
+  bool get suppressesCompetingDialogs =>
+      isBlocking.value || isRefreshing.value;
+
+  static bool get shouldSuppressCompetingDialogs =>
+      instance.suppressesCompetingDialogs;
+
   bool _active = false;
   bool _refreshInFlight = false;
   bool _refreshAgain = false;
