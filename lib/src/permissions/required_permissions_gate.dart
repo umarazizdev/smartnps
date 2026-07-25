@@ -132,7 +132,7 @@ class RequiredPermissionsGate {
       do {
         _refreshAgain = false;
         await BackgroundLocationPermissions.refreshPermissionStateFromOs();
-        final next = await _buildItems();
+        final next = _sortMissingFirst(await _buildItems());
         final fingerprint = _fingerprint(next);
         if (force || fingerprint != _lastFingerprint) {
           _lastFingerprint = fingerprint;
@@ -452,6 +452,23 @@ class RequiredPermissionsGate {
     } catch (_) {
       return false;
     }
+  }
+
+  /// Missing permissions first so the officer acts on them immediately;
+  /// enabled rows follow in their original order.
+  List<RequiredPermissionItem> _sortMissingFirst(
+    List<RequiredPermissionItem> items,
+  ) {
+    final missing = <RequiredPermissionItem>[];
+    final enabled = <RequiredPermissionItem>[];
+    for (final item in items) {
+      if (item.needsAction) {
+        missing.add(item);
+      } else {
+        enabled.add(item);
+      }
+    }
+    return [...missing, ...enabled];
   }
 
   String _fingerprint(List<RequiredPermissionItem> next) {
