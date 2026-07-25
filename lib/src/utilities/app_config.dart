@@ -59,6 +59,9 @@ class AppConfig {
   static const int cSurface = 0xFFFBFBFD;
   static const int cDarkCardColor = 0xFF1A2332;
 
+  /// Active bottom-tab tint from the officer UI (cyan).
+  static const int cBottomBarActive = 0xFF0F93D2;
+
   /// Token the web app can detect in `navigator.userAgent` for native shell traffic.
   static const String webViewAppSignature = 'SmartNPS360App';
 }

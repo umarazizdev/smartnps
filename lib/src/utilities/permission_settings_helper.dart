@@ -10,6 +10,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../app/app_navigator.dart';
 import '../background/background_location_permissions.dart';
 import '../permissions/native_permission_status_service.dart';
+import '../permissions/required_permissions_gate.dart';
 import '../utilities/app_lifecycle_resume_gate.dart';
 import '../utilities/overlay_prompt_guard.dart';
 import '../widgets/glass_action_dialog.dart';
@@ -392,6 +393,16 @@ class PermissionSettingsHelper {
     bool skipOverlayWait = false,
     BuildContext? context,
   }) async {
+    if (RequiredPermissionsGate.shouldSuppressCompetingDialogs) {
+      if (kDebugMode) {
+        debugPrint(
+          '[PermissionSettings] skip dialog key=$dialogKey '
+          '(required-permissions blocker active)',
+        );
+      }
+      return PermissionSettingsPromptResult.skipped;
+    }
+
     if (await _isLocationSettingsPromptRedundant(dialogKey)) {
       if (kDebugMode) {
         debugPrint(

@@ -625,10 +625,8 @@ class PushNotificationService {
 
   /// True while the full-screen "Permissions required" blocker is up (or about
   /// to be). That screen already owns notification CTAs.
-  bool get _isRequiredPermissionsBlockerActive {
-    final gate = RequiredPermissionsGate.instance;
-    return gate.isBlocking.value || gate.isRefreshing.value;
-  }
+  bool get _isRequiredPermissionsBlockerActive =>
+      RequiredPermissionsGate.shouldSuppressCompetingDialogs;
 
   Future<void> _refreshFcmToken({required bool uploadIfAuthenticated}) async {
     if (!pushNotificationsEnabled) return;
