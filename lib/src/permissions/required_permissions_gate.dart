@@ -224,12 +224,6 @@ class RequiredPermissionsGate {
             );
           });
         }
-      case 'batteryOptimization':
-        if (Platform.isAndroid) {
-          await OverlayPromptGuard.runDuringOsPermissionPrompt(
-            Permission.ignoreBatteryOptimizations.request,
-          );
-        }
       default:
         break;
     }
@@ -326,38 +320,6 @@ class RequiredPermissionsGate {
       ),
     ];
 
-    if (Platform.isAndroid) {
-      final batteryOk = await _batteryOptimizationGranted();
-      list.add(
-        RequiredPermissionItem(
-          id: 'batteryOptimization',
-          name: 'Battery unrestricted',
-          description: 'Stops the OS from pausing the app.',
-          enabled: batteryOk,
-          action: batteryOk
-              ? RequiredPermissionAction.none
-              : await _batteryAction(),
-          icon: Icons.battery_charging_full_rounded,
-        ),
-      );
-    }
-
-    final barOk = await _backgroundAppRefreshEnabled();
-    list.add(
-      RequiredPermissionItem(
-        id: 'backgroundAppRefresh',
-        name: Platform.isIOS ? 'Background App Refresh' : 'Background activity',
-        description: Platform.isIOS
-            ? 'Allows background updates.'
-            : 'Turn off battery restrictions for this app.',
-        enabled: barOk,
-        action: barOk
-            ? RequiredPermissionAction.none
-            : RequiredPermissionAction.openSettings,
-        icon: Icons.sync_rounded,
-      ),
-    );
-
     return list;
   }
 
@@ -408,47 +370,6 @@ class RequiredPermissionsGate {
       return RequiredPermissionAction.allow;
     }
     return RequiredPermissionAction.openSettings;
-  }
-
-  Future<RequiredPermissionAction> _batteryAction() async {
-    // Status is read via the native channel (not permission_handler.status) so
-    // the 450ms blocker poll does not spam "No permissions found in manifest".
-    // Allow still uses Permission.ignoreBatteryOptimizations.request() on tap.
-    if (await _batteryOptimizationGranted()) {
-      return RequiredPermissionAction.none;
-    }
-    return RequiredPermissionAction.allow;
-  }
-
-  Future<bool> _batteryOptimizationGranted() async {
-    if (!Platform.isAndroid) return true;
-    try {
-      final status = await _settingsChannel.invokeMethod<String>(
-        'batteryOptimizationStatus',
-      );
-      if (status == 'granted') return true;
-      if (status == 'unknown' || status == 'denied') return false;
-    } catch (_) {}
-    try {
-      final ignoring = await _settingsChannel.invokeMethod<bool>(
-        'isIgnoringBatteryOptimizations',
-      );
-      if (ignoring != null) return ignoring;
-    } catch (_) {}
-    // Unknown native result — do not block or hit permission_handler.status.
-    return true;
-  }
-
-  Future<bool> _backgroundAppRefreshEnabled() async {
-    try {
-      final status = await _settingsChannel.invokeMethod<String>(
-        'backgroundAppRefreshStatus',
-      );
-      if (status == 'enabled') return true;
-      if (status == 'disabled' || status == 'restricted') return false;
-    } catch (_) {}
-    // Unknown / older builds — do not block.
-    return true;
   }
 
   Future<bool> _isAndroidOneTimeLocation() async {
