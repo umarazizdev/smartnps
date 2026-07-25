@@ -17,6 +17,7 @@ import '../auth/auth_repository.dart';
 import '../auth/auth_state.dart';
 import '../permissions/native_permission_status_service.dart';
 import '../permissions/os_notification_permission.dart';
+import '../permissions/required_permissions_gate.dart';
 import 'officer_announcement_coordinator.dart';
 import 'officer_announcement_push.dart';
 import 'push_notification_preferences.dart';
@@ -185,8 +186,15 @@ class PushNotificationService {
   /// (e.g. while the login screen is visible).
   bool Function()? _deferPermissionPromptWhile;
 
+  /// Notifies listeners when the in-app push toggle changes (blocker UI).
+  VoidCallback? _onPushPreferenceChanged;
+
   void setDeferPermissionPromptWhile(bool Function()? checker) {
     _deferPermissionPromptWhile = checker;
+  }
+
+  void setOnPushPreferenceChanged(VoidCallback? callback) {
+    _onPushPreferenceChanged = callback;
   }
 
   bool get _shouldDeferPermissionPrompt =>
@@ -272,6 +280,8 @@ class PushNotificationService {
     } else {
       await enablePushNotifications();
     }
+
+    _onPushPreferenceChanged?.call();
 
     final status = await getNotificationStatus();
     await syncPushStateToPermissionApi();
@@ -559,7 +569,8 @@ class PushNotificationService {
     debugPrint('[SmartNPS360][Push] android notification permission=$status');
     if (!status.isGranted &&
         PermissionSettingsHelper.shouldOpenSettings(status) &&
-        !_notificationSettingsPromptShown) {
+        !_notificationSettingsPromptShown &&
+        !_isRequiredPermissionsBlockerActive) {
       _notificationSettingsPromptShown = true;
       await PermissionSettingsHelper.promptOpenSettings(
         title: 'Notifications disabled',
@@ -597,7 +608,9 @@ class PushNotificationService {
     final granted =
         settings.authorizationStatus == AuthorizationStatus.authorized ||
         settings.authorizationStatus == AuthorizationStatus.provisional;
-    if (!granted && !_notificationSettingsPromptShown) {
+    if (!granted &&
+        !_notificationSettingsPromptShown &&
+        !_isRequiredPermissionsBlockerActive) {
       _notificationSettingsPromptShown = true;
       await PermissionSettingsHelper.promptOpenSettings(
         title: 'Notifications disabled',
@@ -608,6 +621,13 @@ class PushNotificationService {
       );
     }
     return granted;
+  }
+
+  /// True while the full-screen "Permissions required" blocker is up (or about
+  /// to be). That screen already owns notification CTAs.
+  bool get _isRequiredPermissionsBlockerActive {
+    final gate = RequiredPermissionsGate.instance;
+    return gate.isBlocking.value || gate.isRefreshing.value;
   }
 
   Future<void> _refreshFcmToken({required bool uploadIfAuthenticated}) async {
