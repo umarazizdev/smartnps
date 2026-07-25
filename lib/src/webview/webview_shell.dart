@@ -40,6 +40,7 @@ import '../app/native_theme_controller.dart';
 import '../push/officer_announcement_coordinator.dart';
 import '../push/push_notification_service.dart';
 import '../permissions/native_permission_status_service.dart';
+import '../motion/motion_activity_screen.dart';
 
 class WebViewShell extends StatefulWidget {
   const WebViewShell({super.key});
@@ -62,6 +63,7 @@ class _WebViewShellUiController extends GetxController {
   final pullToRefreshActive = false.obs;
   final selectedBottomTabIndex = 0.obs;
   final bottomTabNavigationActive = false.obs;
+  final showingMotionActivity = false.obs;
 
   /// Keeps the native bottom bar visible across in-web redirects whose
   /// intermediate URLs are not exact tab landing paths.
@@ -102,6 +104,9 @@ class _WebViewShellUiController extends GetxController {
   void setOfficerLoggedIn(bool value) {
     if (officerLoggedIn.value == value) return;
     officerLoggedIn.value = value;
+    if (!value) {
+      showingMotionActivity.value = false;
+    }
   }
 }
 
@@ -276,6 +281,7 @@ class _WebViewShellState extends State<WebViewShell>
 
   void _recheckBottomBarForUri(Uri? uri) {
     if (_ui.bottomTabNavigationActive.value) return;
+    if (_ui.showingMotionActivity.value) return;
     final tabIndex = _bottomTabIndexFromUri(uri);
     if (tabIndex != null && _ui.selectedBottomTabIndex.value != tabIndex) {
       _ui.selectedBottomTabIndex.value = tabIndex;
@@ -345,6 +351,7 @@ class _WebViewShellState extends State<WebViewShell>
     final tabIndex = _bottomTabIndexFromUri(uri);
     if (tabIndex == null) return;
     if (_isAuthRoute(_ui.currentUri.value)) return;
+    if (_ui.showingMotionActivity.value) return;
     _ui.preserveBottomBarDuringLoad.value = true;
     if (_ui.bottomTabNavigationActive.value) return;
     if (_ui.selectedBottomTabIndex.value != tabIndex) {
@@ -3798,13 +3805,24 @@ class _WebViewShellState extends State<WebViewShell>
                               );
                             }),
                             Obx(() {
+                              if (!_ui.showingMotionActivity.value) {
+                                return const SizedBox.shrink();
+                              }
+                              return Positioned.fill(
+                                child: MotionActivityScreen(
+                                  isDark: _ui.webPrefersDark.value,
+                                ),
+                              );
+                            }),
+                            Obx(() {
                               final showBottomBar =
                                   !_ui.showOffline.value &&
                                   _ui.firstPageLoaded.value &&
                                   _ui.officerLoggedIn.value &&
                                   !_ui.isKeyboardOpen &&
                                   !_isAuthRoute(_ui.currentUri.value) &&
-                                  (_isBottomBarRoute(_ui.currentUri.value) ||
+                                  (_ui.showingMotionActivity.value ||
+                                      _isBottomBarRoute(_ui.currentUri.value) ||
                                       _ui.preserveBottomBarDuringLoad.value);
                               if (!showBottomBar) {
                                 return const SizedBox.shrink();
@@ -3891,11 +3909,21 @@ class _WebViewShellState extends State<WebViewShell>
     if (controller == null) return;
 
     if (_ui.selectedBottomTabIndex.value == item.index &&
-        !_ui.isNavigating.value) {
+        !_ui.isNavigating.value &&
+        (item.isNativeScreen == _ui.showingMotionActivity.value)) {
       return;
     }
 
     _ui.selectedBottomTabIndex.value = item.index;
+
+    if (item.isNativeScreen) {
+      _ui.showingMotionActivity.value = true;
+      _ui.bottomTabNavigationActive.value = false;
+      _ui.preserveBottomBarDuringLoad.value = true;
+      return;
+    }
+
+    _ui.showingMotionActivity.value = false;
     _ui.bottomTabNavigationActive.value = true;
     _pendingBottomTabLoadStarted = false;
     final nextUri = Uri.tryParse(item.url);
@@ -3988,6 +4016,13 @@ enum _BottomItem {
     'assets/schedule.png',
     'https://smartnps360.com/officer/timesheet/monthly',
   ),
+  motion(
+    'Motion',
+    '',
+    '',
+    '',
+    isNativeScreen: true,
+  ),
   profile(
     'Profile',
     'assets/avatar.png',
@@ -3999,12 +4034,14 @@ enum _BottomItem {
     this.label,
     this.iconAsset,
     this.iconAssetSelected,
-    this.url,
-  );
+    this.url, {
+    this.isNativeScreen = false,
+  });
   final String label;
   final String iconAsset;
   final String iconAssetSelected;
   final String url;
+  final bool isNativeScreen;
 
   /// Normalized path for exact bottom-bar route matching (no prefix/subpath match).
   String get normalizedPath {
@@ -4028,6 +4065,7 @@ enum _BottomItem {
     final path = normalizePath(uri);
     if (path == null) return null;
     for (final item in values) {
+      if (item.isNativeScreen) continue;
       if (item.normalizedPath == path) return item.index;
     }
     return null;
@@ -4055,10 +4093,16 @@ class _BottomBar extends StatelessWidget {
           iosSymbolName: switch (item) {
             _BottomItem.dashboard => 'house.fill',
             _BottomItem.timesheet => 'calendar',
+            _BottomItem.motion => 'figure.walk',
             _BottomItem.profile => 'person.crop.circle.fill',
           },
-          activeAssetIcon: item.iconAssetSelected,
-          inactiveAssetIcon: item.iconAsset,
+          activeAssetIcon: item.iconAssetSelected.isEmpty
+              ? null
+              : item.iconAssetSelected,
+          inactiveAssetIcon: item.iconAsset.isEmpty ? null : item.iconAsset,
+          materialIcon: item == _BottomItem.motion
+              ? Icons.directions_walk
+              : null,
         ),
     ];
 

@@ -14,9 +14,11 @@ import UserNotifications
   private let slcPendingLocationsKey = "smartnps360.ios_slc.pending_locations"
   private var settingsChannelRegistered = false
   private var slcChannelRegistered = false
+  private var motionChannelRegistered = false
   private var settingsMethodChannel: FlutterMethodChannel?
   private var slcLocationManager: CLLocationManager?
   private var slcEventSink: FlutterEventSink?
+  private var motionActivityManager: MotionActivityManager?
 
   override func application(
     _ application: UIApplication,
@@ -52,16 +54,25 @@ import UserNotifications
   func registerPlatformChannels(with messenger: FlutterBinaryMessenger) {
     registerSettingsChannelIfNeeded(with: messenger)
     registerSlcChannelIfNeeded(with: messenger)
+    registerMotionActivityChannelIfNeeded(with: messenger)
   }
 
   /// Fallback for engines created before implicit-engine callback wiring.
   func registerPlatformChannelsIfNeeded() {
-    if slcChannelRegistered && settingsChannelRegistered {
+    if slcChannelRegistered && settingsChannelRegistered && motionChannelRegistered {
       return
     }
     if let messenger = flutterViewController()?.binaryMessenger {
       registerPlatformChannels(with: messenger)
     }
+  }
+
+  private func registerMotionActivityChannelIfNeeded(with messenger: FlutterBinaryMessenger) {
+    guard !motionChannelRegistered else { return }
+    let manager = motionActivityManager ?? MotionActivityManager()
+    manager.register(with: messenger)
+    motionActivityManager = manager
+    motionChannelRegistered = true
   }
 
   private func flutterViewController() -> FlutterViewController? {

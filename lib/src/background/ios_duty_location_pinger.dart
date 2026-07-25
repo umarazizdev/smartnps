@@ -9,6 +9,7 @@ import '../location/location_keep_point_gate.dart';
 import '../location/mock_location_detection.dart';
 import '../location/mock_location_guard.dart';
 import '../location/speed_adaptive_gps_policy.dart';
+import '../motion/motion_activity_fusion_controller.dart';
 import 'background_location_accuracy.dart';
 import 'background_location_uploader.dart';
 import 'ios_background_location_notification.dart';
@@ -68,6 +69,8 @@ class IosDutyLocationPinger {
       }
       rethrow;
     }
+
+    unawaited(MotionActivityFusionController.instance.acquire());
 
     unawaited(
       IosBackgroundLocationNotification.show().catchError((Object e) {
@@ -306,6 +309,10 @@ class IosDutyLocationPinger {
     }
     if (_stopping) return;
 
+    final motionFusion =
+        await MotionActivityFusionController.instance.evaluatePosition(pos);
+    if (_stopping) return;
+
     final mockFlags = MockLocationDetection.flagsFor(pos);
     if (mockFlags.isDetected) {
       MockLocationGuard.maybeShowDialog(
@@ -319,6 +326,10 @@ class IosDutyLocationPinger {
         '[IosDutyLocationPinger] location '
         'acc=${pos.accuracy} '
         'speedBand=${policyDecision.band.label} '
+        'motion=${motionFusion.apiMotionActivity} '
+        'fused=${motionFusion.fusedState} '
+        'session=${motionFusion.active} '
+        'reason=${motionFusion.reason} '
         'uploadEvery=${keepDecision.uploadInterval?.inSeconds}s '
         'trigger=${keepDecision.trigger?.name} '
         'dist=${keepDecision.distanceMeters?.toStringAsFixed(1)}m '
@@ -332,9 +343,17 @@ class IosDutyLocationPinger {
 
     try {
       if (_stopping) return;
-      await uploader.pingNow(pos, policyDecision: policyDecision);
+      await uploader.pingNow(
+        pos,
+        policyDecision: policyDecision,
+        motionFusion: motionFusion,
+      );
       if (_stopping) return;
-      await uploader.add(pos, policyDecision: policyDecision);
+      await uploader.add(
+        pos,
+        policyDecision: policyDecision,
+        motionFusion: motionFusion,
+      );
       _lastUploadAt = DateTime.now();
       await _flushBatchIfDue(uploader);
     } catch (e) {
@@ -395,6 +414,7 @@ class IosDutyLocationPinger {
     _startedAt = null;
     _lastForcedBatchFlushAttemptAt = null;
     _keepPointGate.reset();
+    await MotionActivityFusionController.instance.release();
 
     try {
       await IosBackgroundLocationNotification.dismiss();
@@ -429,6 +449,7 @@ class IosDutyLocationPinger {
     _startedAt = null;
     _lastForcedBatchFlushAttemptAt = null;
     _keepPointGate.reset();
+    await MotionActivityFusionController.instance.release();
 
     try {
       await IosBackgroundLocationNotification.dismiss();

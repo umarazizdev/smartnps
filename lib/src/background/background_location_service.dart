@@ -9,6 +9,7 @@ import '../location/location_keep_point_gate.dart';
 import '../location/mock_location_detection.dart';
 import '../location/speed_adaptive_gps_policy.dart';
 import '../auth/auth_repository.dart';
+import '../motion/motion_activity_fusion_controller.dart';
 import 'background_location_accuracy.dart';
 import 'background_location_uploader.dart';
 
@@ -63,6 +64,7 @@ class BackgroundLocationService {
     var stopping = false;
     final policyTracker = SpeedAdaptiveGpsPolicyTracker();
     final keepPointGate = LocationKeepPointGate();
+    unawaited(MotionActivityFusionController.instance.acquire());
 
     Future<void> stop() async {
       if (stopping) return;
@@ -75,6 +77,7 @@ class BackgroundLocationService {
       sub = null;
       // Stop collecting immediately; do not block stopSelf on open-network batch flush.
       await uploader.stopCollectingOnly();
+      await MotionActivityFusionController.instance.release();
       service.stopSelf();
       unawaited(
         uploader.flushAllPendingBatchesBounded(
@@ -134,6 +137,10 @@ class BackgroundLocationService {
         }
         if (stopping) return;
 
+        final motionFusion =
+            await MotionActivityFusionController.instance.evaluatePosition(pos);
+        if (stopping) return;
+
         final mockFlags = MockLocationDetection.flagsFor(pos);
         if (mockFlags.isDetected) {
           service.invoke('mock_location', {
@@ -149,6 +156,9 @@ class BackgroundLocationService {
             '[BackgroundLocationService] location '
             'acc=${pos.accuracy} '
             'speedBand=${policyDecision.band.label} '
+            'motion=${motionFusion.apiMotionActivity} '
+            'fused=${motionFusion.fusedState} '
+            'session=${motionFusion.active} '
             'uploadEvery=${keepDecision.uploadInterval?.inSeconds}s '
             'trigger=${keepDecision.trigger?.name} '
             'dist=${keepDecision.distanceMeters?.toStringAsFixed(1)}m '
@@ -158,9 +168,17 @@ class BackgroundLocationService {
         }
         try {
           if (stopping) return;
-          await uploader.pingNow(pos, policyDecision: policyDecision);
+          await uploader.pingNow(
+            pos,
+            policyDecision: policyDecision,
+            motionFusion: motionFusion,
+          );
           if (stopping) return;
-          await uploader.add(pos, policyDecision: policyDecision);
+          await uploader.add(
+            pos,
+            policyDecision: policyDecision,
+            motionFusion: motionFusion,
+          );
         } catch (e) {
           if (kDebugMode) {
             // ignore: avoid_print

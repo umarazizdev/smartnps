@@ -48,8 +48,9 @@ class SpeedAdaptiveGpsPolicyBand {
       minKmh: 8,
       maxKmh: 30,
       label: '8-30 km/h',
-      state: 'Fast movement',
-      motionActivity: 'running',
+      state: 'Slow / urban vehicle',
+      // Fallback only — uploads prefer vehicle_session_fusion.
+      motionActivity: 'automotive',
       captureInterval: Duration(seconds: 5),
       uploadInterval: Duration(seconds: 5),
       distanceFilterMeters: 5,

@@ -13,6 +13,8 @@ import '../api/api_client.dart';
 import '../auth/auth_repository.dart';
 import '../location/batch_displacement_gate.dart';
 import '../location/speed_adaptive_gps_policy.dart';
+import '../motion/motion_activity_fusion_controller.dart';
+import '../motion/vehicle_session_fusion.dart';
 import 'background_location_accuracy.dart';
 import '../utilities/app_config.dart';
 import '../utilities/app_version_info.dart';
@@ -396,18 +398,24 @@ class BackgroundLocationUploader {
   Future<void> add(
     Position position, {
     SpeedAdaptiveGpsPolicyDecision? policyDecision,
+    VehicleSessionSnapshot? motionFusion,
   }) async {
     if (!_acceptingNewPoints) return;
     if (!BackgroundLocationAccuracy.isAcceptable(position)) return;
     if (!await _hasUploadAuth()) return;
     if (!_acceptingNewPoints) return;
     final policy = policyDecision ?? _policyTracker.evaluate(position);
+    final fusion = motionFusion ??
+        await MotionActivityFusionController.instance.evaluatePosition(
+          position,
+        );
     if (!policy.shouldQueueForBatch) {
       if (kDebugMode) {
         _batchConsoleLog(
           'skipped batch queue '
           'band=${policy.band.label} '
-          'motion=${policy.band.motionActivity} '
+          'motion=${fusion.apiMotionActivity} '
+          'fused=${fusion.fusedState} '
           'speedKmh=${(policy.smoothedSpeedKmh ?? policy.rawSpeedKmh)?.toStringAsFixed(1)} '
           '(ping-only)',
         );
@@ -431,6 +439,7 @@ class BackgroundLocationUploader {
     final apiPoint = await _buildApiPoint(
       position,
       policyDecision: policy,
+      motionFusion: fusion,
     );
     if (!_acceptingNewPoints) return;
     final point = Map<String, dynamic>.from(apiPoint)
@@ -534,14 +543,20 @@ class BackgroundLocationUploader {
   Future<void> pingNow(
     Position position, {
     SpeedAdaptiveGpsPolicyDecision? policyDecision,
+    VehicleSessionSnapshot? motionFusion,
   }) async {
     if (!_acceptingNewPoints) return;
     if (!BackgroundLocationAccuracy.isAcceptable(position)) return;
     if (!await _hasUploadAuth()) return;
     if (!_acceptingNewPoints) return;
+    final fusion = motionFusion ??
+        await MotionActivityFusionController.instance.evaluatePosition(
+          position,
+        );
     final point = await _buildApiPoint(
       position,
       policyDecision: policyDecision,
+      motionFusion: fusion,
     );
     if (!_acceptingNewPoints) return;
 
@@ -569,16 +584,22 @@ class BackgroundLocationUploader {
   Future<Map<String, dynamic>> _buildApiPoint(
     Position position, {
     SpeedAdaptiveGpsPolicyDecision? policyDecision,
+    VehicleSessionSnapshot? motionFusion,
   }) async {
     _deviceId ??= await DeviceIdentity.getDeviceId();
     return _sanitizePoint(
-      await _buildPoint(position, policyDecision: policyDecision),
+      await _buildPoint(
+        position,
+        policyDecision: policyDecision,
+        motionFusion: motionFusion,
+      ),
     );
   }
 
   Future<Map<String, dynamic>> _buildPoint(
     Position position, {
     SpeedAdaptiveGpsPolicyDecision? policyDecision,
+    VehicleSessionSnapshot? motionFusion,
   }) async {
     final dynamic p = position;
     final dynamic sourceInformation = _safeRead<dynamic>(
@@ -591,6 +612,10 @@ class BackgroundLocationUploader {
     // Geolocator reports when the GPS fix was measured (UTC), not when we flush batch.
     final recordedAtUtc = position.timestamp.toUtc();
     final policy = policyDecision ?? _policyTracker.evaluate(position);
+    final fusion = motionFusion ??
+        await MotionActivityFusionController.instance.evaluatePosition(
+          position,
+        );
 
     return {
       'app': AppConfig.appName,
@@ -611,8 +636,17 @@ class BackgroundLocationUploader {
       'headingAccuracy': _validSensorNumOrNull(() => position.headingAccuracy),
       'isMocked': position.isMocked,
       'isSimulatedBySoftware': isSimulatedBySoftware,
-      'motionActivity': policy.band.motionActivity,
-      'motionSource': 'speed_adaptive_gps_policy',
+      'motionActivity': fusion.apiMotionActivity,
+      'motionSource': 'vehicle_session_fusion',
+      'motionFusedState': fusion.fusedState,
+      'motionNativeActivity': fusion.nativeActivity,
+      'motionNativeConfidence': fusion.nativeConfidence,
+      'motionSessionActive': fusion.active,
+      'motionProvisional': fusion.provisional,
+      'motionReason': fusion.reason,
+      'motionSpeedKmh': fusion.smoothedSpeedKmh ?? fusion.gpsSpeedKmh,
+      // Speed bands remain for capture/upload timing only.
+      'speedBandMotionActivity': policy.band.motionActivity,
       ...policy.toJson(),
       'floor': _numOrNull(() => p.floor),
     };
