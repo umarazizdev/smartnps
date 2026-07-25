@@ -40,6 +40,8 @@ import '../app/native_theme_controller.dart';
 import '../push/officer_announcement_coordinator.dart';
 import '../push/push_notification_service.dart';
 import '../permissions/native_permission_status_service.dart';
+import '../permissions/required_permissions_gate.dart';
+import '../widgets/required_permissions_blocker.dart';
 
 class WebViewShell extends StatefulWidget {
   const WebViewShell({super.key});
@@ -102,6 +104,11 @@ class _WebViewShellUiController extends GetxController {
   void setOfficerLoggedIn(bool value) {
     if (officerLoggedIn.value == value) return;
     officerLoggedIn.value = value;
+    if (value) {
+      RequiredPermissionsGate.instance.start();
+    } else {
+      RequiredPermissionsGate.instance.stop();
+    }
   }
 }
 
@@ -1929,6 +1936,10 @@ class _WebViewShellState extends State<WebViewShell>
     if (state == AppLifecycleState.resumed) {
       // iOS (and Android) may miss connectivity events while suspended.
       unawaited(_syncOfflineFromConnectivity());
+      if (_ui.officerLoggedIn.value) {
+        // Immediate live refresh so Settings toggles flip to Enabled without delay.
+        unawaited(RequiredPermissionsGate.instance.refresh(force: true));
+      }
     }
 
     if (state == AppLifecycleState.resumed &&
@@ -1954,6 +1965,7 @@ class _WebViewShellState extends State<WebViewShell>
         // as the app returns from Settings (before slower prompt rechecks).
         await DutyHeartbeatService.instance
             .refreshBackgroundLocationPermissionBannerState();
+        await RequiredPermissionsGate.instance.refresh(force: true);
         // Android may return from Settings with updated "Allow all the time".
         await AppUpgradeReconciler.reconcileOsAfterEngineReady();
         await LocationDisclosureConsent.reconcileFromOsIfBackgroundReady();
@@ -1984,6 +1996,7 @@ class _WebViewShellState extends State<WebViewShell>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    RequiredPermissionsGate.instance.stop();
     OfficerAnnouncementCoordinator.instance.detach();
     PushNotificationService.instance.setDeferPermissionPromptWhile(null);
     PushNotificationService.instance.setOnNotificationTap(null);
@@ -3383,6 +3396,8 @@ class _WebViewShellState extends State<WebViewShell>
       },
       child: Obx(() {
         final isDark = _ui.webPrefersDark.value;
+        final officerLoggedIn = _ui.officerLoggedIn.value;
+        final onAuthRoute = _isAuthRoute(_ui.currentUri.value);
         // Match OfflineScreen / splash fill so notch + home-indicator strips
         // use the same native chrome colors.
         final safeAreaColor = isDark
@@ -3406,9 +3421,16 @@ class _WebViewShellState extends State<WebViewShell>
                   PermissionSettingsHelper.settingsPromptVisible,
                   OverlayPromptGuard.overlayVisibilityListenable,
                   ClockInGateService.instance.prepareInFlightVisible,
+                  RequiredPermissionsGate.instance.isBlocking,
                 ]),
                 builder: (context, _) {
+                  final showPermissionBlocker =
+                      officerLoggedIn &&
+                      RequiredPermissionsGate.instance.isBlocking.value &&
+                      (Platform.isAndroid || Platform.isIOS) &&
+                      !onAuthRoute;
                   final showBanner =
+                      !showPermissionBlocker &&
                       DutyHeartbeatService
                           .instance
                           .shouldShowBackgroundLocationBanner &&
@@ -3761,6 +3783,10 @@ class _WebViewShellState extends State<WebViewShell>
                                     },
                               ),
                             ),
+                            if (showPermissionBlocker)
+                              const Positioned.fill(
+                                child: RequiredPermissionsBlocker(),
+                              ),
                             Obx(
                               () => _ui.showOffline.value
                                   ? Positioned.fill(
@@ -3799,6 +3825,7 @@ class _WebViewShellState extends State<WebViewShell>
                             }),
                             Obx(() {
                               final showBottomBar =
+                                  !showPermissionBlocker &&
                                   !_ui.showOffline.value &&
                                   _ui.firstPageLoaded.value &&
                                   _ui.officerLoggedIn.value &&
