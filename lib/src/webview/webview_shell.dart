@@ -200,7 +200,8 @@ class _WebViewShellState extends State<WebViewShell>
         ),
       );
 
-      await AuthSessionManager.clearNativeSession(deletePushToken: true);
+      // TEMP: keep FCM/APNs registered after logout (was deletePushToken: true).
+      await AuthSessionManager.clearNativeSession(deletePushToken: false);
 
       debugPrint(
         '[SmartNPS360][Auth] native logout completed '
