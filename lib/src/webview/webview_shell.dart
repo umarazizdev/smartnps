@@ -127,6 +127,12 @@ class _WebViewShellState extends State<WebViewShell>
   final _WebViewShellUiController _ui = _WebViewShellUiController();
   String? _pendingPushUrl;
   bool _nativeLogoutInFlight = false;
+  /// Set when refresh expiry clears the session before the WebView exists.
+  bool _pendingLoginRedirectAfterExpiry = false;
+  bool _refreshExpiryLogoutInFlight = false;
+  /// True while [clearNativeSession] is still running — do not treat `/` as
+  /// "login redirect done" until clear finishes (login URL == initialUrl).
+  bool _awaitingSessionClearForLoginRedirect = false;
 
   /// When true, reconnect / retry must reload the WebView (page never loaded
   /// or last main-frame load failed). When false, dismissing offline is safe.
@@ -227,6 +233,145 @@ class _WebViewShellState extends State<WebViewShell>
       reason: 'fallback: $reason',
       skipIfAlreadyLoggedOut: true,
     );
+  }
+
+  /// Refresh token rejected → clear native session and open web login.
+  ///
+  /// Cookies are cleared so the site cannot bounce straight back to dashboard.
+  /// Post-upgrade grace in [AppUpgradeReconciler] still soft-fails and skips this.
+  ///
+  /// Login target is [AppConfig.webLoginUrl] (== [AppConfig.initialUrl]).
+  Future<void> _onRefreshSessionExpired() async {
+    if (_refreshExpiryLogoutInFlight) {
+      _pendingLoginRedirectAfterExpiry = true;
+      return;
+    }
+    _refreshExpiryLogoutInFlight = true;
+    try {
+      debugPrint(
+        '[SmartNPS360][Auth] refresh session expired → native clear + login redirect',
+      );
+      _pendingLoginRedirectAfterExpiry = true;
+      _awaitingSessionClearForLoginRedirect = true;
+      _ui.setOfficerLoggedIn(false);
+      _setNativeAuthSession(false);
+      unawaited(_clearSiteCookiesForLogout());
+
+      // TEMP: keep FCM/APNs registered after auto/expiry logout too.
+      await AuthSessionManager.clearNativeSession(deletePushToken: false);
+      _awaitingSessionClearForLoginRedirect = false;
+      if (!mounted) return;
+      _ui.setOfficerLoggedIn(false);
+      _setNativeAuthSession(false);
+      await _redirectWebToLogin(reason: 'refresh_session_expired');
+    } catch (_) {
+      _awaitingSessionClearForLoginRedirect = false;
+      rethrow;
+    } finally {
+      _refreshExpiryLogoutInFlight = false;
+    }
+  }
+
+  Future<void> _clearSiteCookiesForLogout() async {
+    final manager = CookieManager.instance();
+    try {
+      await manager.deleteAllCookies();
+    } catch (_) {}
+    for (final host in AppConfig.allowedHosts) {
+      final url = WebUri('https://$host/');
+      try {
+        await manager.deleteCookies(url: url, domain: host);
+      } catch (_) {}
+      try {
+        await manager.deleteCookies(url: url, domain: '.$host');
+      } catch (_) {}
+    }
+  }
+
+  /// True when [uri] is the configured web login landing ([AppConfig.webLoginUrl]).
+  bool _isWebLoginLanding(Uri? uri) {
+    if (uri == null) return false;
+    if (!AppConfig.isAllowedHost(uri.host)) return false;
+    final path = uri.path;
+    if (path.isEmpty || path == '/') return true;
+    final text = uri.toString();
+    return text == AppConfig.webLoginUrl || text == AppConfig.initialUrl;
+  }
+
+  Future<void> _redirectWebToLogin({required String reason}) async {
+    await _clearSiteCookiesForLogout();
+
+    final controller = _controller;
+    if (controller == null) {
+      _pendingLoginRedirectAfterExpiry = true;
+      debugPrint(
+        '[SmartNPS360][Auth] login redirect deferred (no WebView yet) '
+        'reason=$reason',
+      );
+      return;
+    }
+
+    unawaited(
+      controller.evaluateJavascript(
+        source:
+            "try {"
+            "sessionStorage.removeItem('__smartnps_login');"
+            "localStorage.removeItem('__smartnps_login');"
+            "} catch (e) {}",
+      ),
+    );
+
+    try {
+      // Keep pending until onLoadStop confirms home/login (`/`).
+      _pendingLoginRedirectAfterExpiry = true;
+      await controller.stopLoading();
+      await controller.loadUrl(
+        urlRequest: URLRequest(url: WebUri(AppConfig.webLoginUrl)),
+      );
+      debugPrint(
+        '[SmartNPS360][Auth] requested ${AppConfig.webLoginUrl} reason=$reason',
+      );
+    } catch (e) {
+      _pendingLoginRedirectAfterExpiry = true;
+      debugPrint(
+        '[SmartNPS360][Auth] login redirect failed reason=$reason error=$e',
+      );
+    }
+  }
+
+  Future<void> _flushPendingLoginRedirectIfNeeded(
+    InAppWebViewController controller, {
+    Uri? loadedUri,
+  }) async {
+    if (!_pendingLoginRedirectAfterExpiry) return;
+    // Session clear still running — `/` is also the initial URL, so wait.
+    if (_awaitingSessionClearForLoginRedirect || _refreshExpiryLogoutInFlight) {
+      return;
+    }
+
+    final uri = loadedUri ?? _ui.currentUri.value;
+    if (_isWebLoginLanding(uri)) {
+      _pendingLoginRedirectAfterExpiry = false;
+      debugPrint(
+        '[SmartNPS360][Auth] login redirect confirmed url=$uri '
+        '(webLoginUrl=${AppConfig.webLoginUrl})',
+      );
+      return;
+    }
+
+    _controller = controller;
+    debugPrint(
+      '[SmartNPS360][Auth] pending login redirect retry '
+      '(loaded=$uri → ${AppConfig.webLoginUrl})',
+    );
+    try {
+      await controller.stopLoading();
+      await controller.loadUrl(
+        urlRequest: URLRequest(url: WebUri(AppConfig.webLoginUrl)),
+      );
+    } catch (e) {
+      debugPrint('[SmartNPS360][Auth] pending login redirect retry failed: $e');
+    }
   }
 
   Future<void> _refreshNativeAuthSessionFromStorage() async {
@@ -1706,6 +1851,8 @@ class _WebViewShellState extends State<WebViewShell>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Prefer shell handler: clear storage + open login (overrides main fallback).
+    AuthRepository.instance.onRefreshSessionExpired = _onRefreshSessionExpired;
     // Android MethodChannel is ready here; re-sync disclosure from live OS grant.
     unawaited(AppUpgradeReconciler.reconcileOsAfterEngineReady());
     PushNotificationService.instance.setDeferPermissionPromptWhile(
@@ -2005,6 +2152,9 @@ class _WebViewShellState extends State<WebViewShell>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    // Always restore the process-level fallback (tear-offs are not identical).
+    AuthRepository.instance.onRefreshSessionExpired =
+        AuthSessionManager.clearNativeSession;
     RequiredPermissionsGate.instance.stop();
     OfficerAnnouncementCoordinator.instance.detach();
     PushNotificationService.instance.setDeferPermissionPromptWhile(null);
@@ -3466,6 +3616,9 @@ class _WebViewShellState extends State<WebViewShell>
                                   _controller = controller;
                                   _installJsHandlers(controller);
                                   unawaited(_loadPendingPushUrl());
+                                  if (_pendingLoginRedirectAfterExpiry) {
+                                    unawaited(_onRefreshSessionExpired());
+                                  }
                                   if (_ui.showOffline.value) {
                                     unawaited(() async {
                                       final results = await Connectivity()
@@ -3558,6 +3711,17 @@ class _WebViewShellState extends State<WebViewShell>
                                 onLoadStop: (controller, url) async {
                                   _pullToRefreshController?.endRefreshing();
                                   final nextUri = url?.uriValue;
+                                  if (_pendingLoginRedirectAfterExpiry) {
+                                    await _flushPendingLoginRedirectIfNeeded(
+                                      controller,
+                                      loadedUri: nextUri,
+                                    );
+                                    if (_pendingLoginRedirectAfterExpiry) {
+                                      // Still waiting for home/login (`/`) —
+                                      // skip normal session restore on this stop.
+                                      return;
+                                    }
+                                  }
                                   // Android fires loadStop for the previous page when
                                   // switching bottom tabs; ignore until the target tab loads.
                                   final ignoreEvent =

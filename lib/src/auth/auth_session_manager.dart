@@ -19,9 +19,12 @@ class AuthSessionManager {
     if (path.isEmpty || path == '/' || uri.toString() == AppConfig.initialUrl) {
       return true;
     }
+    if (uri.toString() == AppConfig.webLoginUrl ||
+        path.contains('officer/login')) {
+      return true;
+    }
 
-    return path.contains('officer/login') ||
-        path.contains('officer/sign-in') ||
+    return path.contains('officer/sign-in') ||
         path.contains('officer/signin') ||
         path.contains('officer/sign_up') ||
         path.contains('officer/sign-up') ||
@@ -52,9 +55,9 @@ class AuthSessionManager {
   /// 2. Drain — flush/discard GPS batches (token still in secure storage)
   /// 3. Final — clear bearer token and credentials
   ///
-  /// FCM/APNs push-token unregister on logout is temporarily disabled so the
-  /// device can still receive notifications on the login screen.
-  static Future<void> clearNativeSession({bool deletePushToken = true}) async {
+  /// FCM/APNs push-token unregister on logout (manual or auto) is temporarily
+  /// disabled so the device can still receive notifications on the login screen.
+  static Future<void> clearNativeSession({bool deletePushToken = false}) async {
     if (kDebugMode) {
       debugPrint('[AuthSessionManager] logout phase 1: instant UI flags');
     }
