@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../app/native_theme_controller.dart';
 import '../permissions/required_permissions_gate.dart';
 import '../utilities/app_config.dart';
+import '../utilities/app_version_info.dart';
 
 /// Full-screen gate shown while the officer is logged in and required OS /
 /// in-app permissions are missing. Updates live as permissions change.
@@ -56,6 +57,9 @@ class _RequiredPermissionsBlockerState extends State<RequiredPermissionsBlocker>
   Widget build(BuildContext context) {
     final isDark = NativeThemeController.instance.isDark;
     final colors = _PermissionBlockerColors.of(isDark);
+    final versionColor = isDark
+        ? Colors.white.withValues(alpha: 0.38)
+        : const Color(0xFF9CA3AF);
 
     return Material(
       color: colors.background,
@@ -63,83 +67,102 @@ class _RequiredPermissionsBlockerState extends State<RequiredPermissionsBlocker>
         child: ValueListenableBuilder<List<RequiredPermissionItem>>(
           valueListenable: _gate.items,
           builder: (context, items, _) {
-            return LayoutBuilder(
-              builder: (context, constraints) {
-                return SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      minHeight: constraints.maxHeight - 36,
-                    ),
-                    child: Center(
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 420),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Image.asset(
-                              'assets/npslogo.png',
-                              height: 88,
-                              fit: BoxFit.contain,
-                              filterQuality: FilterQuality.high,
-                            ),
-                            const SizedBox(height: 14),
-                            Text(
-                              'Permissions required',
-                              style: TextStyle(
-                                color: colors.title,
-                                fontSize: 22,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: -0.3,
-                                height: 1.2,
+            return Column(
+              children: [
+                Expanded(
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      return SingleChildScrollView(
+                        padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            minHeight: constraints.maxHeight - 28,
+                          ),
+                          child: Center(
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 420),
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Image.asset(
+                                    'assets/npslogo.png',
+                                    height: 88,
+                                    fit: BoxFit.contain,
+                                    filterQuality: FilterQuality.high,
+                                  ),
+                                  const SizedBox(height: 14),
+                                  Text(
+                                    'Permissions required',
+                                    style: TextStyle(
+                                      color: colors.title,
+                                      fontSize: 22,
+                                      fontWeight: FontWeight.w800,
+                                      letterSpacing: -0.3,
+                                      height: 1.2,
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    'SmartNPS360 needs these permissions to run properly.\n\n'
+                                    'Location is used only while you are on duty, and stops '
+                                    'when your shift ends.',
+                                    style: TextStyle(
+                                      color: colors.subtitle,
+                                      fontSize: 13.5,
+                                      height: 1.4,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                  const SizedBox(height: 14),
+                                  Center(
+                                    child: Container(
+                                      width: 44,
+                                      height: 3,
+                                      decoration: BoxDecoration(
+                                        color: colors.divider,
+                                        borderRadius: BorderRadius.circular(2),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 16),
+                                  _PrivacyBanner(colors: colors),
+                                  const SizedBox(height: 16),
+                                  for (var i = 0; i < items.length; i++) ...[
+                                    if (i > 0) const SizedBox(height: 10),
+                                    _PermissionRow(
+                                      item: items[i],
+                                      colors: colors,
+                                      busy: _busyId == items[i].id,
+                                      onAction: () => _onAction(items[i]),
+                                    ),
+                                  ],
+                                ],
                               ),
-                              textAlign: TextAlign.center,
                             ),
-                            const SizedBox(height: 8),
-                            Text(
-                              'SmartNPS360 needs these permissions to run properly.\n\n'
-                              'Location is used only while you are on duty, and stops '
-                              'when your shift ends.',
-                              style: TextStyle(
-                                color: colors.subtitle,
-                                fontSize: 13.5,
-                                height: 1.4,
-                                fontWeight: FontWeight.w500,
-                              ),
-                              textAlign: TextAlign.center,
-                            ),
-                            const SizedBox(height: 14),
-                            Center(
-                              child: Container(
-                                width: 44,
-                                height: 3,
-                                decoration: BoxDecoration(
-                                  color: colors.divider,
-                                  borderRadius: BorderRadius.circular(2),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            _PrivacyBanner(colors: colors),
-                            const SizedBox(height: 16),
-                            for (var i = 0; i < items.length; i++) ...[
-                              if (i > 0) const SizedBox(height: 10),
-                              _PermissionRow(
-                                item: items[i],
-                                colors: colors,
-                                busy: _busyId == items[i].id,
-                                onAction: () => _onAction(items[i]),
-                              ),
-                            ],
-                          ],
+                          ),
                         ),
-                      ),
-                    ),
+                      );
+                    },
                   ),
-                );
-              },
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Text(
+                    'v${AppVersionInfo.version} (${AppVersionInfo.buildNumber})',
+                    style: TextStyle(
+                      color: versionColor,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      letterSpacing: 0.2,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ],
             );
           },
         ),

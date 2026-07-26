@@ -3,6 +3,10 @@ class AppConfig {
 
   static const String initialUrl = 'https://smartnps360.com/';
 
+  /// Home / login page — used by native after session expiry logout.
+  /// Same as [initialUrl] (`https://smartnps360.com/`).
+  static const String webLoginUrl = initialUrl;
+
   static const String gpsApiBaseUrl = '${initialUrl}api/gps/';
   static const String gpsPointPath = 'point';
   static const String gpsPingPath = 'ping';
