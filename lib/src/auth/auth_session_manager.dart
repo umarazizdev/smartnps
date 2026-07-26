@@ -51,10 +51,13 @@ class AuthSessionManager {
   }
 
   /// Logout phases:
-  /// 1. Instant — logged-out flag + stop tracking + start FCM delete
+  /// 1. Instant — logged-out flag + stop tracking
   /// 2. Drain — flush/discard GPS batches (token still in secure storage)
   /// 3. Final — clear bearer token and credentials
-  static Future<void> clearNativeSession({bool deletePushToken = true}) async {
+  ///
+  /// FCM/APNs push-token unregister on logout (manual or auto) is temporarily
+  /// disabled so the device can still receive notifications on the login screen.
+  static Future<void> clearNativeSession({bool deletePushToken = false}) async {
     if (kDebugMode) {
       debugPrint('[AuthSessionManager] logout phase 1: instant UI flags');
     }
@@ -62,9 +65,15 @@ class AuthSessionManager {
     AuthState.instance.clear();
     await DutyHeartbeatService.instance.finalizeLogoutInstant();
 
-    final fcmDelete = deletePushToken
-        ? PushNotificationService.instance.deletePushToken()
-        : Future<void>.value();
+    // TEMP: keep FCM/APNs registration after logout (do not unregister).
+    // if (deletePushToken) {
+    //   await PushNotificationService.instance.deletePushToken();
+    // }
+    if (kDebugMode && deletePushToken) {
+      debugPrint(
+        '[AuthSessionManager] skip FCM/APNs delete on logout (temporarily disabled)',
+      );
+    }
 
     if (kDebugMode) {
       debugPrint(
@@ -75,10 +84,10 @@ class AuthSessionManager {
 
     if (kDebugMode) {
       debugPrint(
-        '[AuthSessionManager] logout phase 3: await FCM + clear token',
+        '[AuthSessionManager] logout phase 3: clear auth token '
+        '(FCM/APNs kept)',
       );
     }
-    await fcmDelete;
     NativePermissionStatusService.instance.resetSyncState();
     await AuthRepository.instance.clear();
     PushNotificationService.instance.setIosSessionAuth();

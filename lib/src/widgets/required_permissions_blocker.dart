@@ -244,10 +244,7 @@ class _PermissionBlockerColors {
 }
 
 class _PermissionAccent {
-  const _PermissionAccent({
-    required this.icon,
-    required this.iconBg,
-  });
+  const _PermissionAccent({required this.icon, required this.iconBg});
 
   final Color icon;
   final Color iconBg;
@@ -322,17 +319,9 @@ class _PermissionRow extends StatelessWidget {
                   ? Transform.rotate(
                       // Icons.send points ~45°; rotate so it faces straight up.
                       angle: -math.pi / 4,
-                      child: Icon(
-                        item.icon,
-                        size: 20,
-                        color: accent.icon,
-                      ),
+                      child: Icon(item.icon, size: 20, color: accent.icon),
                     )
-                  : Icon(
-                      item.icon,
-                      size: 20,
-                      color: accent.icon,
-                    ),
+                  : Icon(item.icon, size: 20, color: accent.icon),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -366,11 +355,7 @@ class _PermissionRow extends StatelessWidget {
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(
-                    Icons.check_circle,
-                    size: 18,
-                    color: colors.enabled,
-                  ),
+                  Icon(Icons.check_circle, size: 18, color: colors.enabled),
                   const SizedBox(width: 5),
                   Text(
                     'Enabled',
@@ -390,8 +375,9 @@ class _PermissionRow extends StatelessWidget {
                   style: TextButton.styleFrom(
                     backgroundColor: colors.actionBg,
                     foregroundColor: colors.actionFg,
-                    disabledBackgroundColor:
-                        colors.actionBg.withValues(alpha: 0.55),
+                    disabledBackgroundColor: colors.actionBg.withValues(
+                      alpha: 0.55,
+                    ),
                     padding: const EdgeInsets.symmetric(horizontal: 14),
                     minimumSize: Size.zero,
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
