@@ -14,6 +14,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../api/api_client.dart';
 import '../auth/auth_repository.dart';
 import '../background/background_location_permissions.dart';
+import '../motion/motion_activity_service.dart';
 import '../push/push_notification_preferences.dart';
 import 'os_notification_permission.dart';
 import '../utilities/app_config.dart';
@@ -537,6 +538,7 @@ class NativePermissionStatusService {
       'backgroundLocation': await _backgroundLocationStatus(),
       'preciseLocation': await _preciseLocationStatus(),
       'notifications': await _notificationStatus(),
+      'motionActivity': await _motionActivityStatus(),
       'batteryOptimization': await _batteryOptimizationStatus(),
       'backgroundAppRefresh': await _backgroundAppRefreshStatus(),
       'push': await _pushToggleStatus(),
@@ -1103,6 +1105,52 @@ class NativePermissionStatusService {
 
   Future<String> _notificationStatus() async {
     return OsNotificationPermission.permissionApiStatus();
+  }
+
+  /// Android Activity Recognition / iOS Motion & Fitness.
+  ///
+  /// Values match other permission fields: `granted`, `denied`, `unknown`.
+  Future<String> _motionActivityStatus() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return 'unknown';
+
+    try {
+      final available = await MotionActivityService.isAvailable();
+      if (!available) return 'unknown';
+
+      if (Platform.isAndroid) {
+        // API 28 and below: ACTIVITY_RECOGNITION not required.
+        final status = await Permission.activityRecognition.status;
+        if (status.isGranted || status.isLimited || status.isProvisional) {
+          return 'granted';
+        }
+        if (status.isPermanentlyDenied || status.isRestricted) {
+          return 'denied';
+        }
+        // Soft deny / not yet asked → unknown (same as notifications).
+        return 'unknown';
+      }
+
+      // iOS: Core Motion authorization via native bridge (read-only).
+      final native = await MotionActivityService.checkPermission();
+      switch (native) {
+        case 'granted':
+          return 'granted';
+        case 'denied':
+        case 'restricted':
+          return 'denied';
+        case 'notDetermined':
+          return 'unknown';
+        default:
+          return 'unknown';
+      }
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint(
+          '[NativePermissionStatus] motion activity status check failed: $error',
+        );
+      }
+      return 'unknown';
+    }
   }
 
   Future<String> _batteryOptimizationStatus() async {

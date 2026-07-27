@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../auth/auth_repository.dart';
+import '../location/adaptive_gps_stream_controller.dart';
 import '../location/location_keep_point_gate.dart';
 import '../location/mock_location_detection.dart';
 import '../location/mock_location_guard.dart';
@@ -25,11 +26,14 @@ class IosDutyLocationPinger {
   static BackgroundLocationUploader? _uploader;
   static DateTime? _lastUploadAt;
   static final LocationKeepPointGate _keepPointGate = LocationKeepPointGate();
+  static final AdaptiveGpsStreamController _streamController =
+      AdaptiveGpsStreamController();
   static DateTime? _startedAt;
   static DateTime? _lastForcedBatchFlushAttemptAt;
   static bool _running = false;
   static bool _stopping = false;
   static bool _recoverInFlight = false;
+  static bool _streamRebuildInFlight = false;
   static final SpeedAdaptiveGpsPolicyTracker _policyTracker =
       SpeedAdaptiveGpsPolicyTracker();
 
@@ -80,28 +84,14 @@ class IosDutyLocationPinger {
       }),
     );
 
-    final permission = await Geolocator.checkPermission();
-    final allowBackground = permission == LocationPermission.always;
-
-    final settings = AppleSettings(
-      accuracy: LocationAccuracy.bestForNavigation,
-      distanceFilter: 0,
-      pauseLocationUpdatesAutomatically: false,
-      showBackgroundLocationIndicator: true,
-      allowBackgroundLocationUpdates: allowBackground,
-    );
+    _streamController
+      ..reset()
+      ..onSettingsChanged = () {
+        unawaited(_rebuildStreamIfNeeded(reason: 'settings_changed'));
+      };
 
     try {
-      _subscription = Geolocator.getPositionStream(locationSettings: settings)
-          .listen(
-            _onPosition,
-            onError: (Object error) {
-              if (kDebugMode) {
-                debugPrint('[IosDutyLocationPinger] stream error: $error');
-              }
-              unawaited(_onStreamError(error));
-            },
-          );
+      await _subscribePositionStream();
     } catch (e) {
       await stop();
       rethrow;
@@ -111,12 +101,59 @@ class IosDutyLocationPinger {
     _stopping = false;
     _startedAt = DateTime.now();
     unawaited(_startSignificantLocationChanges());
-    _startPeriodicPing();
+    _restartPeriodicPing();
     if (kDebugMode) {
+      final permission = await Geolocator.checkPermission();
       debugPrint(
         '[IosDutyLocationPinger] started '
-        '(allowBackground=$allowBackground permission=$permission)',
+        '(interval=${_streamController.interval.inSeconds}s '
+        'distanceFilter=${_streamController.distanceFilterMeters}m '
+        'permission=$permission)',
       );
+    }
+  }
+
+  static Future<void> _subscribePositionStream() async {
+    final permission = await Geolocator.checkPermission();
+    final allowBackground = permission == LocationPermission.always;
+    final settings = _streamController.buildLocationSettings(
+      allowBackgroundLocationUpdates: allowBackground,
+    );
+
+    await _subscription?.cancel();
+    _subscription = Geolocator.getPositionStream(locationSettings: settings)
+        .listen(
+          _onPosition,
+          onError: (Object error) {
+            if (kDebugMode) {
+              debugPrint('[IosDutyLocationPinger] stream error: $error');
+            }
+            unawaited(_onStreamError(error));
+          },
+        );
+    _streamController.markSettingsApplied();
+  }
+
+  static Future<void> _rebuildStreamIfNeeded({required String reason}) async {
+    if (!_running || _stopping || _streamRebuildInFlight) return;
+    _streamRebuildInFlight = true;
+    try {
+      if (kDebugMode) {
+        debugPrint(
+          '[IosDutyLocationPinger] rebuild stream reason=$reason '
+          'interval=${_streamController.interval.inSeconds}s '
+          'distanceFilter=${_streamController.distanceFilterMeters}m '
+          'curveBoost=${_streamController.isCurveBoosting}',
+        );
+      }
+      await _subscribePositionStream();
+      _restartPeriodicPing();
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[IosDutyLocationPinger] stream rebuild failed: $e');
+      }
+    } finally {
+      _streamRebuildInFlight = false;
     }
   }
 
@@ -135,11 +172,11 @@ class IosDutyLocationPinger {
     }
   }
 
-  /// iOS may not emit stream events when the device is stationary (simulator).
-  /// Poll explicitly so ping/batch keep running when the stream is quiet.
-  static void _startPeriodicPing() {
+  /// Poll at the adaptive cadence so quiet streams still produce fixes.
+  static void _restartPeriodicPing() {
     _pingTimer?.cancel();
-    _pingTimer = Timer.periodic(BackgroundLocationUploader.pingInterval, (_) {
+    final every = _streamController.pollInterval;
+    _pingTimer = Timer.periodic(every, (_) {
       unawaited(_pollCurrentPosition());
     });
     unawaited(_pollCurrentPosition());
@@ -165,6 +202,7 @@ class IosDutyLocationPinger {
     try {
       final permission = await Geolocator.checkPermission();
       final allowBackground = permission == LocationPermission.always;
+      // One-shot precise fetch — not the adaptive duty stream.
       final settings = AppleSettings(
         accuracy: LocationAccuracy.bestForNavigation,
         distanceFilter: 0,
@@ -303,7 +341,16 @@ class IosDutyLocationPinger {
     }
 
     final policyDecision = _policyTracker.evaluate(pos);
-    final keepDecision = _keepPointGate.evaluate(pos, policyDecision);
+    final settingsChanged = _streamController.observe(pos, policyDecision);
+    if (settingsChanged) {
+      unawaited(_rebuildStreamIfNeeded(reason: 'policy_or_curve'));
+    }
+
+    final keepDecision = _keepPointGate.evaluate(
+      pos,
+      policyDecision,
+      streamInterval: _streamController.interval,
+    );
     if (!keepDecision.shouldKeep) {
       return;
     }
@@ -330,10 +377,11 @@ class IosDutyLocationPinger {
         'fused=${motionFusion.fusedState} '
         'session=${motionFusion.active} '
         'reason=${motionFusion.reason} '
-        'uploadEvery=${keepDecision.uploadInterval?.inSeconds}s '
+        'streamEvery=${_streamController.interval.inSeconds}s '
+        'distanceFilter=${_streamController.distanceFilterMeters}m '
+        'curveBoost=${_streamController.isCurveBoosting} '
         'trigger=${keepDecision.trigger?.name} '
         'dist=${keepDecision.distanceMeters?.toStringAsFixed(1)}m '
-        'bearingDelta=${keepDecision.bearingDeltaDegrees?.toStringAsFixed(1)} '
         'mocked=${mockFlags.isMocked} simulated=${mockFlags.isSimulatedBySoftware}',
       );
     }
@@ -405,6 +453,9 @@ class IosDutyLocationPinger {
     _running = false;
     _pingTimer?.cancel();
     _pingTimer = null;
+    _streamController
+      ..onSettingsChanged = null
+      ..reset();
     await IosSignificantLocationChangeService.stop(drainPending: true);
     await _subscription?.cancel();
     _subscription = null;
@@ -440,6 +491,9 @@ class IosDutyLocationPinger {
     _running = false;
     _pingTimer?.cancel();
     _pingTimer = null;
+    _streamController
+      ..onSettingsChanged = null
+      ..reset();
     await IosSignificantLocationChangeService.stop();
     await _subscription?.cancel();
     _subscription = null;

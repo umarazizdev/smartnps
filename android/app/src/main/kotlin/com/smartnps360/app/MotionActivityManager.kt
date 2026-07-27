@@ -26,20 +26,30 @@ class MotionActivityManager(
     const val METHOD_CHANNEL = "com.smartnps360.app/motion_activity"
     const val EVENT_CHANNEL = "com.smartnps360.app/motion_activity_events"
     const val ACTION_ACTIVITY_UPDATE = "com.smartnps360.app.ACTION_ACTIVITY_UPDATE"
-    /** Detection cadence for ActivityRecognitionClient (lower = snappier UI, more battery). */
-    private const val DETECTION_INTERVAL_MS = 2_000L
+    /**
+     * Detection cadence for ActivityRecognitionClient.
+     * 0 = as fast as Play Services will deliver (snappier UI).
+     * OS still batches; expect ~1–3s in practice, not true 1Hz.
+     */
+    private const val DETECTION_INTERVAL_MS = 0L
     private const val REQUEST_CODE = 3601
 
     @Volatile
     private var eventSink: EventChannel.EventSink? = null
 
+    @Volatile
+    private var lastPayload: Map<String, Any?>? = null
+
     private val mainHandler = Handler(Looper.getMainLooper())
 
     fun emit(payload: Map<String, Any?>) {
+      lastPayload = payload
       mainHandler.post {
         eventSink?.success(payload)
       }
     }
+
+    fun lastKnown(): Map<String, Any?>? = lastPayload
   }
 
   private val client: ActivityRecognitionClient =
@@ -66,6 +76,14 @@ class MotionActivityManager(
           result.success(mapOf("ok" to true, "running" to false))
         }
         "isRunning" -> result.success(mapOf("ok" to true, "running" to isRunning))
+        "queryLatest" -> {
+          val known = lastPayload
+          if (known != null) {
+            result.success(mapOf("ok" to true, "update" to known))
+          } else {
+            result.success(mapOf("ok" to true, "update" to null))
+          }
+        }
         else -> result.notImplemented()
       }
     }
@@ -86,11 +104,16 @@ class MotionActivityManager(
 
   override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
     eventSink = events
+    // Replay last known so UI paints immediately on (re)subscribe.
+    lastPayload?.let { payload ->
+      mainHandler.post { events?.success(payload) }
+    }
   }
 
   override fun onCancel(arguments: Any?) {
+    // Clear sink only — do NOT stop recognition. Duty GPS / fusion may still
+    // need updates; Flutter calls stop() explicitly via ref-counting.
     eventSink = null
-    stop()
   }
 
   private fun permissionStatus(): String {

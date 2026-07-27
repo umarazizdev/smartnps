@@ -3,16 +3,18 @@
 /// Designed for polyline-ready states:
 /// - Slow car (10–15 km/h) → driving, never "running"
 /// - Red light / crawl traffic → stay in vehicle session
-/// - Leave car → walking within a few seconds (native or GPS-assisted)
+/// - Leave car → walking within ~1–3s (native or GPS-assisted)
+///
+/// Timers are tuned for snappy UI while still rejecting brief traffic-light
+/// flicker between driving and walking.
 class VehicleSessionFusion {
   /// Instant enter — covers most "slow street" driving.
   static const double enterDrivingGpsKmh = 12;
 
-  /// Soft enter after a short sustained mid speed.
+  /// Soft enter at mid speed (immediate provisional session).
   static const double softEnterGpsKmh = 9.5;
-  static const Duration softEnterHold = Duration(milliseconds: 1500);
 
-  static const int enterDrivingConfidence = 45;
+  static const int enterDrivingConfidence = 40;
 
   /// Still clearly moving as a vehicle (incl. slow traffic).
   static const double keepDrivingGpsKmh = 7;
@@ -23,17 +25,18 @@ class VehicleSessionFusion {
   static const double walkMinKmh = 1.4;
   static const double walkMaxKmh = 8.5;
 
-  static const int walkExitConfidence = 40;
-  static const Duration walkExitHold = Duration(seconds: 4);
-  static const int strongWalkConfidence = 70;
-  static const Duration strongWalkExitHold = Duration(seconds: 3);
+  static const int walkExitConfidence = 35;
+  static const Duration walkExitHold = Duration(milliseconds: 1800);
+  static const int strongWalkConfidence = 65;
+  static const Duration strongWalkExitHold = Duration(milliseconds: 900);
 
   /// After a real stop in-vehicle, walk-band GPS can exit without waiting on OS.
-  static const Duration stoppedBeforeGpsWalkExit = Duration(seconds: 4);
-  static const Duration gpsWalkExitHold = Duration(seconds: 4);
+  static const Duration stoppedBeforeGpsWalkExit = Duration(milliseconds: 1800);
+  static const Duration gpsWalkExitHold = Duration(milliseconds: 1600);
 
-  static const Duration nonVehicleHold = Duration(milliseconds: 1200);
-  static const double speedEmaAlpha = 0.4;
+  /// Debounce for walk ↔ stationary ↔ running outside a vehicle session.
+  static const Duration nonVehicleHold = Duration(milliseconds: 350);
+  static const double speedEmaAlpha = 0.55;
 
   bool active = false;
   String state = 'unknown';
@@ -267,6 +270,18 @@ class VehicleSessionFusion {
       return;
     }
 
+    // Instant commit for clear native transitions (OS already debounced).
+    if (!provisional &&
+        (candidate == 'walking' ||
+            candidate == 'running' ||
+            candidate == 'cycling' ||
+            candidate == 'stationary')) {
+      state = candidate;
+      _pendingNonVehicleSince = null;
+      _pendingNonVehicle = null;
+      return;
+    }
+
     if (_pendingNonVehicle == candidate) {
       if (_pendingNonVehicleSince != null &&
           now.difference(_pendingNonVehicleSince!) >= nonVehicleHold) {
@@ -315,20 +330,34 @@ class VehicleSessionFusion {
 
     _walkExitSince ??= now;
     final held = now.difference(_walkExitSince!);
-    final need = nativeConfidence >= strongWalkConfidence
-        ? strongWalkExitHold
-        : walkExitHold;
+    Duration need;
+    if (nativeConfidence >= 80) {
+      need = const Duration(milliseconds: 400);
+    } else if (nativeConfidence >= strongWalkConfidence) {
+      need = strongWalkExitHold;
+    } else {
+      need = walkExitHold;
+    }
 
     if (held < need) {
       reason =
-          'walk-exit pending ${held.inSeconds}s/${need.inSeconds}s (native)';
+          'walk-exit pending ${_fmtMs(held)}/${_fmtMs(need)} (native)';
       return false;
     }
 
     _leaveVehicleAsWalking(
-      reasonText: 'walk exit after ${need.inSeconds}s (native)',
+      reasonText: 'walk exit after ${_fmtMs(need)} (native)',
     );
     return true;
+  }
+
+  static String _fmtMs(Duration d) {
+    final ms = d.inMilliseconds;
+    if (ms < 1000) return '${ms}ms';
+    final s = ms / 1000.0;
+    return s == s.roundToDouble()
+        ? '${s.toInt()}s'
+        : '${s.toStringAsFixed(1)}s';
   }
 
   /// Leave car when: stopped in vehicle, then sustained walk-band GPS,
@@ -362,7 +391,7 @@ class VehicleSessionFusion {
     final held = now.difference(_gpsWalkExitSince!);
     if (held < gpsWalkExitHold) {
       reason =
-          'gps walk-exit pending ${held.inSeconds}s/${gpsWalkExitHold.inSeconds}s';
+          'gps walk-exit pending ${_fmtMs(held)}/${_fmtMs(gpsWalkExitHold)}';
       return false;
     }
 

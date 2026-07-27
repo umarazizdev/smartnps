@@ -5,12 +5,17 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../permissions/native_permission_status_service.dart';
 import '../utilities/app_config.dart';
 import 'motion_activity_fusion_controller.dart';
 import 'motion_activity_service.dart';
 import 'vehicle_session_fusion.dart';
 
 /// Live native motion vs GPS-fused vehicle session for field testing.
+///
+/// **Fused** is the source of truth (same engine as GPS uploads). Native OS
+/// recognition is shown for comparison — it often lags real motion by several
+/// seconds; fusion fills that gap with GPS speed.
 class MotionActivityScreen extends StatefulWidget {
   const MotionActivityScreen({super.key, this.isDark = false});
 
@@ -23,6 +28,7 @@ class MotionActivityScreen extends StatefulWidget {
 class _MotionActivityScreenState extends State<MotionActivityScreen> {
   StreamSubscription<MotionActivityUpdate>? _motionSub;
   StreamSubscription<Position>? _gpsSub;
+  Timer? _ageTicker;
   final _fusion = MotionActivityFusionController.instance;
 
   MotionActivityUpdate? _latest;
@@ -45,6 +51,7 @@ class _MotionActivityScreenState extends State<MotionActivityScreen> {
 
   @override
   void dispose() {
+    _ageTicker?.cancel();
     unawaited(_teardown());
     super.dispose();
   }
@@ -67,12 +74,21 @@ class _MotionActivityScreenState extends State<MotionActivityScreen> {
       _permissionDenied = false;
       _unavailable = false;
       _gpsDenied = false;
-      _latest = null;
-      _fused = null;
-      _gpsSpeedKmh = null;
-      _lastNativeAt = null;
-      _lastGpsAt = null;
     });
+
+    // Seed from in-memory fusion if duty GPS already started it.
+    final existing = _fusion.lastSnapshot;
+    final existingNative = _fusion.lastNative ?? MotionActivityService.lastUpdate;
+    if (existing != null || existingNative != null) {
+      setState(() {
+        _fused = existing;
+        _latest = existingNative;
+        _gpsSpeedKmh = existing?.gpsSpeedKmh ?? existing?.smoothedSpeedKmh;
+        if (existingNative != null) {
+          _lastNativeAt = DateTime.now();
+        }
+      });
+    }
 
     final available = await MotionActivityService.isAvailable();
     if (!available) {
@@ -94,8 +110,13 @@ class _MotionActivityScreenState extends State<MotionActivityScreen> {
         _statusMessage =
             'Motion activity permission is required to detect walking, running, driving, and more.';
       });
+      // Report deny / unknown to permission-status API.
+      unawaited(NativePermissionStatusService.instance.syncIfChanged());
       return;
     }
+
+    // Keep permission-status API in sync after grant / re-check.
+    unawaited(NativePermissionStatusService.instance.syncIfChanged());
 
     if (!_acquired) {
       await _fusion.acquire();
@@ -128,12 +149,31 @@ class _MotionActivityScreenState extends State<MotionActivityScreen> {
       }
     }
 
+    // Immediate snapshot — don't wait for the next OS event.
+    final snap = await MotionActivityService.queryLatest();
+    if (mounted && snap != null) {
+      _lastNativeAt = DateTime.now();
+      _applyFusion(native: snap);
+    }
+
     await _startGpsSpeedWatch();
+    _startAgeTicker();
 
     if (!mounted) return;
     setState(() {
       _starting = false;
-      _statusMessage = 'Listening for activity…';
+      _statusMessage = 'Live — fused is source of truth';
+    });
+  }
+
+  void _startAgeTicker() {
+    _ageTicker?.cancel();
+    // Refresh "Xs ago" labels so staleness is obvious.
+    _ageTicker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      if (_lastNativeAt != null || _lastGpsAt != null) {
+        setState(() {});
+      }
     });
   }
 
@@ -153,13 +193,28 @@ class _MotionActivityScreenState extends State<MotionActivityScreen> {
         return;
       }
 
-      // High-cadence stream so fusion can enter driving before OS motion catches up.
+      // Last-known fix paints speed before the first stream event.
+      try {
+        final last = await Geolocator.getLastKnownPosition();
+        if (last != null && mounted) {
+          final speedMps = last.speed;
+          final kmh = (speedMps.isFinite && speedMps >= 0)
+              ? speedMps * 3.6
+              : null;
+          if (kmh != null) {
+            _lastGpsAt = DateTime.now();
+            _applyFusion(gpsSpeedKmh: kmh);
+          }
+        }
+      } catch (_) {}
+
+      // High-cadence stream so fusion tracks motion before OS AR catches up.
       final LocationSettings settings;
       if (Platform.isAndroid) {
         settings = AndroidSettings(
           accuracy: LocationAccuracy.bestForNavigation,
           distanceFilter: 0,
-          intervalDuration: const Duration(seconds: 1),
+          intervalDuration: const Duration(milliseconds: 800),
         );
       } else if (Platform.isIOS) {
         settings = AppleSettings(
@@ -216,7 +271,7 @@ class _MotionActivityScreenState extends State<MotionActivityScreen> {
 
     setState(() {
       _fused = snapshot;
-      _statusMessage = 'Listening for activity…';
+      _statusMessage = 'Live — fused is source of truth';
     });
   }
 
@@ -270,6 +325,7 @@ class _MotionActivityScreenState extends State<MotionActivityScreen> {
     final provisional = _fused?.provisional ?? false;
     final reason = _fused?.reason ?? '—';
     final smooth = _fused?.smoothedSpeedKmh;
+    final apiLabel = _fused?.apiMotionActivity ?? '—';
 
     final speedText = _gpsDenied
         ? 'GPS permission denied'
@@ -302,7 +358,7 @@ class _MotionActivityScreenState extends State<MotionActivityScreen> {
               Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
-                  'Same fusion used for GPS uploads / polylines (not speed bands).',
+                  'Fused status is what GPS uploads use. Native OS often lags — GPS fills the gap.',
                   style: TextStyle(color: muted, fontSize: 14, height: 1.35),
                 ),
               ),
@@ -322,7 +378,7 @@ class _MotionActivityScreenState extends State<MotionActivityScreen> {
               Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
-                  'API ${_fused?.apiMotionActivity ?? '—'} · '
+                  'API $apiLabel · '
                   'Native ${_ageLabel(_lastNativeAt)} · GPS ${_ageLabel(_lastGpsAt)}',
                   style: TextStyle(color: muted, fontSize: 12),
                 ),
@@ -350,6 +406,22 @@ class _MotionActivityScreenState extends State<MotionActivityScreen> {
                       : Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
+                            // Primary: fused (source of truth)
+                            _HeroStatus(
+                              activity: fusedState,
+                              apiLabel: apiLabel,
+                              subtitle: sessionActive
+                                  ? (provisional
+                                      ? 'Vehicle session · provisional GPS'
+                                      : 'Vehicle session active')
+                                  : (provisional
+                                      ? 'GPS fill-in (waiting on OS)'
+                                      : 'Live fused status'),
+                              detail: reason,
+                              isDark: isDark,
+                              visual: _visualFor(fusedState),
+                            ),
+                            const SizedBox(height: 28),
                             Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
@@ -368,14 +440,12 @@ class _MotionActivityScreenState extends State<MotionActivityScreen> {
                                 const SizedBox(width: 12),
                                 Expanded(
                                   child: _ResultColumn(
-                                    title: 'Fused',
+                                    title: 'Session',
                                     subtitle: sessionActive
                                         ? (provisional
-                                            ? 'Session ON · provisional'
-                                            : 'Vehicle session ON')
-                                        : (provisional
-                                            ? 'Provisional (GPS)'
-                                            : 'Session OFF'),
+                                            ? 'ON · provisional'
+                                            : 'ON')
+                                        : 'OFF',
                                     activity: fusedState,
                                     detail: reason,
                                     confidence: confidence,
@@ -432,6 +502,123 @@ class _MotionActivityScreenState extends State<MotionActivityScreen> {
   }
 }
 
+class _HeroStatus extends StatelessWidget {
+  const _HeroStatus({
+    required this.activity,
+    required this.apiLabel,
+    required this.subtitle,
+    required this.detail,
+    required this.isDark,
+    required this.visual,
+  });
+
+  final String activity;
+  final String apiLabel;
+  final String subtitle;
+  final String detail;
+  final bool isDark;
+  final _ActivityVisual visual;
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = isDark ? Colors.white : const Color(AppConfig.cPrimary);
+    final muted = isDark
+        ? Colors.white.withValues(alpha: 0.65)
+        : const Color(0xFF5B6575);
+    final label = activity.contains('_')
+        ? activity.split('_').map(_titleCase).join(' ')
+        : _titleCase(activity);
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          'FUSED',
+          style: TextStyle(
+            color: visual.color,
+            fontSize: 12,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 1.2,
+          ),
+        ),
+        const SizedBox(height: 10),
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          curve: Curves.easeOut,
+          width: 128,
+          height: 128,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: visual.color.withValues(alpha: isDark ? 0.24 : 0.14),
+            border: Border.all(
+              color: visual.color.withValues(alpha: 0.75),
+              width: 3,
+            ),
+          ),
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 140),
+            child: Icon(
+              visual.icon,
+              key: ValueKey('${activity}_${visual.icon.codePoint}'),
+              size: 56,
+              color: visual.color,
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 140),
+          child: Text(
+            label,
+            key: ValueKey(label),
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: fg,
+              fontSize: 26,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.4,
+              height: 1.1,
+            ),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'API · $apiLabel',
+          style: TextStyle(
+            color: visual.color,
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          subtitle,
+          textAlign: TextAlign.center,
+          style: TextStyle(color: muted, fontSize: 12, height: 1.25),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          detail,
+          textAlign: TextAlign.center,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: muted,
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            height: 1.3,
+          ),
+        ),
+      ],
+    );
+  }
+
+  static String _titleCase(String value) {
+    if (value.isEmpty) return value;
+    return value[0].toUpperCase() + value.substring(1);
+  }
+}
+
 class _LegendChip extends StatelessWidget {
   const _LegendChip({
     required this.isDark,
@@ -449,10 +636,10 @@ class _LegendChip extends StatelessWidget {
         ? Colors.white.withValues(alpha: 0.7)
         : const Color(0xFF5B6575);
     final text = sessionActive
-        ? 'In traffic / stopped car → stays driving until walk exit holds'
+        ? 'In traffic / stopped car → stays driving; leave-car ~1–2s'
         : provisional
-            ? 'Waiting on OS motion — GPS fills the gap'
-            : 'Walking / stationary follow native (GPS only if OS is quiet)';
+            ? 'Waiting on OS motion — GPS fills the gap instantly'
+            : 'Walking / stationary follow native; GPS if OS is quiet';
 
     return Text(
       text,
@@ -513,12 +700,12 @@ class _ResultColumn extends StatelessWidget {
           textAlign: TextAlign.center,
           style: TextStyle(color: muted, fontSize: 11, height: 1.25),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         AnimatedContainer(
-          duration: const Duration(milliseconds: 280),
+          duration: const Duration(milliseconds: 160),
           curve: Curves.easeOut,
-          width: emphasize ? 112 : 104,
-          height: emphasize ? 112 : 104,
+          width: emphasize ? 88 : 80,
+          height: emphasize ? 88 : 80,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: visual.color.withValues(alpha: isDark ? 0.22 : 0.12),
@@ -528,32 +715,32 @@ class _ResultColumn extends StatelessWidget {
             ),
           ),
           child: AnimatedSwitcher(
-            duration: const Duration(milliseconds: 220),
+            duration: const Duration(milliseconds: 140),
             child: Icon(
               visual.icon,
               key: ValueKey('${activity}_${visual.icon.codePoint}'),
-              size: emphasize ? 48 : 44,
+              size: emphasize ? 38 : 34,
               color: visual.color,
             ),
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         AnimatedSwitcher(
-          duration: const Duration(milliseconds: 200),
+          duration: const Duration(milliseconds: 140),
           child: Text(
             label,
             key: ValueKey(label),
             textAlign: TextAlign.center,
             style: TextStyle(
               color: fg,
-              fontSize: 18,
+              fontSize: 15,
               fontWeight: FontWeight.w800,
               letterSpacing: -0.3,
               height: 1.15,
             ),
           ),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 6),
         Text(
           detail,
           textAlign: TextAlign.center,
@@ -567,14 +754,14 @@ class _ResultColumn extends StatelessWidget {
           ),
         ),
         if (showConfidenceBar) ...[
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           SizedBox(
-            width: 120,
+            width: 100,
             child: ClipRRect(
               borderRadius: BorderRadius.circular(8),
               child: LinearProgressIndicator(
                 value: (confidence.clamp(0, 100)) / 100.0,
-                minHeight: 6,
+                minHeight: 5,
                 backgroundColor: isDark
                     ? Colors.white.withValues(alpha: 0.08)
                     : const Color(0xFFE4E8EF),

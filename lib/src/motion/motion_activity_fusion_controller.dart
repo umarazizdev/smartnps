@@ -21,6 +21,9 @@ class MotionActivityFusionController {
   static const _prefsConfidenceKey = 'motion_fusion_native_confidence';
   static const _prefsTimestampKey = 'motion_fusion_native_ts_ms';
 
+  /// Drop stale native prefs so background GPS-only fusion takes over sooner.
+  static const _nativePrefsTtlMs = 25000;
+
   final VehicleSessionFusion fusion = VehicleSessionFusion();
 
   StreamSubscription<MotionActivityUpdate>? _motionSub;
@@ -70,6 +73,8 @@ class MotionActivityFusionController {
         if (kDebugMode) {
           debugPrint('[MotionFusion] native motion started');
         }
+        // Seeds stream via queryLatest → _onNativeUpdate (no duplicate call).
+        await MotionActivityService.queryLatest();
       } else if (kDebugMode) {
         debugPrint('[MotionFusion] native start failed: $start');
       }
@@ -125,10 +130,9 @@ class MotionActivityFusionController {
       final activity = prefs.getString(_prefsActivityKey) ?? 'unknown';
       final confidence = prefs.getInt(_prefsConfidenceKey) ?? 0;
       final ts = prefs.getInt(_prefsTimestampKey) ?? 0;
-      // Ignore stale native (> 90s) so background doesn't stick forever.
       if (ts > 0) {
         final ageMs = DateTime.now().millisecondsSinceEpoch - ts;
-        if (ageMs > 90000) {
+        if (ageMs > _nativePrefsTtlMs) {
           return (activity: 'unknown', confidence: 0);
         }
       }

@@ -53,7 +53,7 @@ class BackgroundLocationUploader {
   final BatchDisplacementGate _batchDisplacementGate = BatchDisplacementGate();
 
   static const int _maxBatchSize = 20;
-  /// Minimum GPS stream poll interval (not upload throttle).
+  /// Minimum / curve-boost GPS cadence (adaptive stream uses policy bands).
   static const Duration pingInterval = Duration(seconds: 1);
   static const Duration _batchEvery = Duration(minutes: 1);
   static const Duration _maxBackoff = Duration(minutes: 2);
@@ -636,6 +636,8 @@ class BackgroundLocationUploader {
       'headingAccuracy': _validSensorNumOrNull(() => position.headingAccuracy),
       'isMocked': position.isMocked,
       'isSimulatedBySoftware': isSimulatedBySoftware,
+      // Same engine as Motion Activity screen (native OS + GPS speed fusion).
+      // Never use speed-band labels for motion — policy is timing-only below.
       'motionActivity': fusion.apiMotionActivity,
       'motionSource': 'vehicle_session_fusion',
       'motionFusedState': fusion.fusedState,
@@ -645,8 +647,7 @@ class BackgroundLocationUploader {
       'motionProvisional': fusion.provisional,
       'motionReason': fusion.reason,
       'motionSpeedKmh': fusion.smoothedSpeedKmh ?? fusion.gpsSpeedKmh,
-      // Speed bands remain for capture/upload timing only.
-      'speedBandMotionActivity': policy.band.motionActivity,
+      // Speed-adaptive policy: capture/upload cadence metadata only.
       ...policy.toJson(),
       'floor': _numOrNull(() => p.floor),
     };
@@ -679,6 +680,8 @@ class BackgroundLocationUploader {
     apiPoint.remove('_local_point_key');
     apiPoint.remove('client_point_id');
     apiPoint.remove('_queue_seq');
+    // Legacy: never send speed-band motion as activity (fusion only).
+    apiPoint.remove('speedBandMotionActivity');
     return apiPoint;
   }
 

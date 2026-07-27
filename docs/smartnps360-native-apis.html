@@ -382,9 +382,16 @@ Accept: application/json</pre>
         <tr><td>headingAccuracy</td><td>number|null</td><td>No</td><td>Heading accuracy (<code>null</code> when invalid or unavailable)</td></tr>
         <tr><td>isMocked</td><td>boolean</td><td>No</td><td>Whether the location is mocked</td></tr>
         <tr><td>isSimulatedBySoftware</td><td>boolean</td><td>No</td><td>Whether location is software-simulated</td></tr>
-        <tr><td>motionActivity</td><td>string</td><td>No</td><td>Motion band label: <code>stationary</code>, <code>walking</code>, <code>running</code>, or <code>automotive</code></td></tr>
-        <tr><td>motionSource</td><td>string</td><td>No</td><td>Always <code>speed_adaptive_gps_policy</code></td></tr>
-        <tr><td>speedBand</td><td>string</td><td>No</td><td>Speed band label</td></tr>
+        <tr><td>motionActivity</td><td>string</td><td>No</td><td><strong>Fused</strong> API label (same engine as Motion Activity screen): <code>stationary</code>, <code>walking</code>, <code>running</code>, <code>cycling</code>, or <code>automotive</code>. Not from speed bands.</td></tr>
+        <tr><td>motionSource</td><td>string</td><td>No</td><td>Always <code>vehicle_session_fusion</code></td></tr>
+        <tr><td>motionFusedState</td><td>string</td><td>No</td><td>Internal fused state (e.g. <code>driving</code>, <code>driving_stopped</code>, <code>walking</code>)</td></tr>
+        <tr><td>motionNativeActivity</td><td>string</td><td>No</td><td>Raw OS Activity Recognition / Core Motion label</td></tr>
+        <tr><td>motionNativeConfidence</td><td>number</td><td>No</td><td>OS confidence 0–100</td></tr>
+        <tr><td>motionSessionActive</td><td>boolean</td><td>No</td><td>Whether sticky vehicle session is active</td></tr>
+        <tr><td>motionProvisional</td><td>boolean</td><td>No</td><td>True when GPS is filling in before OS catches up</td></tr>
+        <tr><td>motionReason</td><td>string</td><td>No</td><td>Short fusion reason string</td></tr>
+        <tr><td>motionSpeedKmh</td><td>number</td><td>No</td><td>Speed used by fusion (smoothed when available)</td></tr>
+        <tr><td>speedBand</td><td>string</td><td>No</td><td>Speed band label (timing only — not motion)</td></tr>
         <tr><td>speedState</td><td>string</td><td>No</td><td>Human-readable speed state</td></tr>
         <tr><td>speedKmh</td><td>number</td><td>No</td><td>Raw speed in km/h</td></tr>
         <tr><td>smoothedSpeedKmh</td><td>number</td><td>No</td><td>Smoothed speed in km/h</td></tr>
@@ -417,7 +424,14 @@ Accept: application/json</pre>
   "isMocked": false,
   "isSimulatedBySoftware": false,
   "motionActivity": "walking",
-  "motionSource": "speed_adaptive_gps_policy",
+  "motionSource": "vehicle_session_fusion",
+  "motionFusedState": "walking",
+  "motionNativeActivity": "walking",
+  "motionNativeConfidence": 75,
+  "motionSessionActive": false,
+  "motionProvisional": false,
+  "motionReason": "native walking",
+  "motionSpeedKmh": 4.2,
   "speedBand": "2-8 km/h",
   "speedState": "Walking / patrol",
   "speedKmh": 4.5,
@@ -478,9 +492,16 @@ Accept: application/json</pre>
         <tr><td>headingAccuracy</td><td>number|null</td><td>No</td><td>Heading accuracy (<code>null</code> when invalid or unavailable)</td></tr>
         <tr><td>isMocked</td><td>boolean</td><td>No</td><td>Whether the location is mocked</td></tr>
         <tr><td>isSimulatedBySoftware</td><td>boolean|null</td><td>No</td><td>Whether location is software-simulated</td></tr>
-        <tr><td>motionActivity</td><td>string</td><td>No</td><td>Motion band label: <code>stationary</code>, <code>walking</code>, <code>running</code>, or <code>automotive</code></td></tr>
-        <tr><td>motionSource</td><td>string</td><td>No</td><td>Always <code>speed_adaptive_gps_policy</code></td></tr>
-        <tr><td>speedBand</td><td>string</td><td>No</td><td>Speed band label (e.g. <code>2-8 km/h</code>, <code>30-60 km/h</code>, <code>100+ km/h</code>)</td></tr>
+        <tr><td>motionActivity</td><td>string</td><td>No</td><td><strong>Fused</strong> API label (same as GPS Ping / Motion screen): <code>stationary</code>, <code>walking</code>, <code>running</code>, <code>cycling</code>, or <code>automotive</code>. Not from speed bands.</td></tr>
+        <tr><td>motionSource</td><td>string</td><td>No</td><td>Always <code>vehicle_session_fusion</code></td></tr>
+        <tr><td>motionFusedState</td><td>string</td><td>No</td><td>Internal fused state</td></tr>
+        <tr><td>motionNativeActivity</td><td>string</td><td>No</td><td>Raw OS motion label</td></tr>
+        <tr><td>motionNativeConfidence</td><td>number</td><td>No</td><td>OS confidence 0–100</td></tr>
+        <tr><td>motionSessionActive</td><td>boolean</td><td>No</td><td>Whether sticky vehicle session is active</td></tr>
+        <tr><td>motionProvisional</td><td>boolean</td><td>No</td><td>True when GPS fill-in is provisional</td></tr>
+        <tr><td>motionReason</td><td>string</td><td>No</td><td>Short fusion reason string</td></tr>
+        <tr><td>motionSpeedKmh</td><td>number</td><td>No</td><td>Speed used by fusion</td></tr>
+        <tr><td>speedBand</td><td>string</td><td>No</td><td>Speed band label (timing only — not motion)</td></tr>
         <tr><td>speedState</td><td>string</td><td>No</td><td>Human-readable speed state (e.g. <code>Walking / patrol</code>)</td></tr>
         <tr><td>speedKmh</td><td>number|null</td><td>No</td><td>Raw speed in km/h</td></tr>
         <tr><td>smoothedSpeedKmh</td><td>number|null</td><td>No</td><td>Smoothed speed in km/h</td></tr>
@@ -515,7 +536,14 @@ Accept: application/json</pre>
       "isMocked": false,
       "isSimulatedBySoftware": false,
       "motionActivity": "walking",
-      "motionSource": "speed_adaptive_gps_policy",
+      "motionSource": "vehicle_session_fusion",
+      "motionFusedState": "walking",
+      "motionNativeActivity": "walking",
+      "motionNativeConfidence": 75,
+      "motionSessionActive": false,
+      "motionProvisional": false,
+      "motionReason": "native walking",
+      "motionSpeedKmh": 4.2,
       "speedBand": "2-8 km/h",
       "speedState": "Walking / patrol",
       "speedKmh": 4.5,
@@ -546,7 +574,14 @@ Accept: application/json</pre>
       "isMocked": false,
       "isSimulatedBySoftware": false,
       "motionActivity": "automotive",
-      "motionSource": "speed_adaptive_gps_policy",
+      "motionSource": "vehicle_session_fusion",
+      "motionFusedState": "driving",
+      "motionNativeActivity": "driving",
+      "motionNativeConfidence": 80,
+      "motionSessionActive": true,
+      "motionProvisional": false,
+      "motionReason": "native driving (session)",
+      "motionSpeedKmh": 34.8,
       "speedBand": "30-60 km/h",
       "speedState": "Vehicle movement",
       "speedKmh": 35.2,
@@ -679,6 +714,7 @@ Accept: application/json</pre>
         <tr><td>backgroundLocation</td><td>granted, denied, unknown</td><td>Background location permission</td></tr>
         <tr><td>preciseLocation</td><td>granted, denied, unknown</td><td>Precise location permission</td></tr>
         <tr><td>notifications</td><td>granted, denied, unknown</td><td>Notification permission</td></tr>
+        <tr><td>motionActivity</td><td>granted, denied, unknown</td><td>Android Activity Recognition / iOS Motion &amp; Fitness permission</td></tr>
         <tr><td>batteryOptimization</td><td>granted, unknown</td><td>Android battery optimization exemption (<code>granted</code> = exempt; <code>unknown</code> = default optimized state or iOS)</td></tr>
         <tr><td>backgroundAppRefresh</td><td>enabled, disabled, restricted, unknown</td><td>iOS Background App Refresh (<code>UIBackgroundRefreshStatus</code>). Android closest equivalent: app background restriction (<code>enabled</code> = not restricted; <code>disabled</code> = restricted; <code>restricted</code> is iOS-only)</td></tr>
         <tr><td>push</td><td>enabled, disabled</td><td>In-app push toggle state (when uploaded)</td></tr>
@@ -698,6 +734,7 @@ Accept: application/json</pre>
     "backgroundLocation": "granted",
     "preciseLocation": "granted",
     "notifications": "granted",
+    "motionActivity": "granted",
     "batteryOptimization": "unknown",
     "backgroundAppRefresh": "enabled",
     "push": "enabled"

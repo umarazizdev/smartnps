@@ -12,13 +12,15 @@ final class MotionActivityManager: NSObject, FlutterStreamHandler {
     let queue = OperationQueue()
     queue.name = "com.smartnps360.app.motion_activity"
     queue.maxConcurrentOperationCount = 1
-    queue.qualityOfService = .utility
+    // Prefer snappy delivery for the Motion UI / fusion.
+    queue.qualityOfService = .userInitiated
     return queue
   }()
 
   private var eventSink: FlutterEventSink?
   private var isStreaming = false
   private var methodChannel: FlutterMethodChannel?
+  private var lastPayload: [String: Any]?
 
   func register(with messenger: FlutterBinaryMessenger) {
     let methods = FlutterMethodChannel(
@@ -50,12 +52,18 @@ final class MotionActivityManager: NSObject, FlutterStreamHandler {
     -> FlutterError?
   {
     eventSink = events
+    if let lastPayload {
+      DispatchQueue.main.async {
+        events(lastPayload)
+      }
+    }
     return nil
   }
 
   func onCancel(withArguments arguments: Any?) -> FlutterError? {
+    // Clear sink only — duty GPS / fusion may still need recognition.
+    // Flutter stops explicitly via MethodChannel stop().
     eventSink = nil
-    stopUpdates()
     return nil
   }
 
@@ -76,6 +84,8 @@ final class MotionActivityManager: NSObject, FlutterStreamHandler {
       result(["ok": true, "running": false])
     case "isRunning":
       result(["ok": true, "running": isStreaming])
+    case "queryLatest":
+      queryLatest(result: result)
     default:
       result(FlutterMethodNotImplemented)
     }
@@ -165,6 +175,8 @@ final class MotionActivityManager: NSObject, FlutterStreamHandler {
     }
 
     if isStreaming {
+      // Refresh snapshot so UI isn't stuck waiting for the next OS event.
+      emitRecentSnapshot()
       return [
         "ok": true,
         "running": true,
@@ -174,12 +186,22 @@ final class MotionActivityManager: NSObject, FlutterStreamHandler {
 
     activityManager.startActivityUpdates(to: activityQueue) { [weak self] activity in
       guard let self = self, let activity = activity else { return }
+      // Skip unknown-only samples when we already have a better last payload.
+      let mapped = self.mapActivity(activity)
+      if mapped.activity == "unknown", self.lastPayload != nil {
+        // Still accept unknown if confidence is high (genuine unknown).
+        if activity.confidence == .low {
+          return
+        }
+      }
       let payload = self.payload(from: activity)
+      self.lastPayload = payload
       DispatchQueue.main.async {
         self.eventSink?(payload)
       }
     }
     isStreaming = true
+    emitRecentSnapshot()
 
     return [
       "ok": true,
@@ -192,6 +214,69 @@ final class MotionActivityManager: NSObject, FlutterStreamHandler {
     guard isStreaming else { return }
     activityManager.stopActivityUpdates()
     isStreaming = false
+  }
+
+  /// Immediate historical query so the screen paints without waiting on live OS lag.
+  private func queryLatest(result: @escaping FlutterResult) {
+    guard CMMotionActivityManager.isActivityAvailable() else {
+      result(["ok": false, "update": NSNull()])
+      return
+    }
+
+    let now = Date()
+    activityManager.queryActivityStarting(
+      from: now.addingTimeInterval(-120),
+      to: now,
+      to: activityQueue
+    ) { [weak self] activities, error in
+      DispatchQueue.main.async {
+        guard let self = self else {
+          result(["ok": false, "update": NSNull()])
+          return
+        }
+        if error != nil {
+          result(["ok": true, "update": self.lastPayload as Any? ?? NSNull()])
+          return
+        }
+        guard let best = self.pickBest(from: activities ?? []) else {
+          result(["ok": true, "update": self.lastPayload as Any? ?? NSNull()])
+          return
+        }
+        let payload = self.payload(from: best)
+        self.lastPayload = payload
+        self.eventSink?(payload)
+        result(["ok": true, "update": payload])
+      }
+    }
+  }
+
+  private func emitRecentSnapshot() {
+    let now = Date()
+    activityManager.queryActivityStarting(
+      from: now.addingTimeInterval(-90),
+      to: now,
+      to: activityQueue
+    ) { [weak self] activities, _ in
+      guard let self = self, let best = self.pickBest(from: activities ?? []) else { return }
+      let payload = self.payload(from: best)
+      self.lastPayload = payload
+      DispatchQueue.main.async {
+        self.eventSink?(payload)
+      }
+    }
+  }
+
+  /// Prefer the newest non-unknown activity; fall back to newest overall.
+  private func pickBest(from activities: [CMMotionActivity]) -> CMMotionActivity? {
+    guard !activities.isEmpty else { return nil }
+    let sorted = activities.sorted { $0.startDate > $1.startDate }
+    if let concrete = sorted.first(where: { activity in
+      let mapped = mapActivity(activity).activity
+      return mapped != "unknown"
+    }) {
+      return concrete
+    }
+    return sorted.first
   }
 
   private func payload(from activity: CMMotionActivity) -> [String: Any] {

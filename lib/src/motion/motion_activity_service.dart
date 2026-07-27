@@ -54,6 +54,10 @@ class MotionActivityService {
       StreamController<MotionActivityUpdate>.broadcast();
 
   static bool _listening = false;
+  static MotionActivityUpdate? _lastUpdate;
+
+  /// Most recent update seen on the EventChannel (may be null before first).
+  static MotionActivityUpdate? get lastUpdate => _lastUpdate;
 
   /// Broadcast stream of activity updates. Subscribe after [start].
   static Stream<MotionActivityUpdate> get stream => _controller.stream;
@@ -140,13 +144,43 @@ class MotionActivityService {
     }
   }
 
+  /// Best-effort immediate snapshot (iOS history query / Android last known).
+  /// Also pushes onto [stream] when native emits via the sink.
+  static Future<MotionActivityUpdate?> queryLatest() async {
+    try {
+      final result = await _methods.invokeMethod<dynamic>('queryLatest');
+      final map = _asMap(result);
+      final updateRaw = map['update'];
+      if (updateRaw is Map) {
+        final update = MotionActivityUpdate.fromMap(updateRaw);
+        _publish(update);
+        return update;
+      }
+      return _lastUpdate;
+    } on MissingPluginException {
+      return _lastUpdate;
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[MotionActivity] queryLatest failed: $e');
+      }
+      return _lastUpdate;
+    }
+  }
+
+  static void _publish(MotionActivityUpdate update) {
+    _lastUpdate = update;
+    if (!_controller.isClosed) {
+      _controller.add(update);
+    }
+  }
+
   static Future<void> _ensureEventSubscription() async {
     if (_listening) return;
     _listening = true;
     _subscription = _events.receiveBroadcastStream().listen(
       (event) {
         if (event is Map) {
-          _controller.add(MotionActivityUpdate.fromMap(event));
+          _publish(MotionActivityUpdate.fromMap(event));
         }
       },
       onError: (Object error) {
