@@ -8,6 +8,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../api/api_client.dart';
 import '../utilities/app_config.dart';
+import '../utilities/app_upgrade_reconciler.dart';
 import 'auth_state.dart';
 import 'location_disclosure_account_sync.dart';
 
@@ -281,6 +282,7 @@ class AuthRepository {
       await saveTokensFromAuthResponse(map);
     }
     await _persistAccessTokenExpiry(map);
+    AppUpgradeReconciler.endPostUpgradeAuthGrace();
   }
 
   bool get hasCachedAccessToken =>
@@ -393,10 +395,11 @@ class AuthRepository {
     return body;
   }
 
-  /// Preloads tokens while the device is unlocked (e.g. app launch).
+  /// Preloads tokens + login flag while the device is unlocked (e.g. app launch).
   Future<void> warmAccessTokenCache() async {
     await getAccessToken();
     await getRefreshToken();
+    await isOfficerLoggedIn();
   }
 
   /// Returns a usable access token, refreshing silently when missing/expired.
@@ -449,6 +452,7 @@ class AuthRepository {
       }
 
       await saveTokensFromAuthResponse(Map<String, dynamic>.from(body));
+      AppUpgradeReconciler.endPostUpgradeAuthGrace();
       final access = await getAccessToken();
       completer.complete(access);
       return access;
@@ -483,8 +487,19 @@ class AuthRepository {
 
   bool _logoutAfterRefreshFailureInFlight = false;
 
+  /// Soft-fails (keeps Secure Storage) during [AppUpgradeReconciler] grace so a
+  /// flaky post-update refresh cannot wipe tokens / GPS queue.
   Future<void> _notifyRefreshSessionExpired() async {
     if (_logoutAfterRefreshFailureInFlight) return;
+    if (AppUpgradeReconciler.shouldSuppressRefreshSessionLogout) {
+      if (kDebugMode) {
+        debugPrint(
+          '[SmartNPS360][AuthRepo] refresh 401/403 soft-failed '
+          '(post-upgrade grace; storage kept)',
+        );
+      }
+      return;
+    }
     _logoutAfterRefreshFailureInFlight = true;
     try {
       final handler = onRefreshSessionExpired;

@@ -18,8 +18,31 @@ class AppUpgradeReconciler {
   static const _storage = FlutterSecureStorage();
   static const _kLastSeenBuild = 'app.last_seen_build';
 
+  /// After an upgrade, refresh 401/403 must not wipe Secure Storage — web
+  /// cookies are often gone while native tokens are still valid.
+  static const Duration postUpgradeAuthGrace = Duration(minutes: 15);
+
   static bool _storageReconcileDone = false;
   static bool _osReconcileDone = false;
+  static DateTime? _suppressRefreshLogoutUntil;
+
+  /// True while post-upgrade grace is active (refresh expiry soft-fails).
+  static bool get shouldSuppressRefreshSessionLogout {
+    final until = _suppressRefreshLogoutUntil;
+    if (until == null) return false;
+    if (DateTime.now().isBefore(until)) return true;
+    _suppressRefreshLogoutUntil = null;
+    return false;
+  }
+
+  static void beginPostUpgradeAuthGrace() {
+    _suppressRefreshLogoutUntil = DateTime.now().add(postUpgradeAuthGrace);
+  }
+
+  /// Call after a successful token refresh / login so normal expiry logout resumes.
+  static void endPostUpgradeAuthGrace() {
+    _suppressRefreshLogoutUntil = null;
+  }
 
   /// Call from [main] before [runApp].
   ///
@@ -41,10 +64,12 @@ class AppUpgradeReconciler {
       await DutyTrackingPreferences.clearBgLocationReady();
       await DutyTrackingPreferences.clearSettingsPromptDeferred();
       ClockInGateService.instance.clearGeoUnlock();
+      beginPostUpgradeAuthGrace();
       if (kDebugMode) {
         debugPrint(
           '[AppUpgradeReconciler] build changed $lastSeenBuild -> $currentBuild '
-          '(${Platform.isAndroid ? 'android' : 'ios'})',
+          '(${Platform.isAndroid ? 'android' : 'ios'}; '
+          'refresh-logout suppressed for ${postUpgradeAuthGrace.inMinutes}m)',
         );
       }
     }
