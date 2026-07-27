@@ -30,6 +30,9 @@
     <!-- Android 13+ notifications (only request at runtime when implemented). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Needed so permission_handler can request battery unrestricted (duty tracking). -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <application
         android:label="SmartNPS360"
         android:name="${applicationName}"

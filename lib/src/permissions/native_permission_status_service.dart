@@ -121,6 +121,13 @@ class NativePermissionStatusService {
   /// Prefer one POST: if mark-denied lands while app_cycle is queued, sync after.
   bool _deferredSyncAfterAppCycle = false;
 
+  /// Optional listener for live OS permission changes (blocker UI).
+  VoidCallback? _onOsPermissionChanged;
+
+  void setOnOsPermissionChanged(VoidCallback? callback) {
+    _onOsPermissionChanged = callback;
+  }
+
   void resetSyncState() {
     stopBatteryMonitoring();
     _lastPayloadFingerprint = null;
@@ -164,6 +171,9 @@ class NativePermissionStatusService {
           );
         }
         unawaited(syncIfChanged());
+        // Keep the logged-in permission blocker in sync without waiting for resume.
+        // ignore: avoid_dynamic_calls — soft dependency via callback.
+        _onOsPermissionChanged?.call();
         return null;
       default:
         throw MissingPluginException('No handler for ${call.method}');

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../app/app_navigator.dart';
 import '../background/background_location_permissions.dart';
+import '../permissions/required_permissions_gate.dart';
 import '../utilities/overlay_prompt_guard.dart';
 import '../utilities/permission_settings_helper.dart';
 import 'glass_action_dialog.dart';
@@ -33,6 +34,7 @@ class ClockInBlockedDialog {
   /// Clock-in only: shown when GPS is refused due to low accuracy (no JS payload).
   static Future<void> showGpsAccuracyFailureForClockIn() async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
+    if (RequiredPermissionsGate.shouldSuppressCompetingDialogs) return;
     if (_dialogVisible) return;
     if (PermissionSettingsHelper.settingsPromptVisible.value) return;
     if (_isInCooldown(gpsAccuracyLowReason)) return;
@@ -66,6 +68,7 @@ class ClockInBlockedDialog {
   static Future<ClockInBlockedAction?> showLocationSettingsPrompt(
     String? deniedReason,
   ) async {
+    if (RequiredPermissionsGate.shouldSuppressCompetingDialogs) return null;
     if (_dialogVisible) return null;
     if (PermissionSettingsHelper.settingsPromptVisible.value) return null;
 
@@ -139,6 +142,7 @@ class ClockInBlockedDialog {
   }) async {
     // Never paint the failure dialog while we are settling after Settings —
     // Android restores leftover routes and caused a brief error flash.
+    if (RequiredPermissionsGate.shouldSuppressCompetingDialogs) return null;
     if (Platform.isAndroid &&
         PermissionSettingsHelper.isAwaitingSettingsReturn) {
       return null;

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../background/background_location_permissions.dart';
 import '../background/location_disclosure_consent.dart';
+import '../permissions/required_permissions_gate.dart';
 import 'clock_in_blocked_dialog.dart';
 import 'glass_action_dialog.dart';
 
@@ -72,6 +73,9 @@ class ClockInLocationDisclosureDialog extends StatelessWidget {
     LocationPermissionPhase phase = LocationPermissionPhase.none,
     bool compact = false,
   }) async {
+    if (RequiredPermissionsGate.shouldSuppressCompetingDialogs) {
+      return false;
+    }
     if (!await LocationDisclosureConsent.shouldShowLocationDisclosure()) {
       return true;
     }

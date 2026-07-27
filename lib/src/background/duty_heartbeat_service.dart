@@ -12,6 +12,7 @@ import '../app/app_navigator.dart';
 import '../auth/auth_repository.dart';
 import '../push/push_notification_service.dart';
 import '../auth/location_disclosure_account_sync.dart';
+import '../permissions/required_permissions_gate.dart';
 import '../utilities/app_config.dart';
 import '../utilities/overlay_prompt_guard.dart';
 import '../utilities/permission_settings_helper.dart';
@@ -178,6 +179,8 @@ class DutyHeartbeatService {
   /// state without re-prompting settings the user already dismissed.
   Future<void> recheckOnDutyPrompts({bool pageReload = false}) async {
     if (!_heartbeatActive) return;
+    // Permission blocker already owns Allow / Settings CTAs.
+    if (RequiredPermissionsGate.shouldSuppressCompetingDialogs) return;
 
     final token = await AuthRepository.instance.ensureValidAccessToken();
     if (token == null || token.isEmpty) return;
@@ -590,6 +593,7 @@ class DutyHeartbeatService {
   /// Re-shows disclosure on user-initiated retry (forceRetry).
   Future<bool> ensureDisclosureBeforeWebLocationAccess() async {
     if (!Platform.isAndroid && !Platform.isIOS) return true;
+    if (RequiredPermissionsGate.shouldSuppressCompetingDialogs) return false;
 
     if (!await LocationDisclosureConsent.shouldShowLocationDisclosure()) {
       _disclosureAccepted = true;
@@ -726,6 +730,8 @@ class DutyHeartbeatService {
   Future<bool> prepareBannerLocationPermissionRequest(
     BuildContext context,
   ) async {
+    if (RequiredPermissionsGate.shouldSuppressCompetingDialogs) return false;
+
     if (!await LocationDisclosureConsent.shouldShowLocationDisclosure()) {
       _disclosureAccepted = true;
       return true;
@@ -1039,6 +1045,7 @@ class DutyHeartbeatService {
   Future<bool> _promptBackgroundLocationDisclosure({
     bool forceRetry = false,
   }) async {
+    if (RequiredPermissionsGate.shouldSuppressCompetingDialogs) return false;
     if (!forceRetry && _disclosureDeferred) {
       return false;
     }
@@ -1151,6 +1158,7 @@ class DutyHeartbeatService {
     bool userInitiated = false,
     BuildContext? context,
   }) async {
+    if (RequiredPermissionsGate.shouldSuppressCompetingDialogs) return false;
     if (_backgroundLocationSettingsDialogVisible) return false;
 
     if (!userInitiated && _onDutyAutoPromptComplete) {

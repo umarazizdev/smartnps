@@ -3,6 +3,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'dart:ui';
 
+import '../utilities/app_config.dart';
+
 class PlatformBottomTab {
   const PlatformBottomTab({
     required this.label,
@@ -50,19 +52,23 @@ class PlatformBottomBar extends StatelessWidget {
         (defaultTargetPlatform == TargetPlatform.iOS ||
             defaultTargetPlatform == TargetPlatform.macOS);
 
+    // Match officer UI active tab cyan in light + dark (iOS + Android).
+    final activeTint =
+        tint ?? const Color(AppConfig.cBottomBarActive);
+
     return isApplePlatform
         ? _CupertinoNativeBottomBar(
             tabs: tabs,
             currentIndex: currentIndex,
             onTap: onTap,
-            tint: tint ?? Theme.of(context).colorScheme.primary,
+            tint: activeTint,
             height: heightIOS,
           )
         : _ClassicBottomBar(
             tabs: tabs,
             currentIndex: currentIndex,
             onTap: onTap,
-            tint: tint ?? Theme.of(context).colorScheme.primary,
+            tint: activeTint,
             surface: surface,
             darkSurface: darkSurface,
             isDark: isDark,
@@ -136,33 +142,31 @@ class _ClassicBottomBar extends StatelessWidget {
     final isAndroid =
         !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
-    final activeColor = effectiveIsDark ? Colors.white : tint;
+    // Same UI cyan for active tabs in light + dark (#0F93D2).
+    final activeColor = tint;
 
+    // Dark: solid white inactive. Light: near-black charcoal from officer UI.
     final inactiveColor = effectiveIsDark
-        ? Colors.white.withAlpha(isAndroid ? 160 : 140)
-        : isAndroid
-        ? const Color(0xFF8D96A6)
-        : const Color.fromARGB(255, 177, 175, 175);
+        ? Colors.white
+        : const Color(0xFF272527);
 
     final bgColor = effectiveIsDark
         ? (darkSurface ?? const Color(0xFF1A2332)).withAlpha(
-            isAndroid ? 225 : 210,
+            isAndroid ? 235 : 210,
           )
-        : (surface ??
-                  (isAndroid
-                      ? const Color(0xFFE6ECF4)
-                      : const Color(0xFFFBFBFD)))
-              .withAlpha(isAndroid ? 242 : 245);
+        : isAndroid
+        // Near-white so the bar matches light cards instead of looking grey.
+        ? const Color(0xFFFFFFF8).withAlpha(252)
+        : (surface ?? const Color(0xFFFBFBFD)).withAlpha(245);
 
     final borderColor = effectiveIsDark
-        ? Colors.white.withAlpha(isAndroid ? 24 : 18)
-        : Colors.black.withAlpha(isAndroid ? 28 : 10);
+        ? Colors.white.withAlpha(isAndroid ? 20 : 18)
+        : Colors.black.withAlpha(isAndroid ? 16 : 10);
 
+    // Light active pill from officer UI (#E9EAEC); dark keeps soft white wash.
     final activePill = effectiveIsDark
         ? Colors.white.withAlpha(isAndroid ? 28 : 18)
-        : isAndroid
-        ? const Color(0xFFD3E2F6)
-        : const Color(0xFFE8EDF6);
+        : const Color(0xFFE9EAEC);
 
     return Padding(
       padding: EdgeInsets.fromLTRB(12, 0, 12, bottomInset + 14),
@@ -182,69 +186,72 @@ class _ClassicBottomBar extends StatelessWidget {
                 BoxShadow(
                   color: effectiveIsDark
                       ? Colors.black.withAlpha(isAndroid ? 110 : 90)
-                      : Colors.black.withAlpha(isAndroid ? 24 : 18),
-                  blurRadius: isAndroid ? 24 : 22,
-                  offset: const Offset(0, 10),
+                      : Colors.black.withAlpha(isAndroid ? 18 : 18),
+                  blurRadius: isAndroid ? 20 : 22,
+                  offset: Offset(0, isAndroid ? 8 : 10),
                 ),
               ],
             ),
             child: SizedBox(
               height: isAndroid ? 72 : 78,
               child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
                 children: tabs.map((tab) {
                   final isActive = currentIndex == tab.index;
 
-                  return InkWell(
-                    borderRadius: BorderRadius.circular(24),
-                    onTap: () => onTap(tab.index),
-                    child: AnimatedContainer(
-                      duration: isAndroid
-                          ? const Duration(milliseconds: 320)
-                          : const Duration(milliseconds: 180),
-                      curve: isAndroid ? Curves.easeInOut : Curves.easeOut,
-                      width: isAndroid ? 66 : 70,
-                      height: isAndroid ? 54 : 58,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: isActive ? activePill : Colors.transparent,
-                        borderRadius: BorderRadius.circular(24),
-                      ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          _TabIcon(
-                            isActive: isActive,
-                            tab: tab,
-                            activeColor: activeColor,
-                            inactiveColor: inactiveColor,
+                  return Expanded(
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(24),
+                      onTap: () => onTap(tab.index),
+                      // Full-width tap target; pill hugs icon + label only.
+                      child: Center(
+                        child: AnimatedContainer(
+                          duration: isAndroid
+                              ? const Duration(milliseconds: 320)
+                              : const Duration(milliseconds: 180),
+                          curve: isAndroid
+                              ? Curves.easeInOut
+                              : Curves.easeOut,
+                          height: isAndroid ? 54 : 58,
+                          padding: EdgeInsets.symmetric(
+                            horizontal: isAndroid ? 14 : 16,
+                            vertical: isAndroid ? 2 : 6,
                           ),
-                          const SizedBox(height: 4),
-                          Flexible(
-                            child: FittedBox(
-                              fit: BoxFit.scaleDown,
-                              child: Text(
+                          decoration: BoxDecoration(
+                            color: isActive
+                                ? activePill
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(24),
+                          ),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _TabIcon(
+                                isActive: isActive,
+                                tab: tab,
+                                activeColor: activeColor,
+                                inactiveColor: inactiveColor,
+                                size: 24,
+                              ),
+                              SizedBox(height: isAndroid ? 3 : 4),
+                              Text(
                                 tab.label,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context).textTheme.titleSmall
-                                    ?.copyWith(
-                                      color: isActive
-                                          ? activeColor
-                                          : inactiveColor,
-                                      fontSize: 11.5,
-                                      fontWeight: isActive
-                                          ? FontWeight.w700
-                                          : FontWeight.w500,
-                                    ),
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w600,
+                                  height: 1.1,
+                                  letterSpacing: 0.15,
+                                  color: isActive
+                                      ? activeColor
+                                      : inactiveColor,
+                                ),
                               ),
-                            ),
+                            ],
                           ),
-                        ],
+                        ),
                       ),
                     ),
                   );
@@ -264,12 +271,14 @@ class _TabIcon extends StatelessWidget {
     required this.tab,
     required this.activeColor,
     required this.inactiveColor,
+    this.size = 24,
   });
 
   final bool isActive;
   final PlatformBottomTab tab;
   final Color activeColor;
   final Color inactiveColor;
+  final double size;
 
   @override
   Widget build(BuildContext context) {
@@ -279,14 +288,15 @@ class _TabIcon extends StatelessWidget {
       return Icon(
         isActive ? Icons.circle : Icons.circle_outlined,
         color: isActive ? activeColor : inactiveColor,
-        size: 24,
+        size: size,
       );
     }
 
     return Image.asset(
       asset,
       color: isActive ? activeColor : inactiveColor,
-      height: 24,
+      height: size,
+      width: size,
     );
   }
 }

@@ -3,6 +3,10 @@ class AppConfig {
 
   static const String initialUrl = 'https://smartnps360.com/';
 
+  /// Home / login page — used by native after session expiry logout.
+  /// Same as [initialUrl] (`https://smartnps360.com/`).
+  static const String webLoginUrl = initialUrl;
+
   static const String gpsApiBaseUrl = '${initialUrl}api/gps/';
   static const String gpsPointPath = 'point';
   static const String gpsPingPath = 'ping';
@@ -58,6 +62,9 @@ class AppConfig {
   static const int cPrimary = 0xFF022A67;
   static const int cSurface = 0xFFFBFBFD;
   static const int cDarkCardColor = 0xFF1A2332;
+
+  /// Active bottom-tab tint from the officer UI (cyan).
+  static const int cBottomBarActive = 0xFF0F93D2;
 
   /// Token the web app can detect in `navigator.userAgent` for native shell traffic.
   static const String webViewAppSignature = 'SmartNPS360App';
