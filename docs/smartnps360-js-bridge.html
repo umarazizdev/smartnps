@@ -191,8 +191,8 @@
     <div class="meta">
       <p><strong>Host:</strong> https://smartnps360.com/</p>
       <p><strong>Bridge handlers documented:</strong> 18</p>
-      <p><strong>App version:</strong> 1.0.0+41</p>
-      <p><strong>Last updated:</strong> 14 July 2026</p>
+      <p><strong>App version:</strong> 1.0.0+55</p>
+      <p><strong>Last updated:</strong> 28 July 2026</p>
     </div>
   </section>
 
@@ -364,26 +364,71 @@
     "latitude": 24.8607,
     "longitude": 67.0011,
     "accuracy": 12.5,
-    "altitude": 45.0,
-    "speed": 0.0,
-    "heading": 0.0,
+    "altitudeAccuracy": null,
     "timestampMs": 1752494400000,
     "timestamp": "2026-07-14T12:00:00.000Z",
+    "altitude": 45.0,
+    "speed": 0.0,
+    "speedAccuracy": null,
+    "heading": 0.0,
+    "headingAccuracy": null,
     "isMocked": false,
     "isSimulatedBySoftware": false,
+    "floor": null,
     "acceptedFromLiveStream": true,
     "isFreshLiveLocation": true,
     "isCachedLocation": false,
     "ageMsWhenAccepted": 0,
     "maxAllowedAccuracyMeters": 50,
-    "timeoutMs": 12000
+    "timeoutMs": 12000,
+    "effectiveMaxAllowedAccuracyMeters": 50,
+    "degradedAccuracyAccepted": false
   }
+}</pre>
+    <h3>location object fields</h3>
+    <table>
+      <thead>
+        <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>latitude</td><td>number</td><td>GPS latitude</td></tr>
+        <tr><td>longitude</td><td>number</td><td>GPS longitude</td></tr>
+        <tr><td>accuracy</td><td>number</td><td>Horizontal accuracy in meters</td></tr>
+        <tr><td>altitudeAccuracy</td><td>number|null</td><td>Altitude accuracy when available</td></tr>
+        <tr><td>timestampMs</td><td>number</td><td>Fix time in milliseconds</td></tr>
+        <tr><td>timestamp</td><td>string</td><td>Fix time ISO 8601</td></tr>
+        <tr><td>altitude</td><td>number</td><td>Altitude in meters</td></tr>
+        <tr><td>speed</td><td>number</td><td>Speed in m/s</td></tr>
+        <tr><td>speedAccuracy</td><td>number|null</td><td>Speed accuracy when available</td></tr>
+        <tr><td>heading</td><td>number</td><td>Heading in degrees</td></tr>
+        <tr><td>headingAccuracy</td><td>number|null</td><td>Heading accuracy when available</td></tr>
+        <tr><td>isMocked</td><td>boolean</td><td>Whether the fix is mocked</td></tr>
+        <tr><td>isSimulatedBySoftware</td><td>boolean</td><td>Whether the fix is software-simulated</td></tr>
+        <tr><td>floor</td><td>number|null</td><td>Floor level when available</td></tr>
+        <tr><td>acceptedFromLiveStream</td><td>boolean</td><td>True when accepted from live GPS stream</td></tr>
+        <tr><td>isFreshLiveLocation</td><td>boolean</td><td>True for a fresh live fix</td></tr>
+        <tr><td>isCachedLocation</td><td>boolean</td><td>True when a cached fix was used</td></tr>
+        <tr><td>ageMsWhenAccepted</td><td>number</td><td>Age of the fix when accepted (ms)</td></tr>
+        <tr><td>maxAllowedAccuracyMeters</td><td>number</td><td>Requested accuracy ceiling</td></tr>
+        <tr><td>timeoutMs</td><td>number</td><td>Request timeout used</td></tr>
+        <tr><td>effectiveMaxAllowedAccuracyMeters</td><td>number</td><td>Effective accuracy ceiling applied</td></tr>
+        <tr><td>degradedAccuracyAccepted</td><td>boolean</td><td>True only if a degraded fix was accepted (currently always <code>false</code>)</td></tr>
+      </tbody>
+    </table>
+    <h3>Error response (accuracy timeout)</h3>
+    <pre>{
+  "ok": false,
+  "error": {
+    "code": "fresh_location_unavailable",
+    "message": "Unable to get a GPS location with accuracy <= 50 meters."
+  },
+  "bestAccuracySeenMeters": 87.5
 }</pre>
     <h3>Common error codes</h3>
     <p>
       <code>untrusted_origin</code>, <code>clock_in_gate_in_progress</code>,
       <code>location_services_disabled</code>, <code>background_location_required</code>,
-      <code>disclosure_required</code>, <code>permission_denied</code>,
+      <code>location_precise</code>, <code>disclosure_required</code>, <code>permission_denied</code>,
       <code>permission_denied_forever</code>, <code>mock_location</code>,
       <code>fresh_location_unavailable</code>, <code>get_location_failed</code>
     </p>
@@ -436,6 +481,16 @@
   "title": "Background location required for shift attendance",
   "message": "Enable background location (Always / Allow all the time) ..."
 }</pre>
+    <h3>Blocked reason codes</h3>
+    <p>
+      <code>clock_in_in_progress</code>, <code>location_services_disabled</code>,
+      <code>background_location_required</code>, <code>location_precise</code>,
+      <code>disclosure_cancelled</code> / cancelled variants, <code>mock_location</code>
+    </p>
+    <p>
+      Clock-in requires background location <strong>and</strong> precise location.
+      When precise location is off, <code>reason</code> is <code>location_precise</code>.
+    </p>
 
     <div class="endpoint">
       <span class="direction web-native">Web → Native</span>
@@ -458,6 +513,24 @@
   "platform": "android"
 }</pre>
     <p><code>phase</code>: <code>none</code> | <code>foregroundOnly</code> | <code>backgroundReady</code></p>
+    <h3>Response fields</h3>
+    <table>
+      <thead>
+        <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>backgroundReady</td><td>boolean</td><td>True when Always / Allow all the time is granted</td></tr>
+        <tr><td>phase</td><td>string</td><td>Permission phase (see above)</td></tr>
+        <tr><td>deniedReason</td><td>string|null</td><td>e.g. <code>background_location_required</code>, <code>location_precise</code>, <code>location_services_disabled</code></td></tr>
+        <tr><td>disclosureAccepted</td><td>boolean</td><td>Whether location disclosure was accepted</td></tr>
+        <tr><td>serviceEnabled</td><td>boolean</td><td>Whether OS location services are on</td></tr>
+        <tr><td>canClockIn</td><td>boolean</td><td>True when background + precise + services ready and gate not in flight</td></tr>
+        <tr><td>prepareInFlight</td><td>boolean</td><td>True while <code>prepareClockIn</code> is running</td></tr>
+        <tr><td>title</td><td>string|null</td><td>Blocked title when <code>canClockIn</code> is false</td></tr>
+        <tr><td>message</td><td>string|null</td><td>Blocked message when <code>canClockIn</code> is false</td></tr>
+        <tr><td>platform</td><td>string</td><td><code>android</code> or <code>ios</code></td></tr>
+      </tbody>
+    </table>
   </section>
 
   <!-- PUSH -->
@@ -561,6 +634,12 @@
   "platform": "android",
   "device": { "brand": "Google", "manufacturer": "Google", "model": "Pixel 8", "sdkInt": 34 }
 }</pre>
+    <h3>Response (iOS example)</h3>
+    <pre>{
+  "ok": true,
+  "platform": "ios",
+  "device": { "name": "iPhone", "model": "iPhone", "systemName": "iOS", "systemVersion": "18.0" }
+}</pre>
 
     <div class="endpoint">
       <span class="direction web-native">Web → Native</span>
@@ -662,7 +741,8 @@
   "is_mocked": false,
   "is_simulated_by_software": false,
   "accepted_from_live_stream": true,
-  "max_allowed_accuracy_meters": 50
+  "max_allowed_accuracy_meters": 50,
+  "timeout_ms": 12000
 }</pre>
   </section>
 
@@ -762,12 +842,17 @@
   "altitude": 45.0,
   "speed": 0.0,
   "heading": 0.0,
-  "is_mocked": false
+  "is_mocked": false,
+  "is_simulated_by_software": false,
+  "accepted_from_live_stream": true,
+  "max_allowed_accuracy_meters": 50,
+  "timeout_ms": 12000
 }</pre>
     <h3>Error callback payload</h3>
     <pre>{ "code": "NATIVE_GPS_FAILED", "message": "..." }</pre>
 
     <p class="footer-note">
+      SmartNPS360 JavaScript Bridge Reference — mobile app 1.0.0+55 (updated 28 July 2026).<br />
       Handler registration summary:
       <code>pickFile</code>, <code>pickImage</code>, <code>takePhoto</code>,
       <code>getCurrentLocation</code>, <code>startLocationWatch</code>, <code>clearLocationWatch</code>,

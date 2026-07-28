@@ -12,6 +12,7 @@ class PlatformBottomTab {
     this.iosSymbolName,
     this.activeAssetIcon,
     this.inactiveAssetIcon,
+    this.materialIcon,
   });
 
   final String label;
@@ -20,6 +21,9 @@ class PlatformBottomTab {
   final String? iosSymbolName;
   final String? activeAssetIcon;
   final String? inactiveAssetIcon;
+
+  /// Used on Android when asset icons are not provided.
+  final IconData? materialIcon;
 }
 
 class PlatformBottomBar extends StatelessWidget {
@@ -286,7 +290,7 @@ class _TabIcon extends StatelessWidget {
 
     if (asset == null || asset.isEmpty) {
       return Icon(
-        isActive ? Icons.circle : Icons.circle_outlined,
+        tab.materialIcon ?? (isActive ? Icons.circle : Icons.circle_outlined),
         color: isActive ? activeColor : inactiveColor,
         size: size,
       );

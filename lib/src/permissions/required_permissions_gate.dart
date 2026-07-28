@@ -9,6 +9,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../background/background_location_permissions.dart';
+import '../motion/motion_activity_service.dart';
 import '../push/push_notification_preferences.dart';
 import '../push/push_notification_service.dart';
 import '../utilities/overlay_prompt_guard.dart';
@@ -157,6 +158,11 @@ class RequiredPermissionsGate {
               'missing=${next.where((e) => e.needsAction).map((e) => e.id).join(',')}',
             );
           }
+          // Keep permission-status API in sync (includes motionActivity).
+          unawaited(
+            NativePermissionStatusService.instance
+                .ensureLatestPermissionsSynced(),
+          );
         }
       } while (_refreshAgain);
     } finally {
@@ -224,6 +230,16 @@ class RequiredPermissionsGate {
             );
           });
         }
+      case 'motionActivity':
+        if (Platform.isAndroid) {
+          await OverlayPromptGuard.runDuringOsPermissionPrompt(
+            Permission.activityRecognition.request,
+          );
+        } else if (Platform.isIOS) {
+          await OverlayPromptGuard.runDuringOsPermissionPrompt(
+            MotionActivityService.requestPermission,
+          );
+        }
       default:
         break;
     }
@@ -257,6 +273,9 @@ class RequiredPermissionsGate {
     final precise = await _preciseGranted(serviceEnabled, foreground);
     final notifications = await OsNotificationPermission.isGranted();
     final pushEnabled = await PushNotificationPreferences.readEnabled();
+    final motionAvailable = await MotionActivityService.isAvailable();
+    final motionGranted =
+        motionAvailable ? await _motionGranted() : true;
 
     final list = <RequiredPermissionItem>[
       if (!serviceEnabled)
@@ -298,6 +317,17 @@ class RequiredPermissionsGate {
             : RequiredPermissionAction.openSettings,
         icon: Icons.gps_fixed_rounded,
       ),
+      if (motionAvailable)
+        RequiredPermissionItem(
+          id: 'motionActivity',
+          name: Platform.isAndroid ? 'Physical activity' : 'Motion & Fitness',
+          description: 'Detects walking, driving, and other activity.',
+          enabled: motionGranted,
+          action: motionGranted
+              ? RequiredPermissionAction.none
+              : await _motionAction(),
+          icon: Icons.directions_walk_rounded,
+        ),
       RequiredPermissionItem(
         id: 'notifications',
         name: 'Notifications',
@@ -321,6 +351,36 @@ class RequiredPermissionsGate {
     ];
 
     return list;
+  }
+
+  Future<bool> _motionGranted() async {
+    if (Platform.isAndroid) {
+      final status = await Permission.activityRecognition.status;
+      return status.isGranted || status.isLimited || status.isProvisional;
+    }
+    if (Platform.isIOS) {
+      final native = await MotionActivityService.checkPermission();
+      return native == 'granted';
+    }
+    return true;
+  }
+
+  Future<RequiredPermissionAction> _motionAction() async {
+    if (Platform.isAndroid) {
+      final status = await Permission.activityRecognition.status;
+      if (status.isPermanentlyDenied || status.isRestricted) {
+        return RequiredPermissionAction.openSettings;
+      }
+      return RequiredPermissionAction.allow;
+    }
+    if (Platform.isIOS) {
+      final native = await MotionActivityService.checkPermission();
+      if (native == 'denied' || native == 'restricted') {
+        return RequiredPermissionAction.openSettings;
+      }
+      return RequiredPermissionAction.allow;
+    }
+    return RequiredPermissionAction.openSettings;
   }
 
   Future<bool> _foregroundGranted(bool serviceEnabled) async {
