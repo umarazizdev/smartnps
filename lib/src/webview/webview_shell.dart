@@ -4283,11 +4283,18 @@ class _BottomBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    const visibleItems = <_BottomItem>[
+      _BottomItem.dashboard,
+      _BottomItem.timesheet,
+      // _BottomItem.motion, // Temporarily hidden from the bottom bar.
+      _BottomItem.profile,
+    ];
+
     final tabs = <PlatformBottomTab>[
-      for (final item in _BottomItem.values)
+      for (final (index, item) in visibleItems.indexed)
         PlatformBottomTab(
           label: item.label,
-          index: item.index,
+          index: index,
           iosSymbolName: switch (item) {
             _BottomItem.dashboard => 'house.fill',
             _BottomItem.timesheet => 'calendar',
@@ -4303,15 +4310,18 @@ class _BottomBar extends StatelessWidget {
               : null,
         ),
     ];
+    final visibleSelectedIndex = visibleItems.indexWhere(
+      (item) => item.index == selectedTabIndex,
+    );
 
     return PlatformBottomBar(
       tabs: tabs,
-      currentIndex: selectedTabIndex,
+      currentIndex: visibleSelectedIndex < 0 ? 0 : visibleSelectedIndex,
       tint: const Color(AppConfig.cBottomBarActive),
       surface: const Color(AppConfig.cSurface),
       darkSurface: const Color(AppConfig.cDarkCardColor),
       isDark: isDark,
-      onTap: (index) => onTap(_BottomItem.values[index]),
+      onTap: (index) => onTap(visibleItems[index]),
     );
   }
 }
