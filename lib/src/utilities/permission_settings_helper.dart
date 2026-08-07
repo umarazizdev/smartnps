@@ -8,12 +8,12 @@ import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../app/app_navigator.dart';
-import '../background/background_location_permissions.dart';
+import '../background/location/background_location_permissions.dart';
 import '../permissions/native_permission_status_service.dart';
 import '../permissions/required_permissions_gate.dart';
 import '../utilities/app_lifecycle_resume_gate.dart';
 import '../utilities/overlay_prompt_guard.dart';
-import '../widgets/glass_action_dialog.dart';
+import '../widgets/dialogs/glass_action_dialog.dart';
 
 enum PermissionSettingsPromptResult { skipped, dismissed, openedSettings }
 

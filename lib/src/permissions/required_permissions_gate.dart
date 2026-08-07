@@ -8,13 +8,13 @@ import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-import '../background/background_location_permissions.dart';
+import '../background/location/background_location_permissions.dart';
 import '../motion/motion_activity_service.dart';
-import '../push/push_notification_preferences.dart';
-import '../push/push_notification_service.dart';
+import '../push/notifications/push_notification_preferences.dart';
+import '../push/notifications/push_notification_service.dart';
 import '../utilities/overlay_prompt_guard.dart';
 import '../utilities/permission_settings_helper.dart';
-import '../widgets/motion_activity_settings_dialog.dart';
+import '../widgets/dialogs/motion_activity_settings_dialog.dart';
 import 'native_permission_status_service.dart';
 import 'os_notification_permission.dart';
 

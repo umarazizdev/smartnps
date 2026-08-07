@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
@@ -6,7 +9,8 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import 'firebase_options.dart';
 import 'src/app/smart_nps_app.dart';
-import 'src/push/push_notification_service.dart';
+import 'src/background/location/background_location_service.dart';
+import 'src/push/notifications/push_notification_service.dart';
 import 'src/api/api_client.dart';
 import 'src/auth/auth_repository.dart';
 import 'src/auth/auth_session_manager.dart';
@@ -29,6 +33,9 @@ Future<void> main() async {
   await AuthRepository.instance.warmAccessTokenCache();
   await PushNotificationService.instance.init();
   MockLocationGuard.ensureBackgroundListenerInstalled();
+  if (Platform.isAndroid) {
+    unawaited(BackgroundLocationService.ensureConfigured());
+  }
   runApp(const SmartNpsApp());
 }
 

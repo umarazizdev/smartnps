@@ -7,7 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../api/api_client.dart';
-import '../utilities/app_config.dart';
+import '../api/api_urls.dart';
 import '../utilities/app_upgrade_reconciler.dart';
 import 'auth_state.dart';
 import 'location_disclosure_account_sync.dart';
@@ -421,12 +421,12 @@ class AuthRepository {
       }
 
       final response = await _refreshDio.postUri(
-        Uri.parse(AppConfig.refreshTokenUrl),
+        Uri.parse(ApiUrls.refreshTokenUrl),
         data: {'refresh_token': refreshToken},
       );
 
       final statusCode = response.statusCode ?? 0;
-      ApiClient.logHttpResult('POST', Uri.parse(AppConfig.refreshTokenUrl), statusCode);
+      ApiClient.logHttpResult('POST', Uri.parse(ApiUrls.refreshTokenUrl), statusCode);
       if (statusCode < 200 || statusCode >= 300) {
         if (statusCode == 401 || statusCode == 403) {
           await _notifyRefreshSessionExpired();
@@ -450,7 +450,7 @@ class AuthRepository {
       final statusCode = e.response?.statusCode ?? 0;
       ApiClient.logHttpError(
         'POST',
-        Uri.parse(AppConfig.refreshTokenUrl),
+        Uri.parse(ApiUrls.refreshTokenUrl),
         statusCode,
         e.response?.data?.toString() ?? e.message ?? e.type.name,
       );
@@ -462,7 +462,7 @@ class AuthRepository {
     } catch (e) {
       ApiClient.logHttpError(
         'POST',
-        Uri.parse(AppConfig.refreshTokenUrl),
+        Uri.parse(ApiUrls.refreshTokenUrl),
         0,
         e.toString(),
       );

@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:smartnps360/src/push/officer_announcement_push.dart';
+import 'package:smartnps360/src/push/announcements/officer_announcement_push.dart';
 
 void main() {
   const validUuid = '123e4567-e89b-12d3-a456-426614174000';

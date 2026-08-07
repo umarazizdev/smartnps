@@ -7,7 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../permissions/native_permission_status_service.dart';
 import '../utilities/app_config.dart';
-import '../widgets/motion_activity_settings_dialog.dart';
+import '../widgets/dialogs/motion_activity_settings_dialog.dart';
 import 'motion_activity_fusion_controller.dart';
 import 'motion_activity_service.dart';
 import 'vehicle_session_fusion.dart';

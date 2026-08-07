@@ -3,10 +3,10 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-import '../background/background_location_permissions.dart';
-import '../background/clock_in_gate_service.dart';
-import '../background/duty_tracking_preferences.dart';
-import '../background/location_disclosure_consent.dart';
+import '../background/location/background_location_permissions.dart';
+import '../background/duty/clock_in_gate_service.dart';
+import '../background/duty/duty_tracking_preferences.dart';
+import '../background/duty/location_disclosure_consent.dart';
 import 'app_version_info.dart';
 
 class AppUpgradeReconciler {

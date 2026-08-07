@@ -1,6 +1,6 @@
 import 'package:geolocator/geolocator.dart';
 
-import '../background/background_location_accuracy.dart';
+import '../background/location/background_location_accuracy.dart';
 
 class SpeedAdaptiveGpsPolicyBand {
   const SpeedAdaptiveGpsPolicyBand({

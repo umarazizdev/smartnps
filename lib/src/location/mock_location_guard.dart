@@ -5,19 +5,16 @@ import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../app/app_navigator.dart';
-import '../widgets/mock_location_dialog.dart';
+import '../widgets/dialogs/mock_location_dialog.dart';
 import '../utilities/overlay_prompt_guard.dart';
 import 'mock_location_detection.dart';
 
-/// Outcome of the clock-in mock-location GPS check.
 enum MockLocationClockInCheck {
-  /// Fresh fix received and not mocked/simulated.
+
   clear,
 
-  /// Position indicates mock or simulated GPS.
   mockDetected,
 
-  /// Could not obtain a fresh GPS fix (timeout/unavailable).
   gpsUnavailable,
 }
 

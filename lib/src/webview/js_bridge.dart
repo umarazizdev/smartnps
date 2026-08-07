@@ -11,12 +11,12 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../background/background_location_permissions.dart';
-import '../background/clock_in_gate_service.dart';
-import '../background/location_disclosure_consent.dart';
-import '../background/duty_heartbeat_service.dart';
+import '../background/location/background_location_permissions.dart';
+import '../background/duty/clock_in_gate_service.dart';
+import '../background/duty/location_disclosure_consent.dart';
+import '../background/duty/duty_heartbeat_service.dart';
 import '../location/mock_location_detection.dart';
-import '../push/push_notification_service.dart';
+import '../push/notifications/push_notification_service.dart';
 import '../utilities/app_config.dart';
 import '../utilities/overlay_prompt_guard.dart';
 import '../utilities/permission_settings_helper.dart';
