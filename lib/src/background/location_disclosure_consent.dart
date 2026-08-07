@@ -6,10 +6,6 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import 'background_location_permissions.dart';
 
-/// Device-wide location disclosure consent (not per officer account).
-///
-/// Google Play and Apple require disclosure before the first background location
-/// request on this device. Acceptance persists across logins and app updates.
 class LocationDisclosureConsent {
   LocationDisclosureConsent._();
 
@@ -18,7 +14,6 @@ class LocationDisclosureConsent {
   static const _kDutyState = 'location.disclosure.duty.v2';
   static const _kClockInState = 'location.disclosure.clockin.v2';
 
-  // Legacy keys migrated on first read.
   static const _kLegacyRecords = 'location.disclosure.records.v1';
   static const _kLegacyLastOfficerId = 'location.disclosure.last_officer_id';
   static const _kLegacyPendingAccept = 'location.disclosure.pending_accept';
@@ -35,7 +30,6 @@ class LocationDisclosureConsent {
     return await isDutyAccepted() || await isClockInAccepted();
   }
 
-  /// True when the in-app disclosure must still be shown on this device.
   static Future<bool> shouldShowLocationDisclosure() async {
     return !await hasAccepted();
   }
@@ -73,7 +67,6 @@ class LocationDisclosureConsent {
     await markClockInAccepted();
   }
 
-  /// When the OS already grants background location, align storage with OS truth.
   static Future<void> reconcileFromOsIfBackgroundReady() async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
 
@@ -93,7 +86,6 @@ class LocationDisclosureConsent {
     }
   }
 
-  /// Migrates legacy per-account and flat keys into device-wide storage once.
   static Future<void> ensureMigrated() async {
     if (_migrationComplete) return;
 

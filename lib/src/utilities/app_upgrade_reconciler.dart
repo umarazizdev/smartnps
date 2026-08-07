@@ -9,24 +9,18 @@ import '../background/duty_tracking_preferences.dart';
 import '../background/location_disclosure_consent.dart';
 import 'app_version_info.dart';
 
-/// Clears stale post-update flags and re-syncs location readiness from the OS.
-///
-/// Runs on both Android (Play / sideload updates) and iOS (TestFlight / App Store).
 class AppUpgradeReconciler {
   AppUpgradeReconciler._();
 
   static const _storage = FlutterSecureStorage();
   static const _kLastSeenBuild = 'app.last_seen_build';
 
-  /// After an upgrade, refresh 401/403 must not wipe Secure Storage — web
-  /// cookies are often gone while native tokens are still valid.
   static const Duration postUpgradeAuthGrace = Duration(minutes: 15);
 
   static bool _storageReconcileDone = false;
   static bool _osReconcileDone = false;
   static DateTime? _suppressRefreshLogoutUntil;
 
-  /// True while post-upgrade grace is active (refresh expiry soft-fails).
   static bool get shouldSuppressRefreshSessionLogout {
     final until = _suppressRefreshLogoutUntil;
     if (until == null) return false;
@@ -39,15 +33,10 @@ class AppUpgradeReconciler {
     _suppressRefreshLogoutUntil = DateTime.now().add(postUpgradeAuthGrace);
   }
 
-  /// Call after a successful token refresh / login so normal expiry logout resumes.
   static void endPostUpgradeAuthGrace() {
     _suppressRefreshLogoutUntil = null;
   }
 
-  /// Call from [main] before [runApp].
-  ///
-  /// Safe without the native MethodChannel: migrates disclosure storage and
-  /// clears stale duty flags after a build change on Android and iOS.
   static Future<void> reconcileIfNeeded() async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
     if (_storageReconcileDone) return;
@@ -81,13 +70,6 @@ class AppUpgradeReconciler {
     }
   }
 
-  /// Call once the Flutter engine / Activity is ready (e.g. WebViewShell).
-  ///
-  /// On Android the settings MethodChannel is only available after
-  /// [MainActivity.configureFlutterEngine], so OS permission reconcile
-  /// must not run from [main].
-  ///
-  /// Safe to call repeatedly from resume; storage writes are idempotent.
   static Future<void> reconcileOsAfterEngineReady() async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
 

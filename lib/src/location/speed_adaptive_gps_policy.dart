@@ -48,8 +48,9 @@ class SpeedAdaptiveGpsPolicyBand {
       minKmh: 8,
       maxKmh: 30,
       label: '8-30 km/h',
-      state: 'Fast movement',
-      motionActivity: 'running',
+      state: 'Slow / urban vehicle',
+
+      motionActivity: 'automotive',
       captureInterval: Duration(seconds: 5),
       uploadInterval: Duration(seconds: 5),
       distanceFilterMeters: 5,
@@ -112,9 +113,6 @@ class SpeedAdaptiveGpsPolicyDecision {
   final double? speedAccuracyMetersPerSecond;
   final bool isTrusted;
 
-  /// Stationary / below 2 km/h points stay on the live ping path only.
-  ///
-  /// They are not queued for `/api/gps/batch`.
   bool get shouldQueueForBatch {
     if (band.motionActivity == 'stationary') return false;
     final maxKmh = band.maxKmh;

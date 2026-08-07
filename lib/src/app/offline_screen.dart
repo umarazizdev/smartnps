@@ -18,15 +18,12 @@ class OfflineScreen extends StatelessWidget {
   final bool isRetrying;
   final String? statusMessage;
 
-  /// Intrinsic size of the no-internet background assets.
   static const _bgW = 853.0;
   static const _bgH = 1844.0;
 
-  /// Wifi illustration end (fraction of bg image height) + breathing room.
   static const _lightIconBottomFrac = 0.408;
   static const _darkIconBottomFrac = 0.360;
 
-  // Colors sampled from the provided UI mockups.
   static const _lightTitle = Color(0xFF17213A);
   static const _lightAccent = Color(0xFF2964C9);
   static const _lightBody = Color(0xFF6B7280);
@@ -54,20 +51,18 @@ class OfflineScreen extends StatelessWidget {
     final bottomInset = MediaQuery.paddingOf(context).bottom;
     final iconFrac = isDark ? _darkIconBottomFrac : _lightIconBottomFrac;
 
-    // Opaque Material so platform WebView error chrome never peeks through.
-    // Parent shell already applies top SafeArea.
     return Material(
       color: fallbackBg,
       child: LayoutBuilder(
         builder: (context, constraints) {
           final w = constraints.maxWidth;
           final h = constraints.maxHeight;
-          // Match Image BoxFit.cover + Alignment.topCenter.
+
           final scale = math.max(w / _bgW, h / _bgH);
           final paintedH = _bgH * scale;
-          // Place all copy under the baked-in wifi icon (design: ~8% gap).
+
           final topGap = (paintedH * iconFrac + 10).clamp(h * 0.28, h * 0.46);
-          // Title uses a bit more width; card/button are narrower like the mockup.
+
           final textSidePad = (w * 0.08).clamp(20.0, 36.0);
           final actionSidePad = (w * 0.145).clamp(36.0, 56.0);
           final actionMaxW = math.min(w - actionSidePad * 2, 320.0);
@@ -126,7 +121,7 @@ class OfflineScreen extends StatelessWidget {
                   ),
                 ),
               ),
-              // Keep help close under Retry (matches design spacing).
+
               const SizedBox(height: 22),
               Padding(
                 padding: EdgeInsets.symmetric(horizontal: textSidePad),
@@ -386,7 +381,7 @@ class _RetryButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Design uses a vertical blue gradient (lighter top → deeper bottom).
+
     final gradient = LinearGradient(
       begin: Alignment.topCenter,
       end: Alignment.bottomCenter,
@@ -469,8 +464,7 @@ class _HelpFooter extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Light mockup: soft pale-blue disc + thin navy ring + navy "?".
-    // Dark mockup: soft blue fill + bright blue ring + white "?".
+
     final ringColor = isDark
         ? OfflineScreen._darkHelpIcon
         : const Color(0xFF1E3A5F);

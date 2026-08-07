@@ -13,6 +13,8 @@ import '../api/api_client.dart';
 import '../auth/auth_repository.dart';
 import '../location/batch_displacement_gate.dart';
 import '../location/speed_adaptive_gps_policy.dart';
+import '../motion/motion_activity_fusion_controller.dart';
+import '../motion/vehicle_session_fusion.dart';
 import 'background_location_accuracy.dart';
 import '../utilities/app_config.dart';
 import '../utilities/app_version_info.dart';
@@ -36,7 +38,7 @@ class BackgroundLocationUploader {
   Timer? _batchTimer;
   int _consecutiveBatchFailures = 0;
   bool _isFlushing = false;
-  /// When false, [pingNow]/[add] no-op so off-duty flush cannot record new points.
+
   bool _acceptingNewPoints = true;
   DateTime? _nextBatchAllowedAt;
   DateTime? _lastSuccessfulBatchFlushAt;
@@ -51,7 +53,7 @@ class BackgroundLocationUploader {
   final BatchDisplacementGate _batchDisplacementGate = BatchDisplacementGate();
 
   static const int _maxBatchSize = 20;
-  /// Minimum GPS stream poll interval (not upload throttle).
+
   static const Duration pingInterval = Duration(seconds: 1);
   static const Duration _batchEvery = Duration(minutes: 1);
   static const Duration _maxBackoff = Duration(minutes: 2);
@@ -251,7 +253,6 @@ class BackgroundLocationUploader {
     });
   }
 
-  /// Drains the on-device queue before shutdown (e.g. off duty).
   Future<void> flushAllPendingBatches({int maxRounds = 200}) async {
     for (var round = 0; round < maxRounds; round++) {
       final remaining = _queuedPointCount();
@@ -260,18 +261,17 @@ class BackgroundLocationUploader {
       try {
         await flushBatch(force: true);
       } catch (_) {
-        // Best-effort: stop if a round makes no progress.
+
         if (_queuedPointCount() >= remaining) return;
       }
 
       if (_queuedPointCount() >= remaining) {
-        // Partial failure or single-point edge; retry once more for leftovers.
+
         if (round > 0) return;
       }
     }
   }
 
-  /// Best-effort upload during logout, bounded by [timeout].
   Future<void> flushAllPendingBatchesBounded({
     Duration timeout = logoutFlushBudget,
   }) async {
@@ -291,7 +291,6 @@ class BackgroundLocationUploader {
     }
   }
 
-  /// Drops any queued GPS points still on disk or in memory.
   Future<int> discardPendingQueue() async {
     await _ensureStorage();
     final discarded = _queuedPointCount();
@@ -309,7 +308,6 @@ class BackgroundLocationUploader {
     return discarded;
   }
 
-  /// Logout teardown: bounded flush while auth still exists, then purge leftovers.
   Future<void> drainAndDiscardOnLogout({
     Duration timeout = logoutFlushBudget,
   }) async {
@@ -340,7 +338,6 @@ class BackgroundLocationUploader {
     }
   }
 
-  /// Opens shared Hive storage and drains/discards even when tracking is off.
   static Future<void> drainAndDiscardOnLogoutStatic({
     Duration timeout = logoutFlushBudget,
   }) async {
@@ -349,8 +346,6 @@ class BackgroundLocationUploader {
     await uploader.drainAndDiscardOnLogout(timeout: timeout);
   }
 
-  /// Opens shared storage and retries queued GPS batches without discarding
-  /// leftovers. Useful when the app resumes after iOS background suspension.
   static Future<void> flushPendingBatchesStatic({
     Duration timeout = const Duration(seconds: 20),
   }) async {
@@ -360,7 +355,7 @@ class BackgroundLocationUploader {
   }
 
   Future<void> stop() async {
-    // Reject new ping/queue first; flush already-queued batches only.
+
     _acceptingNewPoints = false;
     _batchTimer?.cancel();
     _batchTimer = null;
@@ -373,10 +368,6 @@ class BackgroundLocationUploader {
     await flushAllPendingBatches();
   }
 
-  /// Stops timers/connectivity without flushing (logout instant phase).
-  ///
-  /// Also closes [pingNow]/[add] so in-flight GPS callbacks cannot record
-  /// new points while a pending-batch flush runs.
   Future<void> stopCollectingOnly() async {
     _acceptingNewPoints = false;
     _batchTimer?.cancel();
@@ -387,27 +378,27 @@ class BackgroundLocationUploader {
     _connectivitySub = null;
   }
 
-  /// Stores points for batch upload only (Hive).
-  ///
-  /// Ping uploads are sent live and are not persisted.
-  /// Stationary / below 2 km/h points are ping-only and never queued here.
-  /// Points that have not moved far enough (GPS drift while standing) are also
-  /// skipped here without affecting ping.
   Future<void> add(
     Position position, {
     SpeedAdaptiveGpsPolicyDecision? policyDecision,
+    VehicleSessionSnapshot? motionFusion,
   }) async {
     if (!_acceptingNewPoints) return;
     if (!BackgroundLocationAccuracy.isAcceptable(position)) return;
     if (!await _hasUploadAuth()) return;
     if (!_acceptingNewPoints) return;
     final policy = policyDecision ?? _policyTracker.evaluate(position);
+    final fusion = motionFusion ??
+        await MotionActivityFusionController.instance.evaluatePosition(
+          position,
+        );
     if (!policy.shouldQueueForBatch) {
       if (kDebugMode) {
         _batchConsoleLog(
           'skipped batch queue '
           'band=${policy.band.label} '
-          'motion=${policy.band.motionActivity} '
+          'motion=${fusion.apiMotionActivity} '
+          'fused=${fusion.fusedState} '
           'speedKmh=${(policy.smoothedSpeedKmh ?? policy.rawSpeedKmh)?.toStringAsFixed(1)} '
           '(ping-only)',
         );
@@ -431,6 +422,7 @@ class BackgroundLocationUploader {
     final apiPoint = await _buildApiPoint(
       position,
       policyDecision: policy,
+      motionFusion: fusion,
     );
     if (!_acceptingNewPoints) return;
     final point = Map<String, dynamic>.from(apiPoint)
@@ -443,7 +435,6 @@ class BackgroundLocationUploader {
     if (box != null) {
       await box.add(point);
 
-      // Cap on-disk queue size (drop oldest first).
       while (box.length > 2000) {
         await box.deleteAt(0);
       }
@@ -492,8 +483,6 @@ class BackgroundLocationUploader {
     return _fallbackQueueCount + _memoryBatch.length;
   }
 
-  /// Flushes on full batch (20) or when the queue has 2+ points and the
-  /// batch interval elapsed. Location wakes on iOS may not run [Timer.periodic].
   Future<void> _maybeFlushBatchAfterAdd() async {
     final count = _queuedPointCount();
     if (count < 2) return;
@@ -530,18 +519,23 @@ class BackgroundLocationUploader {
     return token != null && token.isNotEmpty;
   }
 
-  /// Sends the current point to the ping API immediately (no local storage).
   Future<void> pingNow(
     Position position, {
     SpeedAdaptiveGpsPolicyDecision? policyDecision,
+    VehicleSessionSnapshot? motionFusion,
   }) async {
     if (!_acceptingNewPoints) return;
     if (!BackgroundLocationAccuracy.isAcceptable(position)) return;
     if (!await _hasUploadAuth()) return;
     if (!_acceptingNewPoints) return;
+    final fusion = motionFusion ??
+        await MotionActivityFusionController.instance.evaluatePosition(
+          position,
+        );
     final point = await _buildApiPoint(
       position,
       policyDecision: policyDecision,
+      motionFusion: fusion,
     );
     if (!_acceptingNewPoints) return;
 
@@ -559,26 +553,31 @@ class BackgroundLocationUploader {
         options: options,
       );
     } on DioException {
-      // ApiClient logs path, status, and error.
+
     } catch (_) {
-      // ApiClient logs path, status, and error.
+
     }
   }
 
-  /// Canonical API payload shared by ping and each batch point.
   Future<Map<String, dynamic>> _buildApiPoint(
     Position position, {
     SpeedAdaptiveGpsPolicyDecision? policyDecision,
+    VehicleSessionSnapshot? motionFusion,
   }) async {
     _deviceId ??= await DeviceIdentity.getDeviceId();
     return _sanitizePoint(
-      await _buildPoint(position, policyDecision: policyDecision),
+      await _buildPoint(
+        position,
+        policyDecision: policyDecision,
+        motionFusion: motionFusion,
+      ),
     );
   }
 
   Future<Map<String, dynamic>> _buildPoint(
     Position position, {
     SpeedAdaptiveGpsPolicyDecision? policyDecision,
+    VehicleSessionSnapshot? motionFusion,
   }) async {
     final dynamic p = position;
     final dynamic sourceInformation = _safeRead<dynamic>(
@@ -588,9 +587,12 @@ class BackgroundLocationUploader {
       () => sourceInformation?.isSimulatedBySoftware as bool?,
     );
 
-    // Geolocator reports when the GPS fix was measured (UTC), not when we flush batch.
     final recordedAtUtc = position.timestamp.toUtc();
     final policy = policyDecision ?? _policyTracker.evaluate(position);
+    final fusion = motionFusion ??
+        await MotionActivityFusionController.instance.evaluatePosition(
+          position,
+        );
 
     return {
       'app': AppConfig.appName,
@@ -611,8 +613,17 @@ class BackgroundLocationUploader {
       'headingAccuracy': _validSensorNumOrNull(() => position.headingAccuracy),
       'isMocked': position.isMocked,
       'isSimulatedBySoftware': isSimulatedBySoftware,
-      'motionActivity': policy.band.motionActivity,
-      'motionSource': 'speed_adaptive_gps_policy',
+
+      'motionActivity': fusion.apiMotionActivity,
+      'motionSource': 'vehicle_session_fusion',
+      'motionFusedState': fusion.fusedState,
+      'motionNativeActivity': fusion.nativeActivity,
+      'motionNativeConfidence': fusion.nativeConfidence,
+      'motionSessionActive': fusion.active,
+      'motionProvisional': fusion.provisional,
+      'motionReason': fusion.reason,
+      'motionSpeedKmh': fusion.smoothedSpeedKmh ?? fusion.gpsSpeedKmh,
+
       ...policy.toJson(),
       'floor': _numOrNull(() => p.floor),
     };
@@ -645,6 +656,8 @@ class BackgroundLocationUploader {
     apiPoint.remove('_local_point_key');
     apiPoint.remove('client_point_id');
     apiPoint.remove('_queue_seq');
+
+    apiPoint.remove('speedBandMotionActivity');
     return apiPoint;
   }
 
@@ -681,8 +694,6 @@ class BackgroundLocationUploader {
     return sanitized;
   }
 
-  /// iOS/CoreLocation uses negative sentinels (e.g. -1) when a value is unknown.
-  /// The GPS API rejects those; omit the field instead.
   num? _validSensorNumOrNull(num Function() read, {num min = 0}) {
     try {
       final v = read();
@@ -929,8 +940,8 @@ class BackgroundLocationUploader {
 
   void _batchConsoleLog(String message) {
     if (!kDebugMode) return;
-    // Filter debug console by: BatchQueue
-    debugPrint('[BatchQueue] $message');
+
+    // debugPrint('[BatchQueue] $message');
   }
 
   String _batchTotalsLabel() {

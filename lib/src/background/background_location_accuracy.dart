@@ -1,6 +1,5 @@
 import 'package:geolocator/geolocator.dart';
 
-/// Minimum quality bar for background duty location uploads.
 class BackgroundLocationAccuracy {
   BackgroundLocationAccuracy._();
 

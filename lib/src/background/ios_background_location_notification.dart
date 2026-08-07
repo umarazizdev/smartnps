@@ -4,7 +4,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
-/// Persistent, silent iOS notification shown while live location is shared.
 class IosBackgroundLocationNotification {
   IosBackgroundLocationNotification._();
 

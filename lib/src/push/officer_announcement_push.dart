@@ -2,10 +2,6 @@ import 'package:flutter/foundation.dart';
 
 import '../utilities/app_config.dart';
 
-/// Focused parser for Laravel officer announcement push payloads.
-///
-/// Flutter never uses announcement title/body for in-app UI; only
-/// [recipientPublicId] is forwarded to the WebView after validation.
 class OfficerAnnouncementPush {
   const OfficerAnnouncementPush({
     required this.recipientPublicId,
@@ -25,7 +21,6 @@ class OfficerAnnouncementPush {
 
   static bool isUuid(String value) => _uuidPattern.hasMatch(value);
 
-  /// Returns a non-null instance only for valid `officer_announcement` pushes.
   static OfficerAnnouncementPush? tryParse(Map<String, dynamic> data) {
     final type = data['type']?.toString().trim();
     final notificationType = data['notification_type']?.toString().trim();
@@ -54,9 +49,6 @@ class OfficerAnnouncementPush {
     );
   }
 
-  /// Validates optional destination URL against the app's trusted host config.
-  /// Untrusted/malformed URLs are rejected (returned as null) without failing
-  /// the announcement itself.
   static Uri? parseTrustedDestinationUrl(Object? raw) {
     final text = raw?.toString().trim();
     if (text == null || text.isEmpty) return null;

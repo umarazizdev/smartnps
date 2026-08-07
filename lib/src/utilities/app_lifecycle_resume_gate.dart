@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
-/// Waits until the app returns to the foreground (e.g. after Settings).
 class AppLifecycleResumeGate {
   AppLifecycleResumeGate._();
 

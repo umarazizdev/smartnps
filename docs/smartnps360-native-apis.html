@@ -190,9 +190,9 @@
     <p class="subtitle">HTTP APIs used by the Flutter mobile app (Android &amp; iOS)</p>
     <div class="meta">
       <p><strong>Base URL:</strong> https://smartnps360.com/</p>
-      <p><strong>APIs documented:</strong> 8 active endpoints</p>
-      <p><strong>App version:</strong> 1.0.0+41</p>
-      <p><strong>Last updated:</strong> 14 July 2026</p>
+      <p><strong>APIs documented:</strong> 9 active endpoints</p>
+      <p><strong>App version:</strong> 1.0.0+66</p>
+      <p><strong>Last updated:</strong> 6 August 2026</p>
     </div>
   </section>
 
@@ -213,6 +213,7 @@
       <li>Register Push Token</li>
       <li>Delete Push Token</li>
       <li>Native Permission Status</li>
+      <li>Log Visit Upload</li>
     </ol>
     <p class="note">
       <strong>For backend developers:</strong> The mobile app does not use
@@ -232,6 +233,7 @@
       <li>Register Push Token</li>
       <li>Delete Push Token</li>
       <li>Native Permission Status</li>
+      <li>Log Visit Upload</li>
     </ol>
   </section>
 
@@ -382,9 +384,16 @@ Accept: application/json</pre>
         <tr><td>headingAccuracy</td><td>number|null</td><td>No</td><td>Heading accuracy (<code>null</code> when invalid or unavailable)</td></tr>
         <tr><td>isMocked</td><td>boolean</td><td>No</td><td>Whether the location is mocked</td></tr>
         <tr><td>isSimulatedBySoftware</td><td>boolean</td><td>No</td><td>Whether location is software-simulated</td></tr>
-        <tr><td>motionActivity</td><td>string</td><td>No</td><td>Motion band label: <code>stationary</code>, <code>walking</code>, <code>running</code>, or <code>automotive</code></td></tr>
-        <tr><td>motionSource</td><td>string</td><td>No</td><td>Always <code>speed_adaptive_gps_policy</code></td></tr>
-        <tr><td>speedBand</td><td>string</td><td>No</td><td>Speed band label</td></tr>
+        <tr><td>motionActivity</td><td>string</td><td>No</td><td><strong>Fused</strong> API label (same engine as Motion Activity screen): <code>stationary</code>, <code>walking</code>, <code>running</code>, <code>cycling</code>, or <code>automotive</code>. Not from speed bands.</td></tr>
+        <tr><td>motionSource</td><td>string</td><td>No</td><td>Always <code>vehicle_session_fusion</code></td></tr>
+        <tr><td>motionFusedState</td><td>string</td><td>No</td><td>Internal fused state (e.g. <code>driving</code>, <code>driving_stopped</code>, <code>walking</code>)</td></tr>
+        <tr><td>motionNativeActivity</td><td>string</td><td>No</td><td>Raw OS Activity Recognition / Core Motion label</td></tr>
+        <tr><td>motionNativeConfidence</td><td>number</td><td>No</td><td>OS confidence 0–100</td></tr>
+        <tr><td>motionSessionActive</td><td>boolean</td><td>No</td><td>Whether sticky vehicle session is active</td></tr>
+        <tr><td>motionProvisional</td><td>boolean</td><td>No</td><td>True when GPS is filling in before OS catches up</td></tr>
+        <tr><td>motionReason</td><td>string</td><td>No</td><td>Short fusion reason string</td></tr>
+        <tr><td>motionSpeedKmh</td><td>number</td><td>No</td><td>Speed used by fusion (smoothed when available)</td></tr>
+        <tr><td>speedBand</td><td>string</td><td>No</td><td>Speed band label (timing only — not motion)</td></tr>
         <tr><td>speedState</td><td>string</td><td>No</td><td>Human-readable speed state</td></tr>
         <tr><td>speedKmh</td><td>number</td><td>No</td><td>Raw speed in km/h</td></tr>
         <tr><td>smoothedSpeedKmh</td><td>number</td><td>No</td><td>Smoothed speed in km/h</td></tr>
@@ -402,7 +411,7 @@ Accept: application/json</pre>
   "platform": "android",
   "device_id": "samsung-galaxy-a12-abc123",
   "deviceId": "samsung-galaxy-a12-abc123",
-  "build": "41",
+  "build": "66",
   "latitude": 24.8607,
   "longitude": 67.0011,
   "accuracy": 8.5,
@@ -417,7 +426,14 @@ Accept: application/json</pre>
   "isMocked": false,
   "isSimulatedBySoftware": false,
   "motionActivity": "walking",
-  "motionSource": "speed_adaptive_gps_policy",
+  "motionSource": "vehicle_session_fusion",
+  "motionFusedState": "walking",
+  "motionNativeActivity": "walking",
+  "motionNativeConfidence": 75,
+  "motionSessionActive": false,
+  "motionProvisional": false,
+  "motionReason": "native walking",
+  "motionSpeedKmh": 4.2,
   "speedBand": "2-8 km/h",
   "speedState": "Walking / patrol",
   "speedKmh": 4.5,
@@ -478,9 +494,16 @@ Accept: application/json</pre>
         <tr><td>headingAccuracy</td><td>number|null</td><td>No</td><td>Heading accuracy (<code>null</code> when invalid or unavailable)</td></tr>
         <tr><td>isMocked</td><td>boolean</td><td>No</td><td>Whether the location is mocked</td></tr>
         <tr><td>isSimulatedBySoftware</td><td>boolean|null</td><td>No</td><td>Whether location is software-simulated</td></tr>
-        <tr><td>motionActivity</td><td>string</td><td>No</td><td>Motion band label: <code>stationary</code>, <code>walking</code>, <code>running</code>, or <code>automotive</code></td></tr>
-        <tr><td>motionSource</td><td>string</td><td>No</td><td>Always <code>speed_adaptive_gps_policy</code></td></tr>
-        <tr><td>speedBand</td><td>string</td><td>No</td><td>Speed band label (e.g. <code>2-8 km/h</code>, <code>30-60 km/h</code>, <code>100+ km/h</code>)</td></tr>
+        <tr><td>motionActivity</td><td>string</td><td>No</td><td><strong>Fused</strong> API label (same as GPS Ping / Motion screen): <code>stationary</code>, <code>walking</code>, <code>running</code>, <code>cycling</code>, or <code>automotive</code>. Not from speed bands.</td></tr>
+        <tr><td>motionSource</td><td>string</td><td>No</td><td>Always <code>vehicle_session_fusion</code></td></tr>
+        <tr><td>motionFusedState</td><td>string</td><td>No</td><td>Internal fused state</td></tr>
+        <tr><td>motionNativeActivity</td><td>string</td><td>No</td><td>Raw OS motion label</td></tr>
+        <tr><td>motionNativeConfidence</td><td>number</td><td>No</td><td>OS confidence 0–100</td></tr>
+        <tr><td>motionSessionActive</td><td>boolean</td><td>No</td><td>Whether sticky vehicle session is active</td></tr>
+        <tr><td>motionProvisional</td><td>boolean</td><td>No</td><td>True when GPS fill-in is provisional</td></tr>
+        <tr><td>motionReason</td><td>string</td><td>No</td><td>Short fusion reason string</td></tr>
+        <tr><td>motionSpeedKmh</td><td>number</td><td>No</td><td>Speed used by fusion</td></tr>
+        <tr><td>speedBand</td><td>string</td><td>No</td><td>Speed band label (timing only — not motion)</td></tr>
         <tr><td>speedState</td><td>string</td><td>No</td><td>Human-readable speed state (e.g. <code>Walking / patrol</code>)</td></tr>
         <tr><td>speedKmh</td><td>number|null</td><td>No</td><td>Raw speed in km/h</td></tr>
         <tr><td>smoothedSpeedKmh</td><td>number|null</td><td>No</td><td>Smoothed speed in km/h</td></tr>
@@ -500,7 +523,7 @@ Accept: application/json</pre>
       "platform": "android",
       "device_id": "samsung-galaxy-a12-abc123",
       "deviceId": "samsung-galaxy-a12-abc123",
-      "build": "41",
+      "build": "66",
       "latitude": 24.8607,
       "longitude": 67.0011,
       "accuracy": 8.5,
@@ -515,7 +538,14 @@ Accept: application/json</pre>
       "isMocked": false,
       "isSimulatedBySoftware": false,
       "motionActivity": "walking",
-      "motionSource": "speed_adaptive_gps_policy",
+      "motionSource": "vehicle_session_fusion",
+      "motionFusedState": "walking",
+      "motionNativeActivity": "walking",
+      "motionNativeConfidence": 75,
+      "motionSessionActive": false,
+      "motionProvisional": false,
+      "motionReason": "native walking",
+      "motionSpeedKmh": 4.2,
       "speedBand": "2-8 km/h",
       "speedState": "Walking / patrol",
       "speedKmh": 4.5,
@@ -531,7 +561,7 @@ Accept: application/json</pre>
       "platform": "android",
       "device_id": "samsung-galaxy-a12-abc123",
       "deviceId": "samsung-galaxy-a12-abc123",
-      "build": "41",
+      "build": "66",
       "latitude": 24.8610,
       "longitude": 67.0015,
       "accuracy": 7.0,
@@ -546,7 +576,14 @@ Accept: application/json</pre>
       "isMocked": false,
       "isSimulatedBySoftware": false,
       "motionActivity": "automotive",
-      "motionSource": "speed_adaptive_gps_policy",
+      "motionSource": "vehicle_session_fusion",
+      "motionFusedState": "driving",
+      "motionNativeActivity": "driving",
+      "motionNativeConfidence": 80,
+      "motionSessionActive": true,
+      "motionProvisional": false,
+      "motionReason": "native driving (session)",
+      "motionSpeedKmh": 34.8,
       "speedBand": "30-60 km/h",
       "speedState": "Vehicle movement",
       "speedKmh": 35.2,
@@ -595,7 +632,7 @@ Accept: application/json</pre>
   "device_id": "samsung-galaxy-a12-abc123",
   "push_token": "fcm-device-token",
   "app_version": "1.0.0",
-  "build": "41"
+  "build": "66"
 }</pre>
 
     <h3>Success Response</h3>
@@ -633,7 +670,7 @@ Accept: application/json</pre>
   "device_id": "ios-ABCDEF12-3456-7890-ABCD-EF1234567890",
   "push_token": "fcm-device-token",
   "app_version": "1.0.0",
-  "build": "41"
+  "build": "66"
 }</pre>
 
     <h3>Success Response</h3>
@@ -679,6 +716,7 @@ Accept: application/json</pre>
         <tr><td>backgroundLocation</td><td>granted, denied, unknown</td><td>Background location permission</td></tr>
         <tr><td>preciseLocation</td><td>granted, denied, unknown</td><td>Precise location permission</td></tr>
         <tr><td>notifications</td><td>granted, denied, unknown</td><td>Notification permission</td></tr>
+        <tr><td>motionActivity</td><td>granted, denied, unknown</td><td>Android Activity Recognition / iOS Motion &amp; Fitness permission</td></tr>
         <tr><td>batteryOptimization</td><td>granted, unknown</td><td>Android battery optimization exemption (<code>granted</code> = exempt; <code>unknown</code> = default optimized state or iOS)</td></tr>
         <tr><td>backgroundAppRefresh</td><td>enabled, disabled, restricted, unknown</td><td>iOS Background App Refresh (<code>UIBackgroundRefreshStatus</code>). Android closest equivalent: app background restriction (<code>enabled</code> = not restricted; <code>disabled</code> = restricted; <code>restricted</code> is iOS-only)</td></tr>
         <tr><td>push</td><td>enabled, disabled</td><td>In-app push toggle state (when uploaded)</td></tr>
@@ -690,7 +728,7 @@ Accept: application/json</pre>
   "platform": "android",
   "deviceId": "samsung-galaxy-a12-abc123",
   "appVersion": "1.0.0",
-  "build": "41",
+  "build": "66",
   "battery_percentage": 78,
   "low_power_mode": "disabled",
   "permissions": {
@@ -698,6 +736,7 @@ Accept: application/json</pre>
     "backgroundLocation": "granted",
     "preciseLocation": "granted",
     "notifications": "granted",
+    "motionActivity": "granted",
     "batteryOptimization": "unknown",
     "backgroundAppRefresh": "enabled",
     "push": "enabled"
@@ -713,8 +752,207 @@ Accept: application/json</pre>
     <p>Reports the device's current OS permission and battery snapshot to the backend. Sent when permissions change, when battery or low-power mode changes, when the app lifecycle changes, or when the in-app push toggle changes. On success, any HTTP 2xx response is treated as accepted.</p>
   </section>
 
+  <!-- 9. Log Visit Upload -->
+  <section class="api">
+    <h2>9. Log Visit Upload</h2>
+    <div class="endpoint">
+      <span class="method post">POST</span>
+      <span class="path">/api/visits</span>
+    </div>
+
+    <p class="note">
+      One multipart request only — <code>meta</code> JSON plus media (and optional voice) files together.
+      Not separate calls. Not a pure JSON body.
+    </p>
+
+    <h3>Form parts</h3>
+    <table>
+      <thead>
+        <tr><th>Part</th><th>Type</th><th>Required</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>meta</td><td>JSON string</td><td>Yes</td><td>Visit metadata, attention-needed flag, and per-item notes/GPS</td></tr>
+        <tr><td>media[0], media[1], …</td><td>file (photo/video)</td><td>Yes (at least one)</td><td>Media files indexed by <code>client_index</code></td></tr>
+        <tr><td>voice[0], voice[2], …</td><td>file (audio)</td><td>Only if item has a voice note</td><td>Voice note for the matching <code>client_index</code></td></tr>
+        <tr><td>attention_voice</td><td>file (audio)</td><td>Only if attention needed has a voice note</td><td>Visit-level Attention Needed voice note (not tied to a media item)</td></tr>
+      </tbody>
+    </table>
+    <p><code>media[N]</code> / <code>voice[N]</code> must match <code>items[].client_index</code>. <code>attention_voice</code> is independent of item indexes.</p>
+
+    <h3>meta JSON fields</h3>
+    <table>
+      <thead>
+        <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>client_draft_id</td><td>string (UUID)</td><td>Yes</td><td>Idempotency key for this report; same value on retry after kill/reopen until success or discard</td></tr>
+        <tr><td>started_at</td><td>string</td><td>Yes</td><td>Visit start time (ISO 8601 UTC)</td></tr>
+        <tr><td>submitted_at</td><td>string</td><td>Yes</td><td>Upload submit time (ISO 8601 UTC)</td></tr>
+        <tr><td>region_id</td><td>number</td><td>Yes</td><td>Patrol region id (source of truth)</td></tr>
+        <tr><td>site_id</td><td>number</td><td>Yes</td><td>Patrol site id (source of truth)</td></tr>
+        <tr><td>region_name</td><td>string</td><td>No</td><td>Display-only region name</td></tr>
+        <tr><td>site_name</td><td>string</td><td>No</td><td>Display-only site name</td></tr>
+        <tr><td>schedule_id</td><td>number</td><td>No</td><td>Schedule id when the visit was opened from a schedule</td></tr>
+        <tr><td>attention_needed</td><td>object</td><td>Yes</td><td>Always present. Visit-level Attention Needed toggle + optional text/voice note</td></tr>
+        <tr><td>items</td><td>array</td><td>Yes</td><td>Per-media metadata in draft order (<code>client_index</code> 0..n-1)</td></tr>
+      </tbody>
+    </table>
+
+    <h3>attention_needed object fields</h3>
+    <table>
+      <thead>
+        <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>needed</td><td>string</td><td>Yes</td><td><code>"yes"</code> or <code>"no"</code> from the Attention Needed toggle</td></tr>
+        <tr><td>text_note</td><td>string</td><td>Yes</td><td>Attention Needed text note when <code>needed</code> is <code>"yes"</code>; otherwise empty string</td></tr>
+        <tr><td>has_voice_note</td><td>boolean</td><td>Yes</td><td>If <code>true</code> (and <code>needed</code> is <code>"yes"</code>), <code>attention_voice</code> must be present in the same request</td></tr>
+      </tbody>
+    </table>
+
+    <h3>items[] object fields</h3>
+    <table>
+      <thead>
+        <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>client_index</td><td>number</td><td>Yes</td><td>0-based index; must match <code>media[N]</code> / optional <code>voice[N]</code></td></tr>
+        <tr><td>type</td><td>string</td><td>Yes</td><td><code>photo</code> or <code>video</code></td></tr>
+        <tr><td>text_note</td><td>string</td><td>No</td><td>Officer text note for this media item (may be empty)</td></tr>
+        <tr><td>captured_at</td><td>string</td><td>No</td><td>Capture time (ISO 8601 UTC)</td></tr>
+        <tr><td>latitude</td><td>number</td><td>No</td><td>Capture GPS latitude</td></tr>
+        <tr><td>longitude</td><td>number</td><td>No</td><td>Capture GPS longitude</td></tr>
+        <tr><td>accuracy_meters</td><td>number</td><td>No</td><td>GPS accuracy in meters</td></tr>
+        <tr><td>has_voice_note</td><td>boolean</td><td>Yes</td><td>If <code>true</code>, <code>voice[N]</code> must be present in the same request</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Request (multipart/form-data)</h3>
+    <pre>POST /api/visits
+Authorization: Bearer &lt;access_token&gt;
+Content-Type: multipart/form-data
+Accept: application/json
+
+meta              → JSON string (see below)
+media[0]          → media_0.jpg           (image/jpeg)
+media[1]          → media_1.mp4           (video/mp4)
+media[2]          → media_2.jpg           (image/jpeg)
+voice[0]          → voice_0.m4a           (audio/mp4)
+voice[2]          → voice_2.m4a           (audio/mp4)
+attention_voice   → attention_voice.m4a   (audio/mp4)  ← only when attention_needed.has_voice_note is true</pre>
+
+    <h3>meta example</h3>
+    <pre>{
+  "client_draft_id": "8f3c2a1e-6b44-4d91-9c2e-1a7b0f5d3e21",
+  "started_at": "2026-08-02T11:10:11.234Z",
+  "submitted_at": "2026-08-02T11:35:02.100Z",
+  "region_id": 12,
+  "site_id": 845,
+  "region_name": "Lahore North",
+  "site_name": "Gate A",
+  "schedule_id": 4012,
+  "attention_needed": {
+    "needed": "yes",
+    "text_note": "Gate lock was forced open",
+    "has_voice_note": false
+  },
+  "items": [
+    {
+      "client_index": 0,
+      "type": "photo",
+      "text_note": "Main gate lock was open",
+      "captured_at": "2026-08-02T11:12:01.000Z",
+      "latitude": 31.520416,
+      "longitude": 74.358748,
+      "accuracy_meters": 8.5,
+      "has_voice_note": true
+    },
+    {
+      "client_index": 1,
+      "type": "video",
+      "text_note": "",
+      "captured_at": "2026-08-02T11:18:44.000Z",
+      "latitude": 31.520901,
+      "longitude": 74.359112,
+      "accuracy_meters": 12.0,
+      "has_voice_note": false
+    },
+    {
+      "client_index": 2,
+      "type": "photo",
+      "text_note": "Side fence damage",
+      "captured_at": "2026-08-02T11:24:10.500Z",
+      "latitude": 31.521055,
+      "longitude": 74.359480,
+      "accuracy_meters": 6.2,
+      "has_voice_note": true
+    }
+  ]
+}</pre>
+
+    <h3>attention_needed variants</h3>
+    <pre>// Toggle ON + text note (no attention_voice file)
+"attention_needed": {
+  "needed": "yes",
+  "text_note": "Gate lock was forced open",
+  "has_voice_note": false
+}
+
+// Toggle ON + voice note (send attention_voice file)
+"attention_needed": {
+  "needed": "yes",
+  "text_note": "",
+  "has_voice_note": true
+}
+
+// Toggle OFF (always still sent; no attention_voice file)
+"attention_needed": {
+  "needed": "no",
+  "text_note": "",
+  "has_voice_note": false
+}</pre>
+
+    <h3>Success Response</h3>
+    <pre>{
+  "success": true,
+  "visit_id": 10921,
+  "client_draft_id": "8f3c2a1e-6b44-4d91-9c2e-1a7b0f5d3e21",
+  "items_saved": 3,
+  "message": "Visit report uploaded successfully"
+}</pre>
+
+    <h3>Error Response</h3>
+    <pre>{
+  "success": false,
+  "message": "Validation failed",
+  "errors": {
+    "site_id": ["The selected site is invalid."],
+    "items.0.voice": ["Voice note missing for client_index 0."],
+    "attention_voice": ["Attention needed voice note missing."]
+  }
+}</pre>
+
+    <h3>Rules</h3>
+    <ul>
+      <li><code>client_draft_id</code> is a UUID used for idempotency — the same id must not create a duplicate visit.</li>
+      <li><code>region_id</code> and <code>site_id</code> are required and are the source of truth; names are display-only.</li>
+      <li><code>client_index</code> is <code>0..n-1</code> in the same order as the saved draft list.</li>
+      <li><code>type</code> is <code>photo</code> or <code>video</code>.</li>
+      <li>Timestamps are ISO 8601 UTC.</li>
+      <li><code>attention_needed</code> is always present in <code>meta</code>. <code>needed</code> is <code>"yes"</code> or <code>"no"</code>.</li>
+      <li>When <code>attention_needed.needed</code> is <code>"no"</code>, <code>text_note</code> is <code>""</code> and <code>has_voice_note</code> is <code>false</code>.</li>
+      <li>When <code>attention_needed.needed</code> is <code>"yes"</code> and <code>has_voice_note</code> is <code>true</code>, the multipart part <code>attention_voice</code> must be present.</li>
+      <li>If an item’s <code>has_voice_note</code> is <code>true</code>, <code>voice[N]</code> must exist for that index. No <code>voice[1]</code> in the example because item 1 has <code>has_voice_note: false</code>.</li>
+      <li>Typical media content types sent by the app: <code>image/jpeg</code>, <code>image/png</code>, <code>image/webp</code>, <code>image/heic</code>, <code>video/mp4</code>, <code>video/quicktime</code>; voice notes usually <code>audio/mp4</code> (<code>.m4a</code>), also <code>audio/mpeg</code>, <code>audio/wav</code>, <code>audio/aac</code>.</li>
+      <li>No client-enforced max file size / count limit beyond requiring at least one media item.</li>
+    </ul>
+
+    <h3>Description</h3>
+    <p>Uploads a patrol visit report from the Log Visit flow as a single multipart request. Requires Bearer authentication (same Sanctum access token as other native APIs; 401 triggers the shared refresh-and-retry path). Includes an always-present <code>attention_needed</code> object for the visit-level Attention Needed toggle (optional text or voice). On success, the app reads <code>success</code>, <code>visit_id</code>, <code>client_draft_id</code>, <code>items_saved</code>, and <code>message</code> (camelCase aliases are also accepted).</p>
+  </section>
+
   <p class="footer-note">
-    SmartNPS360 Native API Reference — endpoints used by mobile app 1.0.0+41 (updated 14 July 2026).
+    SmartNPS360 Native API Reference — endpoints used by mobile app (updated 6 August 2026).
   </p>
 
 </body>

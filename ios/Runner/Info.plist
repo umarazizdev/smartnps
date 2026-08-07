@@ -29,11 +29,15 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Camera access is required to capture photos for Daily Activity Reports, visit evidence, and profile/ID attachments.</string>
+	<string>Camera access is required to record visit videos and capture photos for Daily Activity Reports, visit evidence, and profile/ID attachments.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Microphone access is required to record audio with visit videos.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>SmartNPS360 uses your location only while you are on duty or in an active shift. With background location permission, the app may collect and upload your location even when the app is not open to support attendance verification, patrol tracking, visit logs, and live operational monitoring. Location tracking stops when your shift ends.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Location access is used only while you are on duty (shift active) to verify attendance, breaks, and visits.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>SmartNPS360 uses motion activity to detect whether you are walking, running, driving, cycling, or stationary while on duty, so patrol and attendance tracking can adapt to your physical activity.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Photo library access is required to select profile and ID images during registration and to attach images to reports.</string>
 	<key>NSUserNotificationsUsageDescription</key>

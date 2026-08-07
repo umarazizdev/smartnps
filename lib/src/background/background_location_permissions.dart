@@ -27,15 +27,12 @@ class BackgroundLocationPermissions {
     'com.smartnps360.app/settings',
   );
 
-  /// True when background location is already granted — skip all disclosure and
-  /// permission dialogs (Android Allow all the time / iOS Always).
   static Future<bool> isBackgroundLocationFullyEnabled() async {
     if (!Platform.isAndroid && !Platform.isIOS) return true;
     await refreshPermissionStateFromOs();
     return hasSufficientBackgroundAccess();
   }
 
-  /// Re-reads the current OS permission state (Settings-safe on iOS).
   static Future<void> refreshPermissionStateFromOs() async {
     if (Platform.isIOS) {
       await refreshIosLocationPermission();
@@ -46,11 +43,6 @@ class BackgroundLocationPermissions {
     }
   }
 
-  /// Strict clock-in check: reads background permission from the OS only.
-  /// Foreground / "While using the app" is never treated as clock-in ready.
-  ///
-  /// Android uses the native OS check with plugin fallbacks so Play updates
-  /// and cold-start (before MethodChannel is ready) still resolve correctly.
   static Future<bool> isClockInBackgroundReady() async {
     if (!Platform.isAndroid && !Platform.isIOS) return true;
     await refreshPermissionStateFromOs();
@@ -82,7 +74,6 @@ class BackgroundLocationPermissions {
     };
   }
 
-  /// Reads the current iOS authorization from Geolocator only (Settings-safe).
   static Future<LocationPermission> readIosLocationPermission() async {
     if (!Platform.isIOS) return LocationPermission.always;
     return Geolocator.checkPermission();
@@ -112,7 +103,7 @@ class BackgroundLocationPermissions {
   static Future<BackgroundPermissionOutcome> _ensureAndroidGranted() async {
     final fgBefore = await Permission.location.status;
     if (kDebugMode) {
-      // ignore: avoid_print
+
       print('[BackgroundLocationPermissions] android fg(before)=$fgBefore');
     }
     final fg = fgBefore.isGranted
@@ -133,7 +124,7 @@ class BackgroundLocationPermissions {
 
     final notificationBefore = await Permission.notification.status;
     if (kDebugMode) {
-      // ignore: avoid_print
+
       print(
         '[BackgroundLocationPermissions] android notification(before)=$notificationBefore',
       );
@@ -143,7 +134,7 @@ class BackgroundLocationPermissions {
         Permission.notification.request,
       );
       if (kDebugMode) {
-        // ignore: avoid_print
+
         print(
           '[BackgroundLocationPermissions] android notification(after)=$notification',
         );
@@ -160,7 +151,7 @@ class BackgroundLocationPermissions {
 
     final bgBefore = await Permission.locationAlways.status;
     if (kDebugMode) {
-      // ignore: avoid_print
+
       print('[BackgroundLocationPermissions] android bg(before)=$bgBefore');
     }
     final bg = bgBefore.isGranted
@@ -169,14 +160,13 @@ class BackgroundLocationPermissions {
             Permission.locationAlways.request,
           );
     if (kDebugMode) {
-      // ignore: avoid_print
+
       print('[BackgroundLocationPermissions] android bg(after)=$bg');
     }
     if (bg.isGranted) {
       return const BackgroundPermissionOutcome(granted: true);
     }
 
-    // Foreground location is enough to start; user can upgrade in settings.
     return const BackgroundPermissionOutcome(
       granted: false,
       openSettings: true,
@@ -184,16 +174,10 @@ class BackgroundLocationPermissions {
     );
   }
 
-  /// Re-reads iOS authorization without showing the system prompt.
-  ///
-  /// After the user changes location to Always in Settings, only
-  /// [Geolocator.checkPermission] reflects the new value. Calling
-  /// [Geolocator.requestPermission] here would re-show the dialog and can
-  /// leave the app stuck on whileInUse.
   static Future<LocationPermission> refreshIosLocationPermission() async {
     final permission = await readIosLocationPermission();
     if (kDebugMode && Platform.isIOS) {
-      // ignore: avoid_print
+
       print(
         '[BackgroundLocationPermissions] ios geolocator(check)=$permission',
       );
@@ -202,11 +186,10 @@ class BackgroundLocationPermissions {
   }
 
   static Future<BackgroundPermissionOutcome> _ensureIosGranted() async {
-    // On iOS, permission_handler often reports "denied" after the user grants
-    // "Always" in Settings while Geolocator reflects the real authorization.
+
     var geoPermission = await refreshIosLocationPermission();
     if (kDebugMode) {
-      // ignore: avoid_print
+
       print(
         '[BackgroundLocationPermissions] ios geolocator(before)=$geoPermission',
       );
@@ -217,7 +200,7 @@ class BackgroundLocationPermissions {
         Geolocator.requestPermission,
       );
       if (kDebugMode) {
-        // ignore: avoid_print
+
         print(
           '[BackgroundLocationPermissions] ios geolocator(after request)=$geoPermission',
         );
@@ -237,7 +220,6 @@ class BackgroundLocationPermissions {
       return const BackgroundPermissionOutcome(granted: true);
     }
 
-    // whileInUse: tracking can start, but background updates need "Always".
     return const BackgroundPermissionOutcome(
       granted: false,
       openSettings: true,
@@ -292,10 +274,6 @@ class BackgroundLocationPermissions {
     return null;
   }
 
-  /// True when the OS grants precise / fine location (not Approximate / Reduced).
-  ///
-  /// Uses the native Settings channel (same pattern as background location OS
-  /// checks): Android ACCESS_FINE, iOS CLAccuracyAuthorization.fullAccuracy.
   static Future<bool> hasPreciseLocationAccess() async {
     if (!Platform.isAndroid && !Platform.isIOS) return true;
 
@@ -328,7 +306,6 @@ class BackgroundLocationPermissions {
       }
     }
 
-    // Fallback if native channel is not ready yet (cold start).
     try {
       final accuracy = await Geolocator.getLocationAccuracy();
       final granted = accuracy == LocationAccuracyStatus.precise;
@@ -346,7 +323,7 @@ class BackgroundLocationPermissions {
           '$error',
         );
       }
-      // Authorized but unreadable → treat as missing so banner can recover.
+
       return !(await hasForegroundLocationAccess());
     }
   }
@@ -365,7 +342,7 @@ class BackgroundLocationPermissions {
         );
       }
     }
-    // Do not use Permission.location here — it is granted for Approximate-only.
+
     try {
       final accuracy = await Geolocator.getLocationAccuracy();
       return accuracy == LocationAccuracyStatus.precise;
@@ -406,7 +383,6 @@ class BackgroundLocationPermissions {
     return true;
   }
 
-  /// Android "Allow all the time" — native OS check first, then plugin fallbacks.
   static Future<bool> androidHasBackgroundLocationAccess() async {
     try {
       final nativeGranted = await _nativeSettingsChannel.invokeMethod<bool>(
@@ -428,7 +404,6 @@ class BackgroundLocationPermissions {
     return geo == LocationPermission.always;
   }
 
-  /// Read-only check used before starting duty background tracking.
   static Future<BackgroundPermissionOutcome> readinessOutcome() async {
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
@@ -456,7 +431,6 @@ class BackgroundLocationPermissions {
     return const BackgroundPermissionOutcome(granted: true);
   }
 
-  /// Requests notification permission once before Android foreground service start.
   static Future<void> ensureAndroidNotificationForService() async {
     if (!Platform.isAndroid) return;
     final status = await Permission.notification.status;
@@ -464,14 +438,12 @@ class BackgroundLocationPermissions {
     await Permission.notification.request();
   }
 
-  /// iOS: "Always". Android: "Allow all the time".
   static String alwaysAccessLabel() {
     if (Platform.isIOS) return 'Always';
     if (Platform.isAndroid) return 'Allow all the time';
     return 'always-on';
   }
 
-  /// iOS: "While Using the App". Android: "While using the app".
   static String foregroundAccessLabel() {
     if (Platform.isIOS) return 'While Using the App';
     if (Platform.isAndroid) return 'While using the app';
@@ -712,7 +684,6 @@ class BackgroundLocationPermissions {
     return 'Device location is turned off. Please enable Location in Settings to continue.';
   }
 
-  /// Where Open Settings should navigate after the user confirms in-app.
   static StoreSafeSettingsDestination settingsDestinationFor(
     String? deniedReason,
   ) {

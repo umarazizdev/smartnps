@@ -70,15 +70,13 @@ class ApiClient {
     );
   }
 
-  /// Shared concise API log: path + status only (no headers).
   static void logHttpResult(String method, Uri uri, int? statusCode) {
     if (!kDebugMode) return;
-    debugPrint(
-      '[ApiClient] $method ${_pathFromUri(uri)} status=${statusCode ?? 0}',
-    );
+    // debugPrint(
+    //   '[ApiClient] $method ${_pathFromUri(uri)} status=${statusCode ?? 0}',
+    // );
   }
 
-  /// Shared concise API error log: path + status + error (no headers).
   static void logHttpError(
     String method,
     Uri uri,
@@ -86,9 +84,9 @@ class ApiClient {
     String error,
   ) {
     if (!kDebugMode) return;
-    debugPrint(
-      '[ApiClient] $method ${_pathFromUri(uri)} status=$statusCode error=$error',
-    );
+    // debugPrint(
+    //   '[ApiClient] $method ${_pathFromUri(uri)} status=$statusCode error=$error',
+    // );
   }
 
   static String _pathFromUri(Uri uri) {

@@ -113,7 +113,7 @@ class BackgroundLocationController {
 
       final service = FlutterBackgroundService();
       final bool runningBeforeStop = await service.isRunning();
-      // Always invoke stop: isRunning() can be false while the FGS is still active.
+
       service.invoke('stop');
       if (runningBeforeStop) {
         await _waitUntilAndroidServiceStopped();
@@ -159,7 +159,6 @@ class BackgroundLocationController {
     }
   }
 
-  /// True when platform background location collection is active.
   static Future<bool> isTrackingRunning() async {
     if (Platform.isIOS) {
       return IosDutyLocationPinger.isRunning;

@@ -131,7 +131,6 @@ class _BackgroundLocationRequiredBannerState
         ? 'Enable Location'
         : BackgroundLocationPermissions.bannerButtonLabelFor(deniedReason);
 
-    // Light: warm cream warning strip. Dark: slate bar matching web cards.
     final background = isDark
         ? const Color(0xFF1A2332)
         : const Color(0xFFFFF4E6);

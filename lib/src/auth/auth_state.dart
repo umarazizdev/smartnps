@@ -5,14 +5,9 @@ class AuthState {
 
   static final AuthState instance = AuthState._();
 
-  /// User profile data coming from the WebView (e.g. id, name, roles).
   final ValueNotifier<Map<String, dynamic>?> user =
       ValueNotifier<Map<String, dynamic>?>(null);
 
-  /// Auth/session data coming from the WebView (e.g. access/refresh token, expiry).
-  ///
-  /// Keep tokens out of logs and UI by default; use this only where needed
-  /// (e.g. native API calls, background uploads).
   final ValueNotifier<Map<String, dynamic>?> session =
       ValueNotifier<Map<String, dynamic>?>(null);
 

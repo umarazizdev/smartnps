@@ -12,6 +12,7 @@ class PlatformBottomTab {
     this.iosSymbolName,
     this.activeAssetIcon,
     this.inactiveAssetIcon,
+    this.materialIcon,
   });
 
   final String label;
@@ -20,6 +21,8 @@ class PlatformBottomTab {
   final String? iosSymbolName;
   final String? activeAssetIcon;
   final String? inactiveAssetIcon;
+
+  final IconData? materialIcon;
 }
 
 class PlatformBottomBar extends StatelessWidget {
@@ -52,7 +55,6 @@ class PlatformBottomBar extends StatelessWidget {
         (defaultTargetPlatform == TargetPlatform.iOS ||
             defaultTargetPlatform == TargetPlatform.macOS);
 
-    // Match officer UI active tab cyan in light + dark (iOS + Android).
     final activeTint =
         tint ?? const Color(AppConfig.cBottomBarActive);
 
@@ -142,10 +144,8 @@ class _ClassicBottomBar extends StatelessWidget {
     final isAndroid =
         !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
-    // Same UI cyan for active tabs in light + dark (#0F93D2).
     final activeColor = tint;
 
-    // Dark: solid white inactive. Light: near-black charcoal from officer UI.
     final inactiveColor = effectiveIsDark
         ? Colors.white
         : const Color(0xFF272527);
@@ -155,7 +155,7 @@ class _ClassicBottomBar extends StatelessWidget {
             isAndroid ? 235 : 210,
           )
         : isAndroid
-        // Near-white so the bar matches light cards instead of looking grey.
+
         ? const Color(0xFFFFFFF8).withAlpha(252)
         : (surface ?? const Color(0xFFFBFBFD)).withAlpha(245);
 
@@ -163,7 +163,6 @@ class _ClassicBottomBar extends StatelessWidget {
         ? Colors.white.withAlpha(isAndroid ? 20 : 18)
         : Colors.black.withAlpha(isAndroid ? 16 : 10);
 
-    // Light active pill from officer UI (#E9EAEC); dark keeps soft white wash.
     final activePill = effectiveIsDark
         ? Colors.white.withAlpha(isAndroid ? 28 : 18)
         : const Color(0xFFE9EAEC);
@@ -202,7 +201,7 @@ class _ClassicBottomBar extends StatelessWidget {
                     child: InkWell(
                       borderRadius: BorderRadius.circular(24),
                       onTap: () => onTap(tab.index),
-                      // Full-width tap target; pill hugs icon + label only.
+
                       child: Center(
                         child: AnimatedContainer(
                           duration: isAndroid
@@ -286,7 +285,7 @@ class _TabIcon extends StatelessWidget {
 
     if (asset == null || asset.isEmpty) {
       return Icon(
-        isActive ? Icons.circle : Icons.circle_outlined,
+        tab.materialIcon ?? (isActive ? Icons.circle : Icons.circle_outlined),
         color: isActive ? activeColor : inactiveColor,
         size: size,
       );

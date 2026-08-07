@@ -128,9 +128,6 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
   debugPrintRemoteMessagePayload('background', message);
 
-  // iOS/Android display notification+title payloads via the OS/APNs path.
-  // Custom sound in that case requires the server to set APNs sound to
-  // "alert_sound.caf" (iOS) or the Android notification channel sound.
   if (message.notification != null) {
     return;
   }
@@ -182,11 +179,8 @@ class PushNotificationService {
   String? _iosXsrfToken;
   String? _cachedDeviceId;
 
-  /// When this returns true, notification permission prompts are deferred
-  /// (e.g. while the login screen is visible).
   bool Function()? _deferPermissionPromptWhile;
 
-  /// Notifies listeners when the in-app push toggle changes (blocker UI).
   VoidCallback? _onPushPreferenceChanged;
 
   void setDeferPermissionPromptWhile(bool Function()? checker) {
@@ -288,7 +282,6 @@ class PushNotificationService {
     return status;
   }
 
-  /// Uploads the current in-app push toggle to permission-status API.
   Future<void> syncPushStateToPermissionApi() async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
     if (!await AuthRepository.instance.isOfficerLoggedIn()) return;
@@ -299,7 +292,6 @@ class PushNotificationService {
     );
   }
 
-  /// Re-sync FCM token after app resume (user toggle preference is unchanged).
   Future<Map<String, dynamic>> reconcileOnAppResume() async {
     await _loadPushEnabledPreference();
 
@@ -341,9 +333,6 @@ class PushNotificationService {
     _iosPendingTokenUpload = false;
   }
 
-  /// Waits until the notification permission flow finishes (system dialog included).
-  ///
-  /// Duty/location prompts should call this first so dialogs never stack.
   Future<void> waitForPermissionPromptCompleted({
     bool promptIfNeeded = false,
   }) async {
@@ -356,7 +345,6 @@ class PushNotificationService {
     await requestPermissionAfterAuth();
   }
 
-  /// Prompts for notification permission after login or sign-up (once per app session).
   Future<void> requestPermissionAfterAuth() async {
     if (!pushNotificationsEnabled) {
       debugPrint(
@@ -397,7 +385,6 @@ class PushNotificationService {
     }
     _permissionPromptAttempted = true;
 
-    // Brief delay so dashboard/navigation finishes before the system dialog.
     await Future<void>.delayed(const Duration(seconds: 1));
 
     debugPrint(
@@ -410,7 +397,6 @@ class PushNotificationService {
     }
   }
 
-  /// Requests permission (if needed) and uploads the FCM token after auth.
   Future<void> syncPushTokenAfterLogin() async {
     if (!pushNotificationsEnabled) {
       debugPrint('[SmartNPS360][Push] skip push sync (disabled by user)');
@@ -471,9 +457,6 @@ class PushNotificationService {
 
     final messaging = FirebaseMessaging.instance;
 
-    // On iOS, suppress Firebase's foreground banner/sound so only our local
-    // notification plays alert_sound.caf. FCM remote notifications use the
-    // server APNs sound (default tri-tone) when alert/sound are enabled here.
     if (Platform.isIOS) {
       await messaging.setForegroundNotificationPresentationOptions(
         alert: false,
@@ -623,8 +606,6 @@ class PushNotificationService {
     return granted;
   }
 
-  /// True while the full-screen "Permissions required" blocker is up (or about
-  /// to be). That screen already owns notification CTAs.
   bool get _isRequiredPermissionsBlockerActive =>
       RequiredPermissionsGate.shouldSuppressCompetingDialogs;
 

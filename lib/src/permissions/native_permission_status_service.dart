@@ -14,15 +14,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../api/api_client.dart';
 import '../auth/auth_repository.dart';
 import '../background/background_location_permissions.dart';
+import '../motion/motion_activity_service.dart';
 import '../push/push_notification_preferences.dart';
 import 'os_notification_permission.dart';
 import '../utilities/app_config.dart';
 import '../utilities/app_version_info.dart';
 import '../utilities/device_identity.dart';
 
-/// Store-safe OS permission snapshot for the native-app permission-status API.
-///
-/// Read-only: never requests permissions, only reports current OS state.
 class NativePermissionStatusService {
   NativePermissionStatusService._() {
     _settingsChannel.setMethodCallHandler(_handleSettingsMethodCall);
@@ -35,33 +33,21 @@ class NativePermissionStatusService {
     'com.smartnps360.app/settings',
   );
 
-  /// Legacy Keychain keys — cleared once so uninstall leftovers cannot remap.
   static const FlutterSecureStorage _legacySecureStorage =
       FlutterSecureStorage();
 
-  /// App-local history flags (SharedPreferences). Cleared on uninstall, unlike
-  /// iOS Keychain, so a fresh install reports `unknown` until the user acts.
-  /// Device-wide flag: background location was granted at least once.
-  /// Used so a later revoke reports API `denied` instead of `unknown`.
   static const String _kBackgroundLocationEverGranted =
       'permission.background_location.ever_granted.v1';
 
-  /// Device-wide flag: officer declined enabling background location
-  /// (e.g. Cancel on Open Settings) — even on first prompt.
   static const String _kBackgroundLocationUserDenied =
       'permission.background_location.user_denied.v1';
 
-  /// Device-wide flag: foreground location was granted at least once
-  /// (While using, Always, or Allow only this time). Revoke → API denied.
   static const String _kForegroundLocationEverGranted =
       'permission.foreground_location.ever_granted.v1';
 
-  /// Device-wide flag: officer tapped Don't Allow on the foreground OS dialog.
   static const String _kForegroundLocationUserDenied =
       'permission.foreground_location.user_denied.v1';
 
-  /// iOS only: whenInUse survived a real background (paused/hidden → resumed),
-  /// so it is lasting "While Using" — not temporary "Allow Once".
   static const String _kIosForegroundLastingConfirmed =
       'permission.ios_foreground_lasting_confirmed.v1';
   static const String _kLegacyKeychainCleared =
@@ -76,7 +62,6 @@ class NativePermissionStatusService {
     return _prefsFuture ??= SharedPreferences.getInstance();
   }
 
-  /// Drop stale iOS Keychain history so it cannot affect a reinstall/upgrade.
   Future<void> _clearLegacyKeychainHistoryIfNeeded() async {
     if (_legacyKeychainCleanupStarted) return;
     _legacyKeychainCleanupStarted = true;
@@ -118,10 +103,8 @@ class NativePermissionStatusService {
   bool _syncForceNext = false;
   Future<bool>? _syncInFlight;
 
-  /// Prefer one POST: if mark-denied lands while app_cycle is queued, sync after.
   bool _deferredSyncAfterAppCycle = false;
 
-  /// Optional listener for live OS permission changes (blocker UI).
   VoidCallback? _onOsPermissionChanged;
 
   void setOnOsPermissionChanged(VoidCallback? callback) {
@@ -171,8 +154,7 @@ class NativePermissionStatusService {
           );
         }
         unawaited(syncIfChanged());
-        // Keep the logged-in permission blocker in sync without waiting for resume.
-        // ignore: avoid_dynamic_calls — soft dependency via callback.
+
         _onOsPermissionChanged?.call();
         return null;
       default:
@@ -180,7 +162,6 @@ class NativePermissionStatusService {
     }
   }
 
-  /// Starts conservative live battery uploads while the app is active.
   void startBatteryMonitoring({bool uploadImmediately = true}) {
     if (!Platform.isAndroid && !Platform.isIOS) return;
     unawaited(
@@ -213,16 +194,10 @@ class NativePermissionStatusService {
     _batteryMonitorTimer = null;
   }
 
-  /// App resume / Settings return: re-read live OS location flags and ensure
-  /// they reach the permission-status API (via pending app_cycle or a follow-up).
   Future<bool> syncLocationPermissionsOnResume() {
     return ensureLatestPermissionsSynced(settleMs: 80);
   }
 
-  /// Refresh OS permissions and upload if needed — without double-POST:
-  /// - If an app_cycle upload is pending/in-flight, refresh now and schedule a
-  ///   follow-up sync after it (only uploads when the snapshot still differs).
-  /// - Otherwise syncIfChanged immediately.
   Future<bool> ensureLatestPermissionsSynced({int settleMs = 0}) async {
     if (!Platform.isAndroid && !Platform.isIOS) return false;
     if (settleMs > 0) {
@@ -251,12 +226,6 @@ class NativePermissionStatusService {
     return syncIfChanged();
   }
 
-  /// Builds a fresh OS permission snapshot and uploads when it differs from
-  /// the last successful upload (or always when [force] is true).
-  /// Returns true when an upload was attempted and succeeded.
-  ///
-  /// [bypassAppCycleCoalesce] is for the post-app_cycle follow-up only — the
-  /// drain task still holds `_appCycleUploadInFlight` while that runs.
   Future<bool> syncIfChanged({
     bool force = false,
     bool bypassAppCycleCoalesce = false,
@@ -266,8 +235,6 @@ class NativePermissionStatusService {
     final accessToken = await _accessTokenForLoggedInOfficer();
     if (accessToken == null || accessToken.isEmpty) return false;
 
-    // Non-forced syncs ride along with an in-flight/pending app_cycle POST
-    // so resume + permission sync do not double-hit the same endpoint.
     if (!force &&
         !bypassAppCycleCoalesce &&
         (_pendingAppCycle != null || _appCycleUploadInFlight != null)) {
@@ -310,7 +277,6 @@ class NativePermissionStatusService {
         final force = _syncForceNext;
         _syncForceNext = false;
 
-        // Always sample the latest OS state before comparing.
         await BackgroundLocationPermissions.refreshPermissionStateFromOs();
         final payload = await buildPayload();
         final fingerprint = _fingerprint(payload);
@@ -340,7 +306,6 @@ class NativePermissionStatusService {
     return didUpload;
   }
 
-  /// Posts in-app push toggle state to the permission-status API.
   Future<bool> uploadPushToggle({required bool enabled}) async {
     if (!Platform.isAndroid && !Platform.isIOS) return false;
 
@@ -355,7 +320,6 @@ class NativePermissionStatusService {
     return syncIfChanged(force: true);
   }
 
-  /// Posts app lifecycle state with the same snapshot used by permission sync.
   Future<bool> uploadAppCycle({required String appCycle}) async {
     if (!Platform.isAndroid && !Platform.isIOS) return false;
     if (!await AuthRepository.instance.isOfficerLoggedIn()) return false;
@@ -398,9 +362,7 @@ class NativePermissionStatusService {
 
     if (_deferredSyncAfterAppCycle) {
       _deferredSyncAfterAppCycle = false;
-      // Flags / OS may have changed after the app_cycle snapshot. Upload only
-      // if the permission map still differs (no duplicate when already sent).
-      // bypass: we are still inside _appCycleUploadInFlight.
+
       await syncIfChanged(bypassAppCycleCoalesce: true);
     }
 
@@ -413,16 +375,13 @@ class NativePermissionStatusService {
 
     var uploaded = false;
     await _serialized(() async {
-      // After a real background, lasting While Using stays whenInUse; Allow Once
-      // usually reverts to notDetermined. Confirm only on paused/hidden → resumed
-      // (permission-dialog inactive → resumed must not confirm Allow Once).
+
       if (Platform.isIOS &&
           appCycle == 'resumed' &&
           (_lastAppCycle == 'paused' || _lastAppCycle == 'hidden')) {
         await _confirmIosForegroundLastingAfterRealBackground();
       }
 
-      // Fresh OS sample so Settings toggles land in this single resume POST.
       await BackgroundLocationPermissions.refreshPermissionStateFromOs();
       final payload = await buildPayload();
       payload['app_cycle'] = appCycle;
@@ -537,6 +496,7 @@ class NativePermissionStatusService {
       'backgroundLocation': await _backgroundLocationStatus(),
       'preciseLocation': await _preciseLocationStatus(),
       'notifications': await _notificationStatus(),
+      'motionActivity': await _motionActivityStatus(),
       'batteryOptimization': await _batteryOptimizationStatus(),
       'backgroundAppRefresh': await _backgroundAppRefreshStatus(),
       'push': await _pushToggleStatus(),
@@ -557,7 +517,7 @@ class NativePermissionStatusService {
 
     if (Platform.isAndroid) {
       final status = await Permission.location.status;
-      // "Allow only this time" — track that location was seen, report denied.
+
       if (await _isAndroidOneTimeLocationPermission()) {
         await _markForegroundLocationEverGranted();
         await _clearForegroundLocationUserDenied();
@@ -568,23 +528,15 @@ class NativePermissionStatusService {
         await _clearForegroundLocationUserDenied();
         return 'granted';
       }
-      // Don't Allow / Settings revoke → denied (not unknown).
+
       return _resolveAndroidForegroundDeniedOrUnknown(status);
     }
 
-    // iOS: While Using / Always → granted. "Ask Next Time Or When I Share"
-    // resets to notDetermined (Geolocator: denied) → API denied after a prior
-    // grant; first install stays unknown.
     return _resolveIosForegroundLocationApiStatus(
       await BackgroundLocationPermissions.readIosLocationPermission(),
     );
   }
 
-  /// API-only iOS foregroundLocation mapping (does not change clock-in).
-  ///
-  /// While Using / Always → `granted`. Allow Once also appears as whenInUse
-  /// while active, so it reports `granted` until it expires (then `denied`).
-  /// `denied` only when OS access is actually denied / revoked.
   Future<String> _resolveIosForegroundLocationApiStatus(
     LocationPermission permission,
   ) async {
@@ -597,7 +549,7 @@ class NativePermissionStatusService {
       }
       return 'granted';
     }
-    // Expired Allow Once / Ask Next Time → notDetermined (Geolocator: denied).
+
     await _setIosForegroundLastingConfirmed(false);
     if (permission == LocationPermission.deniedForever) {
       return 'denied';
@@ -643,8 +595,6 @@ class NativePermissionStatusService {
     }
   }
 
-  /// After paused/hidden → resumed: if whenInUse/always still holds, it is
-  /// lasting While Using (Allow Once typically expired to notDetermined).
   Future<void> _confirmIosForegroundLastingAfterRealBackground() async {
     final permission =
         await BackgroundLocationPermissions.readIosLocationPermission();
@@ -663,9 +613,6 @@ class NativePermissionStatusService {
     await _setIosForegroundLastingConfirmed(false);
   }
 
-  /// Android "Allow only this time" flag (API 30+).
-  /// iOS Allow Once is indistinguishable from While Using while whenInUse is
-  /// active; foregroundLocation reports granted until Allow Once expires.
   Future<bool> _isAndroidOneTimeLocationPermission() async {
     if (!Platform.isAndroid) return false;
     try {
@@ -688,15 +635,14 @@ class NativePermissionStatusService {
 
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      // Services off is handled elsewhere for other fields; for background only,
-      // report denied if this device previously had background location allowed.
+
       return _resolveBackgroundLocationApiStatus('unknown');
     }
 
     late final String liveStatus;
     if (Platform.isAndroid) {
       final foreground = await Permission.location.status;
-      // Entire app location set to Deny in Settings → background also denied.
+
       if (await _androidLocationIsDeniedForApi(foreground)) {
         await _markBackgroundLocationUserDenied();
         if (kDebugMode) {
@@ -739,18 +685,17 @@ class NativePermissionStatusService {
     return _resolveBackgroundLocationApiStatus(liveStatus);
   }
 
-  /// Android background permission → API value before history remap.
   Future<String> _mapAndroidBackgroundPermissionStatus(
     PermissionStatus status,
   ) async {
     if (status.isGranted || status.isLimited || status.isProvisional) {
       return 'granted';
     }
-    // Permanent / Settings deny of Always (or parent location) → denied.
+
     if (status.isPermanentlyDenied || status.isRestricted) {
       return 'denied';
     }
-    // Soft denied / not asked → unknown; history remap may upgrade to denied.
+
     return 'unknown';
   }
 
@@ -760,7 +705,7 @@ class NativePermissionStatusService {
     if (status.isPermanentlyDenied || status.isRestricted) {
       return 'denied';
     }
-    // Don't Allow on the OS dialog (stored or rationale after first deny).
+
     if (status.isDenied && await _hasForegroundLocationUserDenied()) {
       return 'denied';
     }
@@ -774,9 +719,6 @@ class NativePermissionStatusService {
     return 'unknown';
   }
 
-  /// True when Android app location is fully revoked for API (Settings Deny).
-  /// Does not include soft Don't Allow on the first FG OS dialog — that only
-  /// remaps foregroundLocation / preciseLocation via [_hasForegroundLocationUserDenied].
   Future<bool> _androidLocationIsDeniedForApi(PermissionStatus status) async {
     if (status.isGranted || status.isLimited || status.isProvisional) {
       return false;
@@ -790,9 +732,6 @@ class NativePermissionStatusService {
     return false;
   }
 
-  /// Call after the system foreground location dialog closes.
-  /// API only: While Using / Always → granted path; Don't Allow or no access →
-  /// foregroundLocation (+ precise via existing precise mapping) denied.
   Future<void> syncForegroundLocationAfterOsPrompt() async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
 
@@ -819,10 +758,6 @@ class NativePermissionStatusService {
     await _uploadPermissionMarkOrDefer();
   }
 
-  /// True when OS has a lasting foreground grant (not one-time / Allow Once).
-  ///
-  /// iOS: whenInUse and always both count as a foreground grant for API sync
-  /// after the OS prompt (Allow Once also appears as whenInUse while active).
   Future<bool> _hasLastingForegroundOsGrant() async {
     if (Platform.isAndroid) {
       if (await _isAndroidOneTimeLocationPermission()) return false;
@@ -838,18 +773,12 @@ class NativePermissionStatusService {
     return false;
   }
 
-  /// Call after Android/iOS foreground OS dialog → Don't Allow / non-lasting.
-  /// API only: foregroundLocation + preciseLocation → denied.
   Future<void> markForegroundLocationDeniedByUser() async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
     await _markForegroundLocationUserDenied();
     await _uploadPermissionMarkOrDefer();
   }
 
-  /// Call when the officer declines enabling background location
-  /// (Cancel on Open Settings, or returns from Settings without Always).
-  /// Stores deny in app prefs and uploads permission status (or defers to
-  /// the pending app_cycle POST to avoid a duplicate ping).
   Future<void> markBackgroundLocationDeniedByUser() async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
     await _markBackgroundLocationUserDenied();
@@ -870,8 +799,6 @@ class NativePermissionStatusService {
     await syncIfChanged(force: true);
   }
 
-  /// Persists grant/deny history for backgroundLocation only.
-  /// Remaps `unknown` → `denied` after prior grant or explicit user deny.
   Future<String> _resolveBackgroundLocationApiStatus(String liveStatus) async {
     if (liveStatus == 'granted') {
       await _markBackgroundLocationEverGranted();
@@ -884,8 +811,6 @@ class NativePermissionStatusService {
       return 'denied';
     }
 
-    // liveStatus is typically `unknown`. Report denied when the officer
-    // previously granted, or explicitly declined (including first-time Cancel).
     if (await _hasBackgroundLocationEverBeenGranted() ||
         await _hasBackgroundLocationUserDenied()) {
       if (kDebugMode) {
@@ -1007,11 +932,11 @@ class NativePermissionStatusService {
 
     if (Platform.isAndroid) {
       final foreground = await Permission.location.status;
-      // "Allow only this time" — temporary; API precise = denied.
+
       if (await _isAndroidOneTimeLocationPermission()) {
         return 'denied';
       }
-      // Lasting FG grant: report real Precise / Approximate (ignore stale deny flags).
+
       if (foreground.isGranted ||
           foreground.isLimited ||
           foreground.isProvisional) {
@@ -1029,14 +954,14 @@ class NativePermissionStatusService {
           return 'granted';
         }
       }
-      // Settings revoke / Don't Allow → denied when applicable.
+
       if (await _androidLocationIsDeniedForApi(foreground) ||
           await _hasForegroundLocationUserDenied() ||
           (foreground.isDenied &&
               await Permission.location.shouldShowRequestRationale)) {
         return 'denied';
       }
-      // Not granted yet and never previously granted → unknown.
+
       return _mapPermissionStatus(foreground);
     }
 
@@ -1045,8 +970,7 @@ class NativePermissionStatusService {
     if (locationPermission == LocationPermission.deniedForever) {
       return 'denied';
     }
-    // Ask Next Time Or When I Share (or never authorized) — match FG API:
-    // after a prior grant → denied; first install → unknown.
+
     if (locationPermission == LocationPermission.denied ||
         locationPermission == LocationPermission.unableToDetermine) {
       await _setIosForegroundLastingConfirmed(false);
@@ -1063,8 +987,6 @@ class NativePermissionStatusService {
       return 'unknown';
     }
 
-    // whileInUse / always: report real Precise Location (same as FG — do not
-    // force denied for unconfirmed whenInUse / Allow Once while active).
     if (locationPermission == LocationPermission.whileInUse ||
         locationPermission == LocationPermission.always) {
       try {
@@ -1105,6 +1027,48 @@ class NativePermissionStatusService {
     return OsNotificationPermission.permissionApiStatus();
   }
 
+  Future<String> _motionActivityStatus() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return 'unknown';
+
+    try {
+      final available = await MotionActivityService.isAvailable();
+      if (!available) return 'unknown';
+
+      if (Platform.isAndroid) {
+
+        final status = await Permission.activityRecognition.status;
+        if (status.isGranted || status.isLimited || status.isProvisional) {
+          return 'granted';
+        }
+        if (status.isPermanentlyDenied || status.isRestricted) {
+          return 'denied';
+        }
+
+        return 'unknown';
+      }
+
+      final native = await MotionActivityService.checkPermission();
+      switch (native) {
+        case 'granted':
+          return 'granted';
+        case 'denied':
+        case 'restricted':
+          return 'denied';
+        case 'notDetermined':
+          return 'unknown';
+        default:
+          return 'unknown';
+      }
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint(
+          '[NativePermissionStatus] motion activity status check failed: $error',
+        );
+      }
+      return 'unknown';
+    }
+  }
+
   Future<String> _batteryOptimizationStatus() async {
     if (!Platform.isAndroid) return 'unknown';
 
@@ -1114,11 +1078,11 @@ class NativePermissionStatusService {
       );
       if (status == 'granted') return 'granted';
       if (status == 'unknown') return 'unknown';
-      // Legacy native builds reported "denied" for the default optimized state.
+
       if (status == 'denied') return 'unknown';
       if (status != null) return 'unknown';
     } on MissingPluginException {
-      // Fall through for older native builds that only expose the boolean API.
+
     } catch (error) {
       if (kDebugMode) {
         debugPrint(
@@ -1132,7 +1096,7 @@ class NativePermissionStatusService {
         'isIgnoringBatteryOptimizations',
       );
       if (ignoring == null) return 'unknown';
-      // Default OS state is not exempt; that is not an explicit officer denial.
+
       return ignoring ? 'granted' : 'unknown';
     } catch (error) {
       if (kDebugMode) {
@@ -1163,9 +1127,6 @@ class NativePermissionStatusService {
     }
   }
 
-  /// iOS: Settings → Background App Refresh (`UIBackgroundRefreshStatus`).
-  /// Android: closest equivalent — app background restriction
-  /// (`ActivityManager.isBackgroundRestricted`, API 28+).
   Future<String> _backgroundAppRefreshStatus() async {
     if (!Platform.isAndroid && !Platform.isIOS) return 'unknown';
 
@@ -1207,8 +1168,7 @@ class NativePermissionStatusService {
     if (status.isGranted || status.isLimited || status.isProvisional) {
       return 'granted';
     }
-    // permanentlyDenied/restricted = officer explicitly blocked access.
-    // denied alone often means "not granted yet" before the first OS prompt.
+
     if (status.isPermanentlyDenied || status.isRestricted) {
       return 'denied';
     }

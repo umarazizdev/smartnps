@@ -3,7 +3,6 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import 'location_disclosure_consent.dart';
 
-/// On-duty location consent state. Persisted per officer account until off duty.
 class DutyTrackingPreferences {
   DutyTrackingPreferences._();
 
@@ -35,7 +34,6 @@ class DutyTrackingPreferences {
     await _storage.delete(key: _kSettingsPromptDeferred);
   }
 
-  /// True once background location is sufficient for this on-duty session.
   static Future<bool> isBgLocationReady() async {
     return (await _storage.read(key: _kBgLocationReady)) == '1';
   }
