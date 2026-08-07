@@ -72,9 +72,7 @@ class ApiClient {
 
   static void logHttpResult(String method, Uri uri, int? statusCode) {
     if (!kDebugMode) return;
-    // debugPrint(
-    //   '[ApiClient] $method ${_pathFromUri(uri)} status=${statusCode ?? 0}',
-    // );
+
   }
 
   static void logHttpError(
@@ -84,9 +82,7 @@ class ApiClient {
     String error,
   ) {
     if (!kDebugMode) return;
-    // debugPrint(
-    //   '[ApiClient] $method ${_pathFromUri(uri)} status=$statusCode error=$error',
-    // );
+
   }
 
   static String _pathFromUri(Uri uri) {

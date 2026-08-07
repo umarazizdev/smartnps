@@ -12,12 +12,12 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api/api_client.dart';
+import '../api/api_urls.dart';
 import '../auth/auth_repository.dart';
-import '../background/background_location_permissions.dart';
+import '../background/location/background_location_permissions.dart';
 import '../motion/motion_activity_service.dart';
-import '../push/push_notification_preferences.dart';
+import '../push/notifications/push_notification_preferences.dart';
 import 'os_notification_permission.dart';
-import '../utilities/app_config.dart';
 import '../utilities/app_version_info.dart';
 import '../utilities/device_identity.dart';
 
@@ -1190,7 +1190,7 @@ class NativePermissionStatusService {
 
   Future<bool> _upload(Map<String, dynamic> payload) async {
     ApiClient.instance.ensureAuthInterceptorInstalled();
-    final uri = Uri.parse(AppConfig.permissionStatusUrl);
+    final uri = Uri.parse(ApiUrls.permissionStatusUrl);
 
     try {
       if (kDebugMode) {

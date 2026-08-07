@@ -6,9 +6,9 @@ import 'package:flutter/foundation.dart';
 import 'package:http_parser/http_parser.dart';
 import 'package:path/path.dart' as p;
 
-import '../logvisitscreen/visit_video_flow_controller.dart';
-import '../utilities/app_config.dart';
+import '../log_visit/flow/visit_video_flow_controller.dart';
 import 'api_client.dart';
+import 'api_urls.dart';
 
 class VisitUploadResult {
   const VisitUploadResult({
@@ -37,8 +37,6 @@ class VisitUploadResult {
   }
 }
 
-/// Uploads a patrol visit draft as multipart/form-data per API contract:
-/// `POST /api/visits` with `meta` JSON + `media[N]` / `voice[N]` files.
 class VisitUploadApi {
   VisitUploadApi._();
 
@@ -134,14 +132,14 @@ class VisitUploadApi {
 
     if (kDebugMode) {
       debugPrint(
-        '[VisitUploadApi] POST ${AppConfig.visitsUploadUrl} '
+        '[VisitUploadApi] POST ${ApiUrls.visitsUploadUrl} '
         'items=${items.length} metaKeys=${meta.keys.toList()}',
       );
     }
 
     try {
       final response = await ApiClient.instance.dio.post<dynamic>(
-        AppConfig.visitsUploadUrl,
+        ApiUrls.visitsUploadUrl,
         data: form,
         options: Options(
           headers: const {'Accept': 'application/json'},
@@ -310,7 +308,7 @@ class VisitUploadApi {
       'mp3' => MediaType('audio', 'mpeg'),
       'wav' => MediaType('audio', 'wav'),
       'aac' => MediaType('audio', 'aac'),
-      _ => MediaType('audio', 'mp4'), // m4a
+      _ => MediaType('audio', 'mp4'),
     };
   }
 
