@@ -8,7 +8,6 @@ import '../permissions/required_permissions_gate.dart';
 import 'clock_in_blocked_dialog.dart';
 import 'glass_action_dialog.dart';
 
-/// Store-safe location disclosure before shift attendance / on-duty permission prompts.
 class ClockInLocationDisclosureDialog extends StatelessWidget {
   const ClockInLocationDisclosureDialog({super.key});
 

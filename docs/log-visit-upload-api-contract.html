@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Log Visit Upload API Contract</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 36px; color: #111; line-height: 1.45; }
+    h1 { font-size: 22px; margin-bottom: 4px; }
+    h2 { font-size: 16px; margin-top: 22px; margin-bottom: 8px; }
+    .meta { color: #555; font-size: 13px; margin-bottom: 18px; }
+    .endpoint { font-family: ui-monospace, Menlo, monospace; background: #f4f6f8; padding: 10px 12px; border-radius: 8px; margin: 12px 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin: 10px 0 16px; }
+    th, td { border: 1px solid #d0d7de; padding: 7px 8px; text-align: left; vertical-align: top; }
+    th { background: #f6f8fa; }
+    pre { background: #0f172a; color: #e2e8f0; padding: 14px; border-radius: 8px; font-size: 11.5px; overflow-x: auto; white-space: pre-wrap; }
+    ul { padding-left: 18px; }
+    li { margin-bottom: 4px; font-size: 13px; }
+    code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Log Visit Upload API Contract</h1>
+  <div class="meta">
+    POST /api/visits · multipart/form-data · Updated 6 August 2026
+  </div>
+
+  <div class="endpoint">
+    <strong>POST</strong> /api/visits<br/>
+    Authorization: Bearer &lt;access_token&gt;<br/>
+    Content-Type: multipart/form-data<br/>
+    Accept: application/json
+  </div>
+
+  <h2>Form parts</h2>
+  <table>
+    <thead>
+      <tr><th>Part</th><th>Type</th><th>Required</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>meta</code></td><td>JSON string</td><td>Yes</td><td>Visit metadata, attention_needed, and per-item notes/GPS</td></tr>
+      <tr><td><code>media[0]</code>, <code>media[1]</code>, …</td><td>file</td><td>Yes (≥1)</td><td>Photo/video files by <code>client_index</code></td></tr>
+      <tr><td><code>voice[0]</code>, <code>voice[2]</code>, …</td><td>file</td><td>If item has voice</td><td>Per-item voice note matching <code>client_index</code></td></tr>
+      <tr><td><code>attention_voice</code></td><td>file</td><td>If attention voice</td><td>Visit-level Attention Needed voice note</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Request example</h2>
+  <pre>POST /api/visits
+Authorization: Bearer &lt;access_token&gt;
+Content-Type: multipart/form-data
+Accept: application/json
+
+meta              → JSON string (see below)
+media[0]          → media_0.jpg           (image/jpeg)
+media[1]          → media_1.mp4           (video/mp4)
+media[2]          → media_2.jpg           (image/jpeg)
+voice[0]          → voice_0.m4a           (audio/mp4)
+voice[2]          → voice_2.m4a           (audio/mp4)
+attention_voice   → attention_voice.m4a   (audio/mp4)  ← only when attention_needed.has_voice_note is true</pre>
+
+  <h2>meta example</h2>
+  <pre>{
+  "client_draft_id": "8f3c2a1e-6b44-4d91-9c2e-1a7b0f5d3e21",
+  "started_at": "2026-08-02T11:10:11.234Z",
+  "submitted_at": "2026-08-02T11:35:02.100Z",
+  "region_id": 12,
+  "site_id": 845,
+  "region_name": "Lahore North",
+  "site_name": "Gate A",
+  "schedule_id": 4012,
+  "attention_needed": {
+    "needed": "yes",
+    "text_note": "Gate lock was forced open",
+    "has_voice_note": false
+  },
+  "items": [
+    {
+      "client_index": 0,
+      "type": "photo",
+      "text_note": "Main gate lock was open",
+      "captured_at": "2026-08-02T11:12:01.000Z",
+      "latitude": 31.520416,
+      "longitude": 74.358748,
+      "accuracy_meters": 8.5,
+      "has_voice_note": true
+    },
+    {
+      "client_index": 1,
+      "type": "video",
+      "text_note": "",
+      "captured_at": "2026-08-02T11:18:44.000Z",
+      "latitude": 31.520901,
+      "longitude": 74.359112,
+      "accuracy_meters": 12.0,
+      "has_voice_note": false
+    },
+    {
+      "client_index": 2,
+      "type": "photo",
+      "text_note": "Side fence damage",
+      "captured_at": "2026-08-02T11:24:10.500Z",
+      "latitude": 31.521055,
+      "longitude": 74.359480,
+      "accuracy_meters": 6.2,
+      "has_voice_note": true
+    }
+  ]
+}</pre>
+
+  <h2>attention_needed object</h2>
+  <table>
+    <thead>
+      <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>needed</code></td><td>string</td><td>Yes</td><td><code>"yes"</code> or <code>"no"</code></td></tr>
+      <tr><td><code>text_note</code></td><td>string</td><td>Yes</td><td>Text when needed=yes; otherwise <code>""</code></td></tr>
+      <tr><td><code>has_voice_note</code></td><td>boolean</td><td>Yes</td><td>If true (and needed=yes), send <code>attention_voice</code></td></tr>
+    </tbody>
+  </table>
+
+  <h2>attention_needed variants</h2>
+  <pre>// Toggle ON + text
+"attention_needed": { "needed": "yes", "text_note": "Gate lock was forced open", "has_voice_note": false }
+
+// Toggle ON + voice  → also send attention_voice file
+"attention_needed": { "needed": "yes", "text_note": "", "has_voice_note": true }
+
+// Toggle OFF  → always still sent
+"attention_needed": { "needed": "no", "text_note": "", "has_voice_note": false }</pre>
+
+  <h2>Rules</h2>
+  <ul>
+    <li><code>attention_needed</code> is always present in <code>meta</code>.</li>
+    <li><code>media[N]</code> / <code>voice[N]</code> match <code>items[].client_index</code>.</li>
+    <li><code>attention_voice</code> is visit-level and not tied to item indexes.</li>
+    <li>Item <code>has_voice_note: true</code> requires matching <code>voice[N]</code>.</li>
+    <li>Timestamps are ISO 8601 UTC.</li>
+  </ul>
+</body>
+</html>

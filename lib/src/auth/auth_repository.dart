@@ -17,7 +17,6 @@ class AuthRepository {
 
   static final AuthRepository instance = AuthRepository._();
 
-  /// Allows Keychain reads while the screen is locked (after first unlock).
   static const _storage = FlutterSecureStorage(
     iOptions: IOSOptions(
       accessibility: KeychainAccessibility.first_unlock_this_device,
@@ -236,7 +235,6 @@ class AuthRepository {
         (e.details?.toString().contains('-25299') ?? false);
   }
 
-  /// Saves access/refresh tokens from login or refresh API payloads.
   Future<void> saveTokensFromAuthResponse(Map<String, dynamic> body) async {
     final map = _unwrapAuthPayload(body);
     final access = extractAccessToken(map);
@@ -253,10 +251,6 @@ class AuthRepository {
     }
   }
 
-  /// Persists login API response (native Sanctum or web auth bridge).
-  ///
-  /// Memory caches tokens first so native APIs keep working even if Keychain
-  /// writes fail (e.g. iOS errSecDuplicateItem / -25299).
   Future<void> saveLoginFromAuthResponse({
     required Map<String, dynamic> map,
     Map<String, dynamic>? user,
@@ -297,7 +291,6 @@ class AuthRepository {
     return null;
   }
 
-  /// Merges authEvent payload + nested session for token lookup.
   static Map<String, dynamic> mergeAuthPayload(
     Map<String, dynamic> payload, {
     Map<String, dynamic>? session,
@@ -395,14 +388,12 @@ class AuthRepository {
     return body;
   }
 
-  /// Preloads tokens + login flag while the device is unlocked (e.g. app launch).
   Future<void> warmAccessTokenCache() async {
     await getAccessToken();
     await getRefreshToken();
     await isOfficerLoggedIn();
   }
 
-  /// Returns a usable access token, refreshing silently when missing/expired.
   Future<String?> ensureValidAccessToken() async {
     final access = await getAccessToken();
     if (access != null && access.isNotEmpty) {
@@ -412,7 +403,6 @@ class AuthRepository {
     return refreshAccessToken();
   }
 
-  /// POST /api/auth/refresh — shared by API interceptor and background services.
   Future<String?> refreshAccessToken() async {
     final inFlight = _refreshInFlight;
     if (inFlight != null) return inFlight.future;
@@ -487,8 +477,6 @@ class AuthRepository {
 
   bool _logoutAfterRefreshFailureInFlight = false;
 
-  /// Soft-fails (keeps Secure Storage) during [AppUpgradeReconciler] grace so a
-  /// flaky post-update refresh cannot wipe tokens / GPS queue.
   Future<void> _notifyRefreshSessionExpired() async {
     if (_logoutAfterRefreshFailureInFlight) return;
     if (AppUpgradeReconciler.shouldSuppressRefreshSessionLogout) {
@@ -609,7 +597,6 @@ class AuthRepository {
     return null;
   }
 
-  /// Resolves the active officer account id from memory or secure storage.
   Future<String?> getOfficerAccountId() async {
     final user = await getCurrentUser();
     if (user == null) return null;
@@ -624,7 +611,6 @@ class AuthRepository {
     return getStoredUser();
   }
 
-  /// Common login payload keys for the officer primary key.
   static String? extractOfficerAccountId(Map<String, dynamic> user) {
     const directKeys = [
       'id',
@@ -655,8 +641,7 @@ class AuthRepository {
   }
 
   String _safeEncode(Map<String, dynamic> user) {
-    // Keep simple for now; we only need persistence for debugging.
-    // If the payload is huge, backend "/me" should be used instead.
+
     try {
       return jsonEncode(user);
     } catch (_) {

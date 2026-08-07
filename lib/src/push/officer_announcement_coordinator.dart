@@ -5,16 +5,12 @@ import 'package:flutter/foundation.dart';
 
 import 'officer_announcement_push.dart';
 
-/// Narrow coordinator: parse → one pending UUID → WebView JS handoff.
-///
-/// Does not render UI, call Laravel APIs, or persist announcement content.
 class OfficerAnnouncementCoordinator {
   OfficerAnnouncementCoordinator._();
 
   static final OfficerAnnouncementCoordinator instance =
       OfficerAnnouncementCoordinator._();
 
-  /// Test-only constructor.
   @visibleForTesting
   OfficerAnnouncementCoordinator.forTesting();
 
@@ -65,9 +61,6 @@ class OfficerAnnouncementCoordinator {
     _ensureOfficerWebViewVisible = null;
   }
 
-  /// Foreground FCM: attempt immediate delivery; retain at most one pending
-  /// UUID when the WebView is not ready. Does not replace an existing tap
-  /// pending UUID.
   void onForeground(OfficerAnnouncementPush push) {
     _logEvent('foreground', push.recipientPublicId);
     if (_isDeliveryReady?.call() ?? false) {
@@ -87,8 +80,6 @@ class OfficerAnnouncementCoordinator {
     }
   }
 
-  /// Notification tap / cold launch: store pending UUID and bring WebView
-  /// to the officer surface when needed.
   void onOpened(
     OfficerAnnouncementPush push, {
     required String source,
@@ -165,7 +156,6 @@ class OfficerAnnouncementCoordinator {
     }
   }
 
-  /// Builds the JS snippet that invokes Laravel's bridge helper safely.
   static String buildDeliveryJavaScript(String recipientPublicId) {
     final payload = jsonEncode({
       'recipient_public_id': recipientPublicId,

@@ -7,10 +7,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'motion_activity_service.dart';
 import 'vehicle_session_fusion.dart';
 
-/// Shared fusion for the test screen and GPS ping/batch uploads.
-///
-/// Native motion is written to [SharedPreferences] so the Android background
-/// isolate can still read the latest OS activity when channels are unavailable.
 class MotionActivityFusionController {
   MotionActivityFusionController._();
 
@@ -21,7 +17,6 @@ class MotionActivityFusionController {
   static const _prefsConfidenceKey = 'motion_fusion_native_confidence';
   static const _prefsTimestampKey = 'motion_fusion_native_ts_ms';
 
-  /// Drop stale native prefs so background GPS-only fusion takes over sooner.
   static const _nativePrefsTtlMs = 25000;
 
   final VehicleSessionFusion fusion = VehicleSessionFusion();
@@ -35,13 +30,11 @@ class MotionActivityFusionController {
 
   MotionActivityUpdate? get lastNative => _lastNative;
 
-  /// Acquire a consumer (duty GPS / test screen). Starts native motion once.
   Future<void> acquire() async {
     _refCount++;
     await ensureStarted();
   }
 
-  /// Release a consumer. Stops native motion only when nobody is using it.
   Future<void> release() async {
     if (_refCount > 0) _refCount--;
     if (_refCount == 0) {
@@ -49,7 +42,6 @@ class MotionActivityFusionController {
     }
   }
 
-  /// Starts native motion (best effort) and begins feeding the fusion engine.
   Future<void> ensureStarted() async {
     if (_started || _starting) return;
     _starting = true;
@@ -73,7 +65,7 @@ class MotionActivityFusionController {
         if (kDebugMode) {
           debugPrint('[MotionFusion] native motion started');
         }
-        // Seeds stream via queryLatest → _onNativeUpdate (no duplicate call).
+
         await MotionActivityService.queryLatest();
       } else if (kDebugMode) {
         debugPrint('[MotionFusion] native start failed: $start');
@@ -83,7 +75,7 @@ class MotionActivityFusionController {
       if (kDebugMode) {
         debugPrint('[MotionFusion] ensureStarted error: $e');
       }
-      _started = true; // allow GPS-only path
+      _started = true;
     } finally {
       _starting = false;
     }
@@ -142,14 +134,12 @@ class MotionActivityFusionController {
     }
   }
 
-  /// Evaluate fusion for a GPS fix (call on every kept location point).
   Future<VehicleSessionSnapshot> evaluatePosition(Position position) async {
     await ensureStarted();
 
     var activity = _lastNative?.activity ?? 'unknown';
     var confidence = _lastNative?.confidence ?? 0;
 
-    // Background isolate often has no live EventChannel — use prefs.
     if (activity == 'unknown' || _lastNative == null) {
       final persisted = await _readPersistedNative();
       if (persisted.activity != 'unknown') {
@@ -172,7 +162,6 @@ class MotionActivityFusionController {
     return snapshot;
   }
 
-  /// For the test screen: push GPS / native without a [Position].
   VehicleSessionSnapshot evaluateRaw({
     required String nativeActivity,
     required int nativeConfidence,

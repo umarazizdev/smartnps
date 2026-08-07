@@ -97,7 +97,7 @@ void main() {
         'message': 'Secret message',
       });
       expect(push, isNotNull);
-      // Model has no title/body fields; only recipient + optional URL.
+
       expect(push!.recipientPublicId, validUuid);
       expect(push.destinationUrl, isNull);
     });

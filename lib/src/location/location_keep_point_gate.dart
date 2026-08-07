@@ -37,13 +37,8 @@ class LocationKeepPointDecision {
   final double? distanceMeters;
 }
 
-/// Dedupes bursty GPS callbacks after the adaptive stream has already applied
-/// speed policy + distance filter + curve boost.
-///
-/// Curve/corner accuracy is handled by rebuilding the stream — not by
-/// bearing-based keep here.
 class LocationKeepPointGate {
-  /// Floor so stream + poll timer cannot double-upload the same second.
+
   static const Duration minKeepInterval = Duration(seconds: 1);
 
   Position? _lastKept;
@@ -85,7 +80,6 @@ class LocationKeepPointGate {
       position.longitude,
     );
 
-    // Stream already rate-limits; accept delivered fixes (debounce only).
     _lastKept = position;
     _lastKeptAt = now;
     return LocationKeepPointDecision.keep(

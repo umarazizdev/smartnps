@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../app/app_navigator.dart';
 
-/// Coordinates native overlays (bottom bar, banners, dialogs) so they do not
-/// appear while the system keyboard is open or another modal is visible.
 class OverlayPromptGuard {
   OverlayPromptGuard._();
 

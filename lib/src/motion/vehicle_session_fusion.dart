@@ -1,25 +1,15 @@
-/// Sticky vehicle-session fusion over raw native motion + GPS speed.
-///
-/// Designed for polyline-ready states:
-/// - Slow car (10–15 km/h) → driving, never "running"
-/// - Red light / crawl traffic → stay in vehicle session
-/// - Leave car → walking within ~1–3s (native or GPS-assisted)
-///
-/// Timers are tuned for snappy UI while still rejecting brief traffic-light
-/// flicker between driving and walking.
+
+
 class VehicleSessionFusion {
-  /// Instant enter — covers most "slow street" driving.
+
   static const double enterDrivingGpsKmh = 12;
 
-  /// Soft enter at mid speed (immediate provisional session).
   static const double softEnterGpsKmh = 9.5;
 
   static const int enterDrivingConfidence = 40;
 
-  /// Still clearly moving as a vehicle (incl. slow traffic).
   static const double keepDrivingGpsKmh = 7;
 
-  /// Below this → stopped in traffic / at light (still in session).
   static const double stoppedGpsKmh = 2.2;
 
   static const double walkMinKmh = 1.4;
@@ -30,11 +20,9 @@ class VehicleSessionFusion {
   static const int strongWalkConfidence = 65;
   static const Duration strongWalkExitHold = Duration(milliseconds: 900);
 
-  /// After a real stop in-vehicle, walk-band GPS can exit without waiting on OS.
   static const Duration stoppedBeforeGpsWalkExit = Duration(milliseconds: 1800);
   static const Duration gpsWalkExitHold = Duration(milliseconds: 1600);
 
-  /// Debounce for walk ↔ stationary ↔ running outside a vehicle session.
   static const Duration nonVehicleHold = Duration(milliseconds: 350);
   static const double speedEmaAlpha = 0.55;
 
@@ -99,7 +87,6 @@ class VehicleSessionFusion {
     _pendingNonVehicleSince = null;
     _pendingNonVehicle = null;
 
-    // Hard re-affirm driving (kills walk-exit timers).
     if (native == 'driving' ||
         (speed != null && speed >= keepDrivingGpsKmh)) {
       state = 'driving';
@@ -112,12 +99,11 @@ class VehicleSessionFusion {
       return;
     }
 
-    // Track stopped-in-vehicle for GPS-assisted leave-car.
     if (speed == null || speed < stoppedGpsKmh) {
       _stoppedInVehicleSince ??= now;
       _gpsWalkExitSince = null;
     } else if (speed >= walkMinKmh && speed < walkMaxKmh) {
-      // keep stopped timestamp — used for post-stop walk exit
+
     } else {
       _stoppedInVehicleSince = null;
       _gpsWalkExitSince = null;
@@ -141,7 +127,6 @@ class VehicleSessionFusion {
       return;
     }
 
-    // Crawl / stop / mixed — stay in vehicle (never invent walking/running).
     if (speed != null &&
         speed >= stoppedGpsKmh &&
         speed < keepDrivingGpsKmh) {
@@ -193,7 +178,7 @@ class VehicleSessionFusion {
 
     if (softGps) {
       _softEnterSince ??= now;
-      // Enter session immediately at soft speed so slow driving never becomes running.
+
       active = true;
       state = 'driving';
       provisional = true;
@@ -224,7 +209,7 @@ class VehicleSessionFusion {
         reason = 'provisional stationary (gps)';
         return 'stationary';
       }
-      // Walk band only — mid speeds belong to soft-enter driving, not running.
+
       if (speed >= walkMinKmh && speed < softEnterGpsKmh) {
         provisional = true;
         reason = 'provisional walking (gps)';
@@ -244,8 +229,7 @@ class VehicleSessionFusion {
 
   void _commitNonVehicle(String candidate, DateTime now) {
     if (candidate == 'driving') {
-      // Driving outside session must go through enter rules / soft-enter.
-      // If we got here with candidate driving from GPS, activate.
+
       if (!active) {
         active = true;
         state = 'driving';
@@ -270,7 +254,6 @@ class VehicleSessionFusion {
       return;
     }
 
-    // Instant commit for clear native transitions (OS already debounced).
     if (!provisional &&
         (candidate == 'walking' ||
             candidate == 'running' ||
@@ -360,8 +343,6 @@ class VehicleSessionFusion {
         : '${s.toStringAsFixed(1)}s';
   }
 
-  /// Leave car when: stopped in vehicle, then sustained walk-band GPS,
-  /// and OS is not still saying driving.
   bool _tryGpsAssistedWalkExit(
     String native,
     double? speed,
@@ -373,7 +354,7 @@ class VehicleSessionFusion {
     }
     if (speed == null || speed < walkMinKmh || speed >= walkMaxKmh) {
       if (speed == null || speed < stoppedGpsKmh) {
-        // still stopped — don't clear stop clock
+
       } else {
         _gpsWalkExitSince = null;
       }
@@ -453,7 +434,6 @@ class VehicleSessionFusion {
     _pendingNonVehicle = null;
   }
 
-  /// Maps fused UI/session states to GPS API motion labels.
   static String toApiMotionActivity(String fusedState) {
     switch (fusedState.toLowerCase().trim()) {
       case 'driving':
