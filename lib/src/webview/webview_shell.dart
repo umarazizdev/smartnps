@@ -40,7 +40,11 @@ import '../app/native_theme_controller.dart';
 import '../push/officer_announcement_coordinator.dart';
 import '../push/push_notification_service.dart';
 import '../permissions/native_permission_status_service.dart';
-import '../motion/motion_activity_screen.dart';
+import '../logvisitscreen/visit_draft_resume_dialog.dart';
+import '../logvisitscreen/visit_gps_session.dart';
+import '../logvisitscreen/visit_media_draft_store.dart';
+import '../logvisitscreen/visit_video_flow_controller.dart';
+import '../logvisitscreen/visit_video_preview_screen.dart';
 import '../permissions/required_permissions_gate.dart';
 import '../widgets/required_permissions_blocker.dart';
 
@@ -65,10 +69,8 @@ class _WebViewShellUiController extends GetxController {
   final pullToRefreshActive = false.obs;
   final selectedBottomTabIndex = 0.obs;
   final bottomTabNavigationActive = false.obs;
-  final showingMotionActivity = false.obs;
+  final showingLogVisit = false.obs;
 
-  /// Keeps the native bottom bar visible across in-web redirects whose
-  /// intermediate URLs are not exact tab landing paths.
   final preserveBottomBarDuringLoad = false.obs;
   final flutterKeyboardInset = 0.0.obs;
 
@@ -110,7 +112,7 @@ class _WebViewShellUiController extends GetxController {
       RequiredPermissionsGate.instance.start();
     } else {
       RequiredPermissionsGate.instance.stop();
-      showingMotionActivity.value = false;
+      showingLogVisit.value = false;
     }
   }
 }
@@ -130,28 +132,20 @@ class _WebViewShellState extends State<WebViewShell>
   final _WebViewShellUiController _ui = _WebViewShellUiController();
   String? _pendingPushUrl;
   bool _nativeLogoutInFlight = false;
-  /// Set when refresh expiry clears the session before the WebView exists.
+
   bool _pendingLoginRedirectAfterExpiry = false;
   bool _refreshExpiryLogoutInFlight = false;
-  /// True while [clearNativeSession] is still running — do not treat `/` as
-  /// "login redirect done" until clear finishes (login URL == initialUrl).
-  bool _awaitingSessionClearForLoginRedirect = false;
 
-  /// When true, reconnect / retry must reload the WebView (page never loaded
-  /// or last main-frame load failed). When false, dismissing offline is safe.
+  bool _awaitingSessionClearForLoginRedirect = false;
+  bool _draftResumePrompted = false;
+  Uri? _uriBeforeLogVisit;
+
   bool _offlineNeedsReload = false;
 
-  /// Set on main-frame network errors so a following onLoadStop (Android error
-  /// document / failed URL) cannot dismiss OfflineScreen until we intentionally
-  /// start a recovery load.
   bool _holdOfflineUntilReload = false;
 
-  /// True after retry/reconnect calls loadUrl; cleared on that load's onLoadStart
-  /// so a stale error onLoadStop cannot clear the hold early.
   bool _awaitingOfflineRecoveryLoad = false;
 
-  /// Debounces transient ConnectivityResult.none / empty reports that
-  /// connectivity_plus emits on cold start, hot restart, and resume (esp. iOS).
   Timer? _offlineConnectivityDebounce;
 
   void _setNativeAuthSession(bool value) {
@@ -164,15 +158,10 @@ class _WebViewShellState extends State<WebViewShell>
     }
   }
 
-  /// Pauses native UI/monitoring while a web login screen is visible.
-  ///
-  /// Does **not** clear [AuthRepository] login flag or tokens — after an app
-  /// update the WebView often loads `/` / [AppConfig.initialUrl] (treated as
-  /// login), and persisting `false` was wiping `isOfficerLoggedIn` across upgrades.
-  /// Storage is only cleared on explicit logout via [AuthSessionManager].
   Future<void> _pauseNativeSessionForLoginScreen() async {
     _ui.setOfficerLoggedIn(false);
     _setNativeAuthSession(false);
+    _draftResumePrompted = false;
     NativePermissionStatusService.instance.stopBatteryMonitoring();
   }
 
@@ -199,9 +188,11 @@ class _WebViewShellState extends State<WebViewShell>
     try {
       debugPrint('[SmartNPS360][Auth] native logout ($reason)');
 
-      // Instant UI — bottom bar hides immediately.
       _ui.setOfficerLoggedIn(false);
       _setNativeAuthSession(false);
+      _ui.showingLogVisit.value = false;
+      unawaited(VisitGpsSession.instance.stop());
+      _draftResumePrompted = false;
       unawaited(
         _controller?.evaluateJavascript(
           source:
@@ -209,7 +200,6 @@ class _WebViewShellState extends State<WebViewShell>
         ),
       );
 
-      // TEMP: keep FCM/APNs registered after logout (was deletePushToken: true).
       await AuthSessionManager.clearNativeSession(deletePushToken: false);
 
       debugPrint(
@@ -229,7 +219,6 @@ class _WebViewShellState extends State<WebViewShell>
     return token != null && token.isNotEmpty;
   }
 
-  /// Fallback when web does not call authEvent logout before navigating away.
   Future<void> _maybePerformLogoutForRoute(Uri? uri, String reason) async {
     if (!AuthSessionManager.isLogoutRoute(uri)) return;
     await _performNativeLogout(
@@ -238,12 +227,6 @@ class _WebViewShellState extends State<WebViewShell>
     );
   }
 
-  /// Refresh token rejected → clear native session and open web login.
-  ///
-  /// Cookies are cleared so the site cannot bounce straight back to dashboard.
-  /// Post-upgrade grace in [AppUpgradeReconciler] still soft-fails and skips this.
-  ///
-  /// Login target is [AppConfig.webLoginUrl] (== [AppConfig.initialUrl]).
   Future<void> _onRefreshSessionExpired() async {
     if (_refreshExpiryLogoutInFlight) {
       _pendingLoginRedirectAfterExpiry = true;
@@ -260,7 +243,6 @@ class _WebViewShellState extends State<WebViewShell>
       _setNativeAuthSession(false);
       unawaited(_clearSiteCookiesForLogout());
 
-      // TEMP: keep FCM/APNs registered after auto/expiry logout too.
       await AuthSessionManager.clearNativeSession(deletePushToken: false);
       _awaitingSessionClearForLoginRedirect = false;
       if (!mounted) return;
@@ -291,7 +273,6 @@ class _WebViewShellState extends State<WebViewShell>
     }
   }
 
-  /// True when [uri] is the configured web login landing ([AppConfig.webLoginUrl]).
   bool _isWebLoginLanding(Uri? uri) {
     if (uri == null) return false;
     if (!AppConfig.isAllowedHost(uri.host)) return false;
@@ -325,7 +306,6 @@ class _WebViewShellState extends State<WebViewShell>
     );
 
     try {
-      // Keep pending until onLoadStop confirms home/login (`/`).
       _pendingLoginRedirectAfterExpiry = true;
       await controller.stopLoading();
       await controller.loadUrl(
@@ -347,7 +327,7 @@ class _WebViewShellState extends State<WebViewShell>
     Uri? loadedUri,
   }) async {
     if (!_pendingLoginRedirectAfterExpiry) return;
-    // Session clear still running — `/` is also the initial URL, so wait.
+
     if (_awaitingSessionClearForLoginRedirect || _refreshExpiryLogoutInFlight) {
       return;
     }
@@ -386,7 +366,7 @@ class _WebViewShellState extends State<WebViewShell>
     final loggedIn = await AuthRepository.instance.isOfficerLoggedIn();
     final token = await AuthRepository.instance.getAccessToken();
     final hasToken = token != null && token.isNotEmpty;
-    // Token is source of truth; heal flag if an older build wiped it on `/`.
+
     if (hasToken && !loggedIn) {
       await AuthRepository.instance.setOfficerLoggedIn(true);
     }
@@ -424,8 +404,7 @@ class _WebViewShellState extends State<WebViewShell>
     if (!_isAuthRoute(uri)) return false;
     final current = _ui.currentUri.value;
     if (current == null || _isAuthRoute(current)) return false;
-    // Ignore incidental auth URLs during bottom-tab switches only — not logout
-    // redirects to the login screen (those must run session + GPS teardown).
+
     return _ui.bottomTabNavigationActive.value;
   }
 
@@ -440,16 +419,13 @@ class _WebViewShellState extends State<WebViewShell>
 
   void _recheckBottomBarForUri(Uri? uri) {
     if (_ui.bottomTabNavigationActive.value) return;
-    if (_ui.showingMotionActivity.value) return;
+    if (_ui.showingLogVisit.value) return;
     final tabIndex = _bottomTabIndexFromUri(uri);
     if (tabIndex != null && _ui.selectedBottomTabIndex.value != tabIndex) {
       _ui.selectedBottomTabIndex.value = tabIndex;
     }
   }
 
-  /// Reads the WebView's live URL and re-syncs bottom-bar visibility.
-  /// Used on both Android and iOS because each platform may deliver navigation
-  /// callbacks in a different order (or skip some during SPA / back navigation).
   Future<void> _reconcileBottomBarFromWebView(
     InAppWebViewController controller,
   ) async {
@@ -475,23 +451,15 @@ class _WebViewShellState extends State<WebViewShell>
     _ui.preserveBottomBarDuringLoad.value = false;
   }
 
-  /// Arm bar visibility for the in-flight main-frame load when leaving or
-  /// targeting a bottom-tab landing URL. Sticky until load completion so
-  /// multi-hop redirects cannot clear it mid-navigation.
-  ///
-  /// Does not arm when leaving the login/auth screen — login → dashboard must
-  /// wait until the dashboard URL is current (late show), same as before
-  /// [preserveBottomBarDuringLoad] existed.
   void _armBottomBarPreserveForNavigation({Uri? from, Uri? to}) {
     if (_ui.preserveBottomBarDuringLoad.value) return;
-    // Login / auth → tab: keep bar hidden until the tab URL actually lands.
+
     if (_isAuthRoute(from)) return;
     if (_isBottomBarRoute(from) || _isBottomBarRoute(to)) {
       _ui.preserveBottomBarDuringLoad.value = true;
       return;
     }
-    // Hot restart / first frame: [currentUri] may still be null while the
-    // WebView is already on a logged-in tab page.
+
     if (from == null &&
         _ui.officerLoggedIn.value &&
         _ui.firstPageLoaded.value &&
@@ -500,17 +468,11 @@ class _WebViewShellState extends State<WebViewShell>
     }
   }
 
-  /// When an in-web navigation targets a tab landing URL, keep the bar up and
-  /// select that tab early. Does not use [bottomTabNavigationActive] so
-  /// intermediate redirect URLs are still synced normally.
-  ///
-  /// Skipped while still on login/auth so post-login auth success cannot
-  /// reveal the bar before the dashboard URL is current.
   void _onInWebBottomTabDestination(Uri uri) {
     final tabIndex = _bottomTabIndexFromUri(uri);
     if (tabIndex == null) return;
     if (_isAuthRoute(_ui.currentUri.value)) return;
-    if (_ui.showingMotionActivity.value) return;
+    if (_ui.showingLogVisit.value) return;
     _ui.preserveBottomBarDuringLoad.value = true;
     if (_ui.bottomTabNavigationActive.value) return;
     if (_ui.selectedBottomTabIndex.value != tabIndex) {
@@ -518,9 +480,6 @@ class _WebViewShellState extends State<WebViewShell>
     }
   }
 
-  /// Android (and sometimes iOS) can deliver loadStop for the page being left
-  /// after the next navigation has already started. That must not clear the
-  /// preserve flag or the bar flickers on the first in-web redirect.
   bool _isStalePreviousPageLoadStopDuringPreserve(
     Uri? nextUri,
     Uri? loadStartUri,
@@ -543,7 +502,6 @@ class _WebViewShellState extends State<WebViewShell>
   bool _shouldIgnoreWebViewNavigationEvent(Uri? uri) {
     if (uri == null) return true;
 
-    // Logout route: always process so native session is cleared on server logout.
     if (AuthSessionManager.isLogoutRoute(uri)) {
       return false;
     }
@@ -556,10 +514,7 @@ class _WebViewShellState extends State<WebViewShell>
     if (_ui.bottomTabNavigationActive.value) {
       return uriTab != selectedTab;
     }
-    // Android can deliver stale load events for the previous tab after navigation
-    // has already finished; ignore anything that would move selection backward.
-    // Only apply while still on a bottom-bar route — after leaving those sections,
-    // every URL change must be processed so the bar can hide and show again.
+
     if (!_ui.isNavigating.value &&
         uriTab != null &&
         uriTab != selectedTab &&
@@ -603,7 +558,7 @@ class _WebViewShellState extends State<WebViewShell>
       'timestamp':
           location['timestampMs'] ?? DateTime.now().millisecondsSinceEpoch,
       'nativeSource': true,
-      // Pass through native verification fields (when present).
+
       'provider': 'flutter_geolocator',
       'is_mocked': location['isMocked'] == true,
       'is_simulated_by_software': location['isSimulatedBySoftware'] == true,
@@ -614,9 +569,8 @@ class _WebViewShellState extends State<WebViewShell>
   }
 
   Map<String, dynamic> _toWebGeolocationPayloadFromPosition(
-    Position position, {
-    required double requiredAccuracyMeters,
-  }) {
+    Position position,
+  ) {
     return {
       'coords': {
         'latitude': position.latitude,
@@ -635,7 +589,7 @@ class _WebViewShellState extends State<WebViewShell>
         position,
       ),
       'accepted_from_live_stream': true,
-      'max_allowed_accuracy_meters': requiredAccuracyMeters,
+      'max_allowed_accuracy_meters': 0,
       'timeout_ms': 0,
     };
   }
@@ -733,6 +687,15 @@ class _WebViewShellState extends State<WebViewShell>
           return ensureFlutterBridge()
             .then(function () {
               return window.flutter_inappwebview.callHandler('themeChanged', isDark);
+            });
+        };
+        window.SmartNPS360.openLogVisit = function (payload) {
+          return ensureFlutterBridge()
+            .then(function () {
+              return window.flutter_inappwebview.callHandler(
+                'openLogVisit',
+                payload == null ? {} : payload
+              );
             });
         };
         window.SmartNPS360.isNativeApp = function () {
@@ -1318,7 +1281,6 @@ class _WebViewShellState extends State<WebViewShell>
               })
               .catch(function () {});
             try {
-              // Complete the web session in parallel with native Sanctum auth.
               form.submit();
             } catch (_) {
               setLoginLoading(form, false);
@@ -1516,7 +1478,6 @@ class _WebViewShellState extends State<WebViewShell>
             },
             timestamp: timestamp,
 
-            // Extra native verification values available to your page.
             nativeSource: true,
             ageMsWhenAccepted: Number(location.ageMsWhenAccepted || 0),
             isFreshLiveLocation: location.isFreshLiveLocation === true,
@@ -1526,7 +1487,6 @@ class _WebViewShellState extends State<WebViewShell>
 
         function toNativeOptions(options) {
           var nativeOptions = {
-            required_accuracy_meters: 50,
             timeout_ms: 12000
           };
 
@@ -1545,22 +1505,8 @@ class _WebViewShellState extends State<WebViewShell>
             return nativeOptions;
           }
 
-          if (options.enableHighAccuracy === false) {
-            nativeOptions.required_accuracy_meters = 100;
-          }
-
           if (typeof options.timeout === 'number' && isFinite(options.timeout)) {
             nativeOptions.timeout_ms = Math.max(5000, Math.min(45000, Math.round(options.timeout)));
-          }
-
-          if (
-            typeof options.required_accuracy_meters === 'number' &&
-            isFinite(options.required_accuracy_meters)
-          ) {
-            nativeOptions.required_accuracy_meters = Math.max(
-              5,
-              Math.min(500, Number(options.required_accuracy_meters))
-            );
           }
 
           return nativeOptions;
@@ -1644,7 +1590,6 @@ class _WebViewShellState extends State<WebViewShell>
           };
         }
 
-        // Called by Flutter to emit watch updates.
         window.__smartnps_native_geo_emit = function (watchId, payload) {
           try {
             var cb = nativeWatchCallbacks[watchId];
@@ -1653,7 +1598,6 @@ class _WebViewShellState extends State<WebViewShell>
           } catch (_) {}
         };
 
-        // Called by Flutter to emit watch errors.
         window.__smartnps_native_geo_error = function (watchId, payload) {
           try {
             var cb = nativeWatchCallbacks[watchId];
@@ -1856,9 +1800,9 @@ class _WebViewShellState extends State<WebViewShell>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // Prefer shell handler: clear storage + open login (overrides main fallback).
+
     AuthRepository.instance.onRefreshSessionExpired = _onRefreshSessionExpired;
-    // Android MethodChannel is ready here; re-sync disclosure from live OS grant.
+
     unawaited(AppUpgradeReconciler.reconcileOsAfterEngineReady());
     PushNotificationService.instance.setDeferPermissionPromptWhile(
       () => _isAuthRoute(_ui.currentUri.value),
@@ -1878,8 +1822,7 @@ class _WebViewShellState extends State<WebViewShell>
           _webReloadInProgress = true;
           _pullToRefreshSourceUri =
               currentUrl?.uriValue ?? _ui.currentUri.value;
-          // reload() avoids iOS WKWebView firing intermediate navigation URLs
-          // that look like a fresh login-page load and tear down duty state.
+
           await controller.reload();
         },
       );
@@ -2095,25 +2038,20 @@ class _WebViewShellState extends State<WebViewShell>
     }
 
     if (state == AppLifecycleState.resumed) {
-      // iOS (and Android) may miss connectivity events while suspended.
       unawaited(_syncOfflineFromConnectivity());
       if (_ui.officerLoggedIn.value) {
-        // Immediate live refresh so Settings toggles flip to Enabled without delay.
         unawaited(RequiredPermissionsGate.instance.refresh(force: true));
       }
     }
 
     if (state == AppLifecycleState.resumed &&
         !AuthSessionManager.isLoginRoute(_ui.currentUri.value)) {
-      // Strip Activity-restored dialogs only while returning from Settings —
-      // not during the Open Settings education prompt itself.
       if (Platform.isAndroid &&
           PermissionSettingsHelper.isAwaitingSettingsReturn) {
         PermissionSettingsHelper.clearPopupRoutesImmediately();
       }
       DutyHeartbeatService.instance.reconcileDialogsAfterAppResume();
-      // Avoid popping/flashing clock-in dialogs while prepareClockIn owns the
-      // Settings-return flow on Android.
+
       if (Platform.isAndroid &&
           !ClockInGateService.instance.isPrepareInFlight &&
           !PermissionSettingsHelper.isAwaitingSettingsReturn) {
@@ -2122,12 +2060,10 @@ class _WebViewShellState extends State<WebViewShell>
       AppLifecycleResumeGate.notifyResumed();
       final controller = _controller;
       unawaited(() async {
-        // Refresh banner immediately so Precise / Always changes show as soon
-        // as the app returns from Settings (before slower prompt rechecks).
         await DutyHeartbeatService.instance
             .refreshBackgroundLocationPermissionBannerState();
         await RequiredPermissionsGate.instance.refresh(force: true);
-        // Android may return from Settings with updated "Allow all the time".
+
         await AppUpgradeReconciler.reconcileOsAfterEngineReady();
         await LocationDisclosureConsent.reconcileFromOsIfBackgroundReady();
         if (controller != null) {
@@ -2142,9 +2078,7 @@ class _WebViewShellState extends State<WebViewShell>
         await ClockInGateService.instance.recheckAfterAppResume();
         await _notifyWebBackgroundLocationStatus();
         await _notifyWebPushNotificationStatus();
-        // After resume settle (disclosure, Settings, one-time grants): ensure
-        // latest OS permissions are on the API. Coalesces with app_cycle when
-        // still pending; otherwise uploads only if the snapshot changed.
+
         await NativePermissionStatusService.instance
             .ensureLatestPermissionsSynced();
         await OfficerAnnouncementCoordinator.instance.tryDeliverPending(
@@ -2157,7 +2091,7 @@ class _WebViewShellState extends State<WebViewShell>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    // Always restore the process-level fallback (tear-offs are not identical).
+
     AuthRepository.instance.onRefreshSessionExpired =
         AuthSessionManager.clearNativeSession;
     RequiredPermissionsGate.instance.stop();
@@ -2183,7 +2117,6 @@ class _WebViewShellState extends State<WebViewShell>
   }
 
   static bool _hasNetworkInterface(List<ConnectivityResult> results) {
-    // Empty lists are transient/unknown (common at startup) — not "offline".
     if (results.isEmpty) return true;
     return results.any((r) => r != ConnectivityResult.none);
   }
@@ -2208,13 +2141,11 @@ class _WebViewShellState extends State<WebViewShell>
         type == WebResourceErrorType.INTERNATIONAL_ROAMING_OFF ||
         type == WebResourceErrorType.DATA_NOT_ALLOWED ||
         type == WebResourceErrorType.CALL_IS_ACTIVE ||
-        // iOS URLError.resourceUnavailable (-1008)
         type == WebResourceErrorType.RESOURCE_UNAVAILABLE ||
         type == WebResourceErrorType.UNKNOWN) {
       return true;
     }
-    // iOS WKWebView may report offline via localized description when the
-    // typed code is less specific than Android's net::ERR_* mapping.
+
     final desc = error.description.toLowerCase();
     return desc.contains('internet connection appears to be offline') ||
         desc.contains('not connected to the internet') ||
@@ -2228,8 +2159,7 @@ class _WebViewShellState extends State<WebViewShell>
   Future<void> _syncOfflineFromConnectivity() async {
     final results = await Connectivity().checkConnectivity();
     if (!mounted) return;
-    // Bidirectional: show offline when down, recover when back (needed on
-    // iOS after background where connectivity events can be missed).
+
     await _handleConnectivityChanged(results);
   }
 
@@ -2265,9 +2195,6 @@ class _WebViewShellState extends State<WebViewShell>
       return;
     }
 
-    // connectivity_plus often emits a brief `none` on cold start / resume /
-    // hot restart even when the radio is fine (documented iOS NWPathMonitor
-    // behavior; similar flashes on Android). Confirm before covering the UI.
     _offlineConnectivityDebounce?.cancel();
     _offlineConnectivityDebounce = Timer(
       const Duration(milliseconds: 500),
@@ -2281,7 +2208,6 @@ class _WebViewShellState extends State<WebViewShell>
     final results = await Connectivity().checkConnectivity();
     if (!mounted) return;
     if (_hasNetworkInterface(results)) {
-      // False negative — do not flash OfflineScreen.
       if (_ui.showOffline.value) {
         _ui.offlineRetrying.value = true;
         _ui.offlineStatusMessage.value = null;
@@ -2298,14 +2224,12 @@ class _WebViewShellState extends State<WebViewShell>
     if (!mounted) return;
     final needsReload = _offlineNeedsReload || !_ui.firstPageLoaded.value;
     if (!needsReload) {
-      // Page was already loaded and no failed navigation — safe to reveal.
       _dismissOfflineScreen();
       return;
     }
 
     final controller = _controller;
     if (controller == null) {
-      // WebView not ready yet; leave offline UI + Retry until it is.
       _ui.offlineRetrying.value = false;
       _ui.offlineStatusMessage.value =
           'Unable to reconnect right now. Please try again.';
@@ -2314,10 +2238,8 @@ class _WebViewShellState extends State<WebViewShell>
 
     final target = _ui.currentUri.value?.toString() ?? AppConfig.initialUrl;
     try {
-      // Keep hold until this load's onLoadStart so a stale error onLoadStop
-      // cannot dismiss OfflineScreen early.
       _awaitingOfflineRecoveryLoad = true;
-      // Keep OfflineScreen up until onLoadStop succeeds (or error re-shows it).
+
       await controller.loadUrl(urlRequest: URLRequest(url: WebUri(target)));
     } catch (_) {
       _awaitingOfflineRecoveryLoad = false;
@@ -2337,7 +2259,6 @@ class _WebViewShellState extends State<WebViewShell>
     var connectivity = await Connectivity().checkConnectivity();
     if (!mounted) return;
     if (!_hasNetworkInterface(connectivity)) {
-      // One short re-check — same transient `none` flash as startup/resume.
       await Future<void>.delayed(const Duration(milliseconds: 250));
       if (!mounted) return;
       connectivity = await Connectivity().checkConnectivity();
@@ -2376,7 +2297,6 @@ class _WebViewShellState extends State<WebViewShell>
         return NavigationActionPolicy.ALLOW;
       }
 
-      // iOS: allow Google Maps iframes/subframes inside smartnps360 pages.
       if (action.isForMainFrame != true &&
           AppConfig.isTrustedSubresourceHost(uri.host)) {
         return NavigationActionPolicy.ALLOW;
@@ -2401,15 +2321,12 @@ class _WebViewShellState extends State<WebViewShell>
   ) async {
     final host = challenge.protectionSpace.host;
 
-    // App origin — iOS may report sslError UNSPECIFIED even when trust succeeded.
     if (AppConfig.isAllowedHost(host)) {
       return ServerTrustAuthResponse(
         action: ServerTrustAuthResponseAction.PROCEED,
       );
     }
 
-    // iOS WKWebView challenges every Google Maps CDN TLS handshake and previously
-    // cancelled all non-smartnps360 hosts. Always proceed for known Google CDNs.
     if (AppConfig.isTrustedSubresourceHost(host)) {
       return ServerTrustAuthResponse(
         action: ServerTrustAuthResponseAction.PROCEED,
@@ -2429,6 +2346,10 @@ class _WebViewShellState extends State<WebViewShell>
   }
 
   Future<bool> _onWillPop() async {
+    if (_ui.showingLogVisit.value) {
+      _dismissLogVisit();
+      return false;
+    }
     final controller = _controller;
     if (controller == null) return true;
     final canGoBack = await controller.canGoBack();
@@ -2438,6 +2359,259 @@ class _WebViewShellState extends State<WebViewShell>
       return false;
     }
     return true;
+  }
+
+  void _dismissLogVisit() {
+    unawaited(_closeLogVisit(openDashboard: false));
+  }
+
+  Future<void> _persistActivePatrolDraft() async {
+    if (!Get.isRegistered<VisitVideoFlowController>()) return;
+    final flow = Get.find<VisitVideoFlowController>();
+    await flow.persistCurrentDraft();
+  }
+
+  void _finishLogVisitUploadSuccess() {
+    unawaited(_closeLogVisit(openDashboard: true));
+  }
+
+  Future<void> _closeLogVisit({required bool openDashboard}) async {
+    await _persistActivePatrolDraft();
+    _ui.showingLogVisit.value = false;
+    unawaited(VisitGpsSession.instance.stop());
+
+    if (openDashboard) {
+      _uriBeforeLogVisit = null;
+      final dashboard = Uri.parse(_BottomItem.dashboard.url);
+      await _navigateWebTo(dashboard);
+      _ui.selectedBottomTabIndex.value = _BottomItem.dashboard.index;
+      _ui.preserveBottomBarDuringLoad.value = true;
+      return;
+    }
+
+    final resumeUri = _uriBeforeLogVisit ?? _ui.currentUri.value;
+    _uriBeforeLogVisit = null;
+
+    if (resumeUri != null) {
+      final current = _ui.currentUri.value;
+      final samePage = current != null &&
+          current.toString() == resumeUri.toString();
+      if (!samePage) {
+        await _navigateWebTo(resumeUri);
+      } else {
+        _recheckBottomBarForUri(resumeUri);
+      }
+    }
+
+    final tab = _bottomTabIndexFromUri(resumeUri);
+    if (tab != null) {
+      _ui.selectedBottomTabIndex.value = tab;
+      _ui.preserveBottomBarDuringLoad.value = true;
+    } else {
+      // Site / log-visit web pages are not bottom-bar routes.
+      _ui.preserveBottomBarDuringLoad.value = false;
+    }
+  }
+
+  Future<void> _navigateWebTo(Uri uri) async {
+    final controller = _controller;
+    _ui.currentUri.value = uri;
+    _recheckBottomBarForUri(uri);
+    if (controller == null) return;
+    _ui.beginNavigation();
+    if (Platform.isAndroid) {
+      try {
+        await controller.stopLoading();
+      } catch (_) {}
+    }
+    await controller.loadUrl(
+      urlRequest: URLRequest(url: WebUri(uri.toString())),
+    );
+  }
+
+  void _openLogVisitTab() {
+    VisitDraftResumeDialog.ensureFlowController();
+    _uriBeforeLogVisit ??= _ui.currentUri.value;
+    _ui.showingLogVisit.value = true;
+    _ui.bottomTabNavigationActive.value = false;
+    _ui.preserveBottomBarDuringLoad.value = true;
+    unawaited(VisitGpsSession.instance.start());
+  }
+
+  Future<Map<String, dynamic>> _openLogVisitScreen([Map? payload]) async {
+    final flow = VisitDraftResumeDialog.ensureFlowController();
+    unawaited(VisitGpsSession.instance.start());
+    final normalized = _normalizeBridgeMap(payload);
+
+    final controller = _controller;
+    if (controller != null) {
+      try {
+        final live = await controller.getUrl();
+        final liveUri = live?.uriValue ?? Uri.tryParse(live?.toString() ?? '');
+        if (liveUri != null) {
+          _uriBeforeLogVisit = liveUri;
+          _ui.currentUri.value = liveUri;
+        }
+      } catch (_) {
+        _uriBeforeLogVisit ??= _ui.currentUri.value;
+      }
+    } else {
+      _uriBeforeLogVisit ??= _ui.currentUri.value;
+    }
+
+    final reopenedPending = await flow.applyBridgePatrolContext(normalized);
+    final ctx = flow.patrolContext.value;
+
+    debugPrint(
+      '[SmartNPS360] patrol draft ready '
+      'reopenedPending=$reopenedPending '
+      'items=${flow.mediaItems.length} '
+      'siteId=${ctx?.siteId} regionId=${ctx?.regionId} '
+      'siteName=${ctx?.siteName} regionName=${ctx?.regionName} '
+      'clientDraftId=${ctx?.clientDraftId} '
+      'resumeUri=$_uriBeforeLogVisit',
+    );
+
+    if (Get.currentRoute == VisitVideoPreviewScreen.routeName) {
+      Get.back();
+    }
+    _openLogVisitTab();
+
+    return <String, dynamic>{
+      'ok': true,
+      'reopenedPending': reopenedPending,
+      'itemCount': flow.mediaItems.length,
+      'siteId': ctx?.siteId,
+      'regionId': ctx?.regionId,
+      'siteName': ctx?.siteName,
+      'regionName': ctx?.regionName,
+      'clientDraftId': ctx?.clientDraftId,
+    };
+  }
+
+  Map<String, dynamic>? _normalizeBridgeMap(dynamic raw) {
+    if (raw == null) return null;
+    if (raw is String) {
+      final trimmed = raw.trim();
+      if (trimmed.isEmpty) return null;
+      try {
+        final decoded = jsonDecode(trimmed);
+        return _normalizeBridgeMap(decoded);
+      } catch (_) {
+        return null;
+      }
+    }
+    if (raw is! Map) return null;
+    final out = <String, dynamic>{};
+    raw.forEach((key, value) {
+      out[key.toString()] = value;
+    });
+    for (final nestedKey in const [
+      'payload',
+      'data',
+      'context',
+      'patrolDraft',
+      'patrolDraftContext',
+    ]) {
+      final nested = out[nestedKey];
+      if (nested is Map) {
+        nested.forEach((key, value) {
+          out.putIfAbsent(key.toString(), () => value);
+        });
+      }
+    }
+    return out;
+  }
+
+  String? _stringFromPayload(Map? payload, List<String> keys) {
+    final value = _valueFromPayload(payload, keys);
+    final text = value?.toString().trim();
+    if (text == null || text.isEmpty) return null;
+    return text;
+  }
+
+  dynamic _valueFromPayload(Map? payload, List<String> keys) {
+    if (payload == null) return null;
+    for (final key in keys) {
+      if (!payload.containsKey(key)) continue;
+      final value = payload[key];
+      if (value == null) continue;
+      if (value is String && value.trim().isEmpty) continue;
+      return value;
+    }
+    return null;
+  }
+
+  Future<Map<String, dynamic>?> _readPatrolDraftContextFromWeb() async {
+    final controller = _controller;
+    if (controller == null) return null;
+    try {
+      final result = await controller.evaluateJavascript(
+        source: '''
+        (function () {
+          try {
+            var ctx = window.SmartNPS360 && window.SmartNPS360.patrolDraftContext;
+            if (!ctx) return null;
+            return JSON.stringify(ctx);
+          } catch (e) {
+            return null;
+          }
+        })();
+        ''',
+      );
+      if (result == null) return null;
+      var text = result.toString().trim();
+      if (text.isEmpty || text == 'null') return null;
+      if ((text.startsWith('"') && text.endsWith('"')) ||
+          (text.startsWith("'") && text.endsWith("'"))) {
+        text = text.substring(1, text.length - 1);
+        text = text.replaceAll(r'\"', '"').replaceAll(r'\\', r'\');
+      }
+      return _normalizeBridgeMap(text);
+    } catch (e) {
+      print('[SmartNPS360] read patrolDraftContext failed: $e');
+      return null;
+    }
+  }
+
+  Future<void> _maybePromptUnfinishedDraft() async {
+    if (_draftResumePrompted) return;
+    if (!_ui.officerLoggedIn.value) return;
+    if (!_ui.firstPageLoaded.value) return;
+    if (_ui.showOffline.value) return;
+    if (_ui.showingLogVisit.value) return;
+    if (_isAuthRoute(_ui.currentUri.value)) return;
+
+    final pending = await VisitMediaDraftStore.instance.listPendingDrafts();
+    if (pending.isEmpty) return;
+
+    _draftResumePrompted = true;
+
+    final flow = VisitDraftResumeDialog.ensureFlowController();
+    await flow.ensureDraftLoaded();
+
+    final result = await VisitDraftResumeDialog.showPending(drafts: pending);
+    if (result == null) return;
+
+    await flow.activateDraft(result.draft.draftKey);
+
+    switch (result.action) {
+      case VisitDraftResumeAction.continueReport:
+        _openLogVisitTab();
+        break;
+      case VisitDraftResumeAction.submitReport:
+        // Submit in place — do not open the draft screen.
+        // Draft was already activated before the notes dialog.
+        unawaited(
+          VisitVideoPreviewScreen.uploadCurrentDraft(
+            onSuccess: _finishLogVisitUploadSuccess,
+          ),
+        );
+        break;
+      case VisitDraftResumeAction.discardReport:
+        await flow.clearAll();
+        break;
+    }
   }
 
   void _installJsHandlers(InAppWebViewController controller) {
@@ -2505,7 +2679,6 @@ class _WebViewShellState extends State<WebViewShell>
 
         await _nativeGeoWatches.remove(watchId)?.cancel();
 
-        // Use the same trust + permission checks as getCurrentLocation.
         final Map<String, dynamic> initial = await _bridge.getCurrentLocation(
           payload,
         );
@@ -2529,13 +2702,6 @@ class _WebViewShellState extends State<WebViewShell>
         final int intervalMs = options != null && options['interval_ms'] is num
             ? (options['interval_ms'] as num).toInt().clamp(500, 5000)
             : 1000;
-        final double requiredAccuracyMeters =
-            options != null && options['required_accuracy_meters'] is num
-            ? (options['required_accuracy_meters'] as num).toDouble().clamp(
-                5.0,
-                500.0,
-              )
-            : 50.0;
 
         final LocationSettings settings;
         if (Platform.isAndroid) {
@@ -2564,11 +2730,10 @@ class _WebViewShellState extends State<WebViewShell>
 
         final sub = Geolocator.getPositionStream(locationSettings: settings).listen(
           (position) async {
-            if (position.accuracy > requiredAccuracyMeters) return;
-            final payload = _toWebGeolocationPayloadFromPosition(
-              position,
-              requiredAccuracyMeters: requiredAccuracyMeters,
-            );
+            if (!position.latitude.isFinite || !position.longitude.isFinite) {
+              return;
+            }
+            final payload = _toWebGeolocationPayloadFromPosition(position);
             final js =
                 'window.__smartnps_native_geo_emit($watchId, ${jsonEncode(payload)});';
             await controller.evaluateJavascript(source: js);
@@ -2698,6 +2863,75 @@ class _WebViewShellState extends State<WebViewShell>
         }
         _setNativeThemeFromWeb(next);
         return {'ok': true, 'isDark': next};
+      },
+    );
+    controller.addJavaScriptHandler(
+      handlerName: 'openLogVisit',
+      callback: (args) async {
+        // Keep print() so this always shows in Android logcat / Xcode.
+        print(
+          '[SmartNPS360] openLogVisit called argsCount=${args.length} args=$args',
+        );
+
+        final currentHost = _ui.currentUri.value?.host;
+        if (!AppConfig.isAllowedHost(currentHost)) {
+          print('[SmartNPS360] denied openLogVisit from host=$currentHost');
+          return {
+            'ok': false,
+            'error': {
+              'code': 'untrusted_origin',
+              'message': 'Untrusted origin',
+            },
+          };
+        }
+
+        final dynamic first = args.isNotEmpty ? args.first : null;
+        var payload = _normalizeBridgeMap(first);
+
+        // Fallback: web sets SmartNPS360.patrolDraftContext before calling.
+        if (payload == null ||
+            (_valueFromPayload(payload, const ['siteId', 'site_id']) == null &&
+                _valueFromPayload(payload, const ['regionId', 'region_id']) ==
+                    null)) {
+          final fromContext = await _readPatrolDraftContextFromWeb();
+          if (fromContext != null) {
+            print(
+              '[SmartNPS360] openLogVisit using patrolDraftContext=$fromContext',
+            );
+            payload = {...?payload, ...fromContext};
+          }
+        }
+
+        final siteId = _valueFromPayload(payload, const ['siteId', 'site_id']);
+        final regionId = _valueFromPayload(payload, const [
+          'regionId',
+          'region_id',
+        ]);
+        final siteName = _stringFromPayload(payload, const [
+          'siteName',
+          'site_name',
+          'site',
+        ]);
+        final regionName = _stringFromPayload(payload, const [
+          'regionName',
+          'region_name',
+          'region',
+        ]);
+
+        print(
+          '[SmartNPS360] openLogVisit site/region '
+          'siteId=$siteId regionId=$regionId '
+          'siteName=$siteName regionName=$regionName '
+          'payload=$payload',
+        );
+
+        final result = await _openLogVisitScreen(payload);
+        print(
+          '[SmartNPS360] openLogVisit ok=${result['ok']} '
+          'reopenedPending=${result['reopenedPending']} '
+          'itemCount=${result['itemCount']}',
+        );
+        return result;
       },
     );
     controller.addJavaScriptHandler(
@@ -2847,6 +3081,7 @@ class _WebViewShellState extends State<WebViewShell>
           );
           _ui.setOfficerLoggedIn(true);
           _setNativeAuthSession(true);
+          _draftResumePrompted = false;
           _syncPushTokenAfterLogin();
           unawaited(_maybeStartDutyHeartbeat());
           unawaited(
@@ -2880,6 +3115,7 @@ class _WebViewShellState extends State<WebViewShell>
           );
           _ui.setOfficerLoggedIn(true);
           _setNativeAuthSession(true);
+          _draftResumePrompted = false;
           _syncPushTokenAfterLogin();
           unawaited(_maybeStartDutyHeartbeat());
           unawaited(
@@ -2969,6 +3205,7 @@ class _WebViewShellState extends State<WebViewShell>
 
       _ui.setOfficerLoggedIn(true);
       _setNativeAuthSession(true);
+      _draftResumePrompted = false;
       if (syncPush) {
         await PushNotificationService.instance.syncPushTokenAfterLogin();
       }
@@ -3413,7 +3650,6 @@ class _WebViewShellState extends State<WebViewShell>
 
 	          notify();
 
-	          // In-page theme toggles
 		          try {
 	            var target1 = document.documentElement;
 	            var target2 = document.body;
@@ -3515,8 +3751,6 @@ class _WebViewShellState extends State<WebViewShell>
     } catch (_) {}
   }
 
-  /// iOS: keep default Mobile Safari UA and append [AppConfig.webViewAppSignature].
-  /// Android: full custom UA with the same app signature token.
   InAppWebViewSettings _createWebViewSettings() {
     return InAppWebViewSettings(
       javaScriptEnabled: true,
@@ -3542,7 +3776,7 @@ class _WebViewShellState extends State<WebViewShell>
       allowsBackForwardNavigationGestures: true,
       verticalScrollBarEnabled: true,
       horizontalScrollBarEnabled: false,
-      // Hide Android's built-in "Webpage not available" chrome; we show OfflineScreen.
+
       disableDefaultErrorPage: Platform.isAndroid ? true : null,
     );
   }
@@ -3562,8 +3796,7 @@ class _WebViewShellState extends State<WebViewShell>
         final isDark = _ui.webPrefersDark.value;
         final officerLoggedIn = _ui.officerLoggedIn.value;
         final onAuthRoute = _isAuthRoute(_ui.currentUri.value);
-        // Match OfflineScreen / splash fill so notch + home-indicator strips
-        // use the same native chrome colors.
+
         final safeAreaColor = isDark
             ? const Color(0xFF0F1724)
             : const Color(AppConfig.cSurface);
@@ -3572,9 +3805,6 @@ class _WebViewShellState extends State<WebViewShell>
           body: ColoredBox(
             color: safeAreaColor,
             child: SafeArea(
-              // iOS: let WebView + floating tab bar draw into the home-indicator
-              // region so the web gradient isn't cut by a solid chrome strip.
-              // Android: keep bottom inset for the system nav / gesture bar.
               bottom: Platform.isAndroid,
               child: AnimatedBuilder(
                 animation: Listenable.merge([
@@ -3645,15 +3875,13 @@ class _WebViewShellState extends State<WebViewShell>
                                   }
                                   if (!_ui.pullToRefreshActive.value) {
                                     final startUri = url?.uriValue;
-                                    // Android (and sometimes iOS) emit load events
-                                    // for the page being left during bottom-tab switches.
+
                                     if (_shouldIgnoreWebViewNavigationEvent(
                                       startUri,
                                     )) {
                                       return;
                                     }
-                                    // Arm before syncing so intermediate non-tab
-                                    // URLs cannot hide the bar during redirects.
+
                                     _armBottomBarPreserveForNavigation(
                                       from: _ui.currentUri.value,
                                       to: startUri,
@@ -3671,8 +3899,6 @@ class _WebViewShellState extends State<WebViewShell>
                                     _ui.beginNavigation();
                                     return;
                                   }
-                                  // iOS can emit transient URLs during reload;
-                                  // keep the last known route until loadStop.
                                 },
                                 onUpdateVisitedHistory:
                                     (controller, url, isReload) {
@@ -3722,13 +3948,10 @@ class _WebViewShellState extends State<WebViewShell>
                                       loadedUri: nextUri,
                                     );
                                     if (_pendingLoginRedirectAfterExpiry) {
-                                      // Still waiting for home/login (`/`) —
-                                      // skip normal session restore on this stop.
                                       return;
                                     }
                                   }
-                                  // Android fires loadStop for the previous page when
-                                  // switching bottom tabs; ignore until the target tab loads.
+
                                   final ignoreEvent =
                                       _shouldIgnoreWebViewNavigationEvent(
                                         nextUri,
@@ -3745,11 +3968,7 @@ class _WebViewShellState extends State<WebViewShell>
                                     androidBottomTabNavComplete =
                                         Platform.isAndroid &&
                                         isBottomTabNavigationComplete;
-                                    // iOS: finish immediately. Android: defer
-                                    // until after awaits — clearing early lets
-                                    // stale previous-tab URLs (e.g. dashboard)
-                                    // steal selectedBottomTabIndex while
-                                    // timesheet/profile is still settling.
+
                                     if (isBottomTabNavigationComplete &&
                                         !Platform.isAndroid) {
                                       _finishBottomTabNavigation();
@@ -3779,10 +3998,8 @@ class _WebViewShellState extends State<WebViewShell>
                                         _syncCurrentUriFromWebView(nextUri);
                                       }
                                       _ui.firstPageLoaded.value = true;
-                                      // After a network error, Android may still
-                                      // fire onLoadStop for the failed URL / error
-                                      // document. Keep OfflineScreen until we
-                                      // intentionally reload (_recoverFromOffline).
+                                      unawaited(_maybePromptUnfinishedDraft());
+
                                       if (!_holdOfflineUntilReload) {
                                         _offlineNeedsReload = false;
                                         if (_ui.showOffline.value) {
@@ -3843,9 +4060,7 @@ class _WebViewShellState extends State<WebViewShell>
                                   await _reconcileBottomBarFromWebView(
                                     controller,
                                   );
-                                  // Android only: keep bottomTabNavigationActive
-                                  // through awaits + reconcile so stale
-                                  // previous-tab URLs cannot change selection.
+
                                   if (Platform.isAndroid &&
                                       androidBottomTabNavComplete) {
                                     _finishBottomTabNavigation();
@@ -3864,9 +4079,7 @@ class _WebViewShellState extends State<WebViewShell>
                                   _webReloadInProgress = false;
                                   _finishBottomTabNavigation();
                                   _endMainFrameNavigationChrome();
-                                  // Ignore cancelled loads and non-main-frame assets.
-                                  // iOS failed navigations default isForMainFrame=true;
-                                  // only skip when explicitly a subframe.
+
                                   if (error.type ==
                                       WebResourceErrorType.CANCELLED) {
                                     return;
@@ -3874,10 +4087,7 @@ class _WebViewShellState extends State<WebViewShell>
                                   if (request.isForMainFrame == false) {
                                     return;
                                   }
-                                  // Show native OfflineScreen synchronously
-                                  // before any await so onLoadStop cannot
-                                  // race and reveal platform error chrome
-                                  // (Android) or a blank WKWebView (iOS).
+
                                   if (_isNetworkLoadError(error)) {
                                     final wasRetrying =
                                         _ui.offlineRetrying.value;
@@ -4002,16 +4212,24 @@ class _WebViewShellState extends State<WebViewShell>
                               );
                             }),
                             Obx(() {
-                              if (!_ui.showingMotionActivity.value) {
+                              if (!_ui.showingLogVisit.value) {
                                 return const SizedBox.shrink();
                               }
                               return Positioned.fill(
-                                child: MotionActivityScreen(
-                                  isDark: _ui.webPrefersDark.value,
+                                child: VisitVideoPreviewScreen(
+                                  onBack: _dismissLogVisit,
+                                  onUploadSuccess: _finishLogVisitUploadSuccess,
+                                  bottomBarClearance: 0,
                                 ),
                               );
                             }),
                             Obx(() {
+                              final uploadingFromDialog =
+                                  !_ui.showingLogVisit.value &&
+                                  _ui.officerLoggedIn.value &&
+                                  VisitDraftResumeDialog.ensureFlowController()
+                                      .isUploading
+                                      .value;
                               final showBottomBar =
                                   !showPermissionBlocker &&
                                   !_ui.showOffline.value &&
@@ -4019,8 +4237,9 @@ class _WebViewShellState extends State<WebViewShell>
                                   _ui.officerLoggedIn.value &&
                                   !_ui.isKeyboardOpen &&
                                   !_isAuthRoute(_ui.currentUri.value) &&
-                                  (_ui.showingMotionActivity.value ||
-                                      _isBottomBarRoute(_ui.currentUri.value) ||
+                                  !_ui.showingLogVisit.value &&
+                                  !uploadingFromDialog &&
+                                  (_isBottomBarRoute(_ui.currentUri.value) ||
                                       _ui.preserveBottomBarDuringLoad.value);
                               if (!showBottomBar) {
                                 return const SizedBox.shrink();
@@ -4108,20 +4327,15 @@ class _WebViewShellState extends State<WebViewShell>
 
     if (_ui.selectedBottomTabIndex.value == item.index &&
         !_ui.isNavigating.value &&
-        (item.isNativeScreen == _ui.showingMotionActivity.value)) {
+        !_ui.showingLogVisit.value) {
       return;
     }
 
     _ui.selectedBottomTabIndex.value = item.index;
-
-    if (item.isNativeScreen) {
-      _ui.showingMotionActivity.value = true;
-      _ui.bottomTabNavigationActive.value = false;
-      _ui.preserveBottomBarDuringLoad.value = true;
-      return;
+    if (_ui.showingLogVisit.value) {
+      unawaited(VisitGpsSession.instance.stop());
     }
-
-    _ui.showingMotionActivity.value = false;
+    _ui.showingLogVisit.value = false;
     _ui.bottomTabNavigationActive.value = true;
     _pendingBottomTabLoadStarted = false;
     final nextUri = Uri.tryParse(item.url);
@@ -4180,7 +4394,7 @@ class _SplashOverlay extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final logoWidth = MediaQuery.sizeOf(context).width * 0.7;
-    // Same fill as OfflineScreen / shell SafeArea chrome.
+
     return ColoredBox(
       color: isDark ? const Color(0xFF0F1724) : const Color(AppConfig.cSurface),
       child: SafeArea(
@@ -4214,13 +4428,6 @@ enum _BottomItem {
     'assets/schedule.png',
     'https://smartnps360.com/officer/timesheet/monthly',
   ),
-  motion(
-    'Motion',
-    '',
-    '',
-    '',
-    isNativeScreen: true,
-  ),
   profile(
     'Profile',
     'assets/avatar.png',
@@ -4232,16 +4439,13 @@ enum _BottomItem {
     this.label,
     this.iconAsset,
     this.iconAssetSelected,
-    this.url, {
-    this.isNativeScreen = false,
-  });
+    this.url,
+  );
   final String label;
   final String iconAsset;
   final String iconAssetSelected;
   final String url;
-  final bool isNativeScreen;
 
-  /// Normalized path for exact bottom-bar route matching (no prefix/subpath match).
   String get normalizedPath {
     final uri = Uri.tryParse(url);
     return _BottomItem.normalizePath(uri) ?? '';
@@ -4258,12 +4462,10 @@ enum _BottomItem {
     return path;
   }
 
-  /// Bottom bar only on the exact tab landing URLs — not sub-pages or siblings.
   static int? indexForUri(Uri? uri) {
     final path = normalizePath(uri);
     if (path == null) return null;
     for (final item in values) {
-      if (item.isNativeScreen) continue;
       if (item.normalizedPath == path) return item.index;
     }
     return null;
@@ -4286,7 +4488,6 @@ class _BottomBar extends StatelessWidget {
     const visibleItems = <_BottomItem>[
       _BottomItem.dashboard,
       _BottomItem.timesheet,
-      // _BottomItem.motion, // Temporarily hidden from the bottom bar.
       _BottomItem.profile,
     ];
 
@@ -4298,16 +4499,12 @@ class _BottomBar extends StatelessWidget {
           iosSymbolName: switch (item) {
             _BottomItem.dashboard => 'house.fill',
             _BottomItem.timesheet => 'calendar',
-            _BottomItem.motion => 'figure.walk',
             _BottomItem.profile => 'person.crop.circle.fill',
           },
           activeAssetIcon: item.iconAssetSelected.isEmpty
               ? null
               : item.iconAssetSelected,
           inactiveAssetIcon: item.iconAsset.isEmpty ? null : item.iconAsset,
-          materialIcon: item == _BottomItem.motion
-              ? Icons.directions_walk
-              : null,
         ),
     ];
     final visibleSelectedIndex = visibleItems.indexWhere(

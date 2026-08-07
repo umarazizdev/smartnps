@@ -37,7 +37,7 @@ class BackgroundLocationService {
       iosConfiguration: IosConfiguration(
         autoStart: true,
         onForeground: _onStart,
-        // iOS background execution is limited; this is best-effort.
+
         onBackground: _onIosBackground,
       ),
     );
@@ -47,7 +47,7 @@ class BackgroundLocationService {
 
   @pragma('vm:entry-point')
   static void _onStart(ServiceInstance service) async {
-    // Keep this isolate minimal: permissions must already be granted by UI.
+
     final uploader = BackgroundLocationUploader();
     await uploader.init();
     uploader.start();
@@ -57,8 +57,7 @@ class BackgroundLocationService {
     }
 
     if (kDebugMode) {
-      // ignore: avoid_print
-      print('[BackgroundLocationService] started');
+      // print('[BackgroundLocationService] started');
     }
 
     StreamSubscription<Position>? sub;
@@ -78,15 +77,14 @@ class BackgroundLocationService {
       if (stopping) return;
       stopping = true;
       if (kDebugMode) {
-        // ignore: avoid_print
-        print('[BackgroundLocationService] stopping (GPS first, then service)');
+        // print('[BackgroundLocationService] stopping (GPS first, then service)');
       }
       streamController
         ..onSettingsChanged = null
         ..reset();
       await sub?.cancel();
       sub = null;
-      // Stop collecting immediately; do not block stopSelf on open-network batch flush.
+
       await uploader.stopCollectingOnly();
       await MotionActivityFusionController.instance.release();
       service.stopSelf();
@@ -102,19 +100,17 @@ class BackgroundLocationService {
       streamRebuildInFlight = true;
       try {
         if (kDebugMode) {
-          // ignore: avoid_print
-          print(
-            '[BackgroundLocationService] rebuild stream reason=$reason '
-            'interval=${streamController.interval.inSeconds}s '
-            'distanceFilter=${streamController.distanceFilterMeters}m '
-            'curveBoost=${streamController.isCurveBoosting}',
-          );
+          // print(
+          //   '[BackgroundLocationService] rebuild stream reason=$reason '
+          //   'interval=${streamController.interval.inSeconds}s '
+          //   'distanceFilter=${streamController.distanceFilterMeters}m '
+          //   'curveBoost=${streamController.isCurveBoosting}',
+          // );
         }
         await subscribePositionStream();
       } catch (e) {
         if (kDebugMode) {
-          // ignore: avoid_print
-          print('[BackgroundLocationService] stream rebuild failed: $e');
+          // print('[BackgroundLocationService] stream rebuild failed: $e');
         }
       } finally {
         streamRebuildInFlight = false;
@@ -132,11 +128,10 @@ class BackgroundLocationService {
 
           if (!BackgroundLocationAccuracy.isAcceptable(pos)) {
             if (kDebugMode) {
-              // ignore: avoid_print
-              print(
-                '[BackgroundLocationService] skipped inaccurate fix '
-                'acc=${pos.accuracy}m',
-              );
+              // print(
+              //   '[BackgroundLocationService] skipped inaccurate fix '
+              //   'acc=${pos.accuracy}m',
+              // );
             }
             return;
           }
@@ -179,22 +174,21 @@ class BackgroundLocationService {
           }
 
           if (kDebugMode) {
-            // ignore: avoid_print
-            print(
-              '[BackgroundLocationService] location '
-              'acc=${pos.accuracy} '
-              'speedBand=${policyDecision.band.label} '
-              'motion=${motionFusion.apiMotionActivity} '
-              'fused=${motionFusion.fusedState} '
-              'session=${motionFusion.active} '
-              'streamEvery=${streamController.interval.inSeconds}s '
-              'distanceFilter=${streamController.distanceFilterMeters}m '
-              'curveBoost=${streamController.isCurveBoosting} '
-              'trigger=${keepDecision.trigger?.name} '
-              'dist=${keepDecision.distanceMeters?.toStringAsFixed(1)}m '
-              'mocked=${mockFlags.isMocked} '
-              'simulated=${mockFlags.isSimulatedBySoftware}',
-            );
+            // print(
+            //   '[BackgroundLocationService] location '
+            //   'acc=${pos.accuracy} '
+            //   'speedBand=${policyDecision.band.label} '
+            //   'motion=${motionFusion.apiMotionActivity} '
+            //   'fused=${motionFusion.fusedState} '
+            //   'session=${motionFusion.active} '
+            //   'streamEvery=${streamController.interval.inSeconds}s '
+            //   'distanceFilter=${streamController.distanceFilterMeters}m '
+            //   'curveBoost=${streamController.isCurveBoosting} '
+            //   'trigger=${keepDecision.trigger?.name} '
+            //   'dist=${keepDecision.distanceMeters?.toStringAsFixed(1)}m '
+            //   'mocked=${mockFlags.isMocked} '
+            //   'simulated=${mockFlags.isSimulatedBySoftware}',
+            // );
           }
           try {
             if (stopping) return;
@@ -211,15 +205,13 @@ class BackgroundLocationService {
             );
           } catch (e) {
             if (kDebugMode) {
-              // ignore: avoid_print
-              print('[BackgroundLocationService] upload failed: $e');
+              // print('[BackgroundLocationService] upload failed: $e');
             }
           }
         },
         onError: (Object error) {
           if (kDebugMode) {
-            // ignore: avoid_print
-            print('[BackgroundLocationService] stream error: $error');
+            // print('[BackgroundLocationService] stream error: $error');
           }
         },
       );
@@ -234,22 +226,20 @@ class BackgroundLocationService {
       unawaited(stop());
     });
 
-    // Adaptive stream: speed policy interval + distance filter (+ curve boost).
     await subscribePositionStream();
     if (kDebugMode) {
-      // ignore: avoid_print
-      print(
-        '[BackgroundLocationService] stream '
-        'interval=${streamController.interval.inSeconds}s '
-        'distanceFilter=${streamController.distanceFilterMeters}m '
-        'platform=${Platform.isAndroid ? 'android' : 'ios'}',
-      );
+      // print(
+      //   '[BackgroundLocationService] stream '
+      //   'interval=${streamController.interval.inSeconds}s '
+      //   'distanceFilter=${streamController.distanceFilterMeters}m '
+      //   'platform=${Platform.isAndroid ? 'android' : 'ios'}',
+      // );
     }
   }
 
   @pragma('vm:entry-point')
   static Future<bool> _onIosBackground(ServiceInstance service) async {
-    // Returning true tells iOS the callback completed successfully.
+
     return true;
   }
 }

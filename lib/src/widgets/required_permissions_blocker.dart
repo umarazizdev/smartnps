@@ -8,8 +8,6 @@ import '../permissions/required_permissions_gate.dart';
 import '../utilities/app_config.dart';
 import '../utilities/app_version_info.dart';
 
-/// Full-screen gate shown while the officer is logged in and required OS /
-/// in-app permissions are missing. Updates live as permissions change.
 class RequiredPermissionsBlocker extends StatefulWidget {
   const RequiredPermissionsBlocker({super.key});
 
@@ -317,7 +315,7 @@ class _PermissionRow extends StatelessWidget {
               ),
               child: item.id == 'push'
                   ? Transform.rotate(
-                      // Icons.send points ~45°; rotate so it faces straight up.
+
                       angle: -math.pi / 4,
                       child: Icon(item.icon, size: 20, color: accent.icon),
                     )

@@ -23,15 +23,12 @@ enum LocationPermissionRequestResult {
   openedSettings,
 }
 
-/// Where [openSettingsForUserTap] should navigate after an explicit user tap.
 enum StoreSafeSettingsDestination {
-  /// Settings > SmartNPS360 (iOS) or app details (Android).
+
   app,
 
-  /// Android location permission page when available; otherwise app settings.
   locationPermission,
 
-  /// Android system Location Services toggle screen.
   systemLocationServices,
 }
 
@@ -46,7 +43,6 @@ class PermissionSettingsHelper {
   static bool _awaitingSettingsReturn = false;
   static final Map<String, DateTime> _lastPromptAtByKey = {};
 
-  /// True while the store-safe Open Settings dialog is on screen.
   static final ValueNotifier<bool> settingsPromptVisible = ValueNotifier(false);
 
   static bool get isAwaitingSettingsReturn => _awaitingSettingsReturn;
@@ -57,12 +53,6 @@ class PermissionSettingsHelper {
     return status.isPermanentlyDenied || status.isRestricted;
   }
 
-  /// Opens device settings only after the user tapped an in-app control.
-  /// Never call this automatically from background polling or page loads.
-  ///
-  /// When [holdAwaitingLock] is true (Android + waitForReturn), the caller must
-  /// call [endAwaitingSettingsReturn] after post-return settle so resume
-  /// handlers do not pop dialogs mid-check.
   static Future<void> openSettingsForUserTap({
     StoreSafeSettingsDestination destination =
         StoreSafeSettingsDestination.app,
@@ -76,8 +66,7 @@ class PermissionSettingsHelper {
 
     _awaitingSettingsReturn = true;
     try {
-      // Android: drop any leftover education popup, then open Settings right away.
-      // Avoid frame/delay waits here — they made Open Settings feel laggy.
+
       if (Platform.isAndroid) {
         clearPopupRoutesImmediately();
       }
@@ -98,10 +87,10 @@ class PermissionSettingsHelper {
       if (shouldWaitForReturn) {
         await AppLifecycleResumeGate.waitForResume();
         if (Platform.isAndroid) {
-          // Strip any Activity-restored dialog before the next frame paints.
+
           clearPopupRoutesImmediately();
           await WidgetsBinding.instance.endOfFrame;
-          // Adaptive: only brief extra settle when permission is not ready yet.
+
           if (!await BackgroundLocationPermissions.isClockInBackgroundReady()) {
             await Future<void>.delayed(const Duration(milliseconds: 120));
             await WidgetsBinding.instance.endOfFrame;
@@ -109,8 +98,7 @@ class PermissionSettingsHelper {
           clearPopupRoutesImmediately();
         }
         await BackgroundLocationPermissions.refreshPermissionStateFromOs();
-        // After Settings settle: coalesce into pending app_cycle, or upload
-        // a follow-up if app_cycle already posted a stale snapshot.
+
         await NativePermissionStatusService.instance
             .ensureLatestPermissionsSynced();
       }
@@ -121,12 +109,10 @@ class PermissionSettingsHelper {
     }
   }
 
-  /// Ends the Settings-return lock after Android permission settle completes.
   static void endAwaitingSettingsReturn() {
     _awaitingSettingsReturn = false;
   }
 
-  /// True when the OS will not show another in-app location prompt.
   static Future<bool> foregroundRequiresSettingsPrompt() async {
     if (Platform.isAndroid) {
       return shouldOpenSettings(await Permission.location.status);
@@ -147,7 +133,6 @@ class PermissionSettingsHelper {
     return null;
   }
 
-  /// Clears stale dialog state when returning from Settings.
   static void reconcilePromptsAfterAppResume() {
     if (Platform.isAndroid) {
       dismissStaleModalRouteIfPresent();
@@ -156,26 +141,20 @@ class PermissionSettingsHelper {
     settingsPromptVisible.value = false;
   }
 
-  /// Clears leftover Settings/education modal only while returning from
-  /// Settings. Removes every popup route in one shot so Android does not
-  /// briefly paint a restored dialog ("Unable to verify…" flash).
   static void dismissStaleModalRouteIfPresent() {
     if (!Platform.isAndroid) return;
     if (!_awaitingSettingsReturn) return;
     clearPopupRoutesImmediately();
   }
 
-  /// Drop all popup/dialog routes without waiting for reverse animation.
-  /// Android-only callers use this for fast Settings handoff.
   static void clearPopupRoutesImmediately() {
     if (!Platform.isAndroid) return;
     final navigator = AppNavigator.key.currentState;
     if (navigator == null) return;
-    // Keep the first non-popup route; strip restored dialogs before paint.
+
     navigator.popUntil((route) => route is! PopupRoute);
   }
 
-  /// @deprecated Prefer [clearPopupRoutesImmediately] — no fixed delay needed.
   static Future<void> waitForDialogDismissSettle() async {
     if (!Platform.isAndroid) return;
     clearPopupRoutesImmediately();
@@ -209,11 +188,8 @@ class PermissionSettingsHelper {
     await Geolocator.openAppSettings();
   }
 
-  /// Opens this app's page in the device Settings app.
   static Future<void> launchAppSettings() => _openAppSettingsWithFallback();
 
-  /// Opens the app's Location permission screen when possible (Android 11+),
-  /// otherwise falls back to the general app settings page.
   static Future<void> launchLocationPermissionSettings() async {
     if (Platform.isAndroid) {
       try {
@@ -231,8 +207,7 @@ class PermissionSettingsHelper {
     }
 
     if (Platform.isIOS) {
-      // iOS has no public deep link to the Location sub-page; open this app's
-      // Settings entry so the user can set Location to Always.
+
       await launchAppSettings();
       return;
     }
@@ -240,7 +215,6 @@ class PermissionSettingsHelper {
     await Geolocator.openAppSettings();
   }
 
-  /// Foreground-only OS prompt. Does not open Settings or request background.
   static Future<LocationPermissionRequestResult>
   requestForegroundLocationStep() async {
     if (await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled()) {
@@ -265,7 +239,7 @@ class PermissionSettingsHelper {
       await OverlayPromptGuard.runDuringOsPermissionPrompt(
         Permission.location.request,
       );
-      // API only: lasting While Using → granted; Don't Allow / only this time → denied.
+
       unawaited(
         NativePermissionStatusService.instance
             .syncForegroundLocationAfterOsPrompt(),
@@ -285,7 +259,7 @@ class PermissionSettingsHelper {
       await OverlayPromptGuard.runDuringOsPermissionPrompt(
         Geolocator.requestPermission,
       );
-      // API only: While Using / Always → granted; Don't Allow / other → denied.
+
       unawaited(
         NativePermissionStatusService.instance
             .syncForegroundLocationAfterOsPrompt(),
@@ -296,7 +270,6 @@ class PermissionSettingsHelper {
     return LocationPermissionRequestResult.completed;
   }
 
-  /// Handles one location-permission step per call: OS prompt or Settings, never both.
   static Future<LocationPermissionRequestResult>
   requestNextLocationPermissionStep() async {
     if (await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled()) {
@@ -342,9 +315,6 @@ class PermissionSettingsHelper {
       return LocationPermissionRequestResult.completed;
     }
 
-    // Android background/all-the-time access usually requires Settings.
-    // Do not call locationAlways.request() here — it jumps straight to the
-    // system permission screen. The in-app Open Settings dialog comes first.
     return LocationPermissionRequestResult.promptShown;
   }
 
@@ -370,18 +340,13 @@ class PermissionSettingsHelper {
       return LocationPermissionRequestResult.completed;
     }
 
-    // Foreground granted; background requires Settings. Do not auto-open —
-    // the explanatory Open Settings dialog handles the next step store-safely.
     return LocationPermissionRequestResult.promptShown;
   }
 
-  /// One staged step per call. Prefer [requestNextLocationPermissionStep].
   static Future<void> launchLocationPermissionSettingsFromStep() async {
     await requestNextLocationPermissionStep();
   }
 
-  /// Shows an explanatory dialog first. Settings open only if the user taps
-  /// [Open Settings]. Never auto-redirects without that tap.
   static Future<PermissionSettingsPromptResult> promptOpenSettings({
     required String title,
     required String message,
@@ -518,7 +483,7 @@ class PermissionSettingsHelper {
     if (!await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled()) {
       return false;
     }
-    // Always/background OK — still show Settings when Precise Location is off.
+
     return BackgroundLocationPermissions.hasPreciseLocationAccess();
   }
 

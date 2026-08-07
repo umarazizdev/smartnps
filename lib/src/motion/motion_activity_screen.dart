@@ -7,15 +7,11 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../permissions/native_permission_status_service.dart';
 import '../utilities/app_config.dart';
+import '../widgets/motion_activity_settings_dialog.dart';
 import 'motion_activity_fusion_controller.dart';
 import 'motion_activity_service.dart';
 import 'vehicle_session_fusion.dart';
 
-/// Live native motion vs GPS-fused vehicle session for field testing.
-///
-/// **Fused** is the source of truth (same engine as GPS uploads). Native OS
-/// recognition is shown for comparison — it often lags real motion by several
-/// seconds; fusion fills that gap with GPS speed.
 class MotionActivityScreen extends StatefulWidget {
   const MotionActivityScreen({super.key, this.isDark = false});
 
@@ -76,7 +72,6 @@ class _MotionActivityScreenState extends State<MotionActivityScreen> {
       _gpsDenied = false;
     });
 
-    // Seed from in-memory fusion if duty GPS already started it.
     final existing = _fusion.lastSnapshot;
     final existingNative = _fusion.lastNative ?? MotionActivityService.lastUpdate;
     if (existing != null || existingNative != null) {
@@ -110,12 +105,11 @@ class _MotionActivityScreenState extends State<MotionActivityScreen> {
         _statusMessage =
             'Motion activity permission is required to detect walking, running, driving, and more.';
       });
-      // Report deny / unknown to permission-status API.
+
       unawaited(NativePermissionStatusService.instance.syncIfChanged());
       return;
     }
 
-    // Keep permission-status API in sync after grant / re-check.
     unawaited(NativePermissionStatusService.instance.syncIfChanged());
 
     if (!_acquired) {
@@ -149,7 +143,6 @@ class _MotionActivityScreenState extends State<MotionActivityScreen> {
       }
     }
 
-    // Immediate snapshot — don't wait for the next OS event.
     final snap = await MotionActivityService.queryLatest();
     if (mounted && snap != null) {
       _lastNativeAt = DateTime.now();
@@ -168,7 +161,7 @@ class _MotionActivityScreenState extends State<MotionActivityScreen> {
 
   void _startAgeTicker() {
     _ageTicker?.cancel();
-    // Refresh "Xs ago" labels so staleness is obvious.
+
     _ageTicker = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
       if (_lastNativeAt != null || _lastGpsAt != null) {
@@ -193,7 +186,6 @@ class _MotionActivityScreenState extends State<MotionActivityScreen> {
         return;
       }
 
-      // Last-known fix paints speed before the first stream event.
       try {
         final last = await Geolocator.getLastKnownPosition();
         if (last != null && mounted) {
@@ -208,7 +200,6 @@ class _MotionActivityScreenState extends State<MotionActivityScreen> {
         }
       } catch (_) {}
 
-      // High-cadence stream so fusion tracks motion before OS AR catches up.
       final LocationSettings settings;
       if (Platform.isAndroid) {
         settings = AndroidSettings(
@@ -246,7 +237,7 @@ class _MotionActivityScreenState extends State<MotionActivityScreen> {
         cancelOnError: false,
       );
     } catch (_) {
-      // Motion comparison still works without GPS.
+
     }
   }
 
@@ -281,7 +272,13 @@ class _MotionActivityScreenState extends State<MotionActivityScreen> {
       if (status.isGranted) return true;
       if (status.isPermanentlyDenied) return false;
       final requested = await Permission.activityRecognition.request();
-      return requested.isGranted;
+      if (requested.isGranted) return true;
+      if (mounted) {
+        await MotionActivitySettingsDialog.showAndMaybeOpenSettings(
+          context: context,
+        );
+      }
+      return false;
     }
 
     if (Platform.isIOS) {
@@ -289,14 +286,22 @@ class _MotionActivityScreenState extends State<MotionActivityScreen> {
       if (native == 'granted') return true;
       if (native == 'denied' || native == 'restricted') return false;
       native = await MotionActivityService.requestPermission();
-      return native == 'granted' || native == 'notDetermined';
+      if (native == 'granted' || native == 'notDetermined') return true;
+      if (mounted) {
+        await MotionActivitySettingsDialog.showAndMaybeOpenSettings(
+          context: context,
+        );
+      }
+      return false;
     }
 
     return false;
   }
 
   Future<void> _openSettings() async {
-    await openAppSettings();
+    await MotionActivitySettingsDialog.showAndMaybeOpenSettings(
+      context: context,
+    );
   }
 
   String _ageLabel(DateTime? at) {
@@ -406,7 +411,7 @@ class _MotionActivityScreenState extends State<MotionActivityScreen> {
                       : Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            // Primary: fused (source of truth)
+
                             _HeroStatus(
                               activity: fusedState,
                               apiLabel: apiLabel,

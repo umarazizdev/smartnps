@@ -56,11 +56,12 @@ post_install do |installer|
       config.build_settings['ENABLE_USER_SCRIPT_SANDBOXING'] = 'NO'
       config.build_settings['DEAD_CODE_STRIPPING'] = 'YES'
 
-      # permission_handler: enable camera and photo library APIs used by js_bridge.
+      # permission_handler: enable camera, microphone, and photo library APIs.
       config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= [
         '$(inherited)',
       ]
       config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] << 'PERMISSION_CAMERA=1'
+      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] << 'PERMISSION_MICROPHONE=1'
       config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] << 'PERMISSION_PHOTOS=1'
       config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] << 'PERMISSION_SENSORS=1'
     end

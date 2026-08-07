@@ -13,7 +13,6 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../background/background_location_permissions.dart';
 import '../background/clock_in_gate_service.dart';
-import '../widgets/clock_in_blocked_dialog.dart';
 import '../background/location_disclosure_consent.dart';
 import '../background/duty_heartbeat_service.dart';
 import '../location/mock_location_detection.dart';
@@ -54,7 +53,6 @@ class JsBridge {
     required bool acceptedFromLiveStream,
     required bool isFreshLiveLocation,
     required bool isCachedLocation,
-    required double maxAllowedAccuracyMeters,
     required int timeoutMs,
   }) {
     final now = DateTime.now();
@@ -85,7 +83,7 @@ class JsBridge {
       'isFreshLiveLocation': isFreshLiveLocation,
       'isCachedLocation': isCachedLocation,
       'ageMsWhenAccepted': ageMsWhenAccepted,
-      'maxAllowedAccuracyMeters': maxAllowedAccuracyMeters,
+      'maxAllowedAccuracyMeters': 0,
       'timeoutMs': timeoutMs,
     };
   }
@@ -130,7 +128,10 @@ class JsBridge {
         return _err('permission_denied', 'Photos permission denied');
       }
       final picker = ImagePicker();
-      final image = await picker.pickImage(source: ImageSource.gallery);
+      final image = await picker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 100,
+      );
       if (image == null) return _ok({'canceled': true});
       return _ok({
         'canceled': false,
@@ -149,7 +150,10 @@ class JsBridge {
         return _err('permission_denied', 'Camera permission denied');
       }
       final picker = ImagePicker();
-      final photo = await picker.pickImage(source: ImageSource.camera);
+      final photo = await picker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 100,
+      );
       if (photo == null) return _ok({'canceled': true});
       return _ok({
         'canceled': false,
@@ -163,12 +167,8 @@ class JsBridge {
   Future<Map<String, dynamic>> getCurrentLocation([dynamic args]) async {
     if (!_isTrustedCaller()) return _deny();
 
-    StreamSubscription<Position>? subscription;
-
-    double maxAllowedAccuracyMeters = 50.0;
     final requestStopwatch = Stopwatch()..start();
     Duration requestTimeout = const Duration(milliseconds: 12000);
-    Position? bestSeen;
     var forClockIn = false;
     var requiresBackgroundForClockIn = false;
 
@@ -179,10 +179,6 @@ class JsBridge {
 
       final int? timeoutMs = options != null && options['timeout_ms'] is num
           ? (options['timeout_ms'] as num).toInt()
-          : null;
-      final double? requiredAccuracyMeters =
-          options != null && options['required_accuracy_meters'] is num
-          ? (options['required_accuracy_meters'] as num).toDouble()
           : null;
       forClockIn =
           options != null &&
@@ -322,27 +318,22 @@ class JsBridge {
         );
       }
 
-      maxAllowedAccuracyMeters = (requiredAccuracyMeters ?? 50.0)
-          .clamp(5.0, 500.0)
-          .toDouble();
-
+      final defaultTimeoutMs = Platform.isIOS ? 20000 : 12000;
       requestTimeout = Duration(
-        milliseconds: (timeoutMs ?? 12000).clamp(5000, 45000),
+        milliseconds: (timeoutMs ?? defaultTimeoutMs).clamp(5000, 45000),
       );
 
       final LocationSettings settings;
-
       if (Platform.isAndroid) {
         settings = AndroidSettings(
-          accuracy: LocationAccuracy.bestForNavigation,
+          accuracy: LocationAccuracy.high,
           distanceFilter: 0,
-          intervalDuration: const Duration(milliseconds: 250),
           timeLimit: requestTimeout,
           forceLocationManager: false,
         );
       } else if (Platform.isIOS) {
         settings = AppleSettings(
-          accuracy: LocationAccuracy.bestForNavigation,
+          accuracy: LocationAccuracy.high,
           distanceFilter: 0,
           timeLimit: requestTimeout,
           pauseLocationUpdatesAutomatically: false,
@@ -350,46 +341,24 @@ class JsBridge {
         );
       } else {
         settings = LocationSettings(
-          accuracy: LocationAccuracy.bestForNavigation,
+          accuracy: LocationAccuracy.high,
           distanceFilter: 0,
           timeLimit: requestTimeout,
         );
       }
 
-      final completer = Completer<Position>();
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: settings,
+      );
 
-      subscription = Geolocator.getPositionStream(locationSettings: settings)
-          .listen(
-            (Position position) {
-              if (completer.isCompleted) return;
-
-              if (bestSeen == null || position.accuracy < bestSeen!.accuracy) {
-                bestSeen = position;
-              }
-
-              if (position.accuracy > maxAllowedAccuracyMeters) {
-                debugPrint(
-                  'Flutter GPS: inaccurate live value ignored. '
-                  'Accuracy: ${position.accuracy}m',
-                );
-                return;
-              }
-
-              completer.complete(position);
-            },
-            onError: (Object error) {
-              if (!completer.isCompleted) {
-                completer.completeError(error);
-              }
-            },
-          );
-
-      final position = await completer.future.timeout(requestTimeout);
+      if (!position.latitude.isFinite || !position.longitude.isFinite) {
+        throw TimeoutException('Invalid GPS coordinates');
+      }
 
       requestStopwatch.stop();
 
       debugPrint(
-        'Flutter GPS live position accepted. '
+        'Flutter GPS current position accepted. '
         'Accuracy: ${position.accuracy}m, '
         'receivedAfter: ${requestStopwatch.elapsedMilliseconds}ms',
       );
@@ -409,39 +378,41 @@ class JsBridge {
         'location': {
           ..._locationPayload(
             position,
-            acceptedFromLiveStream: true,
+            acceptedFromLiveStream: false,
             isFreshLiveLocation: true,
             isCachedLocation: false,
-            maxAllowedAccuracyMeters: maxAllowedAccuracyMeters,
             timeoutMs: requestTimeout.inMilliseconds,
           ),
-          'effectiveMaxAllowedAccuracyMeters': maxAllowedAccuracyMeters,
+          'effectiveMaxAllowedAccuracyMeters': 0,
           'degradedAccuracyAccepted': false,
         },
       });
     } on TimeoutException {
       requestStopwatch.stop();
-      final refusedDueToLowAccuracy =
-          bestSeen == null || bestSeen!.accuracy > maxAllowedAccuracyMeters;
       if ((Platform.isAndroid || Platform.isIOS) &&
-          (forClockIn || requiresBackgroundForClockIn) &&
-          refusedDueToLowAccuracy) {
+          (forClockIn || requiresBackgroundForClockIn)) {
         ClockInGateService.instance.clearGeoUnlock();
-        await ClockInBlockedDialog.showGpsAccuracyFailureForClockIn();
       }
-      return {
-        ..._err(
-          'fresh_location_unavailable',
-          'Unable to get a GPS location with accuracy <= ${maxAllowedAccuracyMeters.toStringAsFixed(0)} meters.',
-        ),
-        if (bestSeen?.accuracy != null)
-          'bestAccuracySeenMeters': bestSeen!.accuracy,
-      };
+      return _err(
+        'fresh_location_unavailable',
+        'Unable to get a GPS location.',
+      );
     } catch (e) {
       requestStopwatch.stop();
-      return _err('get_location_failed', e.toString());
-    } finally {
-      await subscription?.cancel();
+      if ((Platform.isAndroid || Platform.isIOS) &&
+          (forClockIn || requiresBackgroundForClockIn)) {
+        ClockInGateService.instance.clearGeoUnlock();
+      }
+      final message = e.toString();
+      if (message.contains('TimeoutException') ||
+          message.contains('time limit') ||
+          message.contains('TIME_OUT')) {
+        return _err(
+          'fresh_location_unavailable',
+          'Unable to get a GPS location.',
+        );
+      }
+      return _err('get_location_failed', message);
     }
   }
 
@@ -584,7 +555,6 @@ class JsBridge {
     }
   }
 
-  /// Read-only background location readiness for web clock-in gating.
   Future<Map<String, dynamic>> getBackgroundLocationStatus([
     dynamic args,
   ]) async {
@@ -643,7 +613,6 @@ class JsBridge {
     });
   }
 
-  /// Store-safe clock-in gate: disclosure, permissions, then readiness check.
   Future<Map<String, dynamic>> prepareClockIn([dynamic args]) async {
     if (!_isTrustedCaller()) return _deny();
     return ClockInGateService.instance.prepareClockIn();

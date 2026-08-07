@@ -3,8 +3,6 @@ class AppConfig {
 
   static const String initialUrl = 'https://smartnps360.com/';
 
-  /// Home / login page — used by native after session expiry logout.
-  /// Same as [initialUrl] (`https://smartnps360.com/`).
   static const String webLoginUrl = initialUrl;
 
   static const String gpsApiBaseUrl = '${initialUrl}api/gps/';
@@ -18,6 +16,7 @@ class AppConfig {
   static const String pushTokenUrl = '${initialUrl}api/push-token';
   static const String permissionStatusUrl =
       '${initialUrl}api/native-app/permission-status';
+  static const String visitsUploadUrl = '${initialUrl}api/visits';
   static const String defaultPushUrl = '${initialUrl}officer/dashboard';
 
   static const String allowedHost = 'smartnps360.com';
@@ -33,8 +32,6 @@ class AppConfig {
     return h.endsWith('.$allowedHost');
   }
 
-  /// Google Maps / Fonts CDN hosts loaded as subresources from smartnps360 pages.
-  /// iOS WKWebView TLS and iframe navigations must allow these for embedded maps.
   static bool isTrustedSubresourceHost(String? host) {
     if (host == null || host.isEmpty) return false;
     final h = host.toLowerCase();
@@ -63,9 +60,7 @@ class AppConfig {
   static const int cSurface = 0xFFFBFBFD;
   static const int cDarkCardColor = 0xFF1A2332;
 
-  /// Active bottom-tab tint from the officer UI (cyan).
   static const int cBottomBarActive = 0xFF0F93D2;
 
-  /// Token the web app can detect in `navigator.userAgent` for native shell traffic.
   static const String webViewAppSignature = 'SmartNPS360App';
 }

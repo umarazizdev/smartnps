@@ -9,10 +9,8 @@ import '../utilities/overlay_prompt_guard.dart';
 import '../utilities/permission_settings_helper.dart';
 import 'glass_action_dialog.dart';
 
-/// User action from clock-in location dialogs.
 enum ClockInBlockedAction { cancelled, openSettings }
 
-/// Clock-in location dialogs: settings prompt first, error only after failure.
 class ClockInBlockedDialog {
   ClockInBlockedDialog._();
 
@@ -31,7 +29,6 @@ class ClockInBlockedDialog {
   static const String cancelReason = 'clock_in_cancelled';
   static const String cancelMessage = 'Shift attendance was not completed.';
 
-  /// Clock-in only: shown when GPS is refused due to low accuracy (no JS payload).
   static Future<void> showGpsAccuracyFailureForClockIn() async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
     if (RequiredPermissionsGate.shouldSuppressCompetingDialogs) return;
@@ -64,7 +61,6 @@ class ClockInBlockedDialog {
     }
   }
 
-  /// First step: education prompt before opening Settings.
   static Future<ClockInBlockedAction?> showLocationSettingsPrompt(
     String? deniedReason,
   ) async {
@@ -85,8 +81,7 @@ class ClockInBlockedDialog {
     try {
       final bool? accepted;
       if (Platform.isAndroid) {
-        // Zero-duration route so "Open Settings" launches immediately on Android.
-        // iOS keeps the normal GlassActionDialog transition.
+
         OverlayPromptGuard.registerBlockingOverlay();
         try {
           accepted = await showGeneralDialog<bool>(
@@ -133,15 +128,13 @@ class ClockInBlockedDialog {
     }
   }
 
-  /// Second step: error dialog after clock-in failed (Settings return / resume).
   static Future<ClockInBlockedAction?> showFailure({
     required String reason,
     required String title,
     required String message,
     bool bypassCooldown = false,
   }) async {
-    // Never paint the failure dialog while we are settling after Settings —
-    // Android restores leftover routes and caused a brief error flash.
+
     if (RequiredPermissionsGate.shouldSuppressCompetingDialogs) return null;
     if (Platform.isAndroid &&
         PermissionSettingsHelper.isAwaitingSettingsReturn) {
@@ -156,7 +149,6 @@ class ClockInBlockedDialog {
 
     await OverlayPromptGuard.waitUntilReady();
 
-    // Re-check after await — permission may have settled meanwhile.
     if (Platform.isAndroid &&
         PermissionSettingsHelper.isAwaitingSettingsReturn) {
       return null;
@@ -193,9 +185,6 @@ class ClockInBlockedDialog {
     return DateTime.now().difference(last) < _repeatCooldown;
   }
 
-  /// Android may keep a modal route after opening Settings from this dialog.
-  /// Only clears dialog flags; route pop is gated by [PermissionSettingsHelper]
-  /// so a newly shown failure is not dismissed immediately.
   static void reconcileAfterAppResume() {
     if (!Platform.isAndroid) return;
 
@@ -203,8 +192,7 @@ class ClockInBlockedDialog {
     if (!_dialogVisible) {
       return;
     }
-    // Do not force-clear while a dialog is actively presented unless we are
-    // still in the settings-return window (stale education route cleanup).
+
     if (PermissionSettingsHelper.isAwaitingSettingsReturn) {
       _dialogVisible = false;
     }
@@ -249,6 +237,12 @@ class ClockInBlockedDialog {
         return 'Shift attendance was not completed. Open Settings and turn on '
             'Precise location for SmartNPS360. Attendance cannot be verified '
             'without precise location.';
+      case 'gps_unavailable':
+        return 'Shift attendance was not completed. Could not get your current '
+            'location. Move outdoors or wait for GPS, then try again.';
+      case 'mock_location':
+        return 'Shift attendance was not completed. Disable mock or fake GPS '
+            'location before verifying shift attendance from the mobile app.';
       default:
         return 'Shift attendance was not completed. Background location '
             '($alwaysAccessLabel) is required for shift attendance from the '

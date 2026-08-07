@@ -5,21 +5,15 @@ import 'package:geolocator/geolocator.dart';
 
 import 'speed_adaptive_gps_policy.dart';
 
-/// Effective GPS stream settings driven by speed-adaptive policy, with a short
-/// high-rate boost when a road curve/corner is detected from bearing change.
-///
-/// Curve handling lives here (stream), not in ping/batch keep-point logic.
 class AdaptiveGpsStreamController {
   AdaptiveGpsStreamController({this.onSettingsChanged});
 
-  /// Fired when [interval] / [distanceFilterMeters] change (rebuild stream).
   void Function()? onSettingsChanged;
 
   static const Duration curveBoostDuration = Duration(seconds: 12);
   static const Duration curveBoostInterval = Duration(seconds: 1);
   static const int curveBoostDistanceFilterMeters = 0;
 
-  /// Same thresholds previously used by [LocationKeepPointGate] bearing keep.
   static const double minCornerBearingDegrees = 12;
   static const double minBearingDistanceMeters = 2;
 
@@ -50,7 +44,6 @@ class AdaptiveGpsStreamController {
       ? curveBoostDistanceFilterMeters
       : _band.distanceFilterMeters;
 
-  /// Interval to use for the fallback poll timer (matches stream cadence).
   Duration get pollInterval => interval;
 
   void reset() {
@@ -64,8 +57,6 @@ class AdaptiveGpsStreamController {
     _appliedDistanceFilterMeters = null;
   }
 
-  /// Updates band + curve boost from [position]. Returns whether stream
-  /// settings changed and the subscription should be rebuilt.
   bool observe(
     Position position,
     SpeedAdaptiveGpsPolicyDecision policyDecision,
@@ -81,7 +72,6 @@ class AdaptiveGpsStreamController {
     return _settingsDifferFromApplied();
   }
 
-  /// Call after (re)subscribing so the next observe only rebuilds on real change.
   void markSettingsApplied() {
     _appliedInterval = interval;
     _appliedDistanceFilterMeters = distanceFilterMeters;
@@ -134,7 +124,6 @@ class AdaptiveGpsStreamController {
     });
   }
 
-  /// Returns true when a corner/curve is detected between last and current fix.
   bool _detectCurveAndAdvance(Position position) {
     final last = _lastObserved;
     if (last == null) {
@@ -167,7 +156,6 @@ class AdaptiveGpsStreamController {
       }
     }
 
-    // Always advance segment tracking so the next leg can detect a turn.
     if (distanceMeters >= minBearingDistanceMeters) {
       _lastSegmentBearingDegrees = segmentBearing;
     }

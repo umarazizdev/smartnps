@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
-/// Snapshot of the most recent native motion activity update.
 class MotionActivityUpdate {
   const MotionActivityUpdate({
     required this.activity,
@@ -38,7 +37,6 @@ class MotionActivityUpdate {
   }
 }
 
-/// Dart bridge for native Core Motion / Activity Recognition channels.
 class MotionActivityService {
   MotionActivityService._();
 
@@ -56,10 +54,8 @@ class MotionActivityService {
   static bool _listening = false;
   static MotionActivityUpdate? _lastUpdate;
 
-  /// Most recent update seen on the EventChannel (may be null before first).
   static MotionActivityUpdate? get lastUpdate => _lastUpdate;
 
-  /// Broadcast stream of activity updates. Subscribe after [start].
   static Stream<MotionActivityUpdate> get stream => _controller.stream;
 
   static Future<bool> isAvailable() async {
@@ -87,8 +83,6 @@ class MotionActivityService {
     }
   }
 
-  /// iOS: triggers the Motion & Fitness system prompt when needed.
-  /// Android: returns current status (runtime prompt via permission_handler).
   static Future<String> requestPermission() async {
     try {
       final result = await _methods.invokeMethod<dynamic>('requestPermission');
@@ -144,8 +138,6 @@ class MotionActivityService {
     }
   }
 
-  /// Best-effort immediate snapshot (iOS history query / Android last known).
-  /// Also pushes onto [stream] when native emits via the sink.
   static Future<MotionActivityUpdate?> queryLatest() async {
     try {
       final result = await _methods.invokeMethod<dynamic>('queryLatest');

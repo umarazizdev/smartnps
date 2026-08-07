@@ -9,9 +9,22 @@ import '../widgets/mock_location_dialog.dart';
 import '../utilities/overlay_prompt_guard.dart';
 import 'mock_location_detection.dart';
 
+/// Outcome of the clock-in mock-location GPS check.
+enum MockLocationClockInCheck {
+  /// Fresh fix received and not mocked/simulated.
+  clear,
+
+  /// Position indicates mock or simulated GPS.
+  mockDetected,
+
+  /// Could not obtain a fresh GPS fix (timeout/unavailable).
+  gpsUnavailable,
+}
+
 class MockLocationGuard {
   MockLocationGuard._();
 
+  static const Duration _clockInGpsTimeout = Duration(seconds: 15);
   static const Duration _cooldown = Duration(minutes: 2);
 
   static DateTime? _lastDialogAt;
@@ -51,18 +64,17 @@ class MockLocationGuard {
     );
   }
 
-  /// Blocking clock-in check: shows mock dialog when needed, then re-reads GPS.
-  static Future<bool> ensureClearForClockIn() async {
+  static Future<MockLocationClockInCheck> ensureClearForClockIn() async {
     final position = await _readPositionOrNull();
     if (position == null) {
       debugPrint(
         '[MockLocationGuard] ensureClearForClockIn: GPS unavailable/timeout',
       );
-      return false;
+      return MockLocationClockInCheck.gpsUnavailable;
     }
 
     final flags = MockLocationDetection.flagsFor(position);
-    if (!flags.isDetected) return true;
+    if (!flags.isDetected) return MockLocationClockInCheck.clear;
 
     debugPrint(
       '[MockLocationGuard] ensureClearForClockIn: mock detected '
@@ -75,21 +87,23 @@ class MockLocationGuard {
       debugPrint(
         '[MockLocationGuard] ensureClearForClockIn: GPS unavailable after dialog',
       );
-      return false;
+      return MockLocationClockInCheck.gpsUnavailable;
     }
     final clear = !MockLocationDetection.isDetected(recheck);
     debugPrint(
       '[MockLocationGuard] ensureClearForClockIn: after dialog clear=$clear',
     );
-    return clear;
+    return clear
+        ? MockLocationClockInCheck.clear
+        : MockLocationClockInCheck.mockDetected;
   }
 
   static Future<Position?> _readPositionOrNull() async {
     try {
       return await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.best,
-          timeLimit: Duration(seconds: 5),
+          accuracy: LocationAccuracy.high,
+          timeLimit: _clockInGpsTimeout,
         ),
       );
     } catch (_) {

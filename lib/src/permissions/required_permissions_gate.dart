@@ -14,25 +14,12 @@ import '../push/push_notification_preferences.dart';
 import '../push/push_notification_service.dart';
 import '../utilities/overlay_prompt_guard.dart';
 import '../utilities/permission_settings_helper.dart';
+import '../widgets/motion_activity_settings_dialog.dart';
 import 'native_permission_status_service.dart';
 import 'os_notification_permission.dart';
 
-/// Action the blocker CTA should take for a permission row.
-enum RequiredPermissionAction {
-  /// OS can still show a system permission dialog.
-  allow,
+enum RequiredPermissionAction { allow, openSettings, enable, none }
 
-  /// Must be changed in device Settings.
-  openSettings,
-
-  /// In-app preference (not an OS permission).
-  enable,
-
-  /// Already satisfied — no CTA.
-  none,
-}
-
-/// One row on the logged-in required-permissions blocker.
 class RequiredPermissionItem {
   const RequiredPermissionItem({
     required this.id,
@@ -53,9 +40,6 @@ class RequiredPermissionItem {
   bool get needsAction => !enabled;
 }
 
-/// Tracks OS + in-app permissions required after officer login and drives the
-/// full-screen blocker. Refreshes live on resume, after Allow taps, and via a
-/// short poll while blocking so Settings toggles appear without delay.
 class RequiredPermissionsGate {
   RequiredPermissionsGate._();
 
@@ -73,11 +57,7 @@ class RequiredPermissionsGate {
   final ValueNotifier<bool> isBlocking = ValueNotifier(false);
   final ValueNotifier<bool> isRefreshing = ValueNotifier(false);
 
-  /// True while the full-screen permission blocker owns the UI.
-  /// Competing disclosure / Settings / clock-in dialogs must not appear on top.
-  /// Mock-location dialogs are intentionally not gated by this.
-  bool get suppressesCompetingDialogs =>
-      isBlocking.value || isRefreshing.value;
+  bool get suppressesCompetingDialogs => isBlocking.value || isRefreshing.value;
 
   static bool get shouldSuppressCompetingDialogs =>
       instance.suppressesCompetingDialogs;
@@ -89,7 +69,6 @@ class RequiredPermissionsGate {
   String? _lastFingerprint;
   int _actionSerial = 0;
 
-  /// Start monitoring when the officer is logged in (mobile only).
   void start() {
     if (!Platform.isAndroid && !Platform.isIOS) {
       stop();
@@ -124,7 +103,6 @@ class RequiredPermissionsGate {
     }
   }
 
-  /// Immediate re-read (Settings return, Allow result, lifecycle resume).
   Future<void> refresh({bool force = false}) async {
     if (!_active) return;
     if (!Platform.isAndroid && !Platform.isIOS) return;
@@ -158,7 +136,7 @@ class RequiredPermissionsGate {
               'missing=${next.where((e) => e.needsAction).map((e) => e.id).join(',')}',
             );
           }
-          // Keep permission-status API in sync (includes motionActivity).
+
           unawaited(
             NativePermissionStatusService.instance
                 .ensureLatestPermissionsSynced(),
@@ -204,7 +182,8 @@ class RequiredPermissionsGate {
       if (serial == _actionSerial) {
         await refresh(force: true);
         unawaited(
-          NativePermissionStatusService.instance.ensureLatestPermissionsSynced(),
+          NativePermissionStatusService.instance
+              .ensureLatestPermissionsSynced(),
         );
       }
     }
@@ -231,26 +210,41 @@ class RequiredPermissionsGate {
           });
         }
       case 'motionActivity':
-        if (Platform.isAndroid) {
-          await OverlayPromptGuard.runDuringOsPermissionPrompt(
-            Permission.activityRecognition.request,
-          );
-        } else if (Platform.isIOS) {
-          await OverlayPromptGuard.runDuringOsPermissionPrompt(
-            MotionActivityService.requestPermission,
-          );
-        }
+        await _requestMotionPermissionAndGuideIfDenied();
       default:
         break;
     }
   }
 
+  Future<void> _requestMotionPermissionAndGuideIfDenied() async {
+    var denied = false;
+
+    if (Platform.isAndroid) {
+      final status = await OverlayPromptGuard.runDuringOsPermissionPrompt(
+        Permission.activityRecognition.request,
+      );
+      denied = !(status.isGranted || status.isLimited || status.isProvisional);
+    } else if (Platform.isIOS) {
+      final result = await OverlayPromptGuard.runDuringOsPermissionPrompt(
+        MotionActivityService.requestPermission,
+      );
+      denied = result != 'granted';
+    }
+
+    if (!denied) return;
+    await MotionActivitySettingsDialog.showAndMaybeOpenSettings();
+  }
+
   Future<void> _openSettingsFor(String id) async {
+    if (id == 'motionActivity') {
+      await MotionActivitySettingsDialog.showAndMaybeOpenSettings();
+      return;
+    }
+
     final destination = switch (id) {
       'foregroundLocation' ||
       'backgroundLocation' ||
-      'preciseLocation' =>
-        StoreSafeSettingsDestination.locationPermission,
+      'preciseLocation' => StoreSafeSettingsDestination.locationPermission,
       'locationServices' => StoreSafeSettingsDestination.systemLocationServices,
       _ => StoreSafeSettingsDestination.app,
     };
@@ -274,8 +268,7 @@ class RequiredPermissionsGate {
     final notifications = await OsNotificationPermission.isGranted();
     final pushEnabled = await PushNotificationPreferences.readEnabled();
     final motionAvailable = await MotionActivityService.isAvailable();
-    final motionGranted =
-        motionAvailable ? await _motionGranted() : true;
+    final motionGranted = motionAvailable ? await _motionGranted() : true;
 
     final list = <RequiredPermissionItem>[
       if (!serviceEnabled)
@@ -444,8 +437,6 @@ class RequiredPermissionsGate {
     }
   }
 
-  /// Missing permissions first so the officer acts on them immediately;
-  /// enabled rows follow in their original order.
   List<RequiredPermissionItem> _sortMissingFirst(
     List<RequiredPermissionItem> items,
   ) {

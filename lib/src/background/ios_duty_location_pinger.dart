@@ -16,8 +16,6 @@ import 'background_location_uploader.dart';
 import 'ios_background_location_notification.dart';
 import 'ios_significant_location_change_service.dart';
 
-/// iOS live location pings run on the main isolate. Background service isolates
-/// cannot safely use flutter_local_notifications (objective_c crash).
 class IosDutyLocationPinger {
   IosDutyLocationPinger._();
 
@@ -25,6 +23,7 @@ class IosDutyLocationPinger {
   static Timer? _pingTimer;
   static BackgroundLocationUploader? _uploader;
   static DateTime? _lastUploadAt;
+  static Position? _latestAcceptedPosition;
   static final LocationKeepPointGate _keepPointGate = LocationKeepPointGate();
   static final AdaptiveGpsStreamController _streamController =
       AdaptiveGpsStreamController();
@@ -41,10 +40,10 @@ class IosDutyLocationPinger {
   static const Duration _staleLocationThreshold = Duration(minutes: 2);
   static const Duration _forcedBatchFlushEvery = Duration(seconds: 30);
 
-  /// True only when the position stream subscription is active.
   static bool get isRunning => _running && _subscription != null;
 
-  /// True when the stream is alive but has not produced a ping recently.
+  static Position? get latestAcceptedPosition => _latestAcceptedPosition;
+
   static bool get needsRecovery {
     if (!Platform.isIOS || !isRunning) return false;
     final last = _lastUploadAt;
@@ -172,7 +171,6 @@ class IosDutyLocationPinger {
     }
   }
 
-  /// Poll at the adaptive cadence so quiet streams still produce fixes.
   static void _restartPeriodicPing() {
     _pingTimer?.cancel();
     final every = _streamController.pollInterval;
@@ -202,7 +200,7 @@ class IosDutyLocationPinger {
     try {
       final permission = await Geolocator.checkPermission();
       final allowBackground = permission == LocationPermission.always;
-      // One-shot precise fetch — not the adaptive duty stream.
+
       final settings = AppleSettings(
         accuracy: LocationAccuracy.bestForNavigation,
         distanceFilter: 0,
@@ -255,7 +253,6 @@ class IosDutyLocationPinger {
     }
   }
 
-  /// SLC is wake-only: do not upload coarse SLC fixes; fetch precise GPS instead.
   static Future<void> _onSignificantLocationWake(Position pos) async {
     if (_stopping) return;
 
@@ -276,7 +273,6 @@ class IosDutyLocationPinger {
     unawaited(_pollCurrentPosition());
   }
 
-  /// Restarts the stream after permission changes or CoreLocation errors.
   static Future<void> recoverIfNeeded() async {
     if (!Platform.isIOS || _recoverInFlight) return;
     if (isRunning && !needsRecovery) return;
@@ -332,6 +328,7 @@ class IosDutyLocationPinger {
       }
       return;
     }
+    _latestAcceptedPosition = pos;
 
     final token = await AuthRepository.instance.ensureValidAccessToken();
     if (_stopping) return;
@@ -431,7 +428,7 @@ class IosDutyLocationPinger {
     if (!Platform.isIOS) return;
 
     if (drainNativePending) {
-      // Drains pending SLC payloads through the wake handler (no SLC uploads).
+
       await IosSignificantLocationChangeService.drainPendingLocations();
     }
 
@@ -462,6 +459,7 @@ class IosDutyLocationPinger {
     await _uploader?.stop();
     _uploader = null;
     _lastUploadAt = null;
+    _latestAcceptedPosition = null;
     _startedAt = null;
     _lastForcedBatchFlushAttemptAt = null;
     _keepPointGate.reset();
@@ -482,7 +480,6 @@ class IosDutyLocationPinger {
     _stopping = false;
   }
 
-  /// Stops GPS collection immediately without waiting for batch flush.
   static Future<void> stopCollectingOnly() async {
     if (!Platform.isIOS) return;
     if (!_running && _subscription == null && _uploader == null) return;
@@ -500,6 +497,7 @@ class IosDutyLocationPinger {
     await _uploader?.stopCollectingOnly();
     _uploader = null;
     _lastUploadAt = null;
+    _latestAcceptedPosition = null;
     _startedAt = null;
     _lastForcedBatchFlushAttemptAt = null;
     _keepPointGate.reset();

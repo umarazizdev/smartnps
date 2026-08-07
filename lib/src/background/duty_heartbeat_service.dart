@@ -48,8 +48,6 @@ class DutyHeartbeatService {
   bool _disclosurePromptInFlight = false;
   bool _backgroundLocationSettingsDialogVisible = false;
 
-  /// After the first automatic on-duty permission flow, rely on the banner until
-  /// the user taps Enable Location (matches iOS store-safe nag pattern).
   bool _onDutyAutoPromptComplete = false;
   Future<void>? _applyOnDutyFuture;
   Future<bool>? _disclosurePromptFuture;
@@ -64,7 +62,6 @@ class DutyHeartbeatService {
   bool get isBackgroundLocationBannerActive =>
       backgroundLocationPermissionMissing.value;
 
-  /// Banner shows only when permission is missing and no modal is on screen.
   bool get shouldShowBackgroundLocationBanner =>
       backgroundLocationPermissionMissing.value &&
       !PermissionSettingsHelper.settingsPromptVisible.value &&
@@ -77,10 +74,6 @@ class DutyHeartbeatService {
   bool get isOnDutyTrackingActive =>
       _heartbeatActive && _lastAppliedStatus == onDuty;
 
-  /// Fresh heartbeat read used before native logout teardown.
-  ///
-  /// Returns true only when the server reports [onDuty]. If the API is
-  /// unavailable, falls back to the last applied poll result.
   Future<bool> isOnDutyAccordingToHeartbeat() async {
     if (!Platform.isAndroid && !Platform.isIOS) return false;
     if (!await _hasActiveAuthToken()) return false;
@@ -115,10 +108,10 @@ class DutyHeartbeatService {
         !await BackgroundLocationPermissions.hasPreciseLocationAccess();
     final missing = backgroundMissing || preciseMissing;
     if (kDebugMode) {
-      debugPrint(
-        '[DutyHeartbeatService] banner missing=$missing '
-        'bgMissing=$backgroundMissing preciseMissing=$preciseMissing',
-      );
+      // debugPrint(
+      //   '[DutyHeartbeatService] banner missing=$missing '
+      //   'bgMissing=$backgroundMissing preciseMissing=$preciseMissing',
+      // );
     }
     if (backgroundLocationPermissionMissing.value != missing) {
       backgroundLocationPermissionMissing.value = missing;
@@ -131,10 +124,8 @@ class DutyHeartbeatService {
     }
   }
 
-  /// Clears modal routes left behind when returning from Settings.
   void reconcileDialogsAfterAppResume() {
-    // While Settings-return settle is in progress, do not clear/pop overlays —
-    // that briefly flashed "Unable to verify attendance" on Android.
+
     if (Platform.isAndroid &&
         (ClockInGateService.instance.isPrepareInFlight ||
             PermissionSettingsHelper.isAwaitingSettingsReturn)) {
@@ -172,14 +163,9 @@ class DutyHeartbeatService {
     }
   }
 
-  /// Re-checks prompts after page refresh or app resume.
-  ///
-  /// [pageReload] is true for pull-to-refresh / same-URL reloads. In that case
-  /// native session teardown is skipped elsewhere and we only refresh banner
-  /// state without re-prompting settings the user already dismissed.
   Future<void> recheckOnDutyPrompts({bool pageReload = false}) async {
     if (!_heartbeatActive) return;
-    // Permission blocker already owns Allow / Settings CTAs.
+
     if (RequiredPermissionsGate.shouldSuppressCompetingDialogs) return;
 
     final token = await AuthRepository.instance.ensureValidAccessToken();
@@ -208,9 +194,9 @@ class DutyHeartbeatService {
 
     final running = await _isLocationTrackingRunning();
     if (_lastAppliedStatus == onDuty && running) {
-      // Re-read Precise / Always after Settings return (same path as FG/BG).
+
       await refreshBackgroundLocationPermissionBannerState();
-      // iOS Precise Location authorization can settle slightly after resume.
+
       await Future<void>.delayed(const Duration(milliseconds: 300));
       await refreshBackgroundLocationPermissionBannerState();
       return;
@@ -241,7 +227,6 @@ class DutyHeartbeatService {
     return BackgroundLocationController.isTrackingRunning();
   }
 
-  /// Retries stop when heartbeat is off_duty but tracking is still active.
   Future<void> _ensureOffDutyTrackingStopped() async {
     if (_lastAppliedStatus != offDuty) return;
 
@@ -309,7 +294,6 @@ class DutyHeartbeatService {
     }
   }
 
-  /// Instant logout: stop polling/tracking immediately; no batch flush here.
   Future<void> finalizeLogoutInstant() async {
     _heartbeatActive = false;
     _pollTimer?.cancel();
@@ -374,16 +358,16 @@ class DutyHeartbeatService {
             );
             await _applyOnDuty();
           } else if (kDebugMode) {
-            debugPrint('[DutyHeartbeatService] unchanged status=$status');
+            // debugPrint('[DutyHeartbeatService] unchanged status=$status');
           }
           await refreshBackgroundLocationPermissionBannerState();
         } else if (status == offDuty) {
           await _ensureOffDutyTrackingStopped();
           if (kDebugMode) {
-            debugPrint('[DutyHeartbeatService] unchanged status=$status');
+            // debugPrint('[DutyHeartbeatService] unchanged status=$status');
           }
         } else if (kDebugMode) {
-          debugPrint('[DutyHeartbeatService] unchanged status=$status');
+          // debugPrint('[DutyHeartbeatService] unchanged status=$status');
         }
         return;
       }
@@ -589,8 +573,6 @@ class DutyHeartbeatService {
     _onDutyAutoPromptComplete = true;
   }
 
-  /// Store-safe gate for web geolocation: disclosure before any OS prompt.
-  /// Re-shows disclosure on user-initiated retry (forceRetry).
   Future<bool> ensureDisclosureBeforeWebLocationAccess() async {
     if (!Platform.isAndroid && !Platform.isIOS) return true;
     if (RequiredPermissionsGate.shouldSuppressCompetingDialogs) return false;
@@ -621,7 +603,6 @@ class DutyHeartbeatService {
     return await BackgroundLocationPermissions.hasForegroundLocationAccess();
   }
 
-  /// Handles the top banner primary action with the correct next step per state.
   Future<void> handleBannerEnableLocationAction(BuildContext context) async {
     if (await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled() &&
         await BackgroundLocationPermissions.hasPreciseLocationAccess() &&
@@ -653,7 +634,6 @@ class DutyHeartbeatService {
     await refreshBackgroundLocationPermissionBannerState();
   }
 
-  /// Banner tap: OS prompt when possible, otherwise the in-app Open Settings flow.
   Future<void> _advanceBannerLocationPermissionStep(
     BuildContext context,
   ) async {
@@ -726,7 +706,6 @@ class DutyHeartbeatService {
     }
   }
 
-  /// Shows duty disclosure from the banner when it has not been accepted yet.
   Future<bool> prepareBannerLocationPermissionRequest(
     BuildContext context,
   ) async {
@@ -762,8 +741,6 @@ class DutyHeartbeatService {
     return accepted;
   }
 
-  /// Runs the next store-safe step after duty disclosure is accepted.
-  /// Returns true when the Open Settings dialog was shown.
   Future<bool> _runPostDisclosurePermissionStep({
     bool userInitiated = false,
   }) async {
@@ -828,8 +805,6 @@ class DutyHeartbeatService {
     await refreshBackgroundLocationPermissionBannerState();
   }
 
-  /// Shows the explanatory Open Settings dialog when background access is still
-  /// missing after foreground was granted (Android/iOS duty flows).
   Future<void> promptBackgroundLocationSettingsIfNeeded() async {
     if (_lastAppliedStatus != onDuty) return;
     if (!await LocationDisclosureConsent.hasAccepted()) return;
@@ -923,7 +898,6 @@ class DutyHeartbeatService {
     }
   }
 
-  /// Marks permission-ready state after background access is sufficient.
   Future<void> _syncPermissionReadyState() async {
     if (!await BackgroundLocationPermissions.hasSufficientBackgroundAccess()) {
       await refreshBackgroundLocationPermissionBannerState();

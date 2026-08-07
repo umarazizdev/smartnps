@@ -15,7 +15,6 @@ import '../widgets/clock_in_location_disclosure_dialog.dart';
 import 'background_location_permissions.dart';
 import 'location_disclosure_consent.dart';
 
-/// Store-safe clock-in gate: disclosure before OS prompts, then background check.
 class ClockInGateService {
   ClockInGateService._();
 
@@ -31,7 +30,6 @@ class ClockInGateService {
 
   bool get isGeoUnlockedForClockIn => _geoUnlockedForClockIn;
 
-  /// True while [prepareClockIn] is running — blocks parallel GPS / clock-in.
   bool get isPrepareInFlight => _prepareInFlight;
 
   void _setPrepareInFlight(bool value) {
@@ -52,10 +50,9 @@ class ClockInGateService {
     clearGeoUnlock();
   }
 
-  /// Shows failure dialog on resume only when user opened Settings and still blocked.
   Future<void> recheckAfterAppResume() async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
-    // prepareClockIn owns the settings-return flow; avoid racing it.
+
     if (_prepareInFlight) return;
 
     await BackgroundLocationPermissions.refreshPermissionStateFromOs();
@@ -106,7 +103,8 @@ class ClockInGateService {
       return false;
     }
 
-    return await MockLocationGuard.ensureClearForClockIn();
+    final mockCheck = await MockLocationGuard.ensureClearForClockIn();
+    return mockCheck == MockLocationClockInCheck.clear;
   }
 
   Future<void> _hydrateFromStorage() async {
@@ -185,18 +183,9 @@ class ClockInGateService {
         return _runLocationSettingsPromptFlow(deniedReason: 'location_precise');
       }
 
-      if (!await MockLocationGuard.ensureClearForClockIn()) {
-        debugPrint(
-          '[ClockInGateService] prepareClockIn blocked: mock_location '
-          '(or GPS unavailable during mock check)',
-        );
-        return _blocked(
-          reason: 'mock_location',
-          title: 'Mock location detected',
-          message:
-              'Disable mock or fake GPS location before verifying shift attendance from the mobile app.',
-        );
-      }
+      final mockCheck = await MockLocationGuard.ensureClearForClockIn();
+      final mockBlocked = await _blockedIfMockCheckFailed(mockCheck);
+      if (mockBlocked != null) return mockBlocked;
 
       _geoUnlockedForClockIn = true;
       debugPrint('[ClockInGateService] prepareClockIn allowed canClockIn=true');
@@ -206,7 +195,6 @@ class ClockInGateService {
     }
   }
 
-  /// Step 1: settings education prompt. Step 2: error only after Settings return.
   Future<Map<String, dynamic>> _runLocationSettingsPromptFlow({
     required String? deniedReason,
   }) async {
@@ -218,8 +206,7 @@ class ClockInGateService {
 
     if (action != ClockInBlockedAction.openSettings) {
       _pendingFailureAfterSettings = null;
-      // First-time Cancel on Open Settings = user denied background location.
-      // Do not treat Precise Location cancel as a background denial.
+
       if (blockReason != 'location_precise') {
         unawaited(
           NativePermissionStatusService.instance
@@ -229,8 +216,6 @@ class ClockInGateService {
       return _cancelledBlocked(reason: blockReason);
     }
 
-    // Android: strip the education dialog route immediately (no animation wait)
-    // so Settings opens without the prior ~350ms settle delay. iOS unchanged.
     if (Platform.isAndroid) {
       PermissionSettingsHelper.clearPopupRoutesImmediately();
       await WidgetsBinding.instance.endOfFrame;
@@ -260,8 +245,7 @@ class ClockInGateService {
       await BackgroundLocationPermissions.refreshPermissionStateFromOs();
 
       if (Platform.isAndroid) {
-        // Adaptive: succeed immediately if already granted; otherwise a short
-        // poll for OEM lag, then fail fast (no long fixed delay).
+
         var ready =
             await BackgroundLocationPermissions.isClockInBackgroundReady();
         if (!ready) {
@@ -278,7 +262,7 @@ class ClockInGateService {
 
       if (await BackgroundLocationPermissions.isClockInBackgroundReady()) {
         await LocationDisclosureConsent.reconcileFromOsIfBackgroundReady();
-        // Release Settings lock before any UI so resume handlers cannot pop it.
+
         if (Platform.isAndroid) {
           PermissionSettingsHelper.endAwaitingSettingsReturn();
         }
@@ -299,14 +283,9 @@ class ClockInGateService {
           return _showPreciseLocationFailureAfterSettings();
         }
 
-        if (!await MockLocationGuard.ensureClearForClockIn()) {
-          return _blocked(
-            reason: 'mock_location',
-            title: 'Mock location detected',
-            message:
-                'Disable mock or fake GPS location before verifying shift attendance from the mobile app.',
-          );
-        }
+        final mockCheck = await MockLocationGuard.ensureClearForClockIn();
+        final mockBlocked = await _blockedIfMockCheckFailed(mockCheck);
+        if (mockBlocked != null) return mockBlocked;
 
         _geoUnlockedForClockIn = true;
         debugPrint(
@@ -315,7 +294,6 @@ class ClockInGateService {
         return _gateResult(canClockIn: true);
       }
 
-      // One short recheck — covers late OEM flips without delaying failure UI.
       if (Platform.isAndroid) {
         await Future<void>.delayed(const Duration(milliseconds: 200));
         await BackgroundLocationPermissions.refreshPermissionStateFromOs();
@@ -325,23 +303,21 @@ class ClockInGateService {
           if (!await BackgroundLocationPermissions.hasPreciseLocationAccess()) {
             return _showPreciseLocationFailureAfterSettings();
           }
-          if (await MockLocationGuard.ensureClearForClockIn()) {
-            _geoUnlockedForClockIn = true;
-            debugPrint(
-              '[ClockInGateService] prepareClockIn allowed after final settle',
-            );
-            return _gateResult(canClockIn: true);
-          }
+          final settleCheck = await MockLocationGuard.ensureClearForClockIn();
+          final settleBlocked = await _blockedIfMockCheckFailed(settleCheck);
+          if (settleBlocked != null) return settleBlocked;
+          _geoUnlockedForClockIn = true;
+          debugPrint(
+            '[ClockInGateService] prepareClockIn allowed after final settle',
+          );
+          return _gateResult(canClockIn: true);
         }
       }
 
-      // Must clear before showFailure — resume handlers pop while this is true.
       if (Platform.isAndroid) {
         PermissionSettingsHelper.endAwaitingSettingsReturn();
       }
 
-      // Returned from Settings without Always / Allow all the time.
-      // Precise-only blocks are not background denials.
       if (blockReason != 'location_precise') {
         unawaited(
           NativePermissionStatusService.instance
@@ -369,7 +345,6 @@ class ClockInGateService {
     }
   }
 
-  /// After Settings return: background is OK but Precise Location is still off.
   Future<Map<String, dynamic>> _showPreciseLocationFailureAfterSettings() async {
     const preciseReason = 'location_precise';
     final failureAction = await ClockInBlockedDialog.showFailure(
@@ -384,8 +359,6 @@ class ClockInGateService {
     return _cancelledBlocked(reason: preciseReason);
   }
 
-  /// Retries OS background readiness after Settings (Android OEM grant lag).
-  /// Returns as soon as ready; otherwise exits after a short window (~0.5s).
   Future<bool> _waitUntilClockInBackgroundReady({
     int attempts = 4,
     Duration interval = const Duration(milliseconds: 120),
@@ -496,6 +469,45 @@ class ClockInGateService {
     }
 
     return false;
+  }
+
+  Future<Map<String, dynamic>?> _blockedIfMockCheckFailed(
+    MockLocationClockInCheck check,
+  ) async {
+    switch (check) {
+      case MockLocationClockInCheck.clear:
+        return null;
+      case MockLocationClockInCheck.mockDetected:
+        debugPrint(
+          '[ClockInGateService] prepareClockIn blocked: mock_location',
+        );
+        // MockLocationDialog is already presented by MockLocationGuard.
+        return _blocked(
+          reason: 'mock_location',
+          title: 'Mock location detected',
+          message:
+              'Disable mock or fake GPS location before verifying shift attendance from the mobile app.',
+        );
+      case MockLocationClockInCheck.gpsUnavailable:
+        debugPrint(
+          '[ClockInGateService] prepareClockIn blocked: gps_unavailable',
+        );
+        const reason = 'gps_unavailable';
+        const title = 'Location unavailable';
+        const message =
+            'Could not get your current location. Move outdoors or wait for GPS, then try again.';
+        await ClockInBlockedDialog.showFailure(
+          reason: reason,
+          title: title,
+          message: message,
+          bypassCooldown: true,
+        );
+        return _blocked(
+          reason: reason,
+          title: title,
+          message: message,
+        );
+    }
   }
 
   Map<String, dynamic> _blocked({
