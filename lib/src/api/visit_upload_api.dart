@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -42,6 +43,10 @@ class VisitUploadApi {
 
   static final VisitUploadApi instance = VisitUploadApi._();
 
+  /// When true, logs media pixels/bytes then returns without calling the API.
+  /// Keep drafts intact so quality can be re-tested. Set to false to upload again.
+  static const bool skipApiUpload = false;
+
   Future<VisitUploadResult> uploadVisit({
     required Map<String, dynamic> meta,
     required List<VisitMediaItem> items,
@@ -51,6 +56,35 @@ class VisitUploadApi {
       const result = VisitUploadResult(
         success: false,
         message: 'Please capture at least one photo or video before upload.',
+      );
+      _logResult(result);
+      return result;
+    }
+
+    for (var i = 0; i < items.length; i++) {
+      final item = items[i];
+      final mediaFile = File(item.path);
+      if (!await mediaFile.exists()) {
+        final result = VisitUploadResult(
+          success: false,
+          message: 'Media file missing for item $i.',
+        );
+        _logResult(result);
+        return result;
+      }
+      await _logMediaQuality(item: item, index: i, file: mediaFile);
+    }
+
+    if (skipApiUpload) {
+      debugPrint(
+        '[VisitUploadApi] SKIPPED API upload (skipApiUpload=true) '
+        'items=${items.length} — check logs above for pixels/bytes',
+      );
+      const result = VisitUploadResult(
+        success: false,
+        statusCode: 0,
+        message:
+            'API upload disabled for quality testing. Check console for resolution/size.',
       );
       _logResult(result);
       return result;
@@ -210,6 +244,51 @@ class VisitUploadApi {
         'message=${result.displayMessage} errors=${result.errors} '
         'body=$responseBody',
       );
+    }
+  }
+
+  Future<void> _logMediaQuality({
+    required VisitMediaItem item,
+    required int index,
+    required File file,
+  }) async {
+    if (!kDebugMode && !skipApiUpload) return;
+
+    final bytes = await file.length();
+    final kb = (bytes / 1024).toStringAsFixed(1);
+    final name = p.basename(item.path);
+
+    if (item.isVideo) {
+      debugPrint(
+        '[VisitUploadApi] media[$index] video '
+        'bytes=$bytes (${kb}KB) file=$name',
+      );
+      return;
+    }
+
+    final size = await _photoPixelSize(file);
+    final pixels = size == null ? 'unknown' : '${size.$1}x${size.$2}';
+    final warn = size != null && (size.$1 < 1600 || size.$2 < 900)
+        ? ' LOW_RES'
+        : '';
+    debugPrint(
+      '[VisitUploadApi] media[$index] photo '
+      'pixels=$pixels bytes=$bytes (${kb}KB) file=$name$warn',
+    );
+  }
+
+  Future<(int, int)?> _photoPixelSize(File file) async {
+    try {
+      final bytes = await file.readAsBytes();
+      final codec = await ui.instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      final width = frame.image.width;
+      final height = frame.image.height;
+      frame.image.dispose();
+      return (width, height);
+    } catch (error) {
+      debugPrint('[VisitUploadApi] photo dimension read failed: $error');
+      return null;
     }
   }
 

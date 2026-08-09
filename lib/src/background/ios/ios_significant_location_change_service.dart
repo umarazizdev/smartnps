@@ -21,6 +21,18 @@ class IosSignificantLocationChangeService {
 
   static bool get isMonitoring => _nativeMonitoring;
 
+  static Future<void> setOnDuty(bool onDuty) async {
+    if (!Platform.isIOS) return;
+    if (!await _ensureNativeChannelsReady()) return;
+    try {
+      await _channel.invokeMethod<dynamic>('setOnDuty', {'onDuty': onDuty});
+    } on MissingPluginException catch (e) {
+      if (kDebugMode) {
+        debugPrint('[IosSLC] setOnDuty skipped; native channel unavailable: $e');
+      }
+    }
+  }
+
   static Future<Map<String, dynamic>> start({
     required Future<void> Function(Position position) onLocation,
   }) async {
@@ -39,6 +51,8 @@ class IosSignificantLocationChangeService {
       };
     }
 
+    // Native startMonitoring refuses unless on-duty was persisted first.
+    await setOnDuty(true);
     await _ensureEventSubscription();
 
     final result = await _invokeMap('startMonitoring');
@@ -75,7 +89,10 @@ class IosSignificantLocationChangeService {
     return result;
   }
 
-  static Future<void> stop({bool drainPending = false}) async {
+  static Future<void> stop({
+    bool drainPending = false,
+    bool clearOnDuty = true,
+  }) async {
     if (!Platform.isIOS) return;
 
     if (drainPending) {
@@ -88,6 +105,10 @@ class IosSignificantLocationChangeService {
       if (kDebugMode) {
         debugPrint('[IosSLC] stop failed: $e');
       }
+    }
+
+    if (clearOnDuty) {
+      await setOnDuty(false);
     }
 
     await _subscription?.cancel();

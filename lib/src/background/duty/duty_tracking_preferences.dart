@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import 'duty_status_snapshot.dart';
 import 'location_disclosure_consent.dart';
 
 class DutyTrackingPreferences {
@@ -57,6 +58,7 @@ class DutyTrackingPreferences {
   static Future<void> clearOnOffDuty() async {
     await _storage.delete(key: _kSettingsPromptDeferred);
     await _storage.delete(key: _kBgLocationReady);
+    await DutyStatusSnapshot.clear();
     if (kDebugMode) {
       debugPrint('[DutyTrackingPreferences] cleared per-shift state on off duty');
     }
