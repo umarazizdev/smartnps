@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:get/get.dart';
@@ -816,6 +817,14 @@ class VisitVideoRecorderController extends GetxController
           throw StateError('Camera initialized flag is false');
         }
         _lastSuccessfulPreset = preset;
+        if (kDebugMode) {
+          final preview = controller.value.previewSize;
+          debugPrint(
+            '[VisitCamera] opened preset=$preset '
+            'preview=${preview?.width.toInt()}x${preview?.height.toInt()} '
+            'camera=${description.name}',
+          );
+        }
         return controller;
       } catch (e) {
         lastError = e;
@@ -916,6 +925,10 @@ class VisitVideoRecorderController extends GetxController
       final file = await controller.takePicture();
       if (isClosed) return;
 
+      if (kDebugMode) {
+        unawaited(_logCapturedPhotoQuality(file.path));
+      }
+
       if (isFlashOn.value) {
         unawaited(_applyFlashMode(controller));
       }
@@ -934,6 +947,32 @@ class VisitVideoRecorderController extends GetxController
         isCapturingPhoto.value = false;
         _clearPendingCapture();
       }
+    }
+  }
+
+  Future<void> _logCapturedPhotoQuality(String path) async {
+    try {
+      final file = File(path);
+      if (!await file.exists()) {
+        debugPrint('[VisitCamera] captured photo missing path=$path');
+        return;
+      }
+      final bytes = await file.length();
+      final kb = (bytes / 1024).toStringAsFixed(1);
+      final imageBytes = await file.readAsBytes();
+      final codec = await ui.instantiateImageCodec(imageBytes);
+      final frame = await codec.getNextFrame();
+      final width = frame.image.width;
+      final height = frame.image.height;
+      frame.image.dispose();
+      final warn = (width < 1600 || height < 900) ? ' LOW_RES' : '';
+      debugPrint(
+        '[VisitCamera] captured photo '
+        'pixels=${width}x$height bytes=$bytes (${kb}KB) '
+        'preset=$_lastSuccessfulPreset$warn',
+      );
+    } catch (error) {
+      debugPrint('[VisitCamera] captured photo quality log failed: $error');
     }
   }
 

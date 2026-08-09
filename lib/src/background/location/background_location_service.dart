@@ -31,9 +31,30 @@ class BackgroundLocationService {
     try {
       await future;
       _configured = true;
+      // Cold start must not keep a leftover FGS from a previous session.
+      // Duty heartbeat will start it again only after on_duty is confirmed.
+      await _stopIfRunningWithoutDutyGate();
     } finally {
       if (identical(_configureFuture, future)) {
         _configureFuture = null;
+      }
+    }
+  }
+
+  static Future<void> _stopIfRunningWithoutDutyGate() async {
+    try {
+      final service = FlutterBackgroundService();
+      if (!await service.isRunning()) return;
+      if (kDebugMode) {
+        debugPrint(
+          '[DutyLocation] cold start: stopping leftover Android FGS '
+          'until duty heartbeat confirms on_duty',
+        );
+      }
+      service.invoke('stop');
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[DutyLocation] cold start leftover stop failed: $e');
       }
     }
   }
@@ -43,7 +64,9 @@ class BackgroundLocationService {
     await service.configure(
       androidConfiguration: AndroidConfiguration(
         onStart: _onStart,
-        autoStart: true,
+        // Only start after duty heartbeat confirms on_duty.
+        autoStart: false,
+        autoStartOnBoot: false,
         isForegroundMode: true,
         foregroundServiceNotificationId: _notificationId,
         notificationChannelId: _channelId,
@@ -52,7 +75,8 @@ class BackgroundLocationService {
         initialNotificationContent: 'Sharing live location',
       ),
       iosConfiguration: IosConfiguration(
-        autoStart: true,
+        // iOS duty tracking uses IosDutyLocationPinger, not this service.
+        autoStart: false,
         onForeground: _onStart,
         onBackground: _onIosBackground,
       ),
@@ -67,6 +91,9 @@ class BackgroundLocationService {
 
   @pragma('vm:entry-point')
   static void _onStart(ServiceInstance service) async {
+    if (kDebugMode) {
+      debugPrint('[DutyLocation] RUNNING (Android background service onStart)');
+    }
 
     final uploader = BackgroundLocationUploader();
     await uploader.init();
@@ -74,10 +101,6 @@ class BackgroundLocationService {
 
     if (service is AndroidServiceInstance) {
       service.setAsForegroundService();
-    }
-
-    if (kDebugMode) {
-
     }
 
     StreamSubscription<Position>? sub;
@@ -97,7 +120,7 @@ class BackgroundLocationService {
       if (stopping) return;
       stopping = true;
       if (kDebugMode) {
-
+        debugPrint('[DutyLocation] STOPPED (Android background service)');
       }
       streamController
         ..onSettingsChanged = null

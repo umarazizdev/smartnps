@@ -11,6 +11,7 @@ import UserNotifications
   private let slcChannelName = "com.smartnps360.app/ios_slc"
   private let slcEventChannelName = "com.smartnps360.app/ios_slc_events"
   private let slcEnabledKey = "smartnps360.ios_slc.enabled"
+  private let onDutyKey = "smartnps360.ios_duty.on_duty"
   private let slcPendingLocationsKey = "smartnps360.ios_slc.pending_locations"
   private var settingsChannelRegistered = false
   private var slcChannelRegistered = false
@@ -222,10 +223,25 @@ import UserNotifications
       case "stopMonitoring":
         self.stopSlcMonitoring()
         result(["ok": true, "running": false])
+      case "setOnDuty":
+        let onDuty = (call.arguments as? [String: Any])?["onDuty"] as? Bool ?? false
+        self.setOnDuty(onDuty)
+        result([
+          "ok": true,
+          "onDuty": onDuty,
+          "running": UserDefaults.standard.bool(forKey: self.slcEnabledKey),
+        ])
+      case "isOnDuty":
+        result([
+          "ok": true,
+          "onDuty": UserDefaults.standard.bool(forKey: self.onDutyKey),
+          "running": UserDefaults.standard.bool(forKey: self.slcEnabledKey),
+        ])
       case "isMonitoring":
         result([
           "ok": true,
           "running": UserDefaults.standard.bool(forKey: self.slcEnabledKey),
+          "onDuty": UserDefaults.standard.bool(forKey: self.onDutyKey),
           "authorization": self.authorizationStatusString()
         ])
       case "drainPendingLocations":
@@ -244,14 +260,42 @@ import UserNotifications
   }
 
   private func restoreSlcMonitoringIfNeeded(launchOptions: [UIApplication.LaunchOptionsKey: Any]?) {
-    let wasEnabled = UserDefaults.standard.bool(forKey: slcEnabledKey)
+    // Never auto-start Core Location on launch/wake.
+    // Flutter must pull the heartbeat API, confirm on_duty, then start tracking.
+    // Clear any previous on-duty / SLC arming so a stale flag cannot revive GPS.
+    setOnDuty(false)
+
     let launchedForLocation = launchOptions?[UIApplication.LaunchOptionsKey.location] != nil
-    if wasEnabled || launchedForLocation {
-      _ = startSlcMonitoring()
+    if launchedForLocation {
+      NSLog("[SmartNPS360][SLC] location wake deferred until Flutter confirms on_duty via heartbeat")
+    }
+  }
+
+  private func isOnDuty() -> Bool {
+    return UserDefaults.standard.bool(forKey: onDutyKey)
+  }
+
+  private func setOnDuty(_ onDuty: Bool) {
+    UserDefaults.standard.set(onDuty, forKey: onDutyKey)
+    if !onDuty {
+      stopSlcMonitoring()
     }
   }
 
   private func startSlcMonitoring() -> [String: Any] {
+    guard isOnDuty() else {
+      stopSlcMonitoring()
+      return [
+        "ok": false,
+        "running": false,
+        "onDuty": false,
+        "error": [
+          "code": "off_duty",
+          "message": "Background location is only allowed while the officer is on duty"
+        ]
+      ]
+    }
+
     guard CLLocationManager.significantLocationChangeMonitoringAvailable() else {
       return [
         "ok": false,
@@ -287,6 +331,7 @@ import UserNotifications
     return [
       "ok": true,
       "running": true,
+      "onDuty": true,
       "authorization": authorizationStatusString(status)
     ]
   }
@@ -379,7 +424,7 @@ import UserNotifications
   }
 
   func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-    guard UserDefaults.standard.bool(forKey: slcEnabledKey) else { return }
+    guard isOnDuty(), UserDefaults.standard.bool(forKey: slcEnabledKey) else { return }
     guard let location = locations.last else { return }
     let payload = locationPayload(location)
 

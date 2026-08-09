@@ -36,6 +36,10 @@ class IosDutyLocationPinger {
   static final SpeedAdaptiveGpsPolicyTracker _policyTracker =
       SpeedAdaptiveGpsPolicyTracker();
 
+  /// Must return true only after a fresh heartbeat API confirms on_duty.
+  /// Wired by [DutyHeartbeatService] to avoid circular imports.
+  static Future<bool> Function()? confirmOnDutyBeforeStart;
+
   static const Duration _recoverDelay = Duration(seconds: 2);
   static const Duration _staleLocationThreshold = Duration(minutes: 2);
   static const Duration _forcedBatchFlushEvery = Duration(seconds: 30);
@@ -62,11 +66,42 @@ class IosDutyLocationPinger {
       await stop();
     }
 
+    final confirm = confirmOnDutyBeforeStart;
+    if (confirm == null) {
+      if (kDebugMode) {
+        debugPrint(
+          '[DutyLocation] NOT RUNNING: start blocked (no duty confirmation hook)',
+        );
+        debugPrint(
+          '[IosDutyLocationPinger] start blocked; no duty confirmation hook',
+        );
+      }
+      await IosSignificantLocationChangeService.setOnDuty(false);
+      return;
+    }
+    final allowed = await confirm();
+    if (!allowed) {
+      if (kDebugMode) {
+        debugPrint(
+          '[DutyLocation] NOT RUNNING: start blocked (duty not on_duty)',
+        );
+        debugPrint(
+          '[IosDutyLocationPinger] start blocked; heartbeat is not on_duty',
+        );
+      }
+      await IosSignificantLocationChangeService.setOnDuty(false);
+      return;
+    }
+
+    // Persist on-duty only after heartbeat confirmation above.
+    await IosSignificantLocationChangeService.setOnDuty(true);
+
     try {
       _uploader = BackgroundLocationUploader();
       await _uploader!.init();
       _uploader!.start();
     } catch (e) {
+      await IosSignificantLocationChangeService.setOnDuty(false);
       if (kDebugMode) {
         debugPrint('[IosDutyLocationPinger] uploader init failed: $e');
       }
@@ -103,6 +138,13 @@ class IosDutyLocationPinger {
     _restartPeriodicPing();
     if (kDebugMode) {
       final permission = await Geolocator.checkPermission();
+      debugPrint(
+        '[DutyLocation] RUNNING (iOS) '
+        'interval=${_streamController.interval.inSeconds}s '
+        'distanceFilter=${_streamController.distanceFilterMeters}m '
+        'permission=$permission '
+        'bgUpdates=${permission == LocationPermission.always}',
+      );
       debugPrint(
         '[IosDutyLocationPinger] started '
         '(interval=${_streamController.interval.inSeconds}s '
@@ -291,8 +333,36 @@ class IosDutyLocationPinger {
       await Future<void>.delayed(_recoverDelay);
       if (isRunning && !needsRecovery) return;
 
-      await stop();
-      await start();
+      final confirm = confirmOnDutyBeforeStart;
+      if (confirm == null) {
+        if (kDebugMode) {
+          debugPrint(
+            '[IosDutyLocationPinger] recovery blocked; no duty confirmation hook',
+          );
+        }
+        await stop();
+        return;
+      }
+      final allowed = await confirm();
+      if (!allowed) {
+        if (kDebugMode) {
+          debugPrint(
+            '[IosDutyLocationPinger] recovery blocked; heartbeat is not on_duty',
+          );
+        }
+        await stop();
+        return;
+      }
+
+      // Bypass the start() confirm hook — we already confirmed above.
+      final previousConfirm = confirmOnDutyBeforeStart;
+      confirmOnDutyBeforeStart = () async => true;
+      try {
+        await stop();
+        await start();
+      } finally {
+        confirmOnDutyBeforeStart = previousConfirm;
+      }
       if (kDebugMode) {
         debugPrint('[IosDutyLocationPinger] recovery complete');
       }
@@ -474,6 +544,7 @@ class IosDutyLocationPinger {
     }
 
     if (kDebugMode) {
+      debugPrint('[DutyLocation] STOPPED (iOS)');
       debugPrint('[IosDutyLocationPinger] stopped');
     }
 
@@ -482,7 +553,14 @@ class IosDutyLocationPinger {
 
   static Future<void> stopCollectingOnly() async {
     if (!Platform.isIOS) return;
-    if (!_running && _subscription == null && _uploader == null) return;
+    if (!_running && _subscription == null && _uploader == null) {
+      // Still clear stale native on-duty so relaunch cannot restore SLC.
+      await IosSignificantLocationChangeService.setOnDuty(false);
+      if (kDebugMode) {
+        debugPrint('[DutyLocation] STOPPED already (iOS collecting clear)');
+      }
+      return;
+    }
 
     _stopping = true;
     _running = false;
@@ -512,6 +590,7 @@ class IosDutyLocationPinger {
     }
 
     if (kDebugMode) {
+      debugPrint('[DutyLocation] STOPPED (iOS instant logout / collecting only)');
       debugPrint('[IosDutyLocationPinger] stopped collecting (instant logout)');
     }
 
