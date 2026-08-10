@@ -28,7 +28,6 @@ import 'location_disclosure_consent.dart';
 
 class DutyHeartbeatService {
   DutyHeartbeatService._() {
-    // Shared gate for Android + iOS ensureStarted / recovery paths.
     BackgroundLocationController.confirmOnDutyBeforeStart = () {
       return confirmOnDutyFromApiForTracking(stopIfNotOnDuty: true);
     };
@@ -114,12 +113,6 @@ class DutyHeartbeatService {
     return _lastAppliedStatus == onDuty;
   }
 
-  /// Confirms on_duty for tracking.
-  ///
-  /// Online: heartbeat API is authoritative (also refreshes/clears snapshot).
-  /// Offline / API error: a valid Keychain snapshot may authorize tracking.
-  /// When [stopIfNotOnDuty] is true and neither API nor snapshot allow on_duty,
-  /// tracking is stopped.
   Future<bool> confirmOnDutyFromApiForTracking({
     bool stopIfNotOnDuty = true,
   }) async {
@@ -127,8 +120,6 @@ class DutyHeartbeatService {
 
     final onlineAuth = await _hasActiveAuthToken();
     if (!onlineAuth) {
-      // Access token may be expired and refresh failed (offline). Still allow
-      // tracking if a non-empty cached token exists + valid on_duty snapshot.
       final cached = await AuthRepository.instance.getAccessToken();
       if (cached != null &&
           cached.isNotEmpty &&
@@ -298,7 +289,6 @@ class DutyHeartbeatService {
           !await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) {
         return;
       }
-      // Offline with expired access token but valid snapshot — continue.
     } else if (!pageReload) {
       await PushNotificationService.instance.waitForPermissionPromptCompleted(
         promptIfNeeded: true,
@@ -329,7 +319,6 @@ class DutyHeartbeatService {
     }
 
     if (status != onDuty) {
-      // Offline / unknown: resume only with a valid prior on_duty snapshot.
       if (!await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) {
         await refreshBackgroundLocationPermissionBannerState();
         return;
@@ -393,7 +382,9 @@ class DutyHeartbeatService {
         '[DutyHeartbeatService] off_duty but tracking still running; stopping',
       );
     }
-    final result = await BackgroundLocationController.stop();
+    final result = await BackgroundLocationController.stop(
+      announceShiftEnded: true,
+    );
     debugPrint(
       '[DutyHeartbeatService] off_duty stop retry ok=${result['ok'] == true}',
     );
@@ -464,7 +455,9 @@ class DutyHeartbeatService {
     if (Platform.isIOS) {
       unawaited(IosSignificantLocationChangeService.setOnDuty(false));
     }
-    unawaited(BackgroundLocationController.stopCollectingOnly());
+    unawaited(
+      BackgroundLocationController.stopCollectingOnly(announceSignedOut: true),
+    );
     unawaited(DutyTrackingPreferences.clearOnOffDuty());
     unawaited(refreshBackgroundLocationPermissionBannerState());
   }
@@ -806,7 +799,6 @@ class DutyHeartbeatService {
       _onDutyAutoPromptComplete = true;
       return;
     }
-    // Offline: keep snapshot; start may have failed for permissions.
     if (await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) {
       await refreshBackgroundLocationPermissionBannerState();
       _onDutyAutoPromptComplete = true;
@@ -1080,10 +1072,11 @@ class DutyHeartbeatService {
       '[DutyHeartbeatService] stopping location after flushing pending batches',
     );
     if (Platform.isIOS) {
-      // Ensure native SLC cannot restore on next launch before heartbeat runs.
       await IosSignificantLocationChangeService.setOnDuty(false);
     }
-    final result = await BackgroundLocationController.stop();
+    final result = await BackgroundLocationController.stop(
+      announceShiftEnded: true,
+    );
     debugPrint('[DutyHeartbeatService] stop ok=${result['ok'] == true}');
     _lastAppliedStatus = offDuty;
     _resetDisclosureState();
@@ -1132,7 +1125,6 @@ class DutyHeartbeatService {
     final previous = _lastKnownIosPermission;
     _lastKnownIosPermission = permission;
 
-    // Ignore the first observation so cold-start Always does not look like an upgrade.
     if (previous == null) return;
 
     final upgradedToAlways =

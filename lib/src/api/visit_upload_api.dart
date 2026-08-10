@@ -43,8 +43,6 @@ class VisitUploadApi {
 
   static final VisitUploadApi instance = VisitUploadApi._();
 
-  /// When true, logs media pixels/bytes then returns without calling the API.
-  /// Keep drafts intact so quality can be re-tested. Set to false to upload again.
   static const bool skipApiUpload = false;
 
   Future<VisitUploadResult> uploadVisit({

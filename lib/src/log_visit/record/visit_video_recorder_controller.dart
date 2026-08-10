@@ -736,7 +736,7 @@ class VisitVideoRecorderController extends GetxController
         controller.setExposureMode(ExposureMode.auto),
       ]);
       if (isClosed || !identical(cameraController, controller)) return;
-      // Match system Camera: neutral EV (0), continuous auto exposure.
+
       await _applyNeutralExposure(controller);
       if (isClosed || !identical(cameraController, controller)) return;
       await _applyFlashMode(controller);
@@ -771,7 +771,6 @@ class VisitVideoRecorderController extends GetxController
     }
   }
 
-  /// System Camera default brightness: EV compensation = 0.
   Future<void> _applyNeutralExposure(CameraController controller) async {
     if (isClosed || !controller.value.isInitialized) return;
     try {
@@ -869,7 +868,7 @@ class VisitVideoRecorderController extends GetxController
 
     final requestId = ++_focusRequestId;
     try {
-      // Same as system Camera tap: AF/AE on point, neutral EV, focus lock.
+
       await controller.setFocusMode(FocusMode.auto);
       if (isClosed || requestId != _focusRequestId) return;
       await controller.setExposureMode(ExposureMode.auto);

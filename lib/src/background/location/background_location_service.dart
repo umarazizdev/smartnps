@@ -12,6 +12,7 @@ import '../../auth/auth_repository.dart';
 import '../../motion/motion_activity_fusion_controller.dart';
 import 'background_location_accuracy.dart';
 import 'background_location_uploader.dart';
+import 'location_sharing_status_notification.dart';
 
 @pragma('vm:entry-point')
 class BackgroundLocationService {
@@ -31,8 +32,6 @@ class BackgroundLocationService {
     try {
       await future;
       _configured = true;
-      // Cold start must not keep a leftover FGS from a previous session.
-      // Duty heartbeat will start it again only after on_duty is confirmed.
       await _stopIfRunningWithoutDutyGate();
     } finally {
       if (identical(_configureFuture, future)) {
@@ -64,18 +63,17 @@ class BackgroundLocationService {
     await service.configure(
       androidConfiguration: AndroidConfiguration(
         onStart: _onStart,
-        // Only start after duty heartbeat confirms on_duty.
         autoStart: false,
         autoStartOnBoot: false,
         isForegroundMode: true,
         foregroundServiceNotificationId: _notificationId,
         notificationChannelId: _channelId,
         foregroundServiceTypes: const [AndroidForegroundType.location],
-        initialNotificationTitle: 'SmartNPS360',
-        initialNotificationContent: 'Sharing live location',
+        initialNotificationTitle: 'On Duty • Location Active',
+        initialNotificationContent:
+            'Your live location is being shared while you are on duty.',
       ),
       iosConfiguration: IosConfiguration(
-        // iOS duty tracking uses IosDutyLocationPinger, not this service.
         autoStart: false,
         onForeground: _onStart,
         onBackground: _onIosBackground,
@@ -111,12 +109,14 @@ class BackgroundLocationService {
     final streamController = AdaptiveGpsStreamController();
     unawaited(MotionActivityFusionController.instance.acquire());
 
-    late final Future<void> Function() stop;
+    late final Future<void> Function({
+      required LocationSharingStopReason? announceReason,
+    }) stop;
     late final Future<void> Function({required String reason})
         rebuildStreamIfNeeded;
     late final Future<void> Function() subscribePositionStream;
 
-    stop = () async {
+    stop = ({required LocationSharingStopReason? announceReason}) async {
       if (stopping) return;
       stopping = true;
       if (kDebugMode) {
@@ -130,6 +130,21 @@ class BackgroundLocationService {
 
       await uploader.stopCollectingOnly();
       await MotionActivityFusionController.instance.release();
+
+      if (announceReason != null) {
+        try {
+          await LocationSharingStatusNotification.showStopped(
+            reason: announceReason,
+          );
+        } catch (e) {
+          if (kDebugMode) {
+            debugPrint(
+              '[DutyLocation] stopped notification failed before stopSelf: $e',
+            );
+          }
+        }
+      }
+
       service.stopSelf();
       unawaited(
         uploader.flushAllPendingBatchesBounded(
@@ -174,7 +189,7 @@ class BackgroundLocationService {
           final token = await AuthRepository.instance.ensureValidAccessToken();
           if (stopping) return;
           if (token == null || token.isEmpty) {
-            await stop();
+            await stop(announceReason: null);
             return;
           }
 
@@ -244,7 +259,16 @@ class BackgroundLocationService {
     };
 
     service.on('stop').listen((event) {
-      unawaited(stop());
+      final announceReason = LocationSharingStatusNotification.reasonFromWire(
+        event?['announceReason'],
+      );
+      final legacyShiftEnded = event?['announceShiftEnded'] == true;
+      unawaited(
+        stop(
+          announceReason: announceReason ??
+              (legacyShiftEnded ? LocationSharingStopReason.shiftEnded : null),
+        ),
+      );
     });
 
     await subscribePositionStream();

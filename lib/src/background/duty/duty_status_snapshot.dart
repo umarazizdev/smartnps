@@ -5,18 +5,13 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../auth/auth_repository.dart';
 
-/// Secure, user-bound, expiring snapshot of last confirmed on_duty status.
-///
-/// Used so tracking can resume while offline after a prior online confirmation.
-/// Heartbeat API remains the source of truth whenever reachable.
 class DutyStatusSnapshot {
   DutyStatusSnapshot._();
 
   static const _storage = FlutterSecureStorage();
   static const _key = 'duty.status.snapshot.v1';
 
-  /// How long an offline on_duty snapshot may authorize tracking without API.
-  static const Duration ttl = Duration(hours: 8);
+  static const Duration ttl = Duration(hours: 1);
 
   static Future<void> markOnDuty() async {
     final userId = await AuthRepository.instance.getOfficerAccountId();

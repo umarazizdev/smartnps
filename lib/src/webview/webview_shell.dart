@@ -22,8 +22,10 @@ import '../app/offline_screen.dart';
 import '../widgets/chrome/platform_bottom_bar.dart';
 import '../widgets/chrome/background_location_required_banner.dart';
 import '../widgets/dialogs/clock_in_blocked_dialog.dart';
+import '../widgets/dialogs/glass_action_dialog.dart';
 import '../location/mock_location_detection.dart';
 import '../location/mock_location_guard.dart';
+import '../app/app_navigator.dart';
 import '../app/app_routes.dart';
 import '../auth/auth_session_manager.dart';
 import '../auth/auth_state.dart';
@@ -137,6 +139,7 @@ class _WebViewShellState extends State<WebViewShell>
 
   bool _pendingLoginRedirectAfterExpiry = false;
   bool _refreshExpiryLogoutInFlight = false;
+  bool _sessionExpiredDialogInFlight = false;
 
   bool _awaitingSessionClearForLoginRedirect = false;
   bool _draftResumePrompted = false;
@@ -243,11 +246,44 @@ class _WebViewShellState extends State<WebViewShell>
       _ui.setOfficerLoggedIn(false);
       _setNativeAuthSession(false);
       await _redirectWebToLogin(reason: 'refresh_session_expired');
+      unawaited(_showSessionExpiredDialog());
     } catch (_) {
       _awaitingSessionClearForLoginRedirect = false;
       rethrow;
     } finally {
       _refreshExpiryLogoutInFlight = false;
+    }
+  }
+
+  Future<void> _showSessionExpiredDialog() async {
+    if (_sessionExpiredDialogInFlight) return;
+    _sessionExpiredDialogInFlight = true;
+    try {
+      await OverlayPromptGuard.waitUntilReady();
+
+      BuildContext? dialogContext =
+          AppNavigator.key.currentContext ?? (mounted ? context : null);
+      if (dialogContext == null || !dialogContext.mounted) {
+        for (var attempt = 0; attempt < 8; attempt++) {
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+          dialogContext =
+              AppNavigator.key.currentContext ?? (mounted ? context : null);
+          if (dialogContext != null && dialogContext.mounted) break;
+        }
+      }
+      if (dialogContext == null || !dialogContext.mounted) return;
+
+      await GlassActionDialog.show(
+        context: dialogContext,
+        icon: Icons.lock_clock_rounded,
+        title: 'Session expired',
+        message: 'Your session has expired. Please log in again.',
+        primaryLabel: 'OK',
+        variant: GlassActionDialogVariant.error,
+        barrierDismissible: true,
+      );
+    } finally {
+      _sessionExpiredDialogInFlight = false;
     }
   }
 
