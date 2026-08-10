@@ -14,8 +14,6 @@ class BackgroundLocationController {
 
   static Future<Map<String, dynamic>>? _ensureStartedFuture;
 
-  /// Must return true only after a fresh heartbeat (or valid offline snapshot)
-  /// confirms on_duty. Wired by [DutyHeartbeatService].
   static Future<bool> Function()? confirmOnDutyBeforeStart;
 
   static void _log(String message) {
@@ -133,7 +131,7 @@ class BackgroundLocationController {
 
       if (Platform.isIOS) {
         _log('starting iOS duty location pinger…');
-        // Duty already confirmed above; avoid a duplicate heartbeat pull.
+
         final previousConfirm = IosDutyLocationPinger.confirmOnDutyBeforeStart;
         IosDutyLocationPinger.confirmOnDutyBeforeStart = () async => true;
         try {
@@ -242,8 +240,7 @@ class BackgroundLocationController {
       if (Platform.isIOS) {
         final running = IosDutyLocationPinger.isRunning;
         if (!running) {
-          // Clear stale native on-duty / SLC so relaunch cannot restore location
-          // before the next duty heartbeat confirms on_duty.
+
           await IosSignificantLocationChangeService.setOnDuty(false);
           _log('STOP skipped: iOS location was not running');
           return {'ok': true, 'stopped': false, 'running': false};

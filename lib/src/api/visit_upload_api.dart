@@ -43,10 +43,6 @@ class VisitUploadApi {
 
   static final VisitUploadApi instance = VisitUploadApi._();
 
-  /// When true, logs media pixels/bytes then returns without calling the API.
-  /// Keep drafts intact so quality can be re-tested. Set to false to upload again.
-  static const bool skipApiUpload = false;
-
   Future<VisitUploadResult> uploadVisit({
     required Map<String, dynamic> meta,
     required List<VisitMediaItem> items,
@@ -56,35 +52,6 @@ class VisitUploadApi {
       const result = VisitUploadResult(
         success: false,
         message: 'Please capture at least one photo or video before upload.',
-      );
-      _logResult(result);
-      return result;
-    }
-
-    for (var i = 0; i < items.length; i++) {
-      final item = items[i];
-      final mediaFile = File(item.path);
-      if (!await mediaFile.exists()) {
-        final result = VisitUploadResult(
-          success: false,
-          message: 'Media file missing for item $i.',
-        );
-        _logResult(result);
-        return result;
-      }
-      await _logMediaQuality(item: item, index: i, file: mediaFile);
-    }
-
-    if (skipApiUpload) {
-      debugPrint(
-        '[VisitUploadApi] SKIPPED API upload (skipApiUpload=true) '
-        'items=${items.length} — check logs above for pixels/bytes',
-      );
-      const result = VisitUploadResult(
-        success: false,
-        statusCode: 0,
-        message:
-            'API upload disabled for quality testing. Check console for resolution/size.',
       );
       _logResult(result);
       return result;
@@ -108,6 +75,7 @@ class VisitUploadApi {
       }
 
       final mediaName = _mediaFileName(item, i);
+      await _logMediaQuality(item: item, index: i, file: mediaFile);
       form.files.add(
         MapEntry(
           'media[$i]',
@@ -252,7 +220,7 @@ class VisitUploadApi {
     required int index,
     required File file,
   }) async {
-    if (!kDebugMode && !skipApiUpload) return;
+    if (!kDebugMode) return;
 
     final bytes = await file.length();
     final kb = (bytes / 1024).toStringAsFixed(1);

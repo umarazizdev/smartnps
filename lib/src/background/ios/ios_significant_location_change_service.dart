@@ -51,7 +51,6 @@ class IosSignificantLocationChangeService {
       };
     }
 
-    // Native startMonitoring refuses unless on-duty was persisted first.
     await setOnDuty(true);
     await _ensureEventSubscription();
 

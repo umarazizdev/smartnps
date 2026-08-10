@@ -36,8 +36,6 @@ class IosDutyLocationPinger {
   static final SpeedAdaptiveGpsPolicyTracker _policyTracker =
       SpeedAdaptiveGpsPolicyTracker();
 
-  /// Must return true only after a fresh heartbeat API confirms on_duty.
-  /// Wired by [DutyHeartbeatService] to avoid circular imports.
   static Future<bool> Function()? confirmOnDutyBeforeStart;
 
   static const Duration _recoverDelay = Duration(seconds: 2);
@@ -93,7 +91,6 @@ class IosDutyLocationPinger {
       return;
     }
 
-    // Persist on-duty only after heartbeat confirmation above.
     await IosSignificantLocationChangeService.setOnDuty(true);
 
     try {
@@ -354,7 +351,6 @@ class IosDutyLocationPinger {
         return;
       }
 
-      // Bypass the start() confirm hook — we already confirmed above.
       final previousConfirm = confirmOnDutyBeforeStart;
       confirmOnDutyBeforeStart = () async => true;
       try {
@@ -554,7 +550,7 @@ class IosDutyLocationPinger {
   static Future<void> stopCollectingOnly() async {
     if (!Platform.isIOS) return;
     if (!_running && _subscription == null && _uploader == null) {
-      // Still clear stale native on-duty so relaunch cannot restore SLC.
+
       await IosSignificantLocationChangeService.setOnDuty(false);
       if (kDebugMode) {
         debugPrint('[DutyLocation] STOPPED already (iOS collecting clear)');
