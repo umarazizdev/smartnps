@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:get/get.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../app/app_navigator.dart';
 import '../../widgets/dialogs/glass_action_dialog.dart';
@@ -16,6 +17,8 @@ import '../flow/visit_media_draft_store.dart';
 import '../flow/visit_media_geo.dart';
 import '../flow/visit_orientation.dart';
 import '../flow/visit_video_flow_controller.dart';
+
+enum CaptureFlashMode { off, on, auto }
 
 class VisitVideoRecorderController extends GetxController
     with WidgetsBindingObserver {
@@ -48,6 +51,7 @@ class VisitVideoRecorderController extends GetxController
   }
 
   static const ImageFormatGroup _imageFormat = ImageFormatGroup.jpeg;
+  static const _flashModePrefsKey = 'capture.flash_mode';
 
   static final Map<String, ({double min, double max})> _androidZoomCache = {};
   static String? _cachedLogicalZoomCameraName;
@@ -62,7 +66,7 @@ class VisitVideoRecorderController extends GetxController
   final isStoppingRecording = false.obs;
   final isCapturingPhoto = false.obs;
   final isRecording = false.obs;
-  final isFlashOn = false.obs;
+  final flashMode = CaptureFlashMode.off.obs;
   final cameraError = Rxn<String>();
   final recordingSeconds = 0.obs;
 
@@ -124,7 +128,33 @@ class VisitVideoRecorderController extends GetxController
     if (!Get.isRegistered<VisitVideoFlowController>()) {
       Get.put(VisitVideoFlowController());
     }
-    unawaited(initCamera());
+    unawaited(_bootstrapCamera());
+  }
+
+  Future<void> _bootstrapCamera() async {
+    await _loadFlashModePreference();
+    if (isClosed) return;
+    await initCamera();
+  }
+
+  Future<void> _loadFlashModePreference() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_flashModePrefsKey);
+      final mode = switch (raw) {
+        'on' => CaptureFlashMode.on,
+        'auto' => CaptureFlashMode.auto,
+        _ => CaptureFlashMode.off,
+      };
+      if (!isClosed) flashMode.value = mode;
+    } catch (_) {}
+  }
+
+  Future<void> _persistFlashModePreference(CaptureFlashMode mode) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_flashModePrefsKey, mode.name);
+    } catch (_) {}
   }
 
   @override
@@ -736,33 +766,49 @@ class VisitVideoRecorderController extends GetxController
         controller.setExposureMode(ExposureMode.auto),
       ]);
       if (isClosed || !identical(cameraController, controller)) return;
-      // Match system Camera: neutral EV (0), continuous auto exposure.
+
       await _applyNeutralExposure(controller);
       if (isClosed || !identical(cameraController, controller)) return;
-      await _applyFlashMode(controller);
+      await _applyFlashMode(target: controller);
     } catch (_) {}
   }
 
-  Future<void> toggleFlash() async {
+  Future<void> cycleFlashMode() async {
     if (isClosed) return;
     if (isInitializingCamera.value || isSwitchingLens.value) return;
     final controller = cameraController;
     if (controller == null || !controller.value.isInitialized) return;
 
-    final next = !isFlashOn.value;
-    isFlashOn.value = next;
-    final applied = await _applyFlashMode(controller);
+    final previous = flashMode.value;
+    final next = switch (previous) {
+      CaptureFlashMode.off => CaptureFlashMode.on,
+      CaptureFlashMode.on => CaptureFlashMode.auto,
+      CaptureFlashMode.auto => CaptureFlashMode.off,
+    };
+    flashMode.value = next;
+    final applied = await _applyFlashMode(target: controller);
     if (!applied && !isClosed) {
-      isFlashOn.value = !next;
+      flashMode.value = previous;
+      return;
     }
+    unawaited(_persistFlashModePreference(next));
   }
 
-  Future<bool> _applyFlashMode([CameraController? target]) async {
+  Future<bool> _applyFlashMode({
+    CameraController? target,
+    bool forStillCapture = false,
+  }) async {
     final controller = target ?? cameraController;
     if (controller == null || !controller.value.isInitialized) return false;
     if (isClosed) return false;
 
-    final mode = isFlashOn.value ? FlashMode.torch : FlashMode.off;
+    final mode = switch (flashMode.value) {
+      CaptureFlashMode.off => FlashMode.off,
+
+      CaptureFlashMode.on =>
+        forStillCapture ? FlashMode.always : FlashMode.torch,
+      CaptureFlashMode.auto => FlashMode.auto,
+    };
     try {
       await controller.setFlashMode(mode);
       return true;
@@ -771,7 +817,6 @@ class VisitVideoRecorderController extends GetxController
     }
   }
 
-  /// System Camera default brightness: EV compensation = 0.
   Future<void> _applyNeutralExposure(CameraController controller) async {
     if (isClosed || !controller.value.isInitialized) return;
     try {
@@ -869,7 +914,7 @@ class VisitVideoRecorderController extends GetxController
 
     final requestId = ++_focusRequestId;
     try {
-      // Same as system Camera tap: AF/AE on point, neutral EV, focus lock.
+
       await controller.setFocusMode(FocusMode.auto);
       if (isClosed || requestId != _focusRequestId) return;
       await controller.setExposureMode(ExposureMode.auto);
@@ -919,9 +964,16 @@ class VisitVideoRecorderController extends GetxController
 
     try {
       await _applyNeutralExposure(controller);
-      if (isFlashOn.value) {
-        await _applyFlashMode(controller);
+
+      if (flashMode.value == CaptureFlashMode.on) {
+        await controller.setFlashMode(FlashMode.torch);
+        await Future<void>.delayed(const Duration(milliseconds: 120));
+        if (isClosed || !identical(cameraController, controller)) {
+          if (!isClosed) isCapturingPhoto.value = false;
+          return;
+        }
       }
+      await _applyFlashMode(target: controller, forStillCapture: true);
       final file = await controller.takePicture();
       if (isClosed) return;
 
@@ -929,9 +981,7 @@ class VisitVideoRecorderController extends GetxController
         unawaited(_logCapturedPhotoQuality(file.path));
       }
 
-      if (isFlashOn.value) {
-        unawaited(_applyFlashMode(controller));
-      }
+      unawaited(_applyFlashMode(target: controller));
 
       if (!moveToPreview) {
         isCapturingPhoto.value = false;
@@ -1159,9 +1209,7 @@ class VisitVideoRecorderController extends GetxController
 
     try {
       await _applyNeutralExposure(controller);
-      if (isFlashOn.value) {
-        await _applyFlashMode(controller);
-      }
+      await _applyFlashMode(target: controller);
       if (!_isRecorderPrepared) {
         await _prepareRecorder(controller);
       }
@@ -1174,9 +1222,7 @@ class VisitVideoRecorderController extends GetxController
         await controller.startVideoRecording();
       }
 
-      if (isFlashOn.value) {
-        unawaited(_applyFlashMode(controller));
-      }
+      unawaited(_applyFlashMode(target: controller));
 
       if (isClosed) return;
 
@@ -1225,9 +1271,7 @@ class VisitVideoRecorderController extends GetxController
       final file = await controller.stopVideoRecording();
       if (isClosed) return;
 
-      if (isFlashOn.value) {
-        unawaited(_applyFlashMode(controller));
-      }
+      unawaited(_applyFlashMode(target: controller));
 
       if (moveToPreview) {
         pendingCapturePath.value = file.path;

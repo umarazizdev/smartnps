@@ -934,8 +934,8 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                 icon: const Icon(Icons.cloud_upload_rounded, size: 18),
                 label: Text(
                   hasMedia
-                      ? 'Upload (${controller.mediaItems.length})'
-                      : 'Upload',
+                      ? 'Complete Report (${controller.mediaItems.length})'
+                      : 'Complete Report',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(

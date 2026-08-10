@@ -59,10 +59,11 @@ class ClockInGateService {
 
     final pending = _pendingFailureAfterSettings;
     if (pending != null) {
+
       if (Platform.isAndroid) {
         await _waitUntilClockInBackgroundReady();
       }
-      if (await _isClockInFullyReady()) {
+      if (await _isClockInFullyReady(includeMockGpsCheck: true)) {
         _pendingFailureAfterSettings = null;
         _geoUnlockedForClockIn = true;
         return;
@@ -78,14 +79,22 @@ class ClockInGateService {
       return;
     }
 
-    if (await _isClockInFullyReady()) {
+    if (await _isClockInFullyReady(includeMockGpsCheck: false)) {
       _geoUnlockedForClockIn = true;
+      if (kDebugMode) {
+        debugPrint(
+          '[ClockInGateService] resume: permissions ready; '
+          'skipped mock GPS (not clock-in / not duty stream)',
+        );
+      }
       return;
     }
     clearGeoUnlock();
   }
 
-  Future<bool> _isClockInFullyReady() async {
+  Future<bool> _isClockInFullyReady({
+    required bool includeMockGpsCheck,
+  }) async {
     await BackgroundLocationPermissions.refreshPermissionStateFromOs();
     if (!await Geolocator.isLocationServiceEnabled()) return false;
 
@@ -102,6 +111,8 @@ class ClockInGateService {
     if (!await BackgroundLocationPermissions.hasPreciseLocationAccess()) {
       return false;
     }
+
+    if (!includeMockGpsCheck) return true;
 
     final mockCheck = await MockLocationGuard.ensureClearForClockIn();
     return mockCheck == MockLocationClockInCheck.clear;

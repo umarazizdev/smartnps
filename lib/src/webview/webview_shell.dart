@@ -2232,6 +2232,28 @@ class _WebViewShellState extends State<WebViewShell>
     }
   }
 
+  Future<void> _reloadWebViewAfterProcessDeath(
+    InAppWebViewController controller, {
+    required String reason,
+  }) async {
+    if (!mounted) return;
+    try {
+      final current = await controller.getUrl();
+      final target =
+          current?.toString() ??
+          _ui.currentUri.value?.toString() ??
+          AppRoutes.webBaseUrl;
+      debugPrint(
+        '[SmartNPS360][WebView] process death ($reason) → reload $target',
+      );
+      await controller.loadUrl(urlRequest: URLRequest(url: WebUri(target)));
+    } catch (e) {
+      debugPrint(
+        '[SmartNPS360][WebView] process death reload failed ($reason): $e',
+      );
+    }
+  }
+
   Future<void> _retry() async {
     if (_ui.offlineRetrying.value) return;
     _ui.offlineRetrying.value = true;
@@ -4131,6 +4153,23 @@ class _WebViewShellState extends State<WebViewShell>
                                         mode: LaunchMode.externalApplication,
                                       );
                                     },
+                                onWebContentProcessDidTerminate: (controller) {
+                                  unawaited(
+                                    _reloadWebViewAfterProcessDeath(
+                                      controller,
+                                      reason: 'ios_content_process_terminated',
+                                    ),
+                                  );
+                                },
+                                onRenderProcessGone: (controller, detail) {
+                                  if (!detail.didCrash) return;
+                                  unawaited(
+                                    _reloadWebViewAfterProcessDeath(
+                                      controller,
+                                      reason: 'android_render_process_gone',
+                                    ),
+                                  );
+                                },
                               ),
                             ),
                             if (showPermissionBlocker)

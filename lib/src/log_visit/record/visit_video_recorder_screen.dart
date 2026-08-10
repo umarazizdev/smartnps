@@ -12,6 +12,15 @@ import 'visit_video_recorder_controller.dart';
 class VisitVideoRecorderScreen extends GetView<VisitVideoRecorderController> {
   const VisitVideoRecorderScreen({super.key});
 
+  static const double _rightChromeBaseInset = 18;
+  static const double _androidRightChromeExtra = 18;
+
+  static double _rightChromeInset(BuildContext context) {
+    final systemRight = MediaQuery.viewPaddingOf(context).right;
+    final androidExtra = Platform.isAndroid ? _androidRightChromeExtra : 0.0;
+    return _rightChromeBaseInset + systemRight + androidExtra;
+  }
+
   @override
   VisitVideoRecorderController get controller {
     if (!Get.isRegistered<VisitVideoRecorderController>()) {
@@ -68,10 +77,7 @@ class VisitVideoRecorderScreen extends GetView<VisitVideoRecorderController> {
                       child: SizedBox(
                         width: image.width.toDouble(),
                         height: image.height.toDouble(),
-                        child: RawImage(
-                          image: image,
-                          fit: BoxFit.fill,
-                        ),
+                        child: RawImage(image: image, fit: BoxFit.fill),
                       ),
                     ),
                   ),
@@ -150,6 +156,7 @@ class VisitVideoRecorderScreen extends GetView<VisitVideoRecorderController> {
             ),
             Positioned.fill(
               child: SafeArea(
+                right: false,
                 child: Obx(() {
                   final isStarting = controller.isStartingRecording.value;
                   final isStopping = controller.isStoppingRecording.value;
@@ -165,6 +172,7 @@ class VisitVideoRecorderScreen extends GetView<VisitVideoRecorderController> {
                   final showBusyOverlay =
                       isStopping || isStarting || isCapturing;
                   final hideCaptureChrome = pending;
+                  final rightChromeInset = _rightChromeInset(context);
 
                   return Stack(
                     fit: StackFit.expand,
@@ -200,6 +208,7 @@ class VisitVideoRecorderScreen extends GetView<VisitVideoRecorderController> {
                               child: _buildRightControls(
                                 isRecording: isRecording,
                                 isBusy: controlsLocked,
+                                rightInset: rightChromeInset,
                               ),
                             ),
                           ),
@@ -256,7 +265,7 @@ class VisitVideoRecorderScreen extends GetView<VisitVideoRecorderController> {
     required int recordingSeconds,
   }) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
+      padding: const EdgeInsets.fromLTRB(18, 8, 18, 8),
       child: SizedBox(
         height: 44,
         child: Stack(
@@ -274,38 +283,42 @@ class VisitVideoRecorderScreen extends GetView<VisitVideoRecorderController> {
               ),
             ),
             if (isRecording) _buildRecordingBadge(recordingSeconds),
-            Align(
-              alignment: Alignment.centerRight,
-              child: Obx(() {
-                final flashOn = controller.isFlashOn.value;
-                final disabled = controller.isInitializingCamera.value ||
-                    controller.isSwitchingLens.value ||
-                    controller.cameraError.value != null ||
-                    controller.cameraController == null;
-                return Opacity(
-                  opacity: disabled ? 0.45 : 1,
-                  child: IgnorePointer(
-                    ignoring: disabled,
-                    child: _GlassCircleButton(
-                      onTap: () => unawaited(controller.toggleFlash()),
-                      child: Icon(
-                        flashOn
-                            ? Icons.flash_on_rounded
-                            : Icons.flash_off_rounded,
-                        color: flashOn
-                            ? const Color(0xFFFFD60A)
-                            : Colors.white,
-                        size: 22,
-                      ),
-                    ),
-                  ),
-                );
-              }),
-            ),
           ],
         ),
       ),
     );
+  }
+
+  Widget _buildFlashButton() {
+    return Obx(() {
+      final mode = controller.flashMode.value;
+      final disabled =
+          controller.isInitializingCamera.value ||
+          controller.isSwitchingLens.value ||
+          controller.cameraError.value != null ||
+          controller.cameraController == null;
+      final (icon, color) = switch (mode) {
+        CaptureFlashMode.off => (Icons.flash_off_rounded, Colors.white),
+        CaptureFlashMode.on => (
+          Icons.flash_on_rounded,
+          const Color(0xFFFFD60A),
+        ),
+        CaptureFlashMode.auto => (
+          Icons.flash_auto_rounded,
+          const Color(0xFFFFD60A),
+        ),
+      };
+      return Opacity(
+        opacity: disabled ? 0.45 : 1,
+        child: IgnorePointer(
+          ignoring: disabled,
+          child: _GlassCircleButton(
+            onTap: () => unawaited(controller.cycleFlashMode()),
+            child: Icon(icon, color: color, size: 22),
+          ),
+        ),
+      );
+    });
   }
 
   Widget _buildRecordingBadge(int recordingSeconds) {
@@ -338,23 +351,21 @@ class VisitVideoRecorderScreen extends GetView<VisitVideoRecorderController> {
     );
   }
 
-  Widget _buildCaptureHints({
-    required bool isRecording,
-    bool compact = true,
-  }) {
-    return Text(
-      isRecording
-          ? 'Slide up/down to zoom'
-          : (compact ? 'Tap photo\nHold video' : 'Tap photo · Hold video'),
-      textAlign: TextAlign.center,
-      style: TextStyle(
-        color: isRecording ? cOrange : Colors.white.withValues(alpha: 0.92),
-        fontWeight: FontWeight.w600,
-        fontSize: compact ? 11 : 13,
-        height: 1.2,
-        shadows: const [
-          Shadow(color: Color(0x99000000), blurRadius: 8),
-        ],
+  Widget _buildCaptureHints({required bool isRecording, bool compact = true}) {
+    return SizedBox(
+      width: double.infinity,
+      child: Text(
+        isRecording
+            ? 'Slide up/down to zoom'
+            : (compact ? 'Tap photo\nHold video' : 'Tap photo · Hold video'),
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          color: isRecording ? cOrange : Colors.white.withValues(alpha: 0.92),
+          fontWeight: FontWeight.w600,
+          fontSize: compact ? 11 : 13,
+          height: compact ? 1.05 : 1.2,
+          shadows: const [Shadow(color: Color(0x99000000), blurRadius: 8)],
+        ),
       ),
     );
   }
@@ -419,54 +430,74 @@ class VisitVideoRecorderScreen extends GetView<VisitVideoRecorderController> {
   Widget _buildRightControls({
     required bool isRecording,
     required bool isBusy,
+    required double rightInset,
   }) {
-    return Align(
-      alignment: Alignment.centerRight,
-      child: Padding(
-        padding: const EdgeInsets.only(right: 10),
-        child: AnimatedOpacity(
-          duration: const Duration(milliseconds: 180),
-          opacity: isBusy ? 0.45 : 1,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              _buildZoomSelector(
+    const railWidth = 72.0;
+    const shutterSize = 72.0;
+    const hintGap = 2.0;
+
+    return Padding(
+      padding: EdgeInsets.only(right: rightInset),
+      child: AnimatedOpacity(
+        duration: const Duration(milliseconds: 180),
+        opacity: isBusy ? 0.45 : 1,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Align(
+              alignment: Alignment.center,
+              child: _buildZoomSelector(
                 vertical: true,
                 isRecording: isRecording,
               ),
-              const SizedBox(width: 16),
-              SizedBox(
-                width: 92,
-                height: 72,
-                child: Stack(
-                  clipBehavior: Clip.none,
-                  alignment: Alignment.center,
-                  children: [
-                    _buildRecordButton(
+            ),
+            const SizedBox(width: 16),
+            SizedBox(
+              width: railWidth,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+
+                  Align(
+                    alignment: Alignment.center,
+                    child: _buildRecordButton(
                       isRecording: isRecording,
                       isBusy: isBusy,
                     ),
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      bottom: 78,
-                      child: _buildCaptureHints(isRecording: isRecording),
+                  ),
+
+                  Align(
+                    alignment: Alignment.center,
+                    child: Transform.translate(
+                      offset: const Offset(0, -(shutterSize / 2 + hintGap)),
+                      child: FractionalTranslation(
+                        translation: const Offset(0, -1),
+                        child: SizedBox(
+                          width: railWidth,
+                          child: _buildCaptureHints(isRecording: isRecording),
+                        ),
+                      ),
                     ),
-                  ],
-                ),
+                  ),
+
+
+                  Positioned(
+                    top: 8,
+                    left: 0,
+                    right: 0,
+                    child: Center(child: _buildFlashButton()),
+                  ),
+                ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildRecordButton({
-    required bool isRecording,
-    required bool isBusy,
-  }) {
+  Widget _buildRecordButton({required bool isRecording, required bool isBusy}) {
     return GestureDetector(
       onTap: () async {
         if (isBusy || isRecording) return;
@@ -489,7 +520,7 @@ class VisitVideoRecorderScreen extends GetView<VisitVideoRecorderController> {
         await controller.stopRecording();
       },
       child: Container(
-                width: 72,
+        width: 72,
         height: 72,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
@@ -500,14 +531,13 @@ class VisitVideoRecorderScreen extends GetView<VisitVideoRecorderController> {
           ),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.35),
-              blurRadius: 18,
-              offset: const Offset(0, 6),
+              color: Colors.black.withValues(alpha: 0.28),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
             ),
             BoxShadow(
-              color: (isRecording ? cRed : cOrange).withValues(alpha: 0.35),
-              blurRadius: 14,
-              spreadRadius: 1,
+              color: (isRecording ? cRed : cOrange).withValues(alpha: 0.28),
+              blurRadius: 8,
             ),
           ],
         ),
@@ -525,12 +555,13 @@ class VisitVideoRecorderScreen extends GetView<VisitVideoRecorderController> {
     required bool isCapturing,
     String? label,
   }) {
-    final resolvedLabel = label ??
+    final resolvedLabel =
+        label ??
         (isCapturing
             ? 'Capturing...'
             : isStarting
-                ? 'Starting...'
-                : 'Saving...');
+            ? 'Starting...'
+            : 'Saving...');
 
     return Positioned.fill(
       child: ColoredBox(
@@ -638,14 +669,13 @@ class _StableCameraPreviewState extends State<_StableCameraPreview> {
       }
 
       final cameraCtrl = controller.cameraController;
-      final hasLive =
-          cameraCtrl != null && cameraCtrl.value.isInitialized;
+      final hasLive = cameraCtrl != null && cameraCtrl.value.isInitialized;
       if (!hasLive) {
         return const ColoredBox(color: Colors.black);
       }
 
-      final aspect = controller.stablePreviewAspect.value ??
-          cameraCtrl.value.aspectRatio;
+      final aspect =
+          controller.stablePreviewAspect.value ?? cameraCtrl.value.aspectRatio;
 
       return ColoredBox(
         color: Colors.black,
@@ -735,21 +765,27 @@ class _FocusReticleState extends State<_FocusReticle>
     )..forward();
     _scale = TweenSequence<double>([
       TweenSequenceItem(
-        tween: Tween<double>(begin: 1.28, end: 1.0)
-            .chain(CurveTween(curve: Curves.easeOutCubic)),
+        tween: Tween<double>(
+          begin: 1.28,
+          end: 1.0,
+        ).chain(CurveTween(curve: Curves.easeOutCubic)),
         weight: 70,
       ),
       TweenSequenceItem(
-        tween: Tween<double>(begin: 1.0, end: 0.94)
-            .chain(CurveTween(curve: Curves.easeInOut)),
+        tween: Tween<double>(
+          begin: 1.0,
+          end: 0.94,
+        ).chain(CurveTween(curve: Curves.easeInOut)),
         weight: 30,
       ),
     ]).animate(_controller);
     _opacity = TweenSequence<double>([
       TweenSequenceItem(tween: ConstantTween<double>(1), weight: 70),
       TweenSequenceItem(
-        tween: Tween<double>(begin: 1, end: 0.55)
-            .chain(CurveTween(curve: Curves.easeOut)),
+        tween: Tween<double>(
+          begin: 1,
+          end: 0.55,
+        ).chain(CurveTween(curve: Curves.easeOut)),
         weight: 30,
       ),
     ]).animate(_controller);
@@ -768,10 +804,7 @@ class _FocusReticleState extends State<_FocusReticle>
       builder: (context, child) {
         return Opacity(
           opacity: _opacity.value,
-          child: Transform.scale(
-            scale: _scale.value,
-            child: child,
-          ),
+          child: Transform.scale(scale: _scale.value, child: child),
         );
       },
       child: SizedBox(
@@ -851,9 +884,7 @@ class _ZoomChip extends StatelessWidget {
         alignment: Alignment.center,
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(height / 2),
-          color: selected
-              ? const Color(0xCC2C2C2E)
-              : const Color(0x992C2C2E),
+          color: selected ? const Color(0xCC2C2C2E) : const Color(0x992C2C2E),
         ),
         child: AnimatedDefaultTextStyle(
           duration: const Duration(milliseconds: 220),
@@ -873,10 +904,7 @@ class _ZoomChip extends StatelessWidget {
 }
 
 class _GlassCircleButton extends StatelessWidget {
-  const _GlassCircleButton({
-    required this.onTap,
-    required this.child,
-  });
+  const _GlassCircleButton({required this.onTap, required this.child});
 
   final VoidCallback onTap;
   final Widget child;
@@ -885,9 +913,7 @@ class _GlassCircleButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return Material(
       color: Colors.black.withValues(alpha: 0.42),
-      shape: const CircleBorder(
-        side: BorderSide(color: Colors.white24),
-      ),
+      shape: const CircleBorder(side: BorderSide(color: Colors.white24)),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
@@ -895,7 +921,7 @@ class _GlassCircleButton extends StatelessWidget {
         child: SizedBox(
           width: 42,
           height: 42,
-          child: Center(child: child),
+          child: Center(widthFactor: 1, heightFactor: 1, child: child),
         ),
       ),
     );

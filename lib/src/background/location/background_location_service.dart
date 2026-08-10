@@ -31,8 +31,7 @@ class BackgroundLocationService {
     try {
       await future;
       _configured = true;
-      // Cold start must not keep a leftover FGS from a previous session.
-      // Duty heartbeat will start it again only after on_duty is confirmed.
+
       await _stopIfRunningWithoutDutyGate();
     } finally {
       if (identical(_configureFuture, future)) {
@@ -64,7 +63,7 @@ class BackgroundLocationService {
     await service.configure(
       androidConfiguration: AndroidConfiguration(
         onStart: _onStart,
-        // Only start after duty heartbeat confirms on_duty.
+
         autoStart: false,
         autoStartOnBoot: false,
         isForegroundMode: true,
@@ -75,7 +74,7 @@ class BackgroundLocationService {
         initialNotificationContent: 'Sharing live location',
       ),
       iosConfiguration: IosConfiguration(
-        // iOS duty tracking uses IosDutyLocationPinger, not this service.
+
         autoStart: false,
         onForeground: _onStart,
         onBackground: _onIosBackground,
