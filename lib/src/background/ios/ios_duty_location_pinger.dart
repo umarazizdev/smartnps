@@ -13,6 +13,7 @@ import '../../location/speed_adaptive_gps_policy.dart';
 import '../../motion/motion_activity_fusion_controller.dart';
 import '../location/background_location_accuracy.dart';
 import '../location/background_location_uploader.dart';
+import '../location/location_sharing_status_notification.dart';
 import 'ios_background_location_notification.dart';
 import 'ios_significant_location_change_service.dart';
 
@@ -508,7 +509,7 @@ class IosDutyLocationPinger {
     await BackgroundLocationUploader.flushPendingBatchesStatic();
   }
 
-  static Future<void> stop() async {
+  static Future<void> stop({bool announceShiftEnded = false}) async {
     if (!Platform.isIOS) return;
     if (_stopping) return;
 
@@ -532,10 +533,18 @@ class IosDutyLocationPinger {
     await MotionActivityFusionController.instance.release();
 
     try {
-      await IosBackgroundLocationNotification.dismiss();
+      if (announceShiftEnded) {
+        await LocationSharingStatusNotification.showStopped(
+          reason: LocationSharingStopReason.shiftEnded,
+        );
+      } else {
+        await LocationSharingStatusNotification.dismissSharing();
+      }
     } catch (e) {
       if (kDebugMode) {
-        debugPrint('[IosDutyLocationPinger] dismiss notification failed: $e');
+        debugPrint(
+          '[IosDutyLocationPinger] stop notification failed: $e',
+        );
       }
     }
 
@@ -547,16 +556,19 @@ class IosDutyLocationPinger {
     _stopping = false;
   }
 
-  static Future<void> stopCollectingOnly() async {
+  static Future<void> stopCollectingOnly({
+    bool announceSignedOut = false,
+  }) async {
     if (!Platform.isIOS) return;
     if (!_running && _subscription == null && _uploader == null) {
-
       await IosSignificantLocationChangeService.setOnDuty(false);
       if (kDebugMode) {
         debugPrint('[DutyLocation] STOPPED already (iOS collecting clear)');
       }
       return;
     }
+
+    final wasSharing = _running || _subscription != null || _uploader != null;
 
     _stopping = true;
     _running = false;
@@ -578,10 +590,18 @@ class IosDutyLocationPinger {
     await MotionActivityFusionController.instance.release();
 
     try {
-      await IosBackgroundLocationNotification.dismiss();
+      if (announceSignedOut && wasSharing) {
+        await LocationSharingStatusNotification.showStopped(
+          reason: LocationSharingStopReason.signedOut,
+        );
+      } else {
+        await LocationSharingStatusNotification.dismissSharing();
+      }
     } catch (e) {
       if (kDebugMode) {
-        debugPrint('[IosDutyLocationPinger] dismiss notification failed: $e');
+        debugPrint(
+          '[IosDutyLocationPinger] logout stop notification failed: $e',
+        );
       }
     }
 

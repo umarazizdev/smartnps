@@ -6,6 +6,7 @@ import 'package:flutter_background_service/flutter_background_service.dart';
 
 import 'background_location_permissions.dart';
 import 'background_location_service.dart';
+import 'location_sharing_status_notification.dart';
 import '../ios/ios_duty_location_pinger.dart';
 import '../ios/ios_significant_location_change_service.dart';
 
@@ -129,9 +130,14 @@ class BackgroundLocationController {
       await SchedulerBinding.instance.endOfFrame;
       await Future<void>.delayed(const Duration(milliseconds: 300));
 
+      await LocationSharingStatusNotification.clearStopped().catchError(
+        (Object e) {
+          _log('clearStopped failed: $e');
+        },
+      );
+
       if (Platform.isIOS) {
         _log('starting iOS duty location pinger…');
-
         final previousConfirm = IosDutyLocationPinger.confirmOnDutyBeforeStart;
         IosDutyLocationPinger.confirmOnDutyBeforeStart = () async => true;
         try {
@@ -220,33 +226,48 @@ class BackgroundLocationController {
     }
   }
 
-  static Future<void> stopCollectingOnly() async {
+  static Future<void> stopCollectingOnly({
+    bool announceSignedOut = false,
+  }) async {
     try {
       if (Platform.isIOS) {
-        await IosDutyLocationPinger.stopCollectingOnly();
+        await IosDutyLocationPinger.stopCollectingOnly(
+          announceSignedOut: announceSignedOut,
+        );
         return;
       }
 
       final service = FlutterBackgroundService();
       if (await service.isRunning()) {
         _log('STOPPING Android collecting-only…');
-        service.invoke('stop');
+        service.invoke('stop', {
+          if (announceSignedOut)
+            'announceReason': LocationSharingStatusNotification.reasonToWire(
+              LocationSharingStopReason.signedOut,
+            ),
+        });
+        await _waitUntilAndroidServiceStopped(
+          maxWait: const Duration(seconds: 15),
+        );
       }
     } catch (_) {}
   }
 
-  static Future<Map<String, dynamic>> stop() async {
+  static Future<Map<String, dynamic>> stop({
+    bool announceShiftEnded = false,
+  }) async {
     try {
       if (Platform.isIOS) {
         final running = IosDutyLocationPinger.isRunning;
         if (!running) {
-
           await IosSignificantLocationChangeService.setOnDuty(false);
           _log('STOP skipped: iOS location was not running');
           return {'ok': true, 'stopped': false, 'running': false};
         }
         _log('STOPPING iOS duty location…');
-        await IosDutyLocationPinger.stop();
+        await IosDutyLocationPinger.stop(
+          announceShiftEnded: announceShiftEnded,
+        );
         _log('STOPPED (iOS location not running)');
         return {'ok': true, 'stopped': true, 'running': false};
       }
@@ -259,7 +280,12 @@ class BackgroundLocationController {
         _log('STOPPING Android background location…');
       }
 
-      service.invoke('stop');
+      service.invoke('stop', {
+        if (announceShiftEnded && runningBeforeStop)
+          'announceReason': LocationSharingStatusNotification.reasonToWire(
+            LocationSharingStopReason.shiftEnded,
+          ),
+      });
       if (runningBeforeStop) {
         await _waitUntilAndroidServiceStopped();
       } else {
@@ -268,7 +294,12 @@ class BackgroundLocationController {
 
       var stillRunning = await service.isRunning();
       if (stillRunning) {
-        service.invoke('stop');
+        service.invoke('stop', {
+          if (announceShiftEnded && runningBeforeStop)
+            'announceReason': LocationSharingStatusNotification.reasonToWire(
+              LocationSharingStopReason.shiftEnded,
+            ),
+        });
         await _waitUntilAndroidServiceStopped(
           maxWait: const Duration(seconds: 15),
         );

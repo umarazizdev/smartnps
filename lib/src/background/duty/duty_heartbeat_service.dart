@@ -28,7 +28,6 @@ import 'location_disclosure_consent.dart';
 
 class DutyHeartbeatService {
   DutyHeartbeatService._() {
-
     BackgroundLocationController.confirmOnDutyBeforeStart = () {
       return confirmOnDutyFromApiForTracking(stopIfNotOnDuty: true);
     };
@@ -121,7 +120,6 @@ class DutyHeartbeatService {
 
     final onlineAuth = await _hasActiveAuthToken();
     if (!onlineAuth) {
-
       final cached = await AuthRepository.instance.getAccessToken();
       if (cached != null &&
           cached.isNotEmpty &&
@@ -291,7 +289,6 @@ class DutyHeartbeatService {
           !await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) {
         return;
       }
-
     } else if (!pageReload) {
       await PushNotificationService.instance.waitForPermissionPromptCompleted(
         promptIfNeeded: true,
@@ -322,7 +319,6 @@ class DutyHeartbeatService {
     }
 
     if (status != onDuty) {
-
       if (!await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) {
         await refreshBackgroundLocationPermissionBannerState();
         return;
@@ -386,7 +382,9 @@ class DutyHeartbeatService {
         '[DutyHeartbeatService] off_duty but tracking still running; stopping',
       );
     }
-    final result = await BackgroundLocationController.stop();
+    final result = await BackgroundLocationController.stop(
+      announceShiftEnded: true,
+    );
     debugPrint(
       '[DutyHeartbeatService] off_duty stop retry ok=${result['ok'] == true}',
     );
@@ -457,7 +455,9 @@ class DutyHeartbeatService {
     if (Platform.isIOS) {
       unawaited(IosSignificantLocationChangeService.setOnDuty(false));
     }
-    unawaited(BackgroundLocationController.stopCollectingOnly());
+    unawaited(
+      BackgroundLocationController.stopCollectingOnly(announceSignedOut: true),
+    );
     unawaited(DutyTrackingPreferences.clearOnOffDuty());
     unawaited(refreshBackgroundLocationPermissionBannerState());
   }
@@ -799,7 +799,6 @@ class DutyHeartbeatService {
       _onDutyAutoPromptComplete = true;
       return;
     }
-
     if (await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) {
       await refreshBackgroundLocationPermissionBannerState();
       _onDutyAutoPromptComplete = true;
@@ -1073,10 +1072,11 @@ class DutyHeartbeatService {
       '[DutyHeartbeatService] stopping location after flushing pending batches',
     );
     if (Platform.isIOS) {
-
       await IosSignificantLocationChangeService.setOnDuty(false);
     }
-    final result = await BackgroundLocationController.stop();
+    final result = await BackgroundLocationController.stop(
+      announceShiftEnded: true,
+    );
     debugPrint('[DutyHeartbeatService] stop ok=${result['ok'] == true}');
     _lastAppliedStatus = offDuty;
     _resetDisclosureState();
