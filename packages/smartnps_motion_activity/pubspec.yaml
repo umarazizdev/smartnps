@@ -1,0 +1,19 @@
+name: smartnps_motion_activity
+description: Activity Recognition bridge for SmartNPS360 (registers on all Flutter engines including FGS).
+version: 1.0.0
+publish_to: "none"
+
+environment:
+  sdk: ^3.11.0
+  flutter: ">=3.24.0"
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.smartnps360.motion_activity
+        pluginClass: SmartnpsMotionActivityPlugin
+
+dependencies:
+  flutter:
+    sdk: flutter

@@ -44,6 +44,18 @@ class LocationSharingStatusNotification {
 
   static FlutterLocalNotificationsPlugin? _plugin;
   static bool _sharingShown = false;
+  static bool _shiftEndedAnnounced = false;
+  static bool _signedOutAnnounced = false;
+
+  static bool get isSharingShown => _sharingShown;
+
+  static void resetShiftEndedGate() {
+    _shiftEndedAnnounced = false;
+  }
+
+  static void resetSignedOutGate() {
+    _signedOutAnnounced = false;
+  }
 
   static String sharingTitleForPlatform() {
     return Platform.isAndroid ? androidSharingTitle : iosAppTitle;
@@ -111,6 +123,11 @@ class LocationSharingStatusNotification {
           requestAlertPermission: false,
           requestBadgePermission: false,
           requestSoundPermission: false,
+          defaultPresentAlert: true,
+          defaultPresentBadge: false,
+          defaultPresentSound: false,
+          defaultPresentBanner: true,
+          defaultPresentList: true,
         ),
         android: AndroidInitializationSettings('@mipmap/ic_launcher'),
       ),
@@ -149,8 +166,8 @@ class LocationSharingStatusNotification {
 
   static const NotificationDetails _stoppedDetails = NotificationDetails(
     iOS: DarwinNotificationDetails(
-      presentAlert: false,
-      presentBanner: false,
+      presentAlert: true,
+      presentBanner: true,
       presentList: true,
       presentBadge: false,
       presentSound: false,
@@ -228,6 +245,41 @@ class LocationSharingStatusNotification {
       debugPrint(
         '[LocationSharingStatusNotification] stopped shown reason=$reason',
       );
+    }
+  }
+
+  static Future<bool> tryAnnounceStopped({
+    required LocationSharingStopReason reason,
+  }) async {
+    switch (reason) {
+      case LocationSharingStopReason.shiftEnded:
+        if (_shiftEndedAnnounced) return false;
+        _shiftEndedAnnounced = true;
+        break;
+      case LocationSharingStopReason.signedOut:
+        if (_signedOutAnnounced) return false;
+        _signedOutAnnounced = true;
+        break;
+    }
+
+    try {
+      await showStopped(reason: reason);
+      return true;
+    } catch (e) {
+      switch (reason) {
+        case LocationSharingStopReason.shiftEnded:
+          _shiftEndedAnnounced = false;
+          break;
+        case LocationSharingStopReason.signedOut:
+          _signedOutAnnounced = false;
+          break;
+      }
+      if (kDebugMode) {
+        debugPrint(
+          '[LocationSharingStatusNotification] tryAnnounceStopped failed: $e',
+        );
+      }
+      return false;
     }
   }
 

@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 
+import 'android_duty_location_health.dart';
 import 'background_location_permissions.dart';
 import 'background_location_service.dart';
 import 'location_sharing_status_notification.dart';
@@ -34,6 +35,51 @@ class BackgroundLocationController {
       _log('BLOCKED: duty not confirmed (not on_duty)');
     }
     return allowed;
+  }
+
+  /// True when tracking appears up but uploads/stream look stale.
+  ///
+  /// Android: if the FGS process is running, the UI isolate must NOT treat
+  /// missing upload events as stale. Backgrounding the app pauses the UI
+  /// isolate; false "stale" recovery was canceling the live GPS stream.
+  /// Stream health is owned by the FGS isolate itself.
+  static Future<bool> needsRecovery() async {
+    if (Platform.isIOS) {
+      return IosDutyLocationPinger.needsRecovery;
+    }
+    if (!Platform.isAndroid) return false;
+    // FGS alive ⇒ healthy from the UI/heartbeat perspective.
+    return false;
+  }
+
+  static Future<bool> isTrackingHealthy() async {
+    if (!await isTrackingRunning()) return false;
+    if (Platform.isAndroid) return true;
+    return !await needsRecovery();
+  }
+
+  /// Soft-recover Android GPS without tearing down the FGS.
+  /// Prefer not calling this from heartbeat while backgrounded — FGS self-heals.
+  static Future<void> softRecoverAndroidTracking() async {
+    if (!Platform.isAndroid) return;
+    if (!await FlutterBackgroundService().isRunning()) return;
+    if (!await AndroidDutyLocationHealth.computeNeedsRecovery()) return;
+    _log('Android FGS soft-recover: force poll (no stop)');
+    FlutterBackgroundService().invoke('rebuild_stream');
+  }
+
+  /// Tell the Android FGS the UI moved to background so it can keep GPS alive.
+  static Future<void> notifyAppBackgrounded() async {
+    if (!Platform.isAndroid) return;
+    if (!await FlutterBackgroundService().isRunning()) return;
+    FlutterBackgroundService().invoke('app_backgrounded');
+  }
+
+  /// Tell the Android FGS the UI returned to foreground.
+  static Future<void> notifyAppForegrounded() async {
+    if (!Platform.isAndroid) return;
+    if (!await FlutterBackgroundService().isRunning()) return;
+    FlutterBackgroundService().invoke('app_foregrounded');
   }
 
   static Future<Map<String, dynamic>> ensureStarted() async {
@@ -75,6 +121,7 @@ class BackgroundLocationController {
           await IosDutyLocationPinger.stop();
         }
       } else if (Platform.isAndroid) {
+        AndroidDutyLocationHealth.ensureListenerInstalled();
         final service = FlutterBackgroundService();
         if (await service.isRunning()) {
           if (!await _confirmOnDutyOrBlock()) {
@@ -91,8 +138,10 @@ class BackgroundLocationController {
               },
             };
           }
-          _log('RUNNING already (Android background service active)');
-          return {'ok': true, 'started': false, 'running': true};
+          if (await FlutterBackgroundService().isRunning()) {
+            _log('RUNNING already (Android background service active)');
+            return {'ok': true, 'started': false, 'running': true};
+          }
         }
       }
 
@@ -168,9 +217,12 @@ class BackgroundLocationController {
           return {'ok': true, 'started': false, 'running': true};
         }
         _log('starting Android background location service…');
+        AndroidDutyLocationHealth.markStarted();
+        await AndroidDutyLocationHealth.persistStarted(DateTime.now());
         await BackgroundLocationService.configureAndStart();
         final running = await FlutterBackgroundService().isRunning();
         if (!running) {
+          AndroidDutyLocationHealth.markStopped();
           _log('NOT RUNNING: Android service failed to start');
           return {
             'ok': false,
@@ -215,6 +267,7 @@ class BackgroundLocationController {
             maxWait: const Duration(seconds: 15),
           );
         }
+        AndroidDutyLocationHealth.markStopped();
       }
       return ensureStarted();
     } catch (e) {
@@ -226,36 +279,28 @@ class BackgroundLocationController {
     }
   }
 
-  static Future<void> stopCollectingOnly({
-    bool announceSignedOut = false,
-  }) async {
+  static Future<void> stopCollectingOnly() async {
     try {
       if (Platform.isIOS) {
-        await IosDutyLocationPinger.stopCollectingOnly(
-          announceSignedOut: announceSignedOut,
-        );
+        await IosDutyLocationPinger.stopCollectingOnly();
         return;
       }
 
       final service = FlutterBackgroundService();
       if (await service.isRunning()) {
         _log('STOPPING Android collecting-only…');
-        service.invoke('stop', {
-          if (announceSignedOut)
-            'announceReason': LocationSharingStatusNotification.reasonToWire(
-              LocationSharingStopReason.signedOut,
-            ),
-        });
+        service.invoke('stop');
         await _waitUntilAndroidServiceStopped(
           maxWait: const Duration(seconds: 15),
         );
       }
-    } catch (_) {}
+      AndroidDutyLocationHealth.markStopped();
+    } catch (_) {
+      AndroidDutyLocationHealth.markStopped();
+    }
   }
 
-  static Future<Map<String, dynamic>> stop({
-    bool announceShiftEnded = false,
-  }) async {
+  static Future<Map<String, dynamic>> stop() async {
     try {
       if (Platform.isIOS) {
         final running = IosDutyLocationPinger.isRunning;
@@ -265,9 +310,7 @@ class BackgroundLocationController {
           return {'ok': true, 'stopped': false, 'running': false};
         }
         _log('STOPPING iOS duty location…');
-        await IosDutyLocationPinger.stop(
-          announceShiftEnded: announceShiftEnded,
-        );
+        await IosDutyLocationPinger.stop();
         _log('STOPPED (iOS location not running)');
         return {'ok': true, 'stopped': true, 'running': false};
       }
@@ -280,12 +323,7 @@ class BackgroundLocationController {
         _log('STOPPING Android background location…');
       }
 
-      service.invoke('stop', {
-        if (announceShiftEnded && runningBeforeStop)
-          'announceReason': LocationSharingStatusNotification.reasonToWire(
-            LocationSharingStopReason.shiftEnded,
-          ),
-      });
+      service.invoke('stop');
       if (runningBeforeStop) {
         await _waitUntilAndroidServiceStopped();
       } else {
@@ -294,17 +332,14 @@ class BackgroundLocationController {
 
       var stillRunning = await service.isRunning();
       if (stillRunning) {
-        service.invoke('stop', {
-          if (announceShiftEnded && runningBeforeStop)
-            'announceReason': LocationSharingStatusNotification.reasonToWire(
-              LocationSharingStopReason.shiftEnded,
-            ),
-        });
+        service.invoke('stop');
         await _waitUntilAndroidServiceStopped(
           maxWait: const Duration(seconds: 15),
         );
         stillRunning = await service.isRunning();
       }
+
+      AndroidDutyLocationHealth.markStopped();
 
       if (stillRunning) {
         _log('STOP FAILED: Android service still running');
@@ -323,6 +358,7 @@ class BackgroundLocationController {
           },
       };
     } catch (e) {
+      AndroidDutyLocationHealth.markStopped();
       _log('STOP FAILED: $e');
       return {
         'ok': false,

@@ -15,9 +15,10 @@ import '../background/location/background_location_permissions.dart';
 import '../background/duty/clock_in_gate_service.dart';
 import '../background/duty/location_disclosure_consent.dart';
 import '../background/duty/duty_heartbeat_service.dart';
-import '../location/mock_location_detection.dart';
-import '../push/notifications/push_notification_service.dart';
 import '../utilities/app_config.dart';
+import '../location/mock_location_detection.dart';
+import '../location/mock_location_guard.dart';
+import '../push/notifications/push_notification_service.dart';
 import '../utilities/overlay_prompt_guard.dart';
 import '../utilities/permission_settings_helper.dart';
 
@@ -363,14 +364,18 @@ class JsBridge {
         'receivedAfter: ${requestStopwatch.elapsedMilliseconds}ms',
       );
 
-      if (requiresBackgroundForClockIn) {
+      if (AppConfig.enableMockLocationDetection &&
+          (forClockIn || requiresBackgroundForClockIn)) {
         if (MockLocationDetection.isDetected(position)) {
           ClockInGateService.instance.clearGeoUnlock();
+          MockLocationGuard.maybeShowDialogForPosition(position);
           return _err(
             'mock_location',
             'Disable mock or fake GPS location before verifying shift attendance.',
           );
         }
+        ClockInGateService.instance.clearGeoUnlock();
+      } else if (forClockIn || requiresBackgroundForClockIn) {
         ClockInGateService.instance.clearGeoUnlock();
       }
 

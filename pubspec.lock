@@ -657,12 +657,11 @@ packages:
     source: hosted
     version: "14.0.2"
   geolocator_android:
-    dependency: transitive
+    dependency: "direct overridden"
     description:
-      name: geolocator_android
-      sha256: "86ea1654e4f61ff51466848e91c116b422d6010ea269fda0fbe1af7e9e742ce1"
-      url: "https://pub.dev"
-    source: hosted
+      path: "packages/geolocator_android_patched"
+      relative: true
+    source: path
     version: "5.0.3"
   geolocator_apple:
     dependency: transitive
@@ -1261,6 +1260,13 @@ packages:
     description: flutter
     source: sdk
     version: "0.0.0"
+  smartnps_motion_activity:
+    dependency: "direct main"
+    description:
+      path: "packages/smartnps_motion_activity"
+      relative: true
+    source: path
+    version: "1.0.0"
   source_span:
     dependency: transitive
     description:

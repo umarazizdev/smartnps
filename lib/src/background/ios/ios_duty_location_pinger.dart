@@ -509,7 +509,7 @@ class IosDutyLocationPinger {
     await BackgroundLocationUploader.flushPendingBatchesStatic();
   }
 
-  static Future<void> stop({bool announceShiftEnded = false}) async {
+  static Future<void> stop() async {
     if (!Platform.isIOS) return;
     if (_stopping) return;
 
@@ -533,17 +533,11 @@ class IosDutyLocationPinger {
     await MotionActivityFusionController.instance.release();
 
     try {
-      if (announceShiftEnded) {
-        await LocationSharingStatusNotification.showStopped(
-          reason: LocationSharingStopReason.shiftEnded,
-        );
-      } else {
-        await LocationSharingStatusNotification.dismissSharing();
-      }
+      await LocationSharingStatusNotification.dismissSharing();
     } catch (e) {
       if (kDebugMode) {
         debugPrint(
-          '[IosDutyLocationPinger] stop notification failed: $e',
+          '[IosDutyLocationPinger] dismiss sharing failed: $e',
         );
       }
     }
@@ -556,9 +550,7 @@ class IosDutyLocationPinger {
     _stopping = false;
   }
 
-  static Future<void> stopCollectingOnly({
-    bool announceSignedOut = false,
-  }) async {
+  static Future<void> stopCollectingOnly() async {
     if (!Platform.isIOS) return;
     if (!_running && _subscription == null && _uploader == null) {
       await IosSignificantLocationChangeService.setOnDuty(false);
@@ -567,8 +559,6 @@ class IosDutyLocationPinger {
       }
       return;
     }
-
-    final wasSharing = _running || _subscription != null || _uploader != null;
 
     _stopping = true;
     _running = false;
@@ -590,17 +580,11 @@ class IosDutyLocationPinger {
     await MotionActivityFusionController.instance.release();
 
     try {
-      if (announceSignedOut && wasSharing) {
-        await LocationSharingStatusNotification.showStopped(
-          reason: LocationSharingStopReason.signedOut,
-        );
-      } else {
-        await LocationSharingStatusNotification.dismissSharing();
-      }
+      await LocationSharingStatusNotification.dismissSharing();
     } catch (e) {
       if (kDebugMode) {
         debugPrint(
-          '[IosDutyLocationPinger] logout stop notification failed: $e',
+          '[IosDutyLocationPinger] dismiss sharing failed: $e',
         );
       }
     }

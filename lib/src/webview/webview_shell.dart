@@ -34,6 +34,7 @@ import '../api/api_client.dart';
 import '../api/api_urls.dart';
 import '../background/duty/duty_heartbeat_service.dart';
 import '../background/duty/clock_in_gate_service.dart';
+import '../background/location/background_location_controller.dart';
 import '../background/location/background_location_permissions.dart';
 import '../background/duty/location_disclosure_consent.dart';
 import '../background/ios/ios_duty_location_pinger.dart';
@@ -152,6 +153,9 @@ class _WebViewShellState extends State<WebViewShell>
   bool _awaitingOfflineRecoveryLoad = false;
 
   Timer? _offlineConnectivityDebounce;
+
+  /// Dedupes spammy Obx rebuilds; only logs when visibility/reasons change.
+  String? _lastBottomBarVisibilityLog;
 
   void _setNativeAuthSession(bool value) {
     final active = value && _ui.officerLoggedIn.value;
@@ -447,6 +451,57 @@ class _WebViewShellState extends State<WebViewShell>
     if (tabIndex != null && _ui.selectedBottomTabIndex.value != tabIndex) {
       _ui.selectedBottomTabIndex.value = tabIndex;
     }
+  }
+
+  void _logBottomBarVisibility({
+    required bool show,
+    required bool showPermissionBlocker,
+    required bool uploadingFromDialog,
+  }) {
+    final uri = _ui.currentUri.value;
+    final keyboardInset = _ui.flutterKeyboardInset.value;
+    final isAuth = _isAuthRoute(uri);
+    final isBottomRoute = _isBottomBarRoute(uri);
+    final preserve = _ui.preserveBottomBarDuringLoad.value;
+    final reasons = <String>[];
+    if (showPermissionBlocker) reasons.add('permissionBlocker');
+    if (_ui.showOffline.value) reasons.add('offline');
+    if (!_ui.firstPageLoaded.value) reasons.add('firstPageNotLoaded');
+    if (!_ui.officerLoggedIn.value) reasons.add('notLoggedIn');
+    if (_ui.isKeyboardOpen) {
+      reasons.add('keyboardOpen(inset=${keyboardInset.toStringAsFixed(1)})');
+    }
+    if (isAuth) reasons.add('authRoute');
+    if (_ui.showingLogVisit.value) reasons.add('showingLogVisit');
+    if (uploadingFromDialog) reasons.add('uploadingFromDialog');
+    if (!isBottomRoute && !preserve) {
+      reasons.add('notBottomBarRoute+noPreserve');
+    }
+
+    final signature =
+        'show=$show uri=${uri?.toString() ?? 'null'} '
+        'reasons=${reasons.isEmpty ? 'none' : reasons.join('|')} '
+        'flags={permissionBlocker=$showPermissionBlocker '
+        'offline=${_ui.showOffline.value} '
+        'firstPageLoaded=${_ui.firstPageLoaded.value} '
+        'officerLoggedIn=${_ui.officerLoggedIn.value} '
+        'keyboardOpen=${_ui.isKeyboardOpen} '
+        'keyboardInset=${keyboardInset.toStringAsFixed(1)} '
+        'authRoute=$isAuth '
+        'showingLogVisit=${_ui.showingLogVisit.value} '
+        'uploadingFromDialog=$uploadingFromDialog '
+        'isBottomBarRoute=$isBottomRoute '
+        'preserveDuringLoad=$preserve '
+        'selectedTab=${_ui.selectedBottomTabIndex.value} '
+        'platform=${Platform.isAndroid
+            ? 'android'
+            : Platform.isIOS
+            ? 'ios'
+            : 'other'}}';
+
+    if (_lastBottomBarVisibilityLog == signature) return;
+    _lastBottomBarVisibilityLog = signature;
+    debugPrint('[SmartNPS360][BottomBar] $signature');
   }
 
   Future<void> _reconcileBottomBarFromWebView(
@@ -2052,6 +2107,15 @@ class _WebViewShellState extends State<WebViewShell>
           appCycle: state.name,
         ),
       );
+    }
+
+    if (Platform.isAndroid) {
+      if (state == AppLifecycleState.paused ||
+          state == AppLifecycleState.hidden) {
+        unawaited(BackgroundLocationController.notifyAppBackgrounded());
+      } else if (state == AppLifecycleState.resumed) {
+        unawaited(BackgroundLocationController.notifyAppForegrounded());
+      }
     }
 
     if (state == AppLifecycleState.resumed) {
@@ -4278,6 +4342,11 @@ class _WebViewShellState extends State<WebViewShell>
                                   !uploadingFromDialog &&
                                   (_isBottomBarRoute(_ui.currentUri.value) ||
                                       _ui.preserveBottomBarDuringLoad.value);
+                              _logBottomBarVisibility(
+                                show: showBottomBar,
+                                showPermissionBlocker: showPermissionBlocker,
+                                uploadingFromDialog: uploadingFromDialog,
+                              );
                               if (!showBottomBar) {
                                 return const SizedBox.shrink();
                               }
