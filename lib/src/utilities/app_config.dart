@@ -17,6 +17,8 @@ class AppConfig {
   static const int cDarkCardColor = 0xFF1A2332;
   static const int cBottomBarActive = 0xFF0F93D2;
 
+  static const bool enableMockLocationDetection = true;
+
   static bool isAllowedHost(String? host) {
     if (host == null) return false;
     final h = host.toLowerCase();

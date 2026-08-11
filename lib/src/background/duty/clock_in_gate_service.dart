@@ -8,6 +8,7 @@ import 'package:geolocator/geolocator.dart';
 import '../../app/app_navigator.dart';
 import '../../location/mock_location_guard.dart';
 import '../../permissions/native_permission_status_service.dart';
+import '../../utilities/app_config.dart';
 import '../../utilities/overlay_prompt_guard.dart';
 import '../../utilities/permission_settings_helper.dart';
 import '../../widgets/dialogs/clock_in_blocked_dialog.dart';
@@ -59,7 +60,6 @@ class ClockInGateService {
 
     final pending = _pendingFailureAfterSettings;
     if (pending != null) {
-
       if (Platform.isAndroid) {
         await _waitUntilClockInBackgroundReady();
       }
@@ -80,11 +80,10 @@ class ClockInGateService {
     }
 
     if (await _isClockInFullyReady(includeMockGpsCheck: false)) {
-      _geoUnlockedForClockIn = true;
       if (kDebugMode) {
         debugPrint(
           '[ClockInGateService] resume: permissions ready; '
-          'skipped mock GPS (not clock-in / not duty stream)',
+          'mock GPS deferred to clock-in gate',
         );
       }
       return;
@@ -92,9 +91,7 @@ class ClockInGateService {
     clearGeoUnlock();
   }
 
-  Future<bool> _isClockInFullyReady({
-    required bool includeMockGpsCheck,
-  }) async {
+  Future<bool> _isClockInFullyReady({required bool includeMockGpsCheck}) async {
     await BackgroundLocationPermissions.refreshPermissionStateFromOs();
     if (!await Geolocator.isLocationServiceEnabled()) return false;
 
@@ -112,7 +109,9 @@ class ClockInGateService {
       return false;
     }
 
-    if (!includeMockGpsCheck) return true;
+    if (!includeMockGpsCheck || !AppConfig.enableMockLocationDetection) {
+      return true;
+    }
 
     final mockCheck = await MockLocationGuard.ensureClearForClockIn();
     return mockCheck == MockLocationClockInCheck.clear;
@@ -194,9 +193,11 @@ class ClockInGateService {
         return _runLocationSettingsPromptFlow(deniedReason: 'location_precise');
       }
 
-      final mockCheck = await MockLocationGuard.ensureClearForClockIn();
-      final mockBlocked = await _blockedIfMockCheckFailed(mockCheck);
-      if (mockBlocked != null) return mockBlocked;
+      if (AppConfig.enableMockLocationDetection) {
+        final mockCheck = await MockLocationGuard.ensureClearForClockIn();
+        final mockBlocked = await _blockedIfMockCheckFailed(mockCheck);
+        if (mockBlocked != null) return mockBlocked;
+      }
 
       _geoUnlockedForClockIn = true;
       debugPrint('[ClockInGateService] prepareClockIn allowed canClockIn=true');
@@ -256,16 +257,13 @@ class ClockInGateService {
       await BackgroundLocationPermissions.refreshPermissionStateFromOs();
 
       if (Platform.isAndroid) {
-
         var ready =
             await BackgroundLocationPermissions.isClockInBackgroundReady();
         if (!ready) {
           ready = await _waitUntilClockInBackgroundReady();
         }
         if (kDebugMode) {
-          debugPrint(
-            '[ClockInGateService] post-settings bg ready=$ready',
-          );
+          debugPrint('[ClockInGateService] post-settings bg ready=$ready');
         }
       }
 
@@ -294,9 +292,11 @@ class ClockInGateService {
           return _showPreciseLocationFailureAfterSettings();
         }
 
-        final mockCheck = await MockLocationGuard.ensureClearForClockIn();
-        final mockBlocked = await _blockedIfMockCheckFailed(mockCheck);
-        if (mockBlocked != null) return mockBlocked;
+        if (AppConfig.enableMockLocationDetection) {
+          final mockCheck = await MockLocationGuard.ensureClearForClockIn();
+          final mockBlocked = await _blockedIfMockCheckFailed(mockCheck);
+          if (mockBlocked != null) return mockBlocked;
+        }
 
         _geoUnlockedForClockIn = true;
         debugPrint(
@@ -314,9 +314,11 @@ class ClockInGateService {
           if (!await BackgroundLocationPermissions.hasPreciseLocationAccess()) {
             return _showPreciseLocationFailureAfterSettings();
           }
-          final settleCheck = await MockLocationGuard.ensureClearForClockIn();
-          final settleBlocked = await _blockedIfMockCheckFailed(settleCheck);
-          if (settleBlocked != null) return settleBlocked;
+          if (AppConfig.enableMockLocationDetection) {
+            final settleCheck = await MockLocationGuard.ensureClearForClockIn();
+            final settleBlocked = await _blockedIfMockCheckFailed(settleCheck);
+            if (settleBlocked != null) return settleBlocked;
+          }
           _geoUnlockedForClockIn = true;
           debugPrint(
             '[ClockInGateService] prepareClockIn allowed after final settle',
@@ -356,7 +358,8 @@ class ClockInGateService {
     }
   }
 
-  Future<Map<String, dynamic>> _showPreciseLocationFailureAfterSettings() async {
+  Future<Map<String, dynamic>>
+  _showPreciseLocationFailureAfterSettings() async {
     const preciseReason = 'location_precise';
     final failureAction = await ClockInBlockedDialog.showFailure(
       reason: preciseReason,
@@ -513,11 +516,7 @@ class ClockInGateService {
           message: message,
           bypassCooldown: true,
         );
-        return _blocked(
-          reason: reason,
-          title: title,
-          message: message,
-        );
+        return _blocked(reason: reason, title: title, message: message);
     }
   }
 

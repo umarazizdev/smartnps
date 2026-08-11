@@ -1,4 +1,4 @@
-package com.smartnps360.app
+package com.smartnps360.motion_activity
 
 import android.Manifest
 import android.app.PendingIntent
@@ -14,10 +14,15 @@ import com.google.android.gms.location.ActivityRecognitionClient
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Bridges Google Play Services Activity Recognition to Flutter via
  * MethodChannel + EventChannel. Updates arrive through [MotionActivityReceiver].
+ *
+ * Start/stop is process-wide ref-counted so UI + FGS engines can both attach
+ * without one engine tearing down recognition for the other.
  */
 class MotionActivityManager(
   private val context: Context,
@@ -34,8 +39,8 @@ class MotionActivityManager(
     private const val DETECTION_INTERVAL_MS = 0L
     private const val REQUEST_CODE = 3601
 
-    @Volatile
-    private var eventSink: EventChannel.EventSink? = null
+    private val eventSinks = CopyOnWriteArrayList<EventChannel.EventSink>()
+    private val startRefCount = AtomicInteger(0)
 
     @Volatile
     private var lastPayload: Map<String, Any?>? = null
@@ -45,7 +50,12 @@ class MotionActivityManager(
     fun emit(payload: Map<String, Any?>) {
       lastPayload = payload
       mainHandler.post {
-        eventSink?.success(payload)
+        for (sink in eventSinks) {
+          try {
+            sink.success(payload)
+          } catch (_: Exception) {
+          }
+        }
       }
     }
 
@@ -57,7 +67,8 @@ class MotionActivityManager(
 
   private var methodChannel: MethodChannel? = null
   private var eventChannel: EventChannel? = null
-  private var isRunning = false
+  private var instanceSink: EventChannel.EventSink? = null
+  private var thisEngineStarted = false
 
   fun register(messenger: BinaryMessenger) {
     val methods = MethodChannel(messenger, METHOD_CHANNEL)
@@ -73,9 +84,10 @@ class MotionActivityManager(
         "start" -> start(result)
         "stop" -> {
           stop()
-          result.success(mapOf("ok" to true, "running" to false))
+          result.success(mapOf("ok" to true, "running" to (startRefCount.get() > 0)))
         }
-        "isRunning" -> result.success(mapOf("ok" to true, "running" to isRunning))
+        "isRunning" ->
+          result.success(mapOf("ok" to true, "running" to (startRefCount.get() > 0)))
         "queryLatest" -> {
           val known = lastPayload
           if (known != null) {
@@ -99,11 +111,16 @@ class MotionActivityManager(
     methodChannel = null
     eventChannel?.setStreamHandler(null)
     eventChannel = null
-    eventSink = null
+    instanceSink?.let { eventSinks.remove(it) }
+    instanceSink = null
   }
 
   override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
-    eventSink = events
+    instanceSink?.let { eventSinks.remove(it) }
+    instanceSink = events
+    if (events != null && !eventSinks.contains(events)) {
+      eventSinks.add(events)
+    }
     // Replay last known so UI paints immediately on (re)subscribe.
     lastPayload?.let { payload ->
       mainHandler.post { events?.success(payload) }
@@ -111,9 +128,10 @@ class MotionActivityManager(
   }
 
   override fun onCancel(arguments: Any?) {
-    // Clear sink only — do NOT stop recognition. Duty GPS / fusion may still
-    // need updates; Flutter calls stop() explicitly via ref-counting.
-    eventSink = null
+    // Clear this engine's sink only — do NOT stop recognition. Duty GPS /
+    // fusion may still need updates; Flutter calls stop() explicitly.
+    instanceSink?.let { eventSinks.remove(it) }
+    instanceSink = null
   }
 
   private fun permissionStatus(): String {
@@ -152,7 +170,21 @@ class MotionActivityManager(
       return
     }
 
-    if (isRunning) {
+    if (thisEngineStarted) {
+      result.success(
+        mapOf(
+          "ok" to true,
+          "running" to true,
+          "permission" to permissionStatus(),
+        ),
+      )
+      return
+    }
+
+    // Another engine already holds the process-wide recognition session.
+    if (startRefCount.get() > 0) {
+      thisEngineStarted = true
+      startRefCount.incrementAndGet()
       result.success(
         mapOf(
           "ok" to true,
@@ -167,7 +199,8 @@ class MotionActivityManager(
       client
         .requestActivityUpdates(DETECTION_INTERVAL_MS, activityPendingIntent())
         .addOnSuccessListener {
-          isRunning = true
+          thisEngineStarted = true
+          startRefCount.incrementAndGet()
           result.success(
             mapOf(
               "ok" to true,
@@ -177,7 +210,7 @@ class MotionActivityManager(
           )
         }
         .addOnFailureListener { error ->
-          isRunning = false
+          thisEngineStarted = false
           result.success(
             mapOf(
               "ok" to false,
@@ -190,7 +223,7 @@ class MotionActivityManager(
           )
         }
     } catch (error: SecurityException) {
-      isRunning = false
+      thisEngineStarted = false
       result.success(
         mapOf(
           "ok" to false,
@@ -203,7 +236,7 @@ class MotionActivityManager(
         ),
       )
     } catch (error: Exception) {
-      isRunning = false
+      thisEngineStarted = false
       result.success(
         mapOf(
           "ok" to false,
@@ -218,12 +251,15 @@ class MotionActivityManager(
   }
 
   fun stop() {
-    if (!isRunning) return
+    if (!thisEngineStarted) return
+    thisEngineStarted = false
+    val remaining = startRefCount.decrementAndGet()
+    if (remaining > 0) return
+    startRefCount.set(0)
     try {
       client.removeActivityUpdates(activityPendingIntent())
     } catch (_: Exception) {
     }
-    isRunning = false
   }
 
   private fun activityPendingIntent(): PendingIntent {

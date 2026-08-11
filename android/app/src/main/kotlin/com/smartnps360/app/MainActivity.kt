@@ -21,7 +21,6 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
   private val settingsChannel = "com.smartnps360.app/settings"
   private var settingsMethodChannel: MethodChannel? = null
-  private var motionActivityManager: MotionActivityManager? = null
   private var powerSaveReceiverRegistered = false
   private val powerSaveModeReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
@@ -114,10 +113,6 @@ class MainActivity : FlutterActivity() {
         else -> result.notImplemented()
       }
     }
-
-    val motionManager = MotionActivityManager(this)
-    motionManager.register(flutterEngine.dartExecutor.binaryMessenger)
-    motionActivityManager = motionManager
   }
 
   override fun onResume() {
@@ -126,8 +121,6 @@ class MainActivity : FlutterActivity() {
   }
 
   override fun onDestroy() {
-    motionActivityManager?.dispose()
-    motionActivityManager = null
     if (powerSaveReceiverRegistered) {
       try {
         unregisterReceiver(powerSaveModeReceiver)

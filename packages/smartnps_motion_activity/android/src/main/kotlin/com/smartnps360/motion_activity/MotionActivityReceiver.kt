@@ -1,4 +1,4 @@
-package com.smartnps360.app
+package com.smartnps360.motion_activity
 
 import android.content.BroadcastReceiver
 import android.content.Context

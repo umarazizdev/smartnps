@@ -9,6 +9,7 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import 'firebase_options.dart';
 import 'src/app/smart_nps_app.dart';
+import 'src/background/location/android_duty_location_health.dart';
 import 'src/background/location/background_location_service.dart';
 import 'src/push/notifications/push_notification_service.dart';
 import 'src/api/api_client.dart';
@@ -34,6 +35,7 @@ Future<void> main() async {
   await PushNotificationService.instance.init();
   MockLocationGuard.ensureBackgroundListenerInstalled();
   if (Platform.isAndroid) {
+    AndroidDutyLocationHealth.ensureListenerInstalled();
     unawaited(BackgroundLocationService.ensureConfigured());
   }
   runApp(const SmartNpsApp());

@@ -5,6 +5,7 @@ import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../app/app_navigator.dart';
+import '../utilities/app_config.dart';
 import '../widgets/dialogs/mock_location_dialog.dart';
 import '../utilities/overlay_prompt_guard.dart';
 import 'mock_location_detection.dart';
@@ -30,6 +31,7 @@ class MockLocationGuard {
   static int _pendingShowAttempts = 0;
 
   static void ensureBackgroundListenerInstalled() {
+    if (!AppConfig.enableMockLocationDetection) return;
     _backgroundSub ??= FlutterBackgroundService().on('mock_location').listen((
       event,
     ) {
@@ -42,6 +44,7 @@ class MockLocationGuard {
   }
 
   static void maybeShowDialogForPosition(Position position) {
+    if (!AppConfig.enableMockLocationDetection) return;
     final flags = MockLocationDetection.flagsFor(position);
     maybeShowDialog(
       isMocked: flags.isMocked,
@@ -50,6 +53,7 @@ class MockLocationGuard {
   }
 
   static void maybeShowDialogFromBridgeResult(Map<String, dynamic> result) {
+    if (!AppConfig.enableMockLocationDetection) return;
     if (result['ok'] != true) return;
 
     final location = result['location'];
@@ -62,6 +66,10 @@ class MockLocationGuard {
   }
 
   static Future<MockLocationClockInCheck> ensureClearForClockIn() async {
+    if (!AppConfig.enableMockLocationDetection) {
+      return MockLocationClockInCheck.clear;
+    }
+
     final position = await _readPositionOrNull();
     if (position == null) {
       debugPrint(
@@ -142,6 +150,7 @@ class MockLocationGuard {
     required bool isMocked,
     required bool isSimulatedBySoftware,
   }) {
+    if (!AppConfig.enableMockLocationDetection) return;
     if (!isMocked && !isSimulatedBySoftware) return;
     if (_dialogVisible) return;
 
