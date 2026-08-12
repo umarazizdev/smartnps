@@ -22,10 +22,8 @@ import '../app/offline_screen.dart';
 import '../widgets/chrome/platform_bottom_bar.dart';
 import '../widgets/chrome/background_location_required_banner.dart';
 import '../widgets/dialogs/clock_in_blocked_dialog.dart';
-import '../widgets/dialogs/glass_action_dialog.dart';
 import '../location/mock_location_detection.dart';
 import '../location/mock_location_guard.dart';
-import '../app/app_navigator.dart';
 import '../app/app_routes.dart';
 import '../auth/auth_session_manager.dart';
 import '../auth/auth_state.dart';
@@ -52,6 +50,7 @@ import '../log_visit/flow/visit_video_flow_controller.dart';
 import '../log_visit/preview/visit_video_preview_screen.dart';
 import '../permissions/required_permissions_gate.dart';
 import '../widgets/chrome/required_permissions_blocker.dart';
+import '../widgets/dialogs/location_notice_dialog.dart';
 
 class WebViewShell extends StatefulWidget {
   const WebViewShell({super.key});
@@ -75,6 +74,7 @@ class _WebViewShellUiController extends GetxController {
   final selectedBottomTabIndex = 0.obs;
   final bottomTabNavigationActive = false.obs;
   final showingLogVisit = false.obs;
+  final showLocationNotice = false.obs;
 
   final preserveBottomBarDuringLoad = false.obs;
   final flutterKeyboardInset = 0.0.obs;
@@ -114,9 +114,12 @@ class _WebViewShellUiController extends GetxController {
     if (officerLoggedIn.value == value) return;
     officerLoggedIn.value = value;
     if (value) {
-      RequiredPermissionsGate.instance.start();
+      if (!showLocationNotice.value) {
+        RequiredPermissionsGate.instance.start();
+      }
     } else {
       RequiredPermissionsGate.instance.stop();
+      showLocationNotice.value = false;
       showingLogVisit.value = false;
     }
   }
@@ -138,11 +141,7 @@ class _WebViewShellState extends State<WebViewShell>
   String? _pendingPushUrl;
   bool _nativeLogoutInFlight = false;
 
-  bool _pendingLoginRedirectAfterExpiry = false;
-  bool _refreshExpiryLogoutInFlight = false;
-  bool _sessionExpiredDialogInFlight = false;
-
-  bool _awaitingSessionClearForLoginRedirect = false;
+  bool _suppressResidualKeyboardInsetAfterLogin = false;
   bool _draftResumePrompted = false;
   Uri? _uriBeforeLogVisit;
 
@@ -168,6 +167,7 @@ class _WebViewShellState extends State<WebViewShell>
   }
 
   Future<void> _pauseNativeSessionForLoginScreen() async {
+    _suppressResidualKeyboardInsetAfterLogin = false;
     _ui.setOfficerLoggedIn(false);
     _setNativeAuthSession(false);
     _draftResumePrompted = false;
@@ -197,6 +197,7 @@ class _WebViewShellState extends State<WebViewShell>
     try {
       debugPrint('[SmartNPS360][Auth] native logout ($reason)');
 
+      _suppressResidualKeyboardInsetAfterLogin = false;
       _ui.setOfficerLoggedIn(false);
       _setNativeAuthSession(false);
       _ui.showingLogVisit.value = false;
@@ -221,6 +222,19 @@ class _WebViewShellState extends State<WebViewShell>
     }
   }
 
+  void _showLocationNoticeAfterLogin() {
+    if (!mounted) return;
+    RequiredPermissionsGate.instance.stop();
+    _ui.showLocationNotice.value = true;
+  }
+
+  void _dismissLocationNotice() {
+    _ui.showLocationNotice.value = false;
+    if (_ui.officerLoggedIn.value) {
+      RequiredPermissionsGate.instance.start();
+    }
+  }
+
   Future<bool> _hasActiveNativeSession() async {
     if (_ui.officerLoggedIn.value) return true;
     if (await AuthRepository.instance.isOfficerLoggedIn()) return true;
@@ -229,159 +243,33 @@ class _WebViewShellState extends State<WebViewShell>
   }
 
   Future<void> _onRefreshSessionExpired() async {
-    if (_refreshExpiryLogoutInFlight) {
-      _pendingLoginRedirectAfterExpiry = true;
-      return;
-    }
-    _refreshExpiryLogoutInFlight = true;
-    try {
-      debugPrint(
-        '[SmartNPS360][Auth] refresh session expired → native clear + login redirect',
-      );
-      _pendingLoginRedirectAfterExpiry = true;
-      _awaitingSessionClearForLoginRedirect = true;
-      _ui.setOfficerLoggedIn(false);
-      _setNativeAuthSession(false);
-      unawaited(_clearSiteCookiesForLogout());
-
-      await AuthSessionManager.clearNativeSession(deletePushToken: false);
-      _awaitingSessionClearForLoginRedirect = false;
-      if (!mounted) return;
-      _ui.setOfficerLoggedIn(false);
-      _setNativeAuthSession(false);
-      await _redirectWebToLogin(reason: 'refresh_session_expired');
-      unawaited(_showSessionExpiredDialog());
-    } catch (_) {
-      _awaitingSessionClearForLoginRedirect = false;
-      rethrow;
-    } finally {
-      _refreshExpiryLogoutInFlight = false;
-    }
+    if (AuthState.instance.needsReauth.value) return;
+    AuthState.instance.markNeedsReauth();
+    debugPrint(
+      '[SmartNPS360][Auth] refresh failed → token unavailable snackbar '
+      '(no logout, tokens kept)',
+    );
+    _showTokenUnavailableSnackbar();
   }
 
-  Future<void> _showSessionExpiredDialog() async {
-    if (_sessionExpiredDialogInFlight) return;
-    _sessionExpiredDialogInFlight = true;
-    try {
-      await OverlayPromptGuard.waitUntilReady();
-
-      BuildContext? dialogContext =
-          AppNavigator.key.currentContext ?? (mounted ? context : null);
-      if (dialogContext == null || !dialogContext.mounted) {
-        for (var attempt = 0; attempt < 8; attempt++) {
-          await Future<void>.delayed(const Duration(milliseconds: 50));
-          dialogContext =
-              AppNavigator.key.currentContext ?? (mounted ? context : null);
-          if (dialogContext != null && dialogContext.mounted) break;
-        }
-      }
-      if (dialogContext == null || !dialogContext.mounted) return;
-
-      await GlassActionDialog.show(
-        context: dialogContext,
-        icon: Icons.lock_clock_rounded,
-        title: 'Session expired',
-        message: 'Your session has expired. Please log in again.',
-        primaryLabel: 'OK',
-        variant: GlassActionDialogVariant.error,
-        barrierDismissible: true,
-      );
-    } finally {
-      _sessionExpiredDialogInFlight = false;
-    }
-  }
-
-  Future<void> _clearSiteCookiesForLogout() async {
-    final manager = CookieManager.instance();
-    try {
-      await manager.deleteAllCookies();
-    } catch (_) {}
-    for (final host in AppConfig.allowedHosts) {
-      final url = WebUri('https://$host/');
-      try {
-        await manager.deleteCookies(url: url, domain: host);
-      } catch (_) {}
-      try {
-        await manager.deleteCookies(url: url, domain: '.$host');
-      } catch (_) {}
-    }
-  }
-
-  bool _isWebLoginLanding(Uri? uri) => AppConfig.isLoginRoute(uri);
-
-  Future<void> _redirectWebToLogin({required String reason}) async {
-    await _clearSiteCookiesForLogout();
-
-    final controller = _controller;
-    if (controller == null) {
-      _pendingLoginRedirectAfterExpiry = true;
-      debugPrint(
-        '[SmartNPS360][Auth] login redirect deferred (no WebView yet) '
-        'reason=$reason',
-      );
-      return;
-    }
-
-    unawaited(
-      controller.evaluateJavascript(
-        source:
-            "try {"
-            "sessionStorage.removeItem('__smartnps_login');"
-            "localStorage.removeItem('__smartnps_login');"
-            "} catch (e) {}",
+  void _showTokenUnavailableSnackbar() {
+    Get.closeAllSnackbars();
+    Get.snackbar(
+      '',
+      '',
+      snackPosition: SnackPosition.BOTTOM,
+      margin: const EdgeInsets.all(12),
+      duration: const Duration(seconds: 4),
+      titleText: const SizedBox.shrink(),
+      messageText: const Text(
+        'Token is not available. It will be available shortly.',
+        style: TextStyle(color: Colors.white),
       ),
     );
-
-    try {
-      _pendingLoginRedirectAfterExpiry = true;
-      await controller.stopLoading();
-      await controller.loadUrl(
-        urlRequest: URLRequest(url: WebUri(AppRoutes.webLoginUrl)),
-      );
-      debugPrint(
-        '[SmartNPS360][Auth] requested ${AppRoutes.webLoginUrl} reason=$reason',
-      );
-    } catch (e) {
-      _pendingLoginRedirectAfterExpiry = true;
-      debugPrint(
-        '[SmartNPS360][Auth] login redirect failed reason=$reason error=$e',
-      );
-    }
   }
 
-  Future<void> _flushPendingLoginRedirectIfNeeded(
-    InAppWebViewController controller, {
-    Uri? loadedUri,
-  }) async {
-    if (!_pendingLoginRedirectAfterExpiry) return;
-
-    if (_awaitingSessionClearForLoginRedirect || _refreshExpiryLogoutInFlight) {
-      return;
-    }
-
-    final uri = loadedUri ?? _ui.currentUri.value;
-    if (_isWebLoginLanding(uri)) {
-      _pendingLoginRedirectAfterExpiry = false;
-      debugPrint(
-        '[SmartNPS360][Auth] login redirect confirmed url=$uri '
-        '(webLoginUrl=${AppRoutes.webLoginUrl})',
-      );
-      return;
-    }
-
-    _controller = controller;
-    debugPrint(
-      '[SmartNPS360][Auth] pending login redirect retry '
-      '(loaded=$uri → ${AppRoutes.webLoginUrl})',
-    );
-    try {
-      await controller.stopLoading();
-      await controller.loadUrl(
-        urlRequest: URLRequest(url: WebUri(AppRoutes.webLoginUrl)),
-      );
-    } catch (e) {
-      debugPrint('[SmartNPS360][Auth] pending login redirect retry failed: $e');
-    }
+  void _clearSoftReauthAfterSuccessfulLogin() {
+    AuthState.instance.clearNeedsReauth();
   }
 
   Future<void> _refreshNativeAuthSessionFromStorage() async {
@@ -2089,7 +1977,27 @@ class _WebViewShellState extends State<WebViewShell>
   void didChangeMetrics() {
     super.didChangeMetrics();
     if (!mounted) return;
-    _ui.setFlutterKeyboardInset(MediaQuery.viewInsetsOf(context).bottom);
+    final inset = MediaQuery.viewInsetsOf(context).bottom;
+    if (_suppressResidualKeyboardInsetAfterLogin) {
+      if (inset <= AppConfig.keyboardOpenThreshold) {
+        _ui.setFlutterKeyboardInset(0);
+        return;
+      }
+      // Real keyboard opened after login — resume normal inset tracking.
+      _suppressResidualKeyboardInsetAfterLogin = false;
+    }
+    _ui.setFlutterKeyboardInset(inset);
+  }
+
+  void _dismissKeyboardAfterLogin() {
+    _suppressResidualKeyboardInsetAfterLogin = true;
+    FocusManager.instance.primaryFocus?.unfocus();
+    SystemChannels.textInput.invokeMethod('TextInput.hide');
+    final controller = _controller;
+    if (controller != null) {
+      unawaited(controller.clearFocus());
+    }
+    _ui.setFlutterKeyboardInset(0);
   }
 
   @override
@@ -2173,8 +2081,12 @@ class _WebViewShellState extends State<WebViewShell>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
 
-    AuthRepository.instance.onRefreshSessionExpired =
-        AuthSessionManager.clearNativeSession;
+    if (identical(
+      AuthRepository.instance.onRefreshSessionExpired,
+      _onRefreshSessionExpired,
+    )) {
+      AuthRepository.instance.onRefreshSessionExpired = null;
+    }
     RequiredPermissionsGate.instance.stop();
     OfficerAnnouncementCoordinator.instance.detach();
     PushNotificationService.instance.setDeferPermissionPromptWhile(null);
@@ -2506,7 +2418,6 @@ class _WebViewShellState extends State<WebViewShell>
       _ui.selectedBottomTabIndex.value = tab;
       _ui.preserveBottomBarDuringLoad.value = true;
     } else {
-
       _ui.preserveBottomBarDuringLoad.value = false;
     }
   }
@@ -2698,7 +2609,6 @@ class _WebViewShellState extends State<WebViewShell>
         _openLogVisitTab();
         break;
       case VisitDraftResumeAction.submitReport:
-
         unawaited(
           VisitVideoPreviewScreen.uploadCurrentDraft(
             onSuccess: _finishLogVisitUploadSuccess,
@@ -2965,7 +2875,6 @@ class _WebViewShellState extends State<WebViewShell>
     controller.addJavaScriptHandler(
       handlerName: 'openLogVisit',
       callback: (args) async {
-
         print(
           '[SmartNPS360] openLogVisit called argsCount=${args.length} args=$args',
         );
@@ -3175,9 +3084,12 @@ class _WebViewShellState extends State<WebViewShell>
             map: authMap,
             user: user,
           );
+          _clearSoftReauthAfterSuccessfulLogin();
           _ui.setOfficerLoggedIn(true);
           _setNativeAuthSession(true);
           _draftResumePrompted = false;
+          _dismissKeyboardAfterLogin();
+          _showLocationNoticeAfterLogin();
           _syncPushTokenAfterLogin();
           unawaited(_maybeStartDutyHeartbeat());
           unawaited(
@@ -3209,9 +3121,12 @@ class _WebViewShellState extends State<WebViewShell>
             map: authMap,
             user: AuthState.instance.user.value,
           );
+          _clearSoftReauthAfterSuccessfulLogin();
           _ui.setOfficerLoggedIn(true);
           _setNativeAuthSession(true);
           _draftResumePrompted = false;
+          _dismissKeyboardAfterLogin();
+          _showLocationNoticeAfterLogin();
           _syncPushTokenAfterLogin();
           unawaited(_maybeStartDutyHeartbeat());
           unawaited(
@@ -3299,9 +3214,12 @@ class _WebViewShellState extends State<WebViewShell>
         return false;
       }
 
+      _clearSoftReauthAfterSuccessfulLogin();
       _ui.setOfficerLoggedIn(true);
       _setNativeAuthSession(true);
       _draftResumePrompted = false;
+      _dismissKeyboardAfterLogin();
+      _showLocationNoticeAfterLogin();
       if (syncPush) {
         await PushNotificationService.instance.syncPushTokenAfterLogin();
       }
@@ -3320,6 +3238,8 @@ class _WebViewShellState extends State<WebViewShell>
           );
           _ui.setOfficerLoggedIn(true);
           _setNativeAuthSession(true);
+          _dismissKeyboardAfterLogin();
+          _showLocationNoticeAfterLogin();
           if (syncPush) {
             await PushNotificationService.instance.syncPushTokenAfterLogin();
           }
@@ -3883,6 +3803,7 @@ class _WebViewShellState extends State<WebViewShell>
       canPop: false,
       onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
+        if (_ui.showLocationNotice.value) return;
         final shouldPop = await _onWillPop();
         if (shouldPop && mounted) {
           SystemNavigator.pop();
@@ -3892,6 +3813,7 @@ class _WebViewShellState extends State<WebViewShell>
         final isDark = _ui.webPrefersDark.value;
         final officerLoggedIn = _ui.officerLoggedIn.value;
         final onAuthRoute = _isAuthRoute(_ui.currentUri.value);
+        final locationNoticeVisible = _ui.showLocationNotice.value;
 
         final safeAreaColor = isDark
             ? const Color(0xFF0F1724)
@@ -3916,6 +3838,7 @@ class _WebViewShellState extends State<WebViewShell>
                 builder: (context, _) {
                   final showPermissionBlocker =
                       officerLoggedIn &&
+                      !locationNoticeVisible &&
                       RequiredPermissionsGate.instance.isBlocking.value &&
                       (Platform.isAndroid || Platform.isIOS) &&
                       !onAuthRoute;
@@ -3947,9 +3870,6 @@ class _WebViewShellState extends State<WebViewShell>
                                   _controller = controller;
                                   _installJsHandlers(controller);
                                   unawaited(_loadPendingPushUrl());
-                                  if (_pendingLoginRedirectAfterExpiry) {
-                                    unawaited(_onRefreshSessionExpired());
-                                  }
                                   if (_ui.showOffline.value) {
                                     unawaited(() async {
                                       final results = await Connectivity()
@@ -4032,15 +3952,6 @@ class _WebViewShellState extends State<WebViewShell>
                                 onLoadStop: (controller, url) async {
                                   _pullToRefreshController?.endRefreshing();
                                   final nextUri = url?.uriValue;
-                                  if (_pendingLoginRedirectAfterExpiry) {
-                                    await _flushPendingLoginRedirectIfNeeded(
-                                      controller,
-                                      loadedUri: nextUri,
-                                    );
-                                    if (_pendingLoginRedirectAfterExpiry) {
-                                      return;
-                                    }
-                                  }
 
                                   final ignoreEvent =
                                       _shouldIgnoreWebViewNavigationEvent(
@@ -4357,6 +4268,21 @@ class _WebViewShellState extends State<WebViewShell>
                                       _ui.selectedBottomTabIndex.value,
                                   isDark: _ui.webPrefersDark.value,
                                   onTap: _onBottomTap,
+                                ),
+                              );
+                            }),
+                            Obx(() {
+                              if (!_ui.showLocationNotice.value) {
+                                return const SizedBox.shrink();
+                              }
+                              return Positioned.fill(
+                                child: ColoredBox(
+                                  color: Colors.black54,
+                                  child: Center(
+                                    child: LocationNoticeDialog(
+                                      onClose: _dismissLocationNotice,
+                                    ),
+                                  ),
                                 ),
                               );
                             }),

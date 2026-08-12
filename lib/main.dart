@@ -14,7 +14,6 @@ import 'src/background/location/background_location_service.dart';
 import 'src/push/notifications/push_notification_service.dart';
 import 'src/api/api_client.dart';
 import 'src/auth/auth_repository.dart';
-import 'src/auth/auth_session_manager.dart';
 import 'src/location/mock_location_guard.dart';
 import 'src/utilities/app_upgrade_reconciler.dart';
 import 'src/utilities/app_version_info.dart';
@@ -29,8 +28,6 @@ Future<void> main() async {
   await AppVersionInfo.init();
   await AppUpgradeReconciler.reconcileIfNeeded();
   ApiClient.instance.ensureAuthInterceptorInstalled();
-  AuthRepository.instance.onRefreshSessionExpired =
-      AuthSessionManager.clearNativeSession;
   await AuthRepository.instance.warmAccessTokenCache();
   await PushNotificationService.instance.init();
   MockLocationGuard.ensureBackgroundListenerInstalled();

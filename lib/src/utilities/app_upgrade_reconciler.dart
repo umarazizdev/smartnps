@@ -58,7 +58,7 @@ class AppUpgradeReconciler {
         debugPrint(
           '[AppUpgradeReconciler] build changed $lastSeenBuild -> $currentBuild '
           '(${Platform.isAndroid ? 'android' : 'ios'}; '
-          'refresh-logout suppressed for ${postUpgradeAuthGrace.inMinutes}m)',
+          'soft re-auth prompt suppressed for ${postUpgradeAuthGrace.inMinutes}m)',
         );
       }
     }
