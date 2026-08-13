@@ -80,12 +80,14 @@ class _WebViewShellUiController extends GetxController {
   final flutterKeyboardInset = 0.0.obs;
 
   void setFlutterKeyboardInset(double inset) {
-    final clamped = inset < 0 ? 0.0 : inset;
+    final clamped =
+        inset <= AppConfig.keyboardOpenThreshold ? 0.0 : inset;
     if (flutterKeyboardInset.value == clamped) return;
     flutterKeyboardInset.value = clamped;
   }
 
-  bool get isKeyboardOpen => flutterKeyboardInset.value > 0;
+  bool get isKeyboardOpen =>
+      flutterKeyboardInset.value > AppConfig.keyboardOpenThreshold;
 
   void beginNavigation() {
     isNavigating.value = true;
@@ -1066,6 +1068,16 @@ class _WebViewShellState extends State<WebViewShell>
                 window.SmartNPS360._clockInGeoUnlocked = false;
               }
               throw err;
+            });
+        };
+        window.SmartNPS360.notifyClockInSuccess = function (payload) {
+          var data = payload == null ? {} : payload;
+          return ensureFlutterBridge()
+            .then(function () {
+              return window.flutter_inappwebview.callHandler(
+                'clock_in_success',
+                data
+              );
             });
         };
         window.SmartNPS360._applyClockInButtonState = function (button, status) {
@@ -2664,6 +2676,43 @@ class _WebViewShellState extends State<WebViewShell>
     return null;
   }
 
+  bool? _parseClockInSuccessFlag(dynamic raw) {
+    if (raw == null) return null;
+    if (raw is bool) return raw;
+    if (raw is num) {
+      if (raw == 1) return true;
+      if (raw == 0) return false;
+      return null;
+    }
+    if (raw is String) {
+      final text = raw.trim().toLowerCase();
+      if (text == 'true' || text == '1') return true;
+      if (text == 'false' || text == '0') return false;
+      final map = _normalizeBridgeMap(raw);
+      if (map != null) {
+        return _parseClockInSuccessFlag(
+          _valueFromPayload(map, const [
+            'clock_in_success',
+            'clockInSuccess',
+            'success',
+          ]),
+        );
+      }
+      return null;
+    }
+    if (raw is Map) {
+      final map = _normalizeBridgeMap(raw);
+      return _parseClockInSuccessFlag(
+        _valueFromPayload(map, const [
+          'clock_in_success',
+          'clockInSuccess',
+          'success',
+        ]),
+      );
+    }
+    return null;
+  }
+
   Future<Map<String, dynamic>?> _readPatrolDraftContextFromWeb() async {
     final controller = _controller;
     if (controller == null) return null;
@@ -2966,6 +3015,49 @@ class _WebViewShellState extends State<WebViewShell>
           rethrow;
         }
       },
+    );
+    Future<Map<String, dynamic>> handleClockInSuccess(List<dynamic> args) async {
+      final currentHost = _ui.currentUri.value?.host;
+      if (!AppConfig.isAllowedHost(currentHost)) {
+        return {
+          'ok': false,
+          'error': {
+            'code': 'untrusted_origin',
+            'message': 'Untrusted origin',
+          },
+        };
+      }
+
+      final raw = args.isNotEmpty ? args.first : null;
+      final payload = _normalizeBridgeMap(raw);
+      var clockInSuccess = _parseClockInSuccessFlag(raw);
+      final action = _stringFromPayload(payload, const ['action']);
+
+      if (clockInSuccess == null &&
+          action == 'clock_in_success' &&
+          payload != null) {
+        clockInSuccess = _parseClockInSuccessFlag(
+          _valueFromPayload(payload, const ['ok']),
+        );
+      }
+
+      if (clockInSuccess == true) {
+        DutyHeartbeatService.instance.pollAfterClockInSuccess();
+      }
+
+      return {
+        'ok': true,
+        'clock_in_success': clockInSuccess,
+      };
+    }
+
+    controller.addJavaScriptHandler(
+      handlerName: 'clock_in_success',
+      callback: handleClockInSuccess,
+    );
+    controller.addJavaScriptHandler(
+      handlerName: 'notifyClockInSuccess',
+      callback: handleClockInSuccess,
     );
     controller.addJavaScriptHandler(
       handlerName: 'themeChanged',
@@ -3318,6 +3410,10 @@ class _WebViewShellState extends State<WebViewShell>
       }
 
       await AuthRepository.instance.saveLoginFromAuthResponse(map: map);
+      await AuthRepository.instance.saveCredentials(
+        employeeNo: username,
+        password: password,
+      );
 
       final token = await AuthRepository.instance.getAccessToken();
       if (token == null || token.isEmpty) {
