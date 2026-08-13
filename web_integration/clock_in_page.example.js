@@ -7,6 +7,9 @@
  * Native app now blocks GPS until OS reports background location (Always /
  * Allow all the time). Clock-in API calls that do not use GPS can still succeed
  * if the web submits the API directly — that MUST be fixed on the web side.
+ *
+ * After a successful clock-in API, notify native with clock_in_success so it can
+ * burst-poll heartbeat and start duty tracking quickly.
  */
 
 // ---------------------------------------------------------------------------
@@ -39,7 +42,27 @@ async function submitClockIn() {
   // await new Promise((resolve, reject) => {
   //   navigator.geolocation.getCurrentPosition(resolve, reject);
   // });
-  // await fetch('/api/attendance/clock-in', { method: 'POST', ... });
+
+  const res = await fetch('/api/attendance/clock-in', {
+    method: 'POST',
+    // headers / body as needed
+  });
+
+  const clockInSuccess = res.ok;
+
+  // REQUIRED in native WebView: notify after clock-in attempt result
+  if (
+    window.flutter_inappwebview &&
+    typeof window.flutter_inappwebview.callHandler === 'function'
+  ) {
+    window.flutter_inappwebview.callHandler('clock_in_success', {
+      action: 'clock_in_success',
+      clock_in_success: clockInSuccess,
+      ok: clockInSuccess,
+      source: 'officer_dashboard_time_tracker',
+      occurred_at: new Date().toISOString(),
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------

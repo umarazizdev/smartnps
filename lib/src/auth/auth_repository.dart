@@ -37,10 +37,12 @@ class AuthRepository {
   static const _kAccessTokenExpiresAt = 'auth.access_token_expires_at';
   static const _kUserJson = 'auth.user_json';
   static const _kOfficerLoggedIn = 'auth.officer_logged_in';
+  static const _kEmployeeNo = 'auth.employee_no';
+  static const _kPassword = 'auth.password';
 
   static const _refreshRetryKey = '_auth_refresh_retried';
 
-  static final Dio _refreshDio = Dio(
+  static final Dio _authDio = Dio(
     BaseOptions(
       connectTimeout: const Duration(seconds: 12),
       receiveTimeout: const Duration(seconds: 12),
@@ -135,6 +137,7 @@ class AuthRepository {
     await _secureDelete(_kRefreshToken);
     await _secureDelete(_kAccessTokenExpiresAt);
     await _secureDelete(_kUserJson);
+    await clearStoredCredentials();
     _cachedAccessToken = null;
     _cachedRefreshToken = null;
     _cachedAccessTokenExpiresAt = null;
@@ -144,6 +147,48 @@ class AuthRepository {
     AuthState.instance.clearNeedsReauth();
     LocationDisclosureAccountSync.onLoggedOut();
     debugPrint('[SmartNPS360][AuthRepo] cleared auth (secure storage)');
+  }
+
+  /// Persists officer credentials for silent re-login after refresh failure.
+  Future<void> saveCredentials({
+    required String employeeNo,
+    required String password,
+  }) async {
+    final trimmedEmployee = employeeNo.trim();
+    if (trimmedEmployee.isEmpty || password.isEmpty) return;
+
+    final employeeSaved = await _secureWrite(_kEmployeeNo, trimmedEmployee);
+    final passwordSaved = await _secureWrite(_kPassword, password);
+    if (kDebugMode) {
+      debugPrint(
+        employeeSaved && passwordSaved
+            ? '[SmartNPS360][AuthRepo] saved credentials (secure storage)'
+            : '[SmartNPS360][AuthRepo] saved credentials partially '
+                '(employee=$employeeSaved password=$passwordSaved)',
+      );
+    }
+  }
+
+  Future<void> clearStoredCredentials() async {
+    await _secureDelete(_kEmployeeNo);
+    await _secureDelete(_kPassword);
+  }
+
+  Future<({String employeeNo, String password})?> getStoredCredentials() async {
+    try {
+      final employeeNo = await _storage.read(key: _kEmployeeNo);
+      final password = await _storage.read(key: _kPassword);
+      if (employeeNo == null ||
+          employeeNo.isEmpty ||
+          password == null ||
+          password.isEmpty) {
+        return null;
+      }
+      return (employeeNo: employeeNo, password: password);
+    } on PlatformException catch (e) {
+      if (_isKeychainInteractionNotAllowed(e)) return null;
+      rethrow;
+    }
   }
 
   Future<void> saveAccessToken(String token) async {
@@ -418,13 +463,22 @@ class AuthRepository {
       final refreshToken = await getRefreshToken();
       if (refreshToken == null || refreshToken.isEmpty) {
         if (kDebugMode) {
-          debugPrint('[SmartNPS360][AuthRepo] refresh skipped (no refresh token)');
+          debugPrint(
+            '[SmartNPS360][AuthRepo] refresh skipped (no refresh token); '
+            'trying silent re-login',
+          );
         }
+        final silent = await _trySilentRelogin();
+        if (silent != null && silent.isNotEmpty) {
+          completer.complete(silent);
+          return silent;
+        }
+        await _notifyRefreshSessionExpired();
         completer.complete(null);
         return null;
       }
 
-      final response = await _refreshDio.postUri(
+      final response = await _authDio.postUri(
         Uri.parse(ApiUrls.refreshTokenUrl),
         data: {'refresh_token': refreshToken},
       );
@@ -433,6 +487,11 @@ class AuthRepository {
       ApiClient.logHttpResult('POST', Uri.parse(ApiUrls.refreshTokenUrl), statusCode);
       if (statusCode < 200 || statusCode >= 300) {
         if (statusCode == 401 || statusCode == 403) {
+          final silent = await _trySilentRelogin();
+          if (silent != null && silent.isNotEmpty) {
+            completer.complete(silent);
+            return silent;
+          }
           await _notifyRefreshSessionExpired();
         }
         completer.complete(null);
@@ -459,6 +518,11 @@ class AuthRepository {
         e.response?.data?.toString() ?? e.message ?? e.type.name,
       );
       if (statusCode == 401 || statusCode == 403) {
+        final silent = await _trySilentRelogin();
+        if (silent != null && silent.isNotEmpty) {
+          completer.complete(silent);
+          return silent;
+        }
         await _notifyRefreshSessionExpired();
       }
       completer.complete(null);
@@ -476,6 +540,101 @@ class AuthRepository {
       if (identical(_refreshInFlight, completer)) {
         _refreshInFlight = null;
       }
+    }
+  }
+
+  /// Re-authenticates with securely stored credentials when refresh is dead.
+  /// Returns a fresh access token on success; never logs the password.
+  Future<String?> _trySilentRelogin() async {
+    final creds = await getStoredCredentials();
+    if (creds == null) {
+      if (kDebugMode) {
+        debugPrint(
+          '[SmartNPS360][AuthRepo] silent re-login skipped (no stored credentials)',
+        );
+      }
+      return null;
+    }
+
+    try {
+      if (kDebugMode) {
+        debugPrint(
+          '[SmartNPS360][AuthRepo] silent re-login attempt '
+          'employee_no=${creds.employeeNo}',
+        );
+      }
+
+      final response = await _authDio.postUri(
+        Uri.parse(ApiUrls.sanctumLoginUrl),
+        data: {
+          'employee_no': creds.employeeNo,
+          'password': creds.password,
+          'device_name': 'mobile-app',
+        },
+      );
+
+      final statusCode = response.statusCode ?? 0;
+      ApiClient.logHttpResult(
+        'POST',
+        Uri.parse(ApiUrls.sanctumLoginUrl),
+        statusCode,
+      );
+      if (statusCode < 200 || statusCode >= 300) {
+        if (statusCode == 401 || statusCode == 403) {
+          await clearStoredCredentials();
+          if (kDebugMode) {
+            debugPrint(
+              '[SmartNPS360][AuthRepo] silent re-login rejected; '
+              'cleared stored credentials',
+            );
+          }
+        }
+        return null;
+      }
+
+      final body = response.data;
+      if (body is! Map) return null;
+
+      final map = Map<String, dynamic>.from(body);
+      if (extractAccessToken(_unwrapAuthPayload(map)) == null) {
+        return null;
+      }
+
+      await saveLoginFromAuthResponse(map: map);
+      final access = await getAccessToken();
+      if (access != null && access.isNotEmpty) {
+        if (kDebugMode) {
+          debugPrint('[SmartNPS360][AuthRepo] silent re-login succeeded');
+        }
+        return access;
+      }
+      return null;
+    } on DioException catch (e) {
+      final statusCode = e.response?.statusCode ?? 0;
+      ApiClient.logHttpError(
+        'POST',
+        Uri.parse(ApiUrls.sanctumLoginUrl),
+        statusCode,
+        e.response?.data?.toString() ?? e.message ?? e.type.name,
+      );
+      if (statusCode == 401 || statusCode == 403) {
+        await clearStoredCredentials();
+        if (kDebugMode) {
+          debugPrint(
+            '[SmartNPS360][AuthRepo] silent re-login rejected; '
+            'cleared stored credentials',
+          );
+        }
+      }
+      return null;
+    } catch (e) {
+      ApiClient.logHttpError(
+        'POST',
+        Uri.parse(ApiUrls.sanctumLoginUrl),
+        0,
+        e.toString(),
+      );
+      return null;
     }
   }
 

@@ -54,6 +54,7 @@ class DutyHeartbeatService {
   Timer? _pollTimer;
   bool _pollInFlight = false;
   bool _heartbeatActive = false;
+  int _clockInBurstGeneration = 0;
   String? _lastAppliedStatus;
   bool _disclosureAccepted = false;
   bool _disclosureDeferred = false;
@@ -275,6 +276,72 @@ class DutyHeartbeatService {
     unawaited(_hydrateConsentFromStorage());
     unawaited(_pollOnce());
     _scheduleNextPoll();
+  }
+
+  void pollAfterClockInSuccess() {
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+
+    _pollTimer?.cancel();
+    _pollTimer = null;
+
+    if (!_heartbeatActive) {
+      _heartbeatActive = true;
+      LocationSharingStatusNotification.resetSignedOutGate();
+      ApiClient.instance.ensureAuthInterceptorInstalled();
+      unawaited(_hydrateConsentFromStorage());
+    }
+
+    _resetOnDutyAutoPromptState();
+    if (_lastAppliedStatus == onDuty) {
+      _lastAppliedStatus = offDuty;
+    }
+
+    unawaited(_burstPollAfterClockInSuccess());
+  }
+
+  void _cancelClockInBurst() {
+    _clockInBurstGeneration++;
+  }
+
+  Future<void> _burstPollAfterClockInSuccess() async {
+    final generation = ++_clockInBurstGeneration;
+
+    for (var attempt = 1; attempt <= 15; attempt++) {
+      if (generation != _clockInBurstGeneration || !_heartbeatActive) {
+        return;
+      }
+
+      final waitDeadline = DateTime.now().add(const Duration(seconds: 2));
+      while (_pollInFlight && DateTime.now().isBefore(waitDeadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      if (generation != _clockInBurstGeneration || !_heartbeatActive) {
+        return;
+      }
+
+      await _pollOnce();
+
+      if (generation != _clockInBurstGeneration || !_heartbeatActive) {
+        return;
+      }
+
+      if (_lastAppliedStatus == onDuty) {
+        await _applyOnDuty();
+
+        final running = await _isLocationTrackingRunning();
+        if (running || _locationSharingArmedThisDuty) {
+          break;
+        }
+      }
+
+      if (attempt < 15) {
+        await Future<void>.delayed(const Duration(seconds: 1));
+      }
+    }
+
+    if (generation == _clockInBurstGeneration && _heartbeatActive) {
+      _scheduleNextPoll();
+    }
   }
 
   Future<void> _hydrateConsentFromStorage() async {
@@ -564,6 +631,7 @@ class DutyHeartbeatService {
   }
 
   Future<void> stop({bool stopBackgroundLocation = true}) async {
+    _cancelClockInBurst();
     _heartbeatActive = false;
     _pollTimer?.cancel();
     _pollTimer = null;
@@ -581,6 +649,7 @@ class DutyHeartbeatService {
 
   Future<void> finalizeLogoutInstant() async {
     final wasSharing = await _shouldAnnounceLocationStop();
+    _cancelClockInBurst();
     _heartbeatActive = false;
     _pollTimer?.cancel();
     _pollTimer = null;
