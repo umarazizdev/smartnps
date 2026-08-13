@@ -12,6 +12,7 @@ import '../../location/mock_location_guard.dart';
 import '../../location/speed_adaptive_gps_policy.dart';
 import '../../motion/motion_activity_fusion_controller.dart';
 import '../location/background_location_accuracy.dart';
+import '../location/background_location_issue_notification.dart';
 import '../location/background_location_uploader.dart';
 import '../location/location_sharing_status_notification.dart';
 import 'ios_background_location_notification.dart';
@@ -330,6 +331,11 @@ class IosDutyLocationPinger {
       }
       await Future<void>.delayed(_recoverDelay);
       if (isRunning && !needsRecovery) return;
+      unawaited(
+        BackgroundLocationIssueNotification.showIfOnDuty(
+          issue: BackgroundLocationIssue.gpsNotUpdating,
+        ),
+      );
 
       final confirm = confirmOnDutyBeforeStart;
       if (confirm == null) {
@@ -400,6 +406,11 @@ class IosDutyLocationPinger {
     final token = await AuthRepository.instance.ensureValidAccessToken();
     if (_stopping) return;
     if (token == null || token.isEmpty) {
+      unawaited(
+        BackgroundLocationIssueNotification.showIfOnDuty(
+          issue: BackgroundLocationIssue.signedOut,
+        ),
+      );
       await stop();
       return;
     }

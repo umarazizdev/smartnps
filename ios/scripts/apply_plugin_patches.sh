@@ -157,7 +157,10 @@ patch_flutter_background_service_ios() {
 
   patch_file_in_place "$file" perl -0pi -e '
     s/UIApplication\.shared\.setMinimumBackgroundFetchInterval\(UIApplication\.backgroundFetchIntervalMinimum\)\n\s*if #available\(iOS 13\.0, \*\) \{/if #available(iOS 13.0, *) {/s;
-    s/@available\(iOS 13, \*\)\nclass FlutterBackgroundRefreshAppOperation: Operation/@available(iOS 13, *)\nclass FlutterBackgroundRefreshAppOperation: Operation, @unchecked Sendable/s;
+    s/class FlutterBackgroundRefreshAppOperation: Operation[^\n{]*/class FlutterBackgroundRefreshAppOperation: Operation, \@unchecked Sendable/;
+    unless (/didRegisterTaskIdentifier/) {
+      s/    \@available\(iOS 13\.0, \*\)\n    public static func registerTaskIdentifier\(taskIdentifier: String\) \{\n        BGTaskScheduler\.shared\.register\(forTaskWithIdentifier: taskIdentifier, using: nil\) \{ task in\n            self\.handleAppRefresh\(task: task as! BGAppRefreshTask\)\n        \}\n    \}/    private static var didRegisterTaskIdentifier = false\n\n    \@available(iOS 13.0, *)\n    public static func registerTaskIdentifier(taskIdentifier: String) {\n        guard !didRegisterTaskIdentifier else { return }\n        didRegisterTaskIdentifier = true\n        BGTaskScheduler.shared.register(forTaskWithIdentifier: taskIdentifier, using: nil) { task in\n            self.handleAppRefresh(task: task as! BGAppRefreshTask)\n        }\n    }/s;
+    }
   '
 }
 

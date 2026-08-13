@@ -13,6 +13,7 @@ import '../../motion/motion_activity_fusion_controller.dart';
 import '../duty/duty_status_snapshot.dart';
 import 'android_duty_location_health.dart';
 import 'background_location_accuracy.dart';
+import 'background_location_issue_notification.dart';
 import 'background_location_uploader.dart';
 
 @pragma('vm:entry-point')
@@ -20,10 +21,15 @@ class BackgroundLocationService {
   static const String _channelId = 'smartnps360_location';
   static const int _notificationId = 9911;
   /// Kick a one-shot GPS fix if no acceptable upload for this long.
+  /// Used as OEM-throttle fallback only — not a fixed BG cadence.
   static const Duration _forcePollAfter = Duration(seconds: 45);
   /// Only cancel/resubscribe the stream if no fix of any accuracy for this long.
   static const Duration _rebuildStreamAfter = Duration(minutes: 3);
-  static const Duration _bgForcePollEvery = Duration(seconds: 15);
+  /// Stable FGS GPS cadence. Adaptive policy still decides ping vs batch;
+  /// do not retune Geolocator (cancel/resubscribe) or OEM gaps appear.
+  static const Duration _androidStreamInterval = Duration(seconds: 5);
+  /// Renew on_duty snapshot + re-check off_duty clear while UI is frozen.
+  static const Duration _dutyGateEvery = Duration(seconds: 30);
 
   static bool _configured = false;
   static Future<void>? _configureFuture;
@@ -121,7 +127,10 @@ class BackgroundLocationService {
     // flutter_background_service_android on this isolate and throws:
     // "This class should only be used in the main isolate".
     if (kDebugMode) {
-      debugPrint('[DutyLocation] RUNNING (Android background service onStart)');
+      debugPrint(
+        '[DutyLocation] RUNNING (Android background service onStart, '
+        'stable-stream v2)',
+      );
     }
 
     // Hard gate: never collect GPS unless a valid on_duty snapshot exists.
@@ -134,6 +143,18 @@ class BackgroundLocationService {
       service.stopSelf();
       return;
     }
+
+    // Warm tokens in this isolate so BG uploads don't race an empty cache.
+    try {
+      await AuthRepository.instance.warmAccessTokenCache();
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[DutyLocation] Android FGS auth warm failed: $e');
+      }
+    }
+
+    // Extend TTL immediately so UI heartbeat freeze cannot expire the gate.
+    unawaited(DutyStatusSnapshot.renewIfStillOnDuty());
 
     final uploader = BackgroundLocationUploader();
     await uploader.init();
@@ -152,7 +173,7 @@ class BackgroundLocationService {
     var stopping = false;
     var streamRebuildInFlight = false;
     var forcePollInFlight = false;
-    var appInBackground = false;
+    var dutyGateInFlight = false;
     DateTime? lastAcceptedFixAt;
     DateTime? lastAnyFixAt;
     final startedAt = DateTime.now();
@@ -167,28 +188,48 @@ class BackgroundLocationService {
     late final Future<void> Function() subscribePositionStream;
     late final Future<void> Function(Position pos) handlePosition;
     late final Future<void> Function({required String reason}) forcePoll;
+    late final Future<void> Function() runDutyGate;
 
     Timer? healthTimer;
-    Timer? bgForcePollTimer;
+    Timer? dutyGateTimer;
 
-    void stopBgForcePoll() {
-      bgForcePollTimer?.cancel();
-      bgForcePollTimer = null;
-    }
-
-    void startBgForcePoll() {
-      stopBgForcePoll();
-      bgForcePollTimer = Timer.periodic(_bgForcePollEvery, (_) {
-        if (stopping || !appInBackground) return;
-        unawaited(forcePoll(reason: 'bg_keep_alive'));
-      });
-    }
+    /// Keep on_duty TTL fresh while FGS is alive; stop the moment snapshot is
+    /// cleared (off_duty / logout). Never recreates a cleared snapshot.
+    runDutyGate = () async {
+      if (stopping || dutyGateInFlight) return;
+      dutyGateInFlight = true;
+      try {
+        // Renew first so a near-expiry snapshot is extended before the
+        // validity check would clear it. renewIfStillOnDuty never recreates
+        // after clear().
+        await DutyStatusSnapshot.renewIfStillOnDuty();
+        final stillOnDuty =
+            await DutyStatusSnapshot.isValidOnDutyForCurrentUser();
+        if (!stillOnDuty) {
+          if (kDebugMode) {
+            debugPrint(
+              '[DutyLocation] Android FGS duty gate: snapshot gone → stop',
+            );
+          }
+          await stop();
+          return;
+        }
+      } catch (e) {
+        if (kDebugMode) {
+          debugPrint('[DutyLocation] Android FGS duty gate failed: $e');
+        }
+      } finally {
+        dutyGateInFlight = false;
+      }
+    };
 
     handlePosition = (Position pos) async {
       if (stopping) return;
       lastAnyFixAt = DateTime.now();
 
-      // Off-duty / snapshot cleared → stop immediately (no fetch/upload).
+      // Renew before validity check so near-expiry BG sessions survive UI
+      // freeze. renewIfStillOnDuty never recreates after off_duty clear().
+      await DutyStatusSnapshot.renewIfStillOnDuty();
       if (!await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) {
         if (kDebugMode) {
           debugPrint(
@@ -207,16 +248,36 @@ class BackgroundLocationService {
       final token = await AuthRepository.instance.ensureValidAccessToken();
       if (stopping) return;
       if (token == null || token.isEmpty) {
-        await stop();
+        // Logged out (no refresh session) → stop. Transient refresh/network
+        // failure while still logged in → skip this upload, keep GPS alive.
+        final refresh = await AuthRepository.instance.getRefreshToken();
+        if (refresh == null || refresh.isEmpty) {
+          if (kDebugMode) {
+            debugPrint(
+              '[DutyLocation] Android FGS stopping; no auth session',
+            );
+          }
+          unawaited(
+            BackgroundLocationIssueNotification.showIfOnDuty(
+              issue: BackgroundLocationIssue.signedOut,
+            ),
+          );
+          await stop();
+          return;
+        }
+        if (kDebugMode) {
+          debugPrint(
+            '[DutyLocation] Android FGS auth transient fail; '
+            'keeping GPS, skipping upload',
+          );
+        }
         return;
       }
 
       final policyDecision = policyTracker.evaluate(pos);
-      final settingsChanged = streamController.observe(pos, policyDecision);
-      // Avoid stream tear-down while backgrounded — that creates multi-minute gaps.
-      if (settingsChanged && !appInBackground) {
-        unawaited(rebuildStreamIfNeeded(reason: 'policy_or_curve'));
-      }
+      // Observe for keep-gate / fusion inputs only. Never rebuild the live
+      // Android stream on band/curve changes — that stopped GPS in background.
+      streamController.observe(pos, policyDecision);
 
       final keepDecision = keepPointGate.evaluate(
         pos,
@@ -291,6 +352,13 @@ class BackgroundLocationService {
         if (kDebugMode) {
           debugPrint('[DutyLocation] Android force poll failed: $e');
         }
+        // OEM often times out getCurrentPosition in background. Keep FGS.
+        // Only resubscribe when the stream itself looks dead.
+        final lastAny = lastAnyFixAt ?? startedAt;
+        if (!stopping &&
+            DateTime.now().difference(lastAny) > _rebuildStreamAfter) {
+          unawaited(rebuildStreamIfNeeded(reason: 'force_poll_timeout'));
+        }
       } finally {
         forcePollInFlight = false;
       }
@@ -307,11 +375,27 @@ class BackgroundLocationService {
       if (now.difference(lastAccepted) > _forcePollAfter) {
         unawaited(forcePoll(reason: 'stale_accepted_fix'));
       }
+      if (now.difference(lastAccepted) > _rebuildStreamAfter) {
+        unawaited(
+          BackgroundLocationIssueNotification.showIfOnDuty(
+            issue: BackgroundLocationIssue.gpsNotUpdating,
+          ),
+        );
+      }
 
       // Only rebuild if the stream appears completely dead.
       if (now.difference(lastAny) > _rebuildStreamAfter) {
         unawaited(rebuildStreamIfNeeded(reason: 'stream_dead'));
+        unawaited(
+          BackgroundLocationIssueNotification.showIfOnDuty(
+            issue: BackgroundLocationIssue.gpsStopped,
+          ),
+        );
       }
+    });
+
+    dutyGateTimer = Timer.periodic(_dutyGateEvery, (_) {
+      unawaited(runDutyGate());
     });
 
     stop = () async {
@@ -319,7 +403,8 @@ class BackgroundLocationService {
       stopping = true;
       healthTimer?.cancel();
       healthTimer = null;
-      stopBgForcePoll();
+      dutyGateTimer?.cancel();
+      dutyGateTimer = null;
       if (kDebugMode) {
         debugPrint('[DutyLocation] STOPPED (Android background service)');
       }
@@ -357,18 +442,15 @@ class BackgroundLocationService {
     };
 
     subscribePositionStream = () async {
-      // While backgrounded, use aggressive cadence so OEM throttling is less likely.
-      final settings = appInBackground
-          ? AndroidSettings(
-              accuracy: LocationAccuracy.bestForNavigation,
-              distanceFilter: 0,
-              intervalDuration: const Duration(seconds: 5),
-              timeLimit: null,
-              forceLocationManager: false,
-            )
-          : streamController.buildLocationSettings(
-              allowBackgroundLocationUpdates: true,
-            );
+      // One stable Android subscription for FG and BG. Adaptive bands
+      // still gate ping vs batch; they must not cancel this listener.
+      final settings = AndroidSettings(
+        accuracy: LocationAccuracy.bestForNavigation,
+        distanceFilter: 0,
+        intervalDuration: _androidStreamInterval,
+        timeLimit: null,
+        forceLocationManager: false,
+      );
       await sub?.cancel();
       sub = Geolocator.getPositionStream(locationSettings: settings).listen(
         (pos) {
@@ -378,21 +460,19 @@ class BackgroundLocationService {
           if (kDebugMode) {
             debugPrint('[DutyLocation] Android GPS stream error: $error');
           }
-          // Don't tear down on error while backgrounded — force-poll instead.
-          if (appInBackground) {
-            unawaited(forcePoll(reason: 'stream_error_bg'));
-          } else {
-            unawaited(rebuildStreamIfNeeded(reason: 'stream_error'));
-          }
+          unawaited(forcePoll(reason: 'stream_error'));
         },
       );
       streamController.markSettingsApplied();
+      if (kDebugMode) {
+        debugPrint(
+          '[DutyLocation] Android GPS stream subscribed '
+          '(stable ${_androidStreamInterval.inSeconds}s, no policy rebuild)',
+        );
+      }
     };
 
-    streamController.onSettingsChanged = () {
-      if (appInBackground) return;
-      unawaited(rebuildStreamIfNeeded(reason: 'settings_changed'));
-    };
+    streamController.onSettingsChanged = null;
 
     service.on('stop').listen((event) {
       unawaited(stop());
@@ -405,23 +485,22 @@ class BackgroundLocationService {
 
     service.on('app_backgrounded').listen((event) {
       if (stopping) return;
-      appInBackground = true;
       if (kDebugMode) {
-        debugPrint('[DutyLocation] app backgrounded — BG force-poll armed');
+        debugPrint(
+          '[DutyLocation] app backgrounded — GPS stream kept, adaptive upload continues',
+        );
       }
-      startBgForcePoll();
-      // Keep the existing stream; kick an immediate one-shot fix.
-      unawaited(forcePoll(reason: 'enter_background'));
+      // UI isolate will freeze; renew TTL. GPS stays on existing policy stream.
+      unawaited(DutyStatusSnapshot.renewIfStillOnDuty());
+      unawaited(runDutyGate());
     });
 
     service.on('app_foregrounded').listen((event) {
       if (stopping) return;
-      appInBackground = false;
-      stopBgForcePoll();
       if (kDebugMode) {
-        debugPrint('[DutyLocation] app foregrounded — BG force-poll cleared');
+        debugPrint('[DutyLocation] app foregrounded');
       }
-      unawaited(forcePoll(reason: 'enter_foreground'));
+      unawaited(runDutyGate());
     });
 
     await subscribePositionStream();

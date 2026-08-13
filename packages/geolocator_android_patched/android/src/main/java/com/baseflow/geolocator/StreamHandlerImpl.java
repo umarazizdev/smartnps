@@ -24,6 +24,10 @@ import io.flutter.plugin.common.EventChannel;
 class StreamHandlerImpl implements EventChannel.StreamHandler {
   private static final String TAG = "FlutterGeolocator";
 
+  interface ForegroundServiceBinder {
+    void ensureBound(@Nullable Runnable whenReady);
+  }
+
   private final PermissionManager permissionManager;
 
   @Nullable private EventChannel channel;
@@ -32,6 +36,8 @@ class StreamHandlerImpl implements EventChannel.StreamHandler {
   @Nullable private GeolocatorLocationService foregroundLocationService;
   @Nullable private GeolocationManager geolocationManager;
   @Nullable private LocationClient locationClient;
+  @Nullable private ForegroundServiceBinder foregroundServiceBinder;
+  private boolean listenCancelled = false;
 
   public StreamHandlerImpl(PermissionManager permissionManager, GeolocationManager geolocationManager) {
     this.permissionManager = permissionManager;
@@ -41,6 +47,10 @@ class StreamHandlerImpl implements EventChannel.StreamHandler {
   public void setForegroundLocationService(
       @Nullable GeolocatorLocationService foregroundLocationService) {
     this.foregroundLocationService = foregroundLocationService;
+  }
+
+  public void setForegroundServiceBinder(@Nullable ForegroundServiceBinder binder) {
+    this.foregroundServiceBinder = binder;
   }
 
   public void setActivity(@Nullable Activity activity) {
@@ -89,6 +99,7 @@ class StreamHandlerImpl implements EventChannel.StreamHandler {
   @SuppressWarnings({"ConstantConditions", "unchecked"})
   @Override
   public void onListen(Object arguments, EventChannel.EventSink events) {
+    listenCancelled = false;
     try {
       if (!permissionManager.hasPermission(this.context)) {
         events.error(
@@ -102,11 +113,6 @@ class StreamHandlerImpl implements EventChannel.StreamHandler {
           ErrorCodes.permissionDefinitionsNotFound.toString(),
           ErrorCodes.permissionDefinitionsNotFound.toDescription(),
           null);
-      return;
-    }
-
-    if (foregroundLocationService == null) {
-      Log.e(TAG, "Location background service has not started correctly");
       return;
     }
 
@@ -124,27 +130,75 @@ class StreamHandlerImpl implements EventChannel.StreamHandler {
           ForegroundNotificationOptions.parseArguments(
               (Map<String, Object>) map.get("foregroundNotificationConfig"));
     }
-    if (foregroundNotificationOptions != null) {
-      Log.d(TAG, "Geolocator position updates started using Android foreground service");
-      foregroundLocationService.startLocationService(forceLocationManager, locationOptions, events);
-      foregroundLocationService.enableBackgroundMode(foregroundNotificationOptions);
-    } else {
-      Log.d(TAG, "Geolocator position updates started");
-      locationClient =
-          geolocationManager.createLocationClient(
-              context, Boolean.TRUE.equals(forceLocationManager), locationOptions);
 
-      geolocationManager.startPositionUpdates(
-          locationClient,
-          activity,
-          (Location location) -> events.success(LocationMapper.toHashMap(location)),
-          (ErrorCodes errorCodes) ->
-              events.error(errorCodes.toString(), errorCodes.toDescription(), null));
+    if (foregroundNotificationOptions == null) {
+      startDirectPositionUpdates(forceLocationManager, locationOptions, events);
+      return;
     }
+
+    final boolean forceLm = forceLocationManager;
+    final LocationOptions opts = locationOptions;
+    final ForegroundNotificationOptions fgsOpts = foregroundNotificationOptions;
+    if (foregroundLocationService != null) {
+      startForegroundServiceUpdates(forceLm, opts, fgsOpts, events);
+      return;
+    }
+    if (foregroundServiceBinder == null) {
+      Log.e(TAG, "Location background service has not started correctly");
+      events.error(
+          ErrorCodes.errorWhileAcquiringPosition.toString(),
+          "Location background service has not started correctly",
+          null);
+      return;
+    }
+    Log.d(TAG, "Deferring position stream until Geolocator location service is bound");
+    foregroundServiceBinder.ensureBound(
+        () -> {
+          if (listenCancelled) {
+            return;
+          }
+          if (foregroundLocationService == null) {
+            Log.e(TAG, "Location background service bind completed but service is null");
+            events.error(
+                ErrorCodes.errorWhileAcquiringPosition.toString(),
+                "Location background service has not started correctly",
+                null);
+            return;
+          }
+          startForegroundServiceUpdates(forceLm, opts, fgsOpts, events);
+        });
+  }
+
+  private void startDirectPositionUpdates(
+      boolean forceLocationManager,
+      LocationOptions locationOptions,
+      EventChannel.EventSink events) {
+    Log.d(TAG, "Geolocator position updates started");
+    locationClient =
+        geolocationManager.createLocationClient(
+            context, Boolean.TRUE.equals(forceLocationManager), locationOptions);
+
+    geolocationManager.startPositionUpdates(
+        locationClient,
+        activity,
+        (Location location) -> events.success(LocationMapper.toHashMap(location)),
+        (ErrorCodes errorCodes) ->
+            events.error(errorCodes.toString(), errorCodes.toDescription(), null));
+  }
+
+  private void startForegroundServiceUpdates(
+      boolean forceLocationManager,
+      LocationOptions locationOptions,
+      ForegroundNotificationOptions foregroundNotificationOptions,
+      EventChannel.EventSink events) {
+    Log.d(TAG, "Geolocator position updates started using Android foreground service");
+    foregroundLocationService.startLocationService(forceLocationManager, locationOptions, events);
+    foregroundLocationService.enableBackgroundMode(foregroundNotificationOptions);
   }
 
   @Override
   public void onCancel(Object arguments) {
+    listenCancelled = true;
     disposeListeners(true);
   }
 

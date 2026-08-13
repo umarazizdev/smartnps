@@ -17,6 +17,7 @@ import '../../permissions/required_permissions_gate.dart';
 import '../../utilities/overlay_prompt_guard.dart';
 import '../../utilities/permission_settings_helper.dart';
 import '../../widgets/dialogs/location_tracking_disclosure_dialog.dart';
+import '../location/android_duty_location_health.dart';
 import '../location/background_location_controller.dart';
 import '../location/background_location_permissions.dart';
 import '../location/location_sharing_status_notification.dart';
@@ -66,6 +67,7 @@ class DutyHeartbeatService {
   Future<void>? _ensureTrackingFuture;
   Future<bool>? _disclosurePromptFuture;
   LocationPermission? _lastKnownIosPermission;
+  bool _deferTrackingStart = false;
 
   final ValueNotifier<bool> backgroundLocationPermissionMissing = ValueNotifier(
     false,
@@ -104,9 +106,7 @@ class DutyHeartbeatService {
       }
     } catch (e) {
       if (kDebugMode) {
-        debugPrint(
-          '[DutyHeartbeatService] on-duty logout check failed: $e',
-        );
+        debugPrint('[DutyService] on-duty logout check failed: $e');
       }
     }
 
@@ -136,9 +136,7 @@ class DutyHeartbeatService {
         return true;
       }
       if (kDebugMode) {
-        debugPrint(
-          '[DutyHeartbeatService] tracking denied; no auth token',
-        );
+        debugPrint('[DutyHeartbeatService] tracking denied; no auth token');
       }
       await DutyStatusSnapshot.clear();
       if (stopIfNotOnDuty) {
@@ -227,9 +225,7 @@ class DutyHeartbeatService {
     final preciseMissing =
         !await BackgroundLocationPermissions.hasPreciseLocationAccess();
     final missing = backgroundMissing || preciseMissing;
-    if (kDebugMode) {
-
-    }
+    if (kDebugMode) {}
     if (backgroundLocationPermissionMissing.value != missing) {
       backgroundLocationPermissionMissing.value = missing;
     }
@@ -242,7 +238,6 @@ class DutyHeartbeatService {
   }
 
   void reconcileDialogsAfterAppResume() {
-
     if (Platform.isAndroid &&
         (ClockInGateService.instance.isPrepareInFlight ||
             PermissionSettingsHelper.isAwaitingSettingsReturn)) {
@@ -257,6 +252,16 @@ class DutyHeartbeatService {
 
   @Deprecated('Use reconcileDialogsAfterAppResume')
   void reconcileDialogsAfterAndroidResume() => reconcileDialogsAfterAppResume();
+
+  /// Block GPS start until resume has fetched duty status (avoids a brief
+  /// on_duty start when the officer is actually off_duty).
+  void beginResumeDutyReconcile() {
+    _deferTrackingStart = true;
+  }
+
+  void endResumeDutyReconcile() {
+    _deferTrackingStart = false;
+  }
 
   void start() {
     if (!Platform.isAndroid && !Platform.isIOS) return;
@@ -281,7 +286,10 @@ class DutyHeartbeatService {
     }
   }
 
-  Future<void> recheckOnDutyPrompts({bool pageReload = false}) async {
+  Future<void> recheckOnDutyPrompts({
+    bool pageReload = false,
+    bool fromResume = false,
+  }) async {
     if (!_heartbeatActive) return;
 
     if (RequiredPermissionsGate.shouldSuppressCompetingDialogs) return;
@@ -325,6 +333,28 @@ class DutyHeartbeatService {
 
     if (status != onDuty) {
       if (!await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) {
+        if (fromResume) {
+          await _ensureOffDutyTrackingStopped();
+        }
+        await refreshBackgroundLocationPermissionBannerState();
+        return;
+      }
+      // Resume without a fresh on_duty API result: keep a live FGS, but do
+      // not start a new GPS session from snapshot alone.
+      if (fromResume) {
+        final running = await _isLocationTrackingRunning();
+        if (!running) {
+          if (kDebugMode) {
+            debugPrint(
+              '[DutyHeartbeatService] resume: no API on_duty and GPS '
+              'not running — not starting',
+            );
+          }
+          await refreshBackgroundLocationPermissionBannerState();
+          return;
+        }
+        _lastAppliedStatus = onDuty;
+        _locationSharingArmedThisDuty = true;
         await refreshBackgroundLocationPermissionBannerState();
         return;
       }
@@ -351,7 +381,10 @@ class DutyHeartbeatService {
 
     // Always start/recover when on_duty — including same-page reloads.
     // pageReload only skips permission dialogs, not GPS start.
-    await _ensureTrackingRunningForOnDuty(allowPrompts: !pageReload);
+    await _ensureTrackingRunningForOnDuty(
+      allowPrompts: !pageReload,
+      ignoreDefer: fromResume,
+    );
     await refreshBackgroundLocationPermissionBannerState();
   }
 
@@ -359,8 +392,17 @@ class DutyHeartbeatService {
   /// [allowPrompts] false skips disclosure/settings dialogs (e.g. page reload).
   Future<void> _ensureTrackingRunningForOnDuty({
     required bool allowPrompts,
+    bool ignoreDefer = false,
   }) async {
     if (_lastAppliedStatus != onDuty) return;
+    if (_deferTrackingStart && !ignoreDefer) {
+      if (kDebugMode) {
+        debugPrint(
+          '[DutyHeartbeatService] defer GPS start until duty status is known',
+        );
+      }
+      return;
+    }
 
     final inFlight = _ensureTrackingFuture;
     if (inFlight != null) {
@@ -393,19 +435,39 @@ class DutyHeartbeatService {
     }
 
     final running = await _isLocationTrackingRunning();
-    // Android FGS self-heals its GPS stream. Never stop/rebuild from the UI
-    // isolate while the service is up — that caused BG gaps when the app
-    // was backgrounded.
+    // Android FGS self-heals while the UI is backgrounded. Never stop/rebuild
+    // from this isolate then — OEM GPS timeouts led to hard-restart which
+    // killed the live service and could not start a new FGS from background.
     if (running && Platform.isAndroid) {
-      _locationSharingArmedThisDuty = true;
+      if (BackgroundLocationController.isUiBackgrounded) {
+        _locationSharingArmedThisDuty = true;
+        return;
+      }
+      if (kDebugMode) {
+        debugPrint(
+          '[DutyHeartbeatService] on_duty Android tracking stale; recovering',
+        );
+      }
+      final result =
+          await BackgroundLocationController.recoverAndroidTrackingIfNeeded();
+      if (result['ok'] == true) {
+        _locationSharingArmedThisDuty = true;
+      }
+      return;
+    }
+
+    if (!running &&
+        Platform.isAndroid &&
+        BackgroundLocationController.isUiBackgrounded) {
+      if (kDebugMode) {
+        debugPrint('[DutyHeartbeatService] skip GPS start; UI is backgrounded');
+      }
       return;
     }
 
     if (running && Platform.isIOS) {
       if (kDebugMode) {
-        debugPrint(
-          '[DutyHeartbeatService] on_duty tracking stale; recovering',
-        );
+        debugPrint('[DutyHeartbeatService] on_duty tracking stale; recovering');
       }
       await _restartTrackingWithCurrentPermission();
       return;
@@ -446,8 +508,14 @@ class DutyHeartbeatService {
   }
 
   Future<void> _ensureOffDutyTrackingStopped() async {
+    // Always clear any leftover on_duty snapshot while heartbeat says off_duty.
+    await DutyStatusSnapshot.clear();
+
     final running = await _isLocationTrackingRunning();
-    if (!running) return;
+    if (!running) {
+      AndroidDutyLocationHealth.markStopped();
+      return;
+    }
 
     if (kDebugMode) {
       debugPrint(
@@ -743,6 +811,14 @@ class DutyHeartbeatService {
   }
 
   Future<void> _applyOnDutyImpl() async {
+    if (_deferTrackingStart) {
+      if (kDebugMode) {
+        debugPrint(
+          '[DutyHeartbeatService] defer on_duty apply until duty resume reconcile',
+        );
+      }
+      return;
+    }
     if (!_heartbeatActive || !await _hasActiveAuthToken()) {
       if (kDebugMode) {
         debugPrint(
@@ -779,10 +855,7 @@ class DutyHeartbeatService {
       final healthy = await BackgroundLocationController.isTrackingHealthy();
       if (!healthy) {
         await _runPostDisclosurePermissionStep();
-        final running = await _isLocationTrackingRunning();
-        final result = running
-            ? await BackgroundLocationController.restart()
-            : await BackgroundLocationController.ensureStarted();
+        final result = await BackgroundLocationController.ensureStarted();
         debugPrint(
           '[DutyHeartbeatService] ensureStarted (disclosure accepted) ok=${result['ok'] == true}',
         );
@@ -843,13 +916,12 @@ class DutyHeartbeatService {
         await BackgroundLocationPermissions.hasSufficientBackgroundAccess();
     final skipSettingsPrompt = backgroundReady;
 
-    final running = await _isLocationTrackingRunning();
     final result = alreadyHealthy
         ? <String, dynamic>{'ok': true, 'started': false, 'running': true}
-        : (running
-            ? await BackgroundLocationController.restart()
-            : await BackgroundLocationController.ensureStarted());
-    debugPrint('[DutyHeartbeatService] ensureStarted ok=${result['ok'] == true}');
+        : await BackgroundLocationController.ensureStarted();
+    debugPrint(
+      '[DutyHeartbeatService] ensureStarted ok=${result['ok'] == true}',
+    );
 
     if (result['ok'] == true) {
       debugPrint('[DutyLocation] on_duty → location ensureStarted OK');
@@ -885,12 +957,22 @@ class DutyHeartbeatService {
     if (status == onDuty) {
       await DutyStatusSnapshot.markOnDuty();
       await refreshBackgroundLocationPermissionBannerState();
+      // Block auto permission/disclosure dialogs, but keep start retries when
+      // disclosure + background access are already ready.
       _onDutyAutoPromptComplete = true;
+      if (await LocationDisclosureConsent.hasAccepted() &&
+          await BackgroundLocationPermissions.hasSufficientBackgroundAccess()) {
+        unawaited(retryOnDutyTrackingIfReady());
+      }
       return;
     }
     if (await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) {
       await refreshBackgroundLocationPermissionBannerState();
       _onDutyAutoPromptComplete = true;
+      if (await LocationDisclosureConsent.hasAccepted() &&
+          await BackgroundLocationPermissions.hasSufficientBackgroundAccess()) {
+        unawaited(retryOnDutyTrackingIfReady());
+      }
       return;
     }
     await _stopTrackingForFailedDutyConfirm();
@@ -1025,8 +1107,7 @@ class DutyHeartbeatService {
             !await PermissionSettingsHelper.foregroundRequiresSettingsPrompt()) {
           await PermissionSettingsHelper.requestForegroundLocationStep();
           await BackgroundLocationPermissions.refreshPermissionStateFromOs();
-          if (await BackgroundLocationPermissions
-                  .hasSufficientBackgroundAccess() &&
+          if (await BackgroundLocationPermissions.hasSufficientBackgroundAccess() &&
               await BackgroundLocationPermissions.hasPreciseLocationAccess()) {
             return;
           }
@@ -1134,10 +1215,7 @@ class DutyHeartbeatService {
       return;
     }
 
-    final running = await _isLocationTrackingRunning();
-    final result = running
-        ? await BackgroundLocationController.restart()
-        : await BackgroundLocationController.ensureStarted();
+    final result = await BackgroundLocationController.ensureStarted();
     debugPrint(
       '[DutyHeartbeatService] retry ensureStarted ok=${result['ok'] == true}',
     );
@@ -1165,9 +1243,7 @@ class DutyHeartbeatService {
   }
 
   Future<void> _applyOffDuty({bool allowAnnounce = true}) async {
-    debugPrint(
-      '[DutyLocation] off_duty → stopping location tracking',
-    );
+    debugPrint('[DutyLocation] off_duty → stopping location tracking');
     debugPrint(
       '[DutyHeartbeatService] stopping location after flushing pending batches',
     );
@@ -1545,5 +1621,4 @@ class DutyHeartbeatService {
     await refreshBackgroundLocationPermissionBannerState();
     return shown;
   }
-
 }

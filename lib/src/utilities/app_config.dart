@@ -19,7 +19,6 @@ class AppConfig {
 
   static const bool enableMockLocationDetection = true;
 
-  /// Used only right after login to ignore leftover Android IME insets (~7–35px).
   static const double keyboardOpenThreshold = 50.0;
 
   static bool isAllowedHost(String? host) {

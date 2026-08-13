@@ -2,6 +2,7 @@ import Flutter
 import CoreLocation
 import UIKit
 import UserNotifications
+import flutter_background_service_ios
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, CLLocationManagerDelegate, FlutterStreamHandler,
@@ -27,6 +28,14 @@ import UserNotifications
   ) -> Bool {
     if #available(iOS 10.0, *) {
       UNUserNotificationCenter.current().delegate = self
+    }
+
+    // UIScene delivers the plugin's didFinishLaunching after launch has
+    // already finished, which crashes BGTaskScheduler. Register first.
+    if #available(iOS 13.0, *) {
+      SwiftFlutterBackgroundServicePlugin.registerTaskIdentifier(
+        taskIdentifier: SwiftFlutterBackgroundServicePlugin.taskIdentifier
+      )
     }
 
     let didLaunch = super.application(application, didFinishLaunchingWithOptions: launchOptions)

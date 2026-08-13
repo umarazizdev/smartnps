@@ -437,10 +437,12 @@ class BackgroundLocationUploader {
       }
 
       if (kDebugMode) {
-        _logBatchQueueSnapshot(
-          'received',
-          newPointId: newPointId,
-          detail: 'queued for batch upload',
+        _logAddQueued(
+          position: position,
+          pointId: newPointId,
+          policy: policy,
+          fusion: fusion,
+          storage: 'hive',
         );
       }
 
@@ -465,10 +467,12 @@ class BackgroundLocationUploader {
     }
 
     if (kDebugMode) {
-      _logBatchQueueSnapshot(
-        'received',
-        newPointId: newPointId,
-        detail: 'queued for batch upload',
+      _logAddQueued(
+        position: position,
+        pointId: newPointId,
+        policy: policy,
+        fusion: fusion,
+        storage: _fallbackQueueFile != null ? 'file' : 'memory',
       );
     }
     await _maybeFlushBatchAfterAdd();
@@ -545,9 +549,30 @@ class BackgroundLocationUploader {
     );
 
     try {
-      await _dio.postUri(_pingUri(), data: point, options: options);
-    } on DioException {
-    } catch (_) {}
+      final response = await _dio.postUri(
+        _pingUri(),
+        data: point,
+        options: options,
+      );
+      final code = response.statusCode;
+      if (kDebugMode) {
+        debugPrint(
+          '[DutyLocation] ping API status=$code '
+          'success=${_isHttpSuccess(code)}',
+        );
+      }
+    } on DioException catch (e) {
+      if (kDebugMode) {
+        debugPrint(
+          '[DutyLocation] ping API status=${e.response?.statusCode ?? '-'} '
+          'success=false',
+        );
+      }
+    } catch (_) {
+      if (kDebugMode) {
+        debugPrint('[DutyLocation] ping API status=- success=false');
+      }
+    }
   }
 
   Future<Map<String, dynamic>> _buildApiPoint(
@@ -852,13 +877,41 @@ class BackgroundLocationUploader {
       _lastSuccessfulBatchFlushAt = DateTime.now();
       _totalBatchPointsUploaded += batch.length;
 
+      final code = response.statusCode;
       if (kDebugMode) {
+        debugPrint(
+          '[DutyLocation] batch API status=$code '
+          'success=${_isHttpSuccess(code)} count=${batch.length}',
+        );
         _logBatchUploadResult(
           batchRun: batchRun,
           uploadedBatch: batch,
           responseBody: response.data,
         );
       }
+    } on DioException catch (e) {
+      _consecutiveBatchFailures++;
+      final seconds = 1 << (_consecutiveBatchFailures.clamp(0, 6));
+      var delay = Duration(seconds: seconds);
+      if (delay < const Duration(seconds: 5)) {
+        delay = const Duration(seconds: 5);
+      }
+      if (delay > _maxBackoff) delay = _maxBackoff;
+
+      if (kDebugMode) {
+        debugPrint(
+          '[DutyLocation] batch API status=${e.response?.statusCode ?? '-'} '
+          'success=false count=${batch.length}',
+        );
+        _logBatchQueueSnapshot(
+          'upload_failed',
+          batchRun: batchRun,
+          uploadedIds: uploadingIds,
+          detail: 'still queued after failure; retry in ${delay.inSeconds}s',
+        );
+      }
+      _nextBatchAllowedAt = DateTime.now().add(delay);
+      rethrow;
     } catch (e) {
       _consecutiveBatchFailures++;
       final seconds = 1 << (_consecutiveBatchFailures.clamp(0, 6));
@@ -869,6 +922,9 @@ class BackgroundLocationUploader {
       if (delay > _maxBackoff) delay = _maxBackoff;
 
       if (kDebugMode) {
+        debugPrint(
+          '[DutyLocation] batch API status=- success=false count=${batch.length}',
+        );
         _logBatchQueueSnapshot(
           'upload_failed',
           batchRun: batchRun,
@@ -930,9 +986,37 @@ class BackgroundLocationUploader {
     return 'ready_to_flush';
   }
 
+  static bool _isHttpSuccess(int? statusCode) {
+    return statusCode != null && statusCode >= 200 && statusCode < 300;
+  }
+
+  void _logAddQueued({
+    required Position position,
+    required String pointId,
+    required SpeedAdaptiveGpsPolicyDecision policy,
+    required VehicleSessionSnapshot fusion,
+    required String storage,
+  }) {
+    if (!kDebugMode) return;
+    debugPrint(
+      '[DutyLocation] batch add queued $pointId storage=$storage '
+      'queued=${_queuedPointCount()} ${_batchTotalsLabel()} '
+      'lat=${position.latitude.toStringAsFixed(6)} '
+      'lng=${position.longitude.toStringAsFixed(6)} '
+      'acc=${position.accuracy.toStringAsFixed(1)}m '
+      'speedKmh=${(policy.smoothedSpeedKmh ?? policy.rawSpeedKmh)?.toStringAsFixed(1)} '
+      'band=${policy.band.label} '
+      'motion=${fusion.apiMotionActivity} '
+      'fused=${fusion.fusedState} '
+      'native=${fusion.nativeActivity} '
+      'ts=${position.timestamp.toUtc().toIso8601String()} '
+      'reason=${_pendingQueueReason()}',
+    );
+  }
+
   void _batchConsoleLog(String message) {
     if (!kDebugMode) return;
-
+    debugPrint('[BackgroundLocationUploader] $message');
   }
 
   String _batchTotalsLabel() {

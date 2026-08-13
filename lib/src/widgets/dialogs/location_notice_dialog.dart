@@ -1,16 +1,45 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:pdfx/pdfx.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+/// Privacy policy payload fetched through the main WebView session.
+class PolicyDocumentContent {
+  const PolicyDocumentContent.html(this.html) : bytes = null, isPdf = false;
+
+  const PolicyDocumentContent.pdf(this.bytes) : html = null, isPdf = true;
+
+  final String? html;
+  final Uint8List? bytes;
+  final bool isPdf;
+}
+
 class LocationNoticeDialog extends StatelessWidget {
-  const LocationNoticeDialog({super.key, this.onClose});
+  const LocationNoticeDialog({
+    super.key,
+    this.onClose,
+    this.onFetchPolicyDocument,
+  });
 
   final VoidCallback? onClose;
 
-  static final Uri privacyPolicyUri = Uri.parse(
-    'https://smartnps360.com/privacy-policy',
+  /// Fetches policy content via the main WebView session (same as dashboard).
+  final Future<PolicyDocumentContent?> Function(Uri uri)? onFetchPolicyDocument;
+
+  static final Uri privacyPolicyFullUri = Uri.parse(
+    'https://smartnps360.com/officer/documents/privacy_policy_full',
   );
+  static final Uri privacyPolicySummaryUri = Uri.parse(
+    'https://smartnps360.com/officer/documents/privacy_policy_summary',
+  );
+  static final Uri privacyEmailUri = Uri(
+    scheme: 'mailto',
+    path: 'privacy@smartnps360.com',
+  );
+  static final Uri privacyPhoneUri = Uri(scheme: 'tel', path: '+14158004372');
 
   static Future<void> show(BuildContext context) {
     return showDialog<void>(
@@ -22,14 +51,36 @@ class LocationNoticeDialog extends StatelessWidget {
     );
   }
 
-  Future<void> _openPrivacyPolicy() async {
-    final opened = await launchUrl(
-      privacyPolicyUri,
-      mode: LaunchMode.externalApplication,
-    );
+  static Future<void> openContactUri(Uri uri) async {
+    final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
     if (!opened) {
-      await launchUrl(privacyPolicyUri, mode: LaunchMode.platformDefault);
+      await launchUrl(uri, mode: LaunchMode.platformDefault);
     }
+  }
+
+  Future<void> _openPolicy(
+    BuildContext context, {
+    required String title,
+    required Uri uri,
+  }) async {
+    final fetch = onFetchPolicyDocument;
+    if (fetch == null) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+      return;
+    }
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      useRootNavigator: true,
+      builder: (dialogContext) {
+        return _PolicyDocumentDialog(
+          title: title,
+          uri: uri,
+          documentFuture: fetch(uri),
+        );
+      },
+    );
   }
 
   @override
@@ -63,40 +114,47 @@ class LocationNoticeDialog extends StatelessWidget {
               borderRadius: BorderRadius.circular(24),
               child: LayoutBuilder(
                 builder: (context, constraints) {
-                  final designWidth = constraints.maxWidth * 1.12;
-                  return SizedBox(
-                    width: constraints.maxWidth,
-                    height: constraints.maxHeight,
-                    child: FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.topCenter,
-                      child: SizedBox(
-                        width: designWidth,
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              _NoticeHeader(onClose: onClose),
-                              const SizedBox(height: 7),
-                              const _HeroNotice(),
-                              const SizedBox(height: 8),
-                              const _SectionLabel(),
-                              const SizedBox(height: 5),
-                              const _StepsPanel(),
-                              const SizedBox(height: 7),
-                              const _PrivacyPanel(),
-                              const SizedBox(height: 7),
-                              const _ContactPanel(),
-                              const SizedBox(height: 7),
-                              _ActionArea(
-                                onClose: onClose,
-                                onOpenPolicy: () =>
-                                    unawaited(_openPrivacyPolicy()),
+                  return FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.center,
+                    child: SizedBox(
+                      width: constraints.maxWidth,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _NoticeHeader(onClose: onClose),
+                            const SizedBox(height: 7),
+                            const _HeroNotice(),
+                            const SizedBox(height: 8),
+                            const _SectionLabel(),
+                            const SizedBox(height: 5),
+                            const _StepsPanel(),
+                            const SizedBox(height: 7),
+                            const _PrivacyPanel(),
+                            const SizedBox(height: 7),
+                            const _ContactPanel(),
+                            const SizedBox(height: 7),
+                            _ActionArea(
+                              onClose: onClose,
+                              onOpenSummary: () => unawaited(
+                                _openPolicy(
+                                  context,
+                                  title: 'Privacy Policy Summary',
+                                  uri: privacyPolicySummaryUri,
+                                ),
                               ),
-                            ],
-                          ),
+                              onOpenFull: () => unawaited(
+                                _openPolicy(
+                                  context,
+                                  title: 'Full Privacy Policy',
+                                  uri: privacyPolicyFullUri,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
@@ -500,12 +558,12 @@ class _ContactPanel extends StatelessWidget {
           ),
         ],
       ),
-      child: const Padding(
-        padding: EdgeInsets.all(12),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
+            const Text(
               'Questions?',
               style: TextStyle(
                 color: Colors.white,
@@ -513,8 +571,8 @@ class _ContactPanel extends StatelessWidget {
                 fontWeight: FontWeight.w800,
               ),
             ),
-            SizedBox(height: 3),
-            Text(
+            const SizedBox(height: 3),
+            const Text(
               'We\'re here to help. Contact our Privacy Team.',
               style: TextStyle(
                 color: Color(0xFFEDF3FF),
@@ -522,16 +580,26 @@ class _ContactPanel extends StatelessWidget {
                 height: 1.25,
               ),
             ),
-            SizedBox(height: 7),
-            Wrap(
-              spacing: 8,
-              runSpacing: 7,
+            const SizedBox(height: 7),
+            Row(
               children: [
-                _ContactItem(
-                  icon: Icons.mail_outline_rounded,
-                  text: 'privacy@smartnps360.com',
+                Expanded(
+                  flex: 3,
+                  child: _ContactItem(
+                    icon: Icons.mail_outline_rounded,
+                    text: 'privacy@smartnps360.com',
+                    uri: LocationNoticeDialog.privacyEmailUri,
+                  ),
                 ),
-                _ContactItem(icon: Icons.call_outlined, text: '415-800-4372'),
+                const SizedBox(width: 8),
+                Expanded(
+                  flex: 2,
+                  child: _ContactItem(
+                    icon: Icons.call_outlined,
+                    text: '+1 415-800-4372',
+                    uri: LocationNoticeDialog.privacyPhoneUri,
+                  ),
+                ),
               ],
             ),
           ],
@@ -542,35 +610,60 @@ class _ContactPanel extends StatelessWidget {
 }
 
 class _ContactItem extends StatelessWidget {
-  const _ContactItem({required this.icon, required this.text});
+  const _ContactItem({
+    required this.icon,
+    required this.text,
+    required this.uri,
+  });
 
   final IconData icon;
   final String text;
+  final Uri uri;
 
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.10),
+    return Material(
+      color: Colors.white.withValues(alpha: 0.16),
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        onTap: () => unawaited(LocationNoticeDialog.openContactUri(uri)),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: Colors.white, size: 14),
-            const SizedBox(width: 5),
-            Text(
-              text,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
-              ),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.26)),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+            child: Row(
+              children: [
+                Icon(icon, color: const Color(0xFFEAF3FF), size: 14),
+                const SizedBox(width: 5),
+                Expanded(
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      text,
+                      maxLines: 1,
+                      softWrap: false,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 2),
+                const Icon(
+                  Icons.chevron_right_rounded,
+                  color: Color(0xFFEAF3FF),
+                  size: 15,
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -578,10 +671,15 @@ class _ContactItem extends StatelessWidget {
 }
 
 class _ActionArea extends StatelessWidget {
-  const _ActionArea({required this.onClose, required this.onOpenPolicy});
+  const _ActionArea({
+    required this.onClose,
+    required this.onOpenSummary,
+    required this.onOpenFull,
+  });
 
   final VoidCallback? onClose;
-  final VoidCallback onOpenPolicy;
+  final VoidCallback onOpenSummary;
+  final VoidCallback onOpenFull;
 
   @override
   Widget build(BuildContext context) {
@@ -607,21 +705,224 @@ class _ActionArea extends StatelessWidget {
           child: const Text('I Understand'),
         ),
         const SizedBox(height: 4),
-        TextButton.icon(
-          onPressed: onOpenPolicy,
-          icon: const Icon(Icons.open_in_new_rounded, size: 14),
-          label: const Text('View Full Privacy Policy'),
-          style: TextButton.styleFrom(
-            foregroundColor: const Color(0xFF0B2259),
-            minimumSize: const Size.fromHeight(32),
-            textStyle: const TextStyle(
-              fontSize: 12.5,
-              fontWeight: FontWeight.w800,
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _PolicyButton(
+              icon: Icons.open_in_new_rounded,
+              label: 'View Privacy Policy Summary',
+              onPressed: onOpenSummary,
             ),
-          ),
+            _PolicyButton(
+              icon: Icons.open_in_new_rounded,
+              label: 'View Full Privacy Policy',
+              onPressed: onOpenFull,
+            ),
+          ],
         ),
       ],
     );
+  }
+}
+
+class _PolicyButton extends StatelessWidget {
+  const _PolicyButton({
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextButton.icon(
+      onPressed: onPressed,
+      icon: Icon(icon, size: 13),
+      label: Text(label),
+      style: TextButton.styleFrom(
+        foregroundColor: const Color(0xFF0B2259),
+        minimumSize: Size.zero,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 8),
+        textStyle: const TextStyle(fontSize: 11.1, fontWeight: FontWeight.w800),
+      ),
+    );
+  }
+}
+
+class _PolicyDocumentDialog extends StatelessWidget {
+  const _PolicyDocumentDialog({
+    required this.title,
+    required this.uri,
+    required this.documentFuture,
+  });
+
+  final String title;
+  final Uri uri;
+  final Future<PolicyDocumentContent?> documentFuture;
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final maxWidth = media.size.width >= 820 ? 760.0 : media.size.width - 18;
+    final maxHeight = media.size.height - media.padding.vertical - 24;
+
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 9, vertical: 12),
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxWidth, maxHeight: maxHeight),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: const Color(0xFFE0E8F5)),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x33091A3A),
+                blurRadius: 34,
+                offset: Offset(0, 14),
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(20),
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 12, 8, 10),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Color(0xFF0B2259),
+                            fontSize: 17,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        icon: const Icon(Icons.close_rounded),
+                        color: const Color(0xFF0B2259),
+                        tooltip: 'Close',
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1, color: Color(0xFFE0E8F5)),
+                Expanded(
+                  child: FutureBuilder<PolicyDocumentContent?>(
+                    future: documentFuture,
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState != ConnectionState.done) {
+                        return const Center(
+                          child: Padding(
+                            padding: EdgeInsets.all(24),
+                            child: CircularProgressIndicator(
+                              color: Color(0xFF2A63C7),
+                            ),
+                          ),
+                        );
+                      }
+
+                      final doc = snapshot.data;
+                      if (doc == null) {
+                        return const Center(
+                          child: Padding(
+                            padding: EdgeInsets.all(24),
+                            child: Text(
+                              'Unable to load this document. Please try again.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: Color(0xFF0B2259),
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        );
+                      }
+
+                      if (doc.isPdf && doc.bytes != null) {
+                        return _PolicyPdfView(bytes: doc.bytes!);
+                      }
+
+                      final html = doc.html;
+                      if (html == null || html.isEmpty) {
+                        return const Center(
+                          child: Padding(
+                            padding: EdgeInsets.all(24),
+                            child: Text(
+                              'Unable to load this document. Please try again.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: Color(0xFF0B2259),
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        );
+                      }
+
+                      return InAppWebView(
+                        initialData: InAppWebViewInitialData(
+                          data: html,
+                          mimeType: 'text/html',
+                          encoding: 'utf-8',
+                          baseUrl: WebUri('https://smartnps360.com/'),
+                          historyUrl: WebUri.uri(uri),
+                        ),
+                        initialSettings: InAppWebViewSettings(
+                          javaScriptEnabled: true,
+                          supportZoom: true,
+                          transparentBackground: false,
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PolicyPdfView extends StatefulWidget {
+  const _PolicyPdfView({required this.bytes});
+
+  final Uint8List bytes;
+
+  @override
+  State<_PolicyPdfView> createState() => _PolicyPdfViewState();
+}
+
+class _PolicyPdfViewState extends State<_PolicyPdfView> {
+  late final PdfControllerPinch _controller = PdfControllerPinch(
+    document: PdfDocument.openData(widget.bytes),
+  );
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PdfViewPinch(controller: _controller);
   }
 }
 

@@ -166,12 +166,26 @@ class _WebViewShellState extends State<WebViewShell>
     }
   }
 
+  void _cancelNativeGeoWatches() {
+    if (_nativeGeoWatches.isEmpty) return;
+    for (final sub in _nativeGeoWatches.values) {
+      unawaited(sub.cancel());
+    }
+    _nativeGeoWatches.clear();
+  }
+
+  void _releaseUiLocationOnLogout() {
+    _cancelNativeGeoWatches();
+    unawaited(VisitGpsSession.instance.stop());
+  }
+
   Future<void> _pauseNativeSessionForLoginScreen() async {
     _suppressResidualKeyboardInsetAfterLogin = false;
     _ui.setOfficerLoggedIn(false);
     _setNativeAuthSession(false);
     _draftResumePrompted = false;
     NativePermissionStatusService.instance.stopBatteryMonitoring();
+    _releaseUiLocationOnLogout();
   }
 
   Future<bool> _performNativeLogout({
@@ -201,7 +215,7 @@ class _WebViewShellState extends State<WebViewShell>
       _ui.setOfficerLoggedIn(false);
       _setNativeAuthSession(false);
       _ui.showingLogVisit.value = false;
-      unawaited(VisitGpsSession.instance.stop());
+      _releaseUiLocationOnLogout();
       _draftResumePrompted = false;
       unawaited(
         _controller?.evaluateJavascript(
@@ -2059,8 +2073,15 @@ class _WebViewShellState extends State<WebViewShell>
           await _reconcileBottomBarFromWebView(controller);
         }
         await _requestNotificationPermissionForRoute(_ui.currentUri.value);
-        await _maybeStartDutyHeartbeat();
-        await DutyHeartbeatService.instance.recheckOnDutyPrompts();
+        DutyHeartbeatService.instance.beginResumeDutyReconcile();
+        try {
+          await _maybeStartDutyHeartbeat();
+          await DutyHeartbeatService.instance.recheckOnDutyPrompts(
+            fromResume: true,
+          );
+        } finally {
+          DutyHeartbeatService.instance.endResumeDutyReconcile();
+        }
         if (Platform.isIOS) {
           await IosDutyLocationPinger.flushPendingBatchNow();
         }
@@ -2101,10 +2122,7 @@ class _WebViewShellState extends State<WebViewShell>
         .removeListener(_onBackgroundLocationPermissionChanged);
     NativePermissionStatusService.instance.stopBatteryMonitoring();
     unawaited(_stopDutyHeartbeat());
-    for (final sub in _nativeGeoWatches.values) {
-      sub.cancel();
-    }
-    _nativeGeoWatches.clear();
+    _cancelNativeGeoWatches();
     _ui.dispose();
     super.dispose();
   }
@@ -2436,6 +2454,101 @@ class _WebViewShellState extends State<WebViewShell>
     await controller.loadUrl(
       urlRequest: URLRequest(url: WebUri(uri.toString())),
     );
+  }
+
+  /// Fetch officer document using the main WebView session (cookies + UA).
+  Future<PolicyDocumentContent?> _fetchOfficerDocumentHtml(Uri uri) async {
+    final controller = _controller;
+    if (controller == null) return null;
+
+    try {
+      final result = await controller.callAsyncJavaScript(
+        functionBody: '''
+          const response = await fetch(url, {
+            credentials: 'include',
+            headers: {
+              'Accept': 'application/pdf,text/html,application/xhtml+xml,*/*;q=0.8'
+            }
+          });
+          if (!response.ok) {
+            return JSON.stringify({ ok: false, status: response.status });
+          }
+          const contentType = (response.headers.get('content-type') || '').toLowerCase();
+          const buffer = await response.arrayBuffer();
+          const bytes = new Uint8Array(buffer);
+          const isPdfHeader =
+            bytes.length >= 4 &&
+            bytes[0] === 0x25 &&
+            bytes[1] === 0x50 &&
+            bytes[2] === 0x44 &&
+            bytes[3] === 0x46;
+          const isPdf = contentType.indexOf('pdf') !== -1 || isPdfHeader;
+
+          if (isPdf) {
+            let binary = '';
+            const chunk = 0x8000;
+            for (let i = 0; i < bytes.length; i += chunk) {
+              binary += String.fromCharCode.apply(
+                null,
+                bytes.subarray(i, i + chunk)
+              );
+            }
+            return JSON.stringify({
+              ok: true,
+              isPdf: true,
+              base64: btoa(binary),
+              contentType: contentType
+            });
+          }
+
+          const html = new TextDecoder('utf-8').decode(bytes);
+          return JSON.stringify({
+            ok: true,
+            isPdf: false,
+            html: html,
+            contentType: contentType
+          });
+        ''',
+        arguments: {'url': uri.toString()},
+      );
+
+      if (result?.error != null) {
+        debugPrint('[PolicyDocument] fetch JS error: ${result!.error}');
+        return null;
+      }
+
+      final raw = result?.value;
+      if (raw is! String || raw.isEmpty) {
+        debugPrint('[PolicyDocument] fetch empty result: $raw');
+        return null;
+      }
+
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return null;
+      if (decoded['ok'] != true) {
+        debugPrint(
+          '[PolicyDocument] fetch not ok status=${decoded['status']}',
+        );
+        return null;
+      }
+
+      final isPdf = decoded['isPdf'] == true;
+      if (isPdf) {
+        final base64 = decoded['base64'];
+        if (base64 is! String || base64.isEmpty) return null;
+        final bytes = base64Decode(base64);
+        debugPrint('[PolicyDocument] fetch pdf bytes=${bytes.length}');
+        return PolicyDocumentContent.pdf(bytes);
+      }
+
+      final html = decoded['html'];
+      if (html is! String || html.isEmpty) return null;
+      debugPrint('[PolicyDocument] fetch html bytes=${html.length}');
+      return PolicyDocumentContent.html(html);
+    } catch (e) {
+      debugPrint('[PolicyDocument] fetch failed: $e');
+      return null;
+    }
   }
 
   void _openLogVisitTab() {
@@ -4281,6 +4394,8 @@ class _WebViewShellState extends State<WebViewShell>
                                   child: Center(
                                     child: LocationNoticeDialog(
                                       onClose: _dismissLocationNotice,
+                                      onFetchPolicyDocument:
+                                          _fetchOfficerDocumentHtml,
                                     ),
                                   ),
                                 ),
