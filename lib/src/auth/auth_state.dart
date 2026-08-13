@@ -11,6 +11,10 @@ class AuthState {
   final ValueNotifier<Map<String, dynamic>?> session =
       ValueNotifier<Map<String, dynamic>?>(null);
 
+  /// True when access-token refresh returned 401/403. Tokens are kept;
+  /// UI should prompt soft re-auth without clearing the native session.
+  final ValueNotifier<bool> needsReauth = ValueNotifier<bool>(false);
+
   bool get isLoggedIn => user.value != null;
 
   void setLoggedInUser(Map<String, dynamic> payload) {
@@ -23,9 +27,22 @@ class AuthState {
     debugPrint('[SmartNPS360][Auth] session updated=${_safeSessionForLog(session.value)}');
   }
 
+  void markNeedsReauth() {
+    if (needsReauth.value) return;
+    needsReauth.value = true;
+    debugPrint('[SmartNPS360][Auth] needs soft re-auth (tokens kept)');
+  }
+
+  void clearNeedsReauth() {
+    if (!needsReauth.value) return;
+    needsReauth.value = false;
+    debugPrint('[SmartNPS360][Auth] soft re-auth cleared');
+  }
+
   void clear() {
     user.value = null;
     session.value = null;
+    needsReauth.value = false;
     debugPrint('[SmartNPS360][Auth] logged out (cleared user)');
   }
 

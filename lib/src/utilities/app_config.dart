@@ -19,6 +19,8 @@ class AppConfig {
 
   static const bool enableMockLocationDetection = true;
 
+  static const double keyboardOpenThreshold = 50.0;
+
   static bool isAllowedHost(String? host) {
     if (host == null) return false;
     final h = host.toLowerCase();

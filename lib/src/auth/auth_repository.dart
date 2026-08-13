@@ -51,6 +51,7 @@ class AuthRepository {
     ),
   );
 
+  /// Called when refresh returns 401/403. Must soft-fail only (no session wipe).
   Future<void> Function()? onRefreshSessionExpired;
 
   Completer<String?>? _refreshInFlight;
@@ -140,6 +141,7 @@ class AuthRepository {
     _cachedOfficerLoggedIn = false;
     _accessTokenAccessibilityMigrated = false;
     await setOfficerLoggedIn(false);
+    AuthState.instance.clearNeedsReauth();
     LocationDisclosureAccountSync.onLoggedOut();
     debugPrint('[SmartNPS360][AuthRepo] cleared auth (secure storage)');
   }
@@ -248,6 +250,7 @@ class AuthRepository {
     await _persistAccessTokenExpiry(map);
     if (access != null && access.isNotEmpty) {
       AuthState.instance.setSession(sessionFromAuthMap(map));
+      AuthState.instance.clearNeedsReauth();
     }
   }
 
@@ -276,6 +279,7 @@ class AuthRepository {
       await saveTokensFromAuthResponse(map);
     }
     await _persistAccessTokenExpiry(map);
+    AuthState.instance.clearNeedsReauth();
     AppUpgradeReconciler.endPostUpgradeAuthGrace();
   }
 
@@ -475,33 +479,35 @@ class AuthRepository {
     }
   }
 
-  bool _logoutAfterRefreshFailureInFlight = false;
+  bool _softReauthNotifyInFlight = false;
 
   Future<void> _notifyRefreshSessionExpired() async {
-    if (_logoutAfterRefreshFailureInFlight) return;
+    if (_softReauthNotifyInFlight) return;
     if (AppUpgradeReconciler.shouldSuppressRefreshSessionLogout) {
       if (kDebugMode) {
         debugPrint(
           '[SmartNPS360][AuthRepo] refresh 401/403 soft-failed '
-          '(post-upgrade grace; storage kept)',
+          '(post-upgrade grace; storage kept, no re-auth prompt)',
         );
       }
       return;
     }
-    _logoutAfterRefreshFailureInFlight = true;
+    _softReauthNotifyInFlight = true;
     try {
+      AuthState.instance.markNeedsReauth();
+      if (kDebugMode) {
+        debugPrint(
+          '[SmartNPS360][AuthRepo] refresh 401/403 → soft re-auth '
+          '(tokens + duty state kept)',
+        );
+      }
       final handler = onRefreshSessionExpired;
       if (handler != null) {
         await handler();
         return;
       }
-      if (kDebugMode) {
-        debugPrint(
-          '[SmartNPS360][AuthRepo] refresh session expired (no logout handler)',
-        );
-      }
     } finally {
-      _logoutAfterRefreshFailureInFlight = false;
+      _softReauthNotifyInFlight = false;
     }
   }
 

@@ -7,13 +7,18 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// Android FGS GPS health.
 ///
-/// Upload freshness is persisted to [SharedPreferences] from the FGS isolate so
-/// the UI isolate can still judge health after being backgrounded (when it may
+/// Freshness is persisted to [SharedPreferences] from the FGS isolate so the
+/// UI isolate can still judge health after being backgrounded (when it may
 /// miss live `FlutterBackgroundService` events).
+///
+/// The "upload" timestamp is updated after each accepted GPS fix is processed
+/// (including ping-only stationary fixes). Batch trail upload may pause while
+/// stationary; that alone must not look stale.
 class AndroidDutyLocationHealth {
   AndroidDutyLocationHealth._();
 
   static const Duration staleThreshold = Duration(minutes: 2);
+  static const int maxSoftRecoverBeforeHardRestart = 2;
   static const String uploadEvent = 'duty_location_upload';
   static const String startedEvent = 'duty_location_started';
 
@@ -22,11 +27,23 @@ class AndroidDutyLocationHealth {
 
   static DateTime? _startedAt;
   static DateTime? _lastUploadAt;
+  static int _softRecoverAttempts = 0;
   static StreamSubscription<Map<String, dynamic>?>? _uploadSub;
   static StreamSubscription<Map<String, dynamic>?>? _startedSub;
 
   static DateTime? get startedAt => _startedAt;
   static DateTime? get lastUploadAt => _lastUploadAt;
+  static int get softRecoverAttempts => _softRecoverAttempts;
+  static bool get shouldHardRestart =>
+      _softRecoverAttempts >= maxSoftRecoverBeforeHardRestart;
+
+  static void noteSoftRecoverAttempted() {
+    _softRecoverAttempts++;
+  }
+
+  static void resetRecoverAttempts() {
+    _softRecoverAttempts = 0;
+  }
 
   static void ensureListenerInstalled() {
     if (!Platform.isAndroid) return;
@@ -56,15 +73,18 @@ class AndroidDutyLocationHealth {
   static void markStarted({DateTime? at}) {
     _startedAt = at ?? DateTime.now();
     _lastUploadAt = null;
+    resetRecoverAttempts();
   }
 
   static void markUpload({DateTime? at}) {
     _lastUploadAt = at ?? DateTime.now();
+    resetRecoverAttempts();
   }
 
   static void markStopped() {
     _startedAt = null;
     _lastUploadAt = null;
+    resetRecoverAttempts();
     unawaited(clearPersisted());
   }
 
