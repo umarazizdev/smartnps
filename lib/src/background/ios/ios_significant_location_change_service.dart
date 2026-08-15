@@ -16,7 +16,7 @@ class IosSignificantLocationChangeService {
   );
 
   static StreamSubscription<dynamic>? _subscription;
-  static Future<void> Function(Position position)? _onLocation;
+  static Future<void> Function(Position position, String source)? _onLocation;
   static bool _nativeMonitoring = false;
 
   static bool get isMonitoring => _nativeMonitoring;
@@ -34,7 +34,7 @@ class IosSignificantLocationChangeService {
   }
 
   static Future<Map<String, dynamic>> start({
-    required Future<void> Function(Position position) onLocation,
+    required Future<void> Function(Position position, String source) onLocation,
   }) async {
     if (!Platform.isIOS) return {'ok': true, 'running': false};
 
@@ -177,21 +177,22 @@ class IosSignificantLocationChangeService {
     final callback = _onLocation;
     if (callback == null) return;
 
-    final position = _positionFromPayload(event);
+    if (event is! Map) return;
+    final map = Map<Object?, Object?>.from(event);
+    final source = map['source']?.toString() ?? 'ios_slc';
+    final position = _positionFromMap(map);
     if (position == null) return;
 
     if (kDebugMode) {
       debugPrint(
-        '[IosSLC] wake event acc=${position.accuracy}',
+        '[IosSLC] event source=$source acc=${position.accuracy}',
       );
     }
 
-    await callback(position);
+    await callback(position, source);
   }
 
-  static Position? _positionFromPayload(Object? event) {
-    if (event is! Map) return null;
-    final map = Map<Object?, Object?>.from(event);
+  static Position? _positionFromMap(Map<Object?, Object?> map) {
     final latitude = _doubleOrNull(map['latitude']);
     final longitude = _doubleOrNull(map['longitude']);
     if (latitude == null || longitude == null) return null;

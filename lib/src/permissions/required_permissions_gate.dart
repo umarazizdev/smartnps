@@ -59,12 +59,18 @@ class RequiredPermissionsGate {
 
   bool get suppressesCompetingDialogs => isBlocking.value || isRefreshing.value;
 
+  static bool Function()? privacyNoticeVisibleChecker;
+
+  static bool get isPrivacyNoticeVisible =>
+      privacyNoticeVisibleChecker?.call() ?? false;
+
   static bool get shouldSuppressCompetingDialogs =>
-      instance.suppressesCompetingDialogs;
+      instance.suppressesCompetingDialogs || isPrivacyNoticeVisible;
 
   bool _active = false;
   bool _refreshInFlight = false;
   bool _refreshAgain = false;
+  bool _autoOsPromptInFlight = false;
   Timer? _pollTimer;
   String? _lastFingerprint;
   int _actionSerial = 0;
@@ -186,6 +192,60 @@ class RequiredPermissionsGate {
               .ensureLatestPermissionsSynced(),
         );
       }
+    }
+  }
+
+  Future<void> requestPendingAllowPermissionsAutomatically() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+    if (!_active || _autoOsPromptInFlight || isPrivacyNoticeVisible) return;
+
+    _autoOsPromptInFlight = true;
+    try {
+      await refresh(force: true);
+      if (!_active || isPrivacyNoticeVisible) return;
+
+      const promptOrder = <String>[
+        'foregroundLocation',
+        'motionActivity',
+        'notifications',
+      ];
+      final pending =
+          items.value
+              .where(
+                (item) =>
+                    !item.enabled &&
+                    item.action == RequiredPermissionAction.allow,
+              )
+              .toList()
+            ..sort((a, b) {
+              final ai = promptOrder.indexOf(a.id);
+              final bi = promptOrder.indexOf(b.id);
+              final aRank = ai < 0 ? promptOrder.length : ai;
+              final bRank = bi < 0 ? promptOrder.length : bi;
+              return aRank.compareTo(bRank);
+            });
+
+      for (final item in pending) {
+        if (!_active || isPrivacyNoticeVisible) return;
+        if (kDebugMode) {
+          debugPrint('[RequiredPermissionsGate] auto OS prompt id=${item.id}');
+        }
+        await handleAction(item);
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+      }
+
+      final enableItems = items.value
+          .where(
+            (item) =>
+                !item.enabled && item.action == RequiredPermissionAction.enable,
+          )
+          .toList();
+      for (final item in enableItems) {
+        if (!_active || isPrivacyNoticeVisible) return;
+        await handleAction(item);
+      }
+    } finally {
+      _autoOsPromptInFlight = false;
     }
   }
 

@@ -8,12 +8,9 @@ import '../duty/duty_status_snapshot.dart';
 
 enum BackgroundLocationIssue {
   gpsStopped,
-  gpsNotUpdating,
   signedOut,
 }
 
-/// Alerts the officer when on-duty background GPS fails unexpectedly.
-/// Does not fire for normal clock-out / off_duty stops.
 class BackgroundLocationIssueNotification {
   BackgroundLocationIssueNotification._();
 
@@ -35,8 +32,6 @@ class BackgroundLocationIssueNotification {
     switch (issue) {
       case BackgroundLocationIssue.gpsStopped:
         return 'Location stopped';
-      case BackgroundLocationIssue.gpsNotUpdating:
-        return 'Location not updating';
       case BackgroundLocationIssue.signedOut:
         return 'Location stopped';
     }
@@ -46,8 +41,6 @@ class BackgroundLocationIssueNotification {
     switch (issue) {
       case BackgroundLocationIssue.gpsStopped:
         return 'Your live location stopped. The phone is not getting GPS while you are on duty.';
-      case BackgroundLocationIssue.gpsNotUpdating:
-        return 'Your live location stopped updating while you are on duty.';
       case BackgroundLocationIssue.signedOut:
         return 'Your live location stopped because you were signed out.';
     }

@@ -5,31 +5,20 @@ import 'package:geolocator_android/geolocator_android.dart';
 import 'package:geolocator_platform_interface/geolocator_platform_interface.dart';
 import 'package:uuid/uuid.dart';
 
-/// An implementation of [GeolocatorPlatform] that uses method channels.
 class GeolocatorAndroid extends GeolocatorPlatform {
-  /// The method channel used to interact with the native platform.
   static const _methodChannel =
       MethodChannel('flutter.baseflow.com/geolocator_android');
 
-  /// The event channel used to receive [Position] updates from the native
-  /// platform.
   static const _eventChannel =
       EventChannel('flutter.baseflow.com/geolocator_updates_android');
 
-  /// The event channel used to receive [LocationServiceStatus] updates from the
-  /// native platform.
   static const _serviceStatusEventChannel =
       EventChannel('flutter.baseflow.com/geolocator_service_updates_android');
 
-  /// Registers this class as the default instance of [GeolocatorPlatform].
   static void registerWith() {
     GeolocatorPlatform.instance = GeolocatorAndroid();
   }
 
-  /// On Android devices you can set [forcedLocationManager]
-  /// to true to force the plugin to use the [LocationManager] to determine the
-  /// position instead of the [FusedLocationProviderClient]. On iOS this is
-  /// ignored.
   bool forcedLocationManager = false;
 
   Stream<Position>? _positionStream;
@@ -40,7 +29,6 @@ class GeolocatorAndroid extends GeolocatorPlatform {
   @override
   Future<LocationPermission> checkPermission() async {
     try {
-      // ignore: omit_local_variable_types
       final int permission =
           await _methodChannel.invokeMethod('checkPermission');
 
@@ -55,7 +43,6 @@ class GeolocatorAndroid extends GeolocatorPlatform {
   @override
   Future<LocationPermission> requestPermission() async {
     try {
-      // ignore: omit_local_variable_types
       final int permission =
           await _methodChannel.invokeMethod('requestPermission');
 

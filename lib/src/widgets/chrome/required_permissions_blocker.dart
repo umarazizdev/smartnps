@@ -25,7 +25,10 @@ class _RequiredPermissionsBlockerState extends State<RequiredPermissionsBlocker>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    unawaited(_gate.refresh(force: true));
+    unawaited(() async {
+      await _gate.refresh(force: true);
+      await _gate.requestPendingAllowPermissionsAutomatically();
+    }());
   }
 
   @override
@@ -315,7 +318,6 @@ class _PermissionRow extends StatelessWidget {
               ),
               child: item.id == 'push'
                   ? Transform.rotate(
-
                       angle: -math.pi / 4,
                       child: Icon(item.icon, size: 20, color: accent.icon),
                     )

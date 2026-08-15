@@ -11,8 +11,6 @@ class DutyStatusSnapshot {
   static const _storage = FlutterSecureStorage();
   static const _key = 'duty.status.snapshot.v1';
 
-  /// Heartbeat / FGS renew window. FGS renews this while still on_duty so the
-  /// UI isolate being frozen in background cannot expire the gate.
   static const Duration ttl = Duration(minutes: 30);
 
   static Future<void> markOnDuty() async {
@@ -35,25 +33,14 @@ class DutyStatusSnapshot {
     };
 
     await _storage.write(key: _key, value: jsonEncode(payload));
-    if (kDebugMode) {
-      debugPrint(
-        '[DutyStatusSnapshot] marked on_duty user=$userId '
-        'ttl=${ttl.inMinutes}m',
-      );
-    }
   }
 
-  /// Extends TTL only when an on_duty snapshot already exists for this user.
-  ///
-  /// Never recreates after [clear] (off_duty / logout). Safe to call from the
-  /// Android FGS isolate while the UI heartbeat is frozen.
   static Future<bool> renewIfStillOnDuty() async {
     final userId = await AuthRepository.instance.getOfficerAccountId();
     if (userId == null || userId.isEmpty) return false;
 
     final raw = await _storage.read(key: _key);
     if (raw == null || raw.isEmpty) {
-      // Cleared ⇒ off_duty / logout. Do not recreate.
       return false;
     }
 
@@ -70,15 +57,12 @@ class DutyStatusSnapshot {
           : DateTime.tryParse(expiresRaw)?.toUtc();
       if (expiresAt == null) return false;
 
-      // Only renew a still-valid (or barely-expired) live session. Fully
-      // expired + cleared gates are handled by [isValidOnDutyForCurrentUser].
       final now = DateTime.now().toUtc();
       final grace = const Duration(minutes: 2);
       if (expiresAt.add(grace).isBefore(now)) {
         return false;
       }
 
-      // Re-check key still present to reduce clear→recreate races.
       final stillThere = await _storage.read(key: _key);
       if (stillThere == null || stillThere.isEmpty) return false;
 

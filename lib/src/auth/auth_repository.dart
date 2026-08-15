@@ -53,7 +53,6 @@ class AuthRepository {
     ),
   );
 
-  /// Called when refresh returns 401/403. Must soft-fail only (no session wipe).
   Future<void> Function()? onRefreshSessionExpired;
 
   Completer<String?>? _refreshInFlight;
@@ -149,7 +148,6 @@ class AuthRepository {
     debugPrint('[SmartNPS360][AuthRepo] cleared auth (secure storage)');
   }
 
-  /// Persists officer credentials for silent re-login after refresh failure.
   Future<void> saveCredentials({
     required String employeeNo,
     required String password,
@@ -543,8 +541,6 @@ class AuthRepository {
     }
   }
 
-  /// Re-authenticates with securely stored credentials when refresh is dead.
-  /// Returns a fresh access token on success; never logs the password.
   Future<String?> _trySilentRelogin() async {
     final creds = await getStoredCredentials();
     if (creds == null) {

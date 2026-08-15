@@ -563,14 +563,17 @@ class BackgroundLocationUploader {
       }
     } on DioException catch (e) {
       if (kDebugMode) {
+        final code = e.response?.statusCode ?? '-';
+        final body = e.response?.data;
         debugPrint(
-          '[DutyLocation] ping API status=${e.response?.statusCode ?? '-'} '
-          'success=false',
+          '[DutyLocation] ping API status=$code '
+          'success=false'
+          '${body == null ? '' : ' body=$body'}',
         );
       }
-    } catch (_) {
+    } catch (e) {
       if (kDebugMode) {
-        debugPrint('[DutyLocation] ping API status=- success=false');
+        debugPrint('[DutyLocation] ping API status=- success=false error=$e');
       }
     }
   }
@@ -620,7 +623,7 @@ class BackgroundLocationUploader {
       'latitude': position.latitude,
       'longitude': position.longitude,
       'accuracy': position.accuracy,
-      'altitudeAccuracy': _numOrNull(() => position.altitudeAccuracy),
+      'altitudeAccuracy': _validSensorNumOrNull(() => position.altitudeAccuracy),
       'timestampMs': recordedAtUtc.millisecondsSinceEpoch,
       'timestamp': recordedAtUtc.toIso8601String(),
       'altitude': position.altitude,
@@ -702,6 +705,7 @@ class BackgroundLocationUploader {
       'headingAccuracy',
       'speed',
       'speedAccuracy',
+      'altitudeAccuracy',
     ]) {
       final value = sanitized[key];
       if (value is num && (value.isNaN || value < 0)) {

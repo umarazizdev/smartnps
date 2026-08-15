@@ -19,6 +19,13 @@ import flutter_background_service_ios
   private var motionChannelRegistered = false
   private var settingsMethodChannel: FlutterMethodChannel?
   private var slcLocationManager: CLLocationManager?
+  private var dutyGpsLocationManager: CLLocationManager?
+  private var dutyPollLocationManager: CLLocationManager?
+  private var gpsPollInFlight = false
+  private var gpsPollTimer: Timer?
+  private var lastNativeGpsAt: Date?
+  private let dutyGpsDistanceFilter: CLLocationDistance = 5
+  private let gpsPollInterval: TimeInterval = 30
   private var slcEventSink: FlutterEventSink?
   private var motionActivityManager: MotionActivityManager?
 
@@ -305,47 +312,105 @@ import flutter_background_service_ios
       ]
     }
 
-    guard CLLocationManager.significantLocationChangeMonitoringAvailable() else {
-      return [
-        "ok": false,
-        "running": false,
-        "error": [
-          "code": "slc_unavailable",
-          "message": "Significant location change monitoring is not available on this device"
-        ]
-      ]
-    }
-
     let status = CLLocationManager.authorizationStatus()
     guard status == .authorizedAlways else {
+      stopSlcMonitoring()
       return [
         "ok": false,
         "running": false,
         "authorization": authorizationStatusString(status),
         "error": [
           "code": "location_always_required",
-          "message": "Always location permission is required for iOS significant location changes"
+          "message": "Always location permission is required for iOS background location"
         ]
       ]
     }
 
-    let manager = slcLocationManager ?? CLLocationManager()
-    manager.delegate = self
-    manager.allowsBackgroundLocationUpdates = true
-    manager.pausesLocationUpdatesAutomatically = false
-    slcLocationManager = manager
-    manager.startMonitoringSignificantLocationChanges()
+    startDutyGpsMonitoring()
+
+    if CLLocationManager.significantLocationChangeMonitoringAvailable() {
+      let manager = slcLocationManager ?? CLLocationManager()
+      manager.delegate = self
+      manager.allowsBackgroundLocationUpdates = true
+      manager.pausesLocationUpdatesAutomatically = false
+      slcLocationManager = manager
+      manager.startMonitoringSignificantLocationChanges()
+    } else {
+      NSLog("[SmartNPS360][SLC] significant-change unavailable; duty GPS 5m keep-alive still running")
+    }
+
     UserDefaults.standard.set(true, forKey: slcEnabledKey)
 
     return [
       "ok": true,
       "running": true,
       "onDuty": true,
+      "gpsKeepAlive": true,
+      "distanceFilterMeters": dutyGpsDistanceFilter,
       "authorization": authorizationStatusString(status)
     ]
   }
 
+  private func startDutyGpsMonitoring() {
+    let manager = dutyGpsLocationManager ?? CLLocationManager()
+    manager.delegate = self
+    manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
+    manager.distanceFilter = dutyGpsDistanceFilter
+    manager.activityType = .otherNavigation
+    manager.allowsBackgroundLocationUpdates = true
+    manager.pausesLocationUpdatesAutomatically = false
+    if #available(iOS 11.0, *) {
+      manager.showsBackgroundLocationIndicator = true
+    }
+    dutyGpsLocationManager = manager
+    manager.startUpdatingLocation()
+    startGpsPollTimer()
+  }
+
+  private func startGpsPollTimer() {
+    gpsPollTimer?.invalidate()
+    let timer = Timer(timeInterval: gpsPollInterval, repeats: true) { [weak self] _ in
+      self?.requestFreshGpsPoll(reason: "timer")
+    }
+    RunLoop.main.add(timer, forMode: .common)
+    gpsPollTimer = timer
+  }
+
+  /// One-shot current GPS (not last-known). Used while stationary and on SLC wake.
+  private func requestFreshGpsPoll(reason: String) {
+    guard isOnDuty(), UserDefaults.standard.bool(forKey: slcEnabledKey) else { return }
+    if let lastGps = lastNativeGpsAt, Date().timeIntervalSince(lastGps) < gpsPollInterval {
+      return
+    }
+    if gpsPollInFlight { return }
+    gpsPollInFlight = true
+
+    let manager = dutyPollLocationManager ?? CLLocationManager()
+    manager.delegate = self
+    manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
+    manager.distanceFilter = kCLDistanceFilterNone
+    manager.activityType = .otherNavigation
+    manager.allowsBackgroundLocationUpdates = true
+    manager.pausesLocationUpdatesAutomatically = false
+    if #available(iOS 11.0, *) {
+      manager.showsBackgroundLocationIndicator = true
+    }
+    dutyPollLocationManager = manager
+    NSLog("[SmartNPS360][DutyGPS] requesting fresh GPS poll (\(reason))")
+    manager.requestLocation()
+  }
+
   private func stopSlcMonitoring() {
+    gpsPollTimer?.invalidate()
+    gpsPollTimer = nil
+    gpsPollInFlight = false
+    lastNativeGpsAt = nil
+    dutyPollLocationManager?.stopUpdatingLocation()
+    dutyPollLocationManager?.delegate = nil
+    dutyPollLocationManager = nil
+    dutyGpsLocationManager?.stopUpdatingLocation()
+    dutyGpsLocationManager?.delegate = nil
+    dutyGpsLocationManager = nil
     slcLocationManager?.stopMonitoringSignificantLocationChanges()
     slcLocationManager?.delegate = nil
     slcLocationManager = nil
@@ -370,7 +435,7 @@ import flutter_background_service_ios
     }
   }
 
-  private func locationPayload(_ location: CLLocation) -> [String: Any] {
+  private func locationPayload(_ location: CLLocation, source: String) -> [String: Any] {
     var payload: [String: Any] = [
       "latitude": location.coordinate.latitude,
       "longitude": location.coordinate.longitude,
@@ -380,7 +445,7 @@ import flutter_background_service_ios
       "heading": location.course,
       "speed": location.speed,
       "timestampMs": Int64(location.timestamp.timeIntervalSince1970 * 1000),
-      "source": "ios_slc"
+      "source": source
     ]
 
     if #available(iOS 13.4, *) {
@@ -435,8 +500,26 @@ import flutter_background_service_ios
   func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
     guard isOnDuty(), UserDefaults.standard.bool(forKey: slcEnabledKey) else { return }
     guard let location = locations.last else { return }
-    let payload = locationPayload(location)
 
+    if manager === dutyPollLocationManager {
+      gpsPollInFlight = false
+      lastNativeGpsAt = Date()
+      emitLocation(location, source: "ios_gps")
+      return
+    }
+
+    if manager === dutyGpsLocationManager {
+      lastNativeGpsAt = Date()
+      emitLocation(location, source: "ios_gps")
+      return
+    }
+
+    emitLocation(location, source: "ios_slc")
+    requestFreshGpsPoll(reason: "slc_wake")
+  }
+
+  private func emitLocation(_ location: CLLocation, source: String) {
+    let payload = locationPayload(location, source: source)
     DispatchQueue.main.async { [weak self] in
       guard let self = self else { return }
       if let sink = self.slcEventSink {
@@ -448,7 +531,10 @@ import flutter_background_service_ios
   }
 
   func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-    NSLog("[SmartNPS360][SLC] Significant location change failed: \(error.localizedDescription)")
+    if manager === dutyPollLocationManager {
+      gpsPollInFlight = false
+    }
+    NSLog("[SmartNPS360][DutyGPS] location failed: \(error.localizedDescription)")
   }
 
   func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
