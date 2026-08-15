@@ -8,13 +8,13 @@ import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-import '../background/background_location_permissions.dart';
+import '../background/location/background_location_permissions.dart';
 import '../motion/motion_activity_service.dart';
-import '../push/push_notification_preferences.dart';
-import '../push/push_notification_service.dart';
+import '../push/notifications/push_notification_preferences.dart';
+import '../push/notifications/push_notification_service.dart';
 import '../utilities/overlay_prompt_guard.dart';
 import '../utilities/permission_settings_helper.dart';
-import '../widgets/motion_activity_settings_dialog.dart';
+import '../widgets/dialogs/motion_activity_settings_dialog.dart';
 import 'native_permission_status_service.dart';
 import 'os_notification_permission.dart';
 
@@ -59,12 +59,18 @@ class RequiredPermissionsGate {
 
   bool get suppressesCompetingDialogs => isBlocking.value || isRefreshing.value;
 
+  static bool Function()? privacyNoticeVisibleChecker;
+
+  static bool get isPrivacyNoticeVisible =>
+      privacyNoticeVisibleChecker?.call() ?? false;
+
   static bool get shouldSuppressCompetingDialogs =>
-      instance.suppressesCompetingDialogs;
+      instance.suppressesCompetingDialogs || isPrivacyNoticeVisible;
 
   bool _active = false;
   bool _refreshInFlight = false;
   bool _refreshAgain = false;
+  bool _autoOsPromptInFlight = false;
   Timer? _pollTimer;
   String? _lastFingerprint;
   int _actionSerial = 0;
@@ -186,6 +192,60 @@ class RequiredPermissionsGate {
               .ensureLatestPermissionsSynced(),
         );
       }
+    }
+  }
+
+  Future<void> requestPendingAllowPermissionsAutomatically() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+    if (!_active || _autoOsPromptInFlight || isPrivacyNoticeVisible) return;
+
+    _autoOsPromptInFlight = true;
+    try {
+      await refresh(force: true);
+      if (!_active || isPrivacyNoticeVisible) return;
+
+      const promptOrder = <String>[
+        'foregroundLocation',
+        'motionActivity',
+        'notifications',
+      ];
+      final pending =
+          items.value
+              .where(
+                (item) =>
+                    !item.enabled &&
+                    item.action == RequiredPermissionAction.allow,
+              )
+              .toList()
+            ..sort((a, b) {
+              final ai = promptOrder.indexOf(a.id);
+              final bi = promptOrder.indexOf(b.id);
+              final aRank = ai < 0 ? promptOrder.length : ai;
+              final bRank = bi < 0 ? promptOrder.length : bi;
+              return aRank.compareTo(bRank);
+            });
+
+      for (final item in pending) {
+        if (!_active || isPrivacyNoticeVisible) return;
+        if (kDebugMode) {
+          debugPrint('[RequiredPermissionsGate] auto OS prompt id=${item.id}');
+        }
+        await handleAction(item);
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+      }
+
+      final enableItems = items.value
+          .where(
+            (item) =>
+                !item.enabled && item.action == RequiredPermissionAction.enable,
+          )
+          .toList();
+      for (final item in enableItems) {
+        if (!_active || isPrivacyNoticeVisible) return;
+        await handleAction(item);
+      }
+    } finally {
+      _autoOsPromptInFlight = false;
     }
   }
 

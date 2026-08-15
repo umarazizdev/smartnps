@@ -1,5 +1,3 @@
-
-
 class VehicleSessionFusion {
 
   static const double enterDrivingGpsKmh = 12;

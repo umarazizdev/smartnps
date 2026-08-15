@@ -381,7 +381,6 @@ class _RetryButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-
     final gradient = LinearGradient(
       begin: Alignment.topCenter,
       end: Alignment.bottomCenter,
@@ -464,7 +463,6 @@ class _HelpFooter extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-
     final ringColor = isDark
         ? OfflineScreen._darkHelpIcon
         : const Color(0xFF1E3A5F);

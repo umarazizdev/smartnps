@@ -120,6 +120,7 @@ class MotionActivityService {
   static Future<void> stop() async {
     try {
       await _methods.invokeMethod<dynamic>('stop');
+    } on MissingPluginException {
     } catch (e) {
       if (kDebugMode) {
         debugPrint('[MotionActivity] stop failed: $e');

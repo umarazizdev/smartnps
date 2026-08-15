@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-import 'package:smartnps360/src/logvisitscreen/visit_video_preview_screen.dart';
 import 'package:smartnps360/src/webview/webview_shell.dart';
 
 import '../app/app_navigator.dart';

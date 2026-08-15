@@ -1,14 +1,15 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http_parser/http_parser.dart';
 import 'package:path/path.dart' as p;
 
-import '../logvisitscreen/visit_video_flow_controller.dart';
-import '../utilities/app_config.dart';
+import '../log_visit/flow/visit_video_flow_controller.dart';
 import 'api_client.dart';
+import 'api_urls.dart';
 
 class VisitUploadResult {
   const VisitUploadResult({
@@ -37,8 +38,6 @@ class VisitUploadResult {
   }
 }
 
-/// Uploads a patrol visit draft as multipart/form-data per API contract:
-/// `POST /api/visits` with `meta` JSON + `media[N]` / `voice[N]` files.
 class VisitUploadApi {
   VisitUploadApi._();
 
@@ -76,6 +75,7 @@ class VisitUploadApi {
       }
 
       final mediaName = _mediaFileName(item, i);
+      await _logMediaQuality(item: item, index: i, file: mediaFile);
       form.files.add(
         MapEntry(
           'media[$i]',
@@ -134,14 +134,14 @@ class VisitUploadApi {
 
     if (kDebugMode) {
       debugPrint(
-        '[VisitUploadApi] POST ${AppConfig.visitsUploadUrl} '
+        '[VisitUploadApi] POST ${ApiUrls.visitsUploadUrl} '
         'items=${items.length} metaKeys=${meta.keys.toList()}',
       );
     }
 
     try {
       final response = await ApiClient.instance.dio.post<dynamic>(
-        AppConfig.visitsUploadUrl,
+        ApiUrls.visitsUploadUrl,
         data: form,
         options: Options(
           headers: const {'Accept': 'application/json'},
@@ -212,6 +212,51 @@ class VisitUploadApi {
         'message=${result.displayMessage} errors=${result.errors} '
         'body=$responseBody',
       );
+    }
+  }
+
+  Future<void> _logMediaQuality({
+    required VisitMediaItem item,
+    required int index,
+    required File file,
+  }) async {
+    if (!kDebugMode) return;
+
+    final bytes = await file.length();
+    final kb = (bytes / 1024).toStringAsFixed(1);
+    final name = p.basename(item.path);
+
+    if (item.isVideo) {
+      debugPrint(
+        '[VisitUploadApi] media[$index] video '
+        'bytes=$bytes (${kb}KB) file=$name',
+      );
+      return;
+    }
+
+    final size = await _photoPixelSize(file);
+    final pixels = size == null ? 'unknown' : '${size.$1}x${size.$2}';
+    final warn = size != null && (size.$1 < 1600 || size.$2 < 900)
+        ? ' LOW_RES'
+        : '';
+    debugPrint(
+      '[VisitUploadApi] media[$index] photo '
+      'pixels=$pixels bytes=$bytes (${kb}KB) file=$name$warn',
+    );
+  }
+
+  Future<(int, int)?> _photoPixelSize(File file) async {
+    try {
+      final bytes = await file.readAsBytes();
+      final codec = await ui.instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      final width = frame.image.width;
+      final height = frame.image.height;
+      frame.image.dispose();
+      return (width, height);
+    } catch (error) {
+      debugPrint('[VisitUploadApi] photo dimension read failed: $error');
+      return null;
     }
   }
 
@@ -310,7 +355,7 @@ class VisitUploadApi {
       'mp3' => MediaType('audio', 'mpeg'),
       'wav' => MediaType('audio', 'wav'),
       'aac' => MediaType('audio', 'aac'),
-      _ => MediaType('audio', 'mp4'), // m4a
+      _ => MediaType('audio', 'mp4'),
     };
   }
 

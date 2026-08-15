@@ -1,0 +1,1 @@
+library smartnps_motion_activity;

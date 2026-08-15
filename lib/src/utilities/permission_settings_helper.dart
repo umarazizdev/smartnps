@@ -8,23 +8,18 @@ import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../app/app_navigator.dart';
-import '../background/background_location_permissions.dart';
+import '../background/location/background_location_permissions.dart';
 import '../permissions/native_permission_status_service.dart';
 import '../permissions/required_permissions_gate.dart';
 import '../utilities/app_lifecycle_resume_gate.dart';
 import '../utilities/overlay_prompt_guard.dart';
-import '../widgets/glass_action_dialog.dart';
+import '../widgets/dialogs/glass_action_dialog.dart';
 
 enum PermissionSettingsPromptResult { skipped, dismissed, openedSettings }
 
-enum LocationPermissionRequestResult {
-  completed,
-  promptShown,
-  openedSettings,
-}
+enum LocationPermissionRequestResult { completed, promptShown, openedSettings }
 
 enum StoreSafeSettingsDestination {
-
   app,
 
   locationPermission,
@@ -54,8 +49,7 @@ class PermissionSettingsHelper {
   }
 
   static Future<void> openSettingsForUserTap({
-    StoreSafeSettingsDestination destination =
-        StoreSafeSettingsDestination.app,
+    StoreSafeSettingsDestination destination = StoreSafeSettingsDestination.app,
     bool waitForReturn = false,
     @Deprecated('Use waitForReturn') bool waitForReturnOnAndroid = false,
     bool holdAwaitingLock = false,
@@ -66,7 +60,6 @@ class PermissionSettingsHelper {
 
     _awaitingSettingsReturn = true;
     try {
-
       if (Platform.isAndroid) {
         clearPopupRoutesImmediately();
       }
@@ -87,7 +80,6 @@ class PermissionSettingsHelper {
       if (shouldWaitForReturn) {
         await AppLifecycleResumeGate.waitForResume();
         if (Platform.isAndroid) {
-
           clearPopupRoutesImmediately();
           await WidgetsBinding.instance.endOfFrame;
 
@@ -170,7 +162,9 @@ class PermissionSettingsHelper {
         if (opened == true) return;
       } catch (error) {
         if (kDebugMode) {
-          debugPrint('[PermissionSettings] openAppSettings native failed: $error');
+          debugPrint(
+            '[PermissionSettings] openAppSettings native failed: $error',
+          );
         }
       }
     }
@@ -207,7 +201,6 @@ class PermissionSettingsHelper {
     }
 
     if (Platform.isIOS) {
-
       await launchAppSettings();
       return;
     }
@@ -217,6 +210,10 @@ class PermissionSettingsHelper {
 
   static Future<LocationPermissionRequestResult>
   requestForegroundLocationStep() async {
+    if (RequiredPermissionsGate.isPrivacyNoticeVisible) {
+      return LocationPermissionRequestResult.promptShown;
+    }
+
     if (await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled()) {
       return LocationPermissionRequestResult.completed;
     }
@@ -272,6 +269,10 @@ class PermissionSettingsHelper {
 
   static Future<LocationPermissionRequestResult>
   requestNextLocationPermissionStep() async {
+    if (RequiredPermissionsGate.isPrivacyNoticeVisible) {
+      return LocationPermissionRequestResult.promptShown;
+    }
+
     if (await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled()) {
       return LocationPermissionRequestResult.completed;
     }
@@ -318,7 +319,8 @@ class PermissionSettingsHelper {
     return LocationPermissionRequestResult.promptShown;
   }
 
-  static Future<LocationPermissionRequestResult> _requestNextIosLocationStep() async {
+  static Future<LocationPermissionRequestResult>
+  _requestNextIosLocationStep() async {
     var permission = await Geolocator.checkPermission();
 
     if (permission == LocationPermission.deniedForever) {
@@ -446,9 +448,7 @@ class PermissionSettingsHelper {
             waitForReturn: true,
           );
         } else {
-          await openSettingsForUserTap(
-            waitForReturn: true,
-          );
+          await openSettingsForUserTap(waitForReturn: true);
         }
         return PermissionSettingsPromptResult.openedSettings;
       }
@@ -476,7 +476,9 @@ class PermissionSettingsHelper {
     return Platform.isAndroid || Platform.isIOS;
   }
 
-  static Future<bool> _isLocationSettingsPromptRedundant(String dialogKey) async {
+  static Future<bool> _isLocationSettingsPromptRedundant(
+    String dialogKey,
+  ) async {
     if (!_shouldOpenLocationPermissionSettings(dialogKey)) {
       return false;
     }
