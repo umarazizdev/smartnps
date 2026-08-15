@@ -9,13 +9,12 @@ class OverlayPromptGuard {
   static const Duration _maxWait = Duration(seconds: 30);
 
   static final ValueNotifier<int> _blockingOverlayCount = ValueNotifier(0);
-  static final ValueNotifier<bool> osPermissionPromptInFlight =
-      ValueNotifier(false);
+  static final ValueNotifier<bool> osPermissionPromptInFlight = ValueNotifier(
+    false,
+  );
 
-  static Listenable get overlayVisibilityListenable => Listenable.merge([
-    _blockingOverlayCount,
-    osPermissionPromptInFlight,
-  ]);
+  static Listenable get overlayVisibilityListenable =>
+      Listenable.merge([_blockingOverlayCount, osPermissionPromptInFlight]);
 
   static bool get hasBlockingNativeOverlay => _blockingOverlayCount.value > 0;
 
@@ -53,9 +52,7 @@ class OverlayPromptGuard {
     return !isKeyboardVisible(context);
   }
 
-  static Future<void> waitUntilReady({
-    Duration timeout = _maxWait,
-  }) async {
+  static Future<void> waitUntilReady({Duration timeout = _maxWait}) async {
     final deadline = DateTime.now().add(timeout);
     while (DateTime.now().isBefore(deadline)) {
       if (canShowOverlay()) return;

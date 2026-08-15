@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 
 import '../duty/duty_status_snapshot.dart';
@@ -20,9 +22,13 @@ class BackgroundLocationController {
 
   static Future<bool> Function()? confirmOnDutyBeforeStart;
 
-  /// True while the Flutter UI is paused/hidden. FGS must self-heal then;
-  /// never hard-restart or start a new FGS from the background.
-  static bool get isUiBackgrounded => _uiBackgrounded;
+  static bool get isUiBackgrounded {
+    if (_uiBackgrounded) return true;
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    return lifecycle == AppLifecycleState.inactive ||
+        lifecycle == AppLifecycleState.paused ||
+        lifecycle == AppLifecycleState.hidden;
+  }
 
   static void _log(String message) {
     if (kDebugMode) {
@@ -43,11 +49,6 @@ class BackgroundLocationController {
     return allowed;
   }
 
-  /// True when tracking appears up but GPS/ping activity looks stale.
-  ///
-  /// Android freshness comes from FGS-persisted timestamps (survives UI
-  /// background suspend). Stationary may skip batch trail uploads but still
-  /// updates this timestamp after each accepted fix/ping.
   static Future<bool> needsRecovery() async {
     if (Platform.isIOS) {
       return IosDutyLocationPinger.needsRecovery;
@@ -63,7 +64,6 @@ class BackgroundLocationController {
     return !await needsRecovery();
   }
 
-  /// Soft-recover Android GPS without tearing down the FGS.
   static Future<void> softRecoverAndroidTracking({
     bool force = false,
     bool countTowardHardRestart = true,
@@ -83,10 +83,6 @@ class BackgroundLocationController {
     FlutterBackgroundService().invoke('rebuild_stream');
   }
 
-  /// Soft-recover first; hard-restart FGS only while the UI is foregrounded.
-  /// Never starts GPS unless [confirmOnDutyBeforeStart] still says on_duty.
-  /// Never tears down a live FGS while the UI is backgrounded (OEM GPS
-  /// timeouts are common; hard-restart then fails to start a new FGS).
   static Future<Map<String, dynamic>> recoverAndroidTrackingIfNeeded() async {
     if (!Platform.isAndroid) {
       return {'ok': true, 'recovered': false};
@@ -109,7 +105,7 @@ class BackgroundLocationController {
     }
 
     if (!await FlutterBackgroundService().isRunning()) {
-      if (_uiBackgrounded) {
+      if (isUiBackgrounded) {
         _log('SKIP start; UI is backgrounded (no new FGS from background)');
         return {
           'ok': false,
@@ -125,7 +121,7 @@ class BackgroundLocationController {
       return {'ok': true, 'recovered': false, 'running': true};
     }
 
-    if (_uiBackgrounded) {
+    if (isUiBackgrounded) {
       _log('UI backgrounded — keep FGS, soft-recover only (no hard-restart)');
       await softRecoverAndroidTracking(
         force: true,
@@ -161,24 +157,36 @@ class BackgroundLocationController {
     };
   }
 
-  /// Tell the Android FGS the UI moved to background so it can keep GPS alive.
   static Future<void> notifyAppBackgrounded() async {
-    if (!Platform.isAndroid) return;
     _uiBackgrounded = true;
+    if (!Platform.isAndroid) return;
     if (!await FlutterBackgroundService().isRunning()) return;
-    // Renew while UI is still awake so FGS starts BG with a fresh TTL.
     try {
       await DutyStatusSnapshot.renewIfStillOnDuty();
     } catch (_) {}
     FlutterBackgroundService().invoke('app_backgrounded');
   }
 
-  /// Tell the Android FGS the UI returned to foreground.
   static Future<void> notifyAppForegrounded() async {
-    if (!Platform.isAndroid) return;
     _uiBackgrounded = false;
+    if (!Platform.isAndroid) return;
     if (!await FlutterBackgroundService().isRunning()) return;
     FlutterBackgroundService().invoke('app_foregrounded');
+  }
+
+  static Future<void> _yieldForStartIfForeground() async {
+    if (isUiBackgrounded) {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      return;
+    }
+    try {
+      await SchedulerBinding.instance.endOfFrame.timeout(
+        const Duration(milliseconds: 800),
+      );
+    } on TimeoutException {
+      _log('endOfFrame timed out; continuing GPS start');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 300));
   }
 
   static Future<Map<String, dynamic>> ensureStarted() async {
@@ -199,25 +207,16 @@ class BackgroundLocationController {
   static Future<Map<String, dynamic>> _ensureStartedImpl() async {
     try {
       if (Platform.isIOS) {
-        if (IosDutyLocationPinger.isRunning &&
-            !IosDutyLocationPinger.needsRecovery) {
-          if (!await _confirmOnDutyOrBlock()) {
-            return {
-              'ok': false,
-              'started': false,
-              'running': false,
-              'error': {
-                'code': 'duty_not_confirmed',
-                'message':
-                    'Background location blocked; heartbeat is not on_duty',
-              },
-            };
-          }
-          _log('RUNNING already (iOS pinger active)');
-          return {'ok': true, 'started': false, 'running': true};
-        }
         if (IosDutyLocationPinger.isRunning) {
-          await IosDutyLocationPinger.stop();
+          if (IosDutyLocationPinger.needsRecovery) {
+            _log('iOS stream subscription missing; resubscribe in place');
+            await IosDutyLocationPinger.rebuildForCurrentPermission(
+              reason: 'subscription_missing',
+            );
+          } else {
+            _log('RUNNING already (iOS pinger active)');
+          }
+          return {'ok': true, 'started': false, 'running': true};
         }
       } else if (Platform.isAndroid) {
         AndroidDutyLocationHealth.ensureListenerInstalled();
@@ -238,7 +237,7 @@ class BackgroundLocationController {
             };
           }
           if (await AndroidDutyLocationHealth.computeNeedsRecovery()) {
-            if (_uiBackgrounded) {
+            if (isUiBackgrounded) {
               await softRecoverAndroidTracking(
                 force: true,
                 countTowardHardRestart: false,
@@ -263,7 +262,6 @@ class BackgroundLocationController {
                 maxWait: const Duration(seconds: 15),
               );
               AndroidDutyLocationHealth.markStopped();
-              // Fall through to start a fresh FGS below.
             } else {
               await softRecoverAndroidTracking(force: true);
               _log('Android FGS soft-recovered (ensureStarted)');
@@ -312,8 +310,7 @@ class BackgroundLocationController {
 
       await BackgroundLocationPermissions.ensureAndroidNotificationForService();
 
-      await SchedulerBinding.instance.endOfFrame;
-      await Future<void>.delayed(const Duration(milliseconds: 300));
+      await _yieldForStartIfForeground();
 
       await LocationSharingStatusNotification.clearStopped().catchError(
         (Object e) {
@@ -352,7 +349,7 @@ class BackgroundLocationController {
           _log('RUNNING already (Android background service active)');
           return {'ok': true, 'started': false, 'running': true};
         }
-        if (_uiBackgrounded) {
+        if (isUiBackgrounded) {
           _log('SKIP start; UI is backgrounded (no new FGS from background)');
           return {
             'ok': false,
@@ -405,7 +402,7 @@ class BackgroundLocationController {
 
   static Future<Map<String, dynamic>> restart() async {
     try {
-      if (Platform.isAndroid && _uiBackgrounded) {
+      if (Platform.isAndroid && isUiBackgrounded) {
         _log('SKIP hard-restart; UI is backgrounded (keep live FGS)');
         if (await FlutterBackgroundService().isRunning()) {
           await softRecoverAndroidTracking(
@@ -420,6 +417,27 @@ class BackgroundLocationController {
           };
         }
         return {'ok': false, 'skipped': true, 'running': false};
+      }
+      if (Platform.isIOS && isUiBackgrounded) {
+        if (IosDutyLocationPinger.isRunning) {
+          _log(
+            'SKIP hard-restart; UI is backgrounded (keep live iOS stream)',
+          );
+          await IosDutyLocationPinger.rebuildForCurrentPermission(
+            reason: 'permission_while_backgrounded',
+          );
+          return {
+            'ok': true,
+            'skipped': true,
+            'running': true,
+            'softRebuilt': true,
+            'deferredHardRestart': true,
+          };
+        }
+        _log(
+          'iOS tracking stopped while UI backgrounded; starting without hard-stop',
+        );
+        return ensureStarted();
       }
       if (Platform.isIOS) {
         if (IosDutyLocationPinger.isRunning) {

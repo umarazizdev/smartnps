@@ -10,6 +10,8 @@ class AdaptiveGpsStreamController {
 
   void Function()? onSettingsChanged;
 
+  static const int iosLockedDistanceFilterMeters = 5;
+
   static const Duration curveBoostDuration = Duration(seconds: 12);
   static const Duration curveBoostInterval = Duration(seconds: 1);
   static const int curveBoostDistanceFilterMeters = 0;
@@ -30,6 +32,7 @@ class AdaptiveGpsStreamController {
   SpeedAdaptiveGpsPolicyBand get band => _band;
 
   bool get isCurveBoosting {
+    if (Platform.isIOS) return false;
     final until = _curveBoostUntil;
     if (until == null) return false;
     if (DateTime.now().isBefore(until)) return true;
@@ -40,9 +43,12 @@ class AdaptiveGpsStreamController {
   Duration get interval =>
       isCurveBoosting ? curveBoostInterval : _band.captureInterval;
 
-  int get distanceFilterMeters => isCurveBoosting
-      ? curveBoostDistanceFilterMeters
-      : _band.distanceFilterMeters;
+  int get distanceFilterMeters {
+    if (Platform.isIOS) return iosLockedDistanceFilterMeters;
+    return isCurveBoosting
+        ? curveBoostDistanceFilterMeters
+        : _band.distanceFilterMeters;
+  }
 
   Duration get pollInterval => interval;
 
@@ -62,6 +68,10 @@ class AdaptiveGpsStreamController {
     SpeedAdaptiveGpsPolicyDecision policyDecision,
   ) {
     _band = policyDecision.band;
+
+    if (Platform.isIOS) {
+      return false;
+    }
 
     final curveHit = _detectCurveAndAdvance(position);
     if (curveHit) {
@@ -93,6 +103,7 @@ class AdaptiveGpsStreamController {
     return AppleSettings(
       accuracy: LocationAccuracy.bestForNavigation,
       distanceFilter: filter,
+      activityType: ActivityType.otherNavigation,
       pauseLocationUpdatesAutomatically: false,
       showBackgroundLocationIndicator: true,
       allowBackgroundLocationUpdates: allowBackgroundLocationUpdates,

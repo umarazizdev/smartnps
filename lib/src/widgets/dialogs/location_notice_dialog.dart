@@ -6,7 +6,6 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:pdfx/pdfx.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-/// Privacy policy payload fetched through the main WebView session.
 class PolicyDocumentContent {
   const PolicyDocumentContent.html(this.html) : bytes = null, isPdf = false;
 
@@ -26,7 +25,6 @@ class LocationNoticeDialog extends StatelessWidget {
 
   final VoidCallback? onClose;
 
-  /// Fetches policy content via the main WebView session (same as dashboard).
   final Future<PolicyDocumentContent?> Function(Uri uri)? onFetchPolicyDocument;
 
   static final Uri privacyPolicyFullUri = Uri.parse(

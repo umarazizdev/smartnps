@@ -11,8 +11,6 @@ class AuthState {
   final ValueNotifier<Map<String, dynamic>?> session =
       ValueNotifier<Map<String, dynamic>?>(null);
 
-  /// True when access-token refresh returned 401/403. Tokens are kept;
-  /// UI should prompt soft re-auth without clearing the native session.
   final ValueNotifier<bool> needsReauth = ValueNotifier<bool>(false);
 
   bool get isLoggedIn => user.value != null;

@@ -103,7 +103,6 @@ class BackgroundLocationPermissions {
   static Future<BackgroundPermissionOutcome> _ensureAndroidGranted() async {
     final fgBefore = await Permission.location.status;
     if (kDebugMode) {
-
       print('[BackgroundLocationPermissions] android fg(before)=$fgBefore');
     }
     final fg = fgBefore.isGranted
@@ -124,7 +123,6 @@ class BackgroundLocationPermissions {
 
     final notificationBefore = await Permission.notification.status;
     if (kDebugMode) {
-
       print(
         '[BackgroundLocationPermissions] android notification(before)=$notificationBefore',
       );
@@ -134,7 +132,6 @@ class BackgroundLocationPermissions {
         Permission.notification.request,
       );
       if (kDebugMode) {
-
         print(
           '[BackgroundLocationPermissions] android notification(after)=$notification',
         );
@@ -151,7 +148,6 @@ class BackgroundLocationPermissions {
 
     final bgBefore = await Permission.locationAlways.status;
     if (kDebugMode) {
-
       print('[BackgroundLocationPermissions] android bg(before)=$bgBefore');
     }
     final bg = bgBefore.isGranted
@@ -160,7 +156,6 @@ class BackgroundLocationPermissions {
             Permission.locationAlways.request,
           );
     if (kDebugMode) {
-
       print('[BackgroundLocationPermissions] android bg(after)=$bg');
     }
     if (bg.isGranted) {
@@ -175,21 +170,12 @@ class BackgroundLocationPermissions {
   }
 
   static Future<LocationPermission> refreshIosLocationPermission() async {
-    final permission = await readIosLocationPermission();
-    if (kDebugMode && Platform.isIOS) {
-
-      print(
-        '[BackgroundLocationPermissions] ios geolocator(check)=$permission',
-      );
-    }
-    return permission;
+    return readIosLocationPermission();
   }
 
   static Future<BackgroundPermissionOutcome> _ensureIosGranted() async {
-
     var geoPermission = await refreshIosLocationPermission();
     if (kDebugMode) {
-
       print(
         '[BackgroundLocationPermissions] ios geolocator(before)=$geoPermission',
       );
@@ -200,7 +186,6 @@ class BackgroundLocationPermissions {
         Geolocator.requestPermission,
       );
       if (kDebugMode) {
-
         print(
           '[BackgroundLocationPermissions] ios geolocator(after request)=$geoPermission',
         );
@@ -290,11 +275,6 @@ class BackgroundLocationPermissions {
         'hasPreciseLocationPermission',
       );
       if (precise != null) {
-        if (kDebugMode) {
-          debugPrint(
-            '[BackgroundLocationPermissions] ios native precise=$precise',
-          );
-        }
         return precise;
       }
     } catch (error) {

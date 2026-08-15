@@ -347,14 +347,14 @@ class PushNotificationService {
     await requestPermissionAfterAuth();
   }
 
-  Future<void> requestPermissionAfterAuth() async {
+  Future<void> requestPermissionAfterAuth({bool immediate = false}) async {
     if (!pushNotificationsEnabled) {
       debugPrint(
         '[SmartNPS360][Push] skip permission prompt (disabled by user)',
       );
       return;
     }
-    if (_shouldDeferPermissionPrompt) {
+    if (!immediate && _shouldDeferPermissionPrompt) {
       debugPrint(
         '[SmartNPS360][Push] deferring notification permission (auth route)',
       );
@@ -369,7 +369,7 @@ class PushNotificationService {
       return;
     }
 
-    final future = _requestPermissionAfterAuthImpl();
+    final future = _requestPermissionAfterAuthImpl(immediate: immediate);
     _permissionPromptFuture = future;
     try {
       await future;
@@ -380,14 +380,16 @@ class PushNotificationService {
     }
   }
 
-  Future<void> _requestPermissionAfterAuthImpl() async {
+  Future<void> _requestPermissionAfterAuthImpl({bool immediate = false}) async {
     if (_permissionPromptAttempted) {
       await _refreshFcmToken(uploadIfAuthenticated: true);
       return;
     }
     _permissionPromptAttempted = true;
 
-    await Future<void>.delayed(const Duration(seconds: 1));
+    if (!immediate) {
+      await Future<void>.delayed(const Duration(seconds: 1));
+    }
 
     debugPrint(
       '[SmartNPS360][Push] requesting notification permission (after auth)',

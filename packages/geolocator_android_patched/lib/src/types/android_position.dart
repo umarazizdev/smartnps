@@ -1,15 +1,9 @@
-// ignore_for_file: use_super_parameters
 
 import 'package:geolocator_platform_interface/geolocator_platform_interface.dart';
-// ignore: depend_on_referenced_packages
 import 'package:meta/meta.dart';
 
-/// Contains additional location information only available on Android platforms.
 @immutable
 class AndroidPosition extends Position {
-  /// Constructs an instance with the given values for testing. [AndroidPosition]
-  /// instances constructed this way won't actually reflect any real information
-  /// from the platform, just whatever was passed in at construction time.
   const AndroidPosition({
     required this.satelliteCount,
     required this.satellitesUsedInFix,
@@ -39,14 +33,8 @@ class AndroidPosition extends Position {
           isMocked: isMocked,
         );
 
-  /// If available it returns the number of GNSS satellites.
-  ///
-  /// If the number of satellites is not available it returns the default value: 0.0.
   final double satelliteCount;
 
-  /// If available it returns the number of GNSS satellites used in fix.
-  ///
-  /// If the number of satellites used in fix is not available it returns the default value: 0.0.
   final double satellitesUsedInFix;
 
   @override
@@ -62,10 +50,8 @@ class AndroidPosition extends Position {
   int get hashCode =>
       satelliteCount.hashCode ^ satellitesUsedInFix.hashCode ^ super.hashCode;
 
-  /// Converts the supplied [Map] to an instance of the [AndroidPosition] class.
   static AndroidPosition fromMap(dynamic message) {
     final Map<dynamic, dynamic> positionMap = message;
-    // Call the Position fromMap method so future changes to the Position class are automatically picked up.
     final position = Position.fromMap(positionMap);
 
     return AndroidPosition(
@@ -86,8 +72,6 @@ class AndroidPosition extends Position {
     );
   }
 
-  /// Converts the [AndroidPosition] instance into a [Map] instance that can be
-  /// serialized to JSON.
   @override
   Map<String, dynamic> toJson() {
     return super.toJson()

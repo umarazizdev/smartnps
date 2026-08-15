@@ -254,8 +254,6 @@ class DutyHeartbeatService {
   @Deprecated('Use reconcileDialogsAfterAppResume')
   void reconcileDialogsAfterAndroidResume() => reconcileDialogsAfterAppResume();
 
-  /// Block GPS start until resume has fetched duty status (avoids a brief
-  /// on_duty start when the officer is actually off_duty).
   void beginResumeDutyReconcile() {
     _deferTrackingStart = true;
   }
@@ -406,8 +404,6 @@ class DutyHeartbeatService {
         await refreshBackgroundLocationPermissionBannerState();
         return;
       }
-      // Resume without a fresh on_duty API result: keep a live FGS, but do
-      // not start a new GPS session from snapshot alone.
       if (fromResume) {
         final running = await _isLocationTrackingRunning();
         if (!running) {
@@ -446,8 +442,6 @@ class DutyHeartbeatService {
       return;
     }
 
-    // Always start/recover when on_duty — including same-page reloads.
-    // pageReload only skips permission dialogs, not GPS start.
     await _ensureTrackingRunningForOnDuty(
       allowPrompts: !pageReload,
       ignoreDefer: fromResume,
@@ -455,8 +449,6 @@ class DutyHeartbeatService {
     await refreshBackgroundLocationPermissionBannerState();
   }
 
-  /// Starts or recovers duty GPS when heartbeat says on_duty.
-  /// [allowPrompts] false skips disclosure/settings dialogs (e.g. page reload).
   Future<void> _ensureTrackingRunningForOnDuty({
     required bool allowPrompts,
     bool ignoreDefer = false,
@@ -502,9 +494,6 @@ class DutyHeartbeatService {
     }
 
     final running = await _isLocationTrackingRunning();
-    // Android FGS self-heals while the UI is backgrounded. Never stop/rebuild
-    // from this isolate then — OEM GPS timeouts led to hard-restart which
-    // killed the live service and could not start a new FGS from background.
     if (running && Platform.isAndroid) {
       if (BackgroundLocationController.isUiBackgrounded) {
         _locationSharingArmedThisDuty = true;
@@ -534,9 +523,11 @@ class DutyHeartbeatService {
 
     if (running && Platform.isIOS) {
       if (kDebugMode) {
-        debugPrint('[DutyHeartbeatService] on_duty tracking stale; recovering');
+        debugPrint(
+          '[DutyHeartbeatService] on_duty iOS stream live; skipping rebuild',
+        );
       }
-      await _restartTrackingWithCurrentPermission();
+      _locationSharingArmedThisDuty = true;
       return;
     }
 
@@ -575,7 +566,6 @@ class DutyHeartbeatService {
   }
 
   Future<void> _ensureOffDutyTrackingStopped() async {
-    // Always clear any leftover on_duty snapshot while heartbeat says off_duty.
     await DutyStatusSnapshot.clear();
 
     final running = await _isLocationTrackingRunning();
@@ -623,10 +613,11 @@ class DutyHeartbeatService {
     if (IosDutyLocationPinger.needsRecovery) {
       if (kDebugMode) {
         debugPrint(
-          '[DutyHeartbeatService] on_duty location stream stale; recovering',
+          '[DutyHeartbeatService] on_duty location stream dead; recovering',
         );
       }
       await IosDutyLocationPinger.recoverIfNeeded();
+      return;
     }
   }
 
@@ -662,7 +653,6 @@ class DutyHeartbeatService {
     debugPrint(
       '[DutyHeartbeatService] instant logout (heartbeat + tracking stopped)',
     );
-    // Clear snapshot first so any in-flight FGS fix cannot upload while off duty.
     unawaited(DutyStatusSnapshot.clear());
     if (Platform.isIOS) {
       unawaited(IosSignificantLocationChangeService.setOnDuty(false));
@@ -1026,8 +1016,6 @@ class DutyHeartbeatService {
     if (status == onDuty) {
       await DutyStatusSnapshot.markOnDuty();
       await refreshBackgroundLocationPermissionBannerState();
-      // Block auto permission/disclosure dialogs, but keep start retries when
-      // disclosure + background access are already ready.
       _onDutyAutoPromptComplete = true;
       if (await LocationDisclosureConsent.hasAccepted() &&
           await BackgroundLocationPermissions.hasSufficientBackgroundAccess()) {
@@ -1320,7 +1308,6 @@ class DutyHeartbeatService {
     final wasOnDuty = _lastAppliedStatus == onDuty;
     final wasSharing = await _shouldAnnounceLocationStop();
 
-    // Clear on_duty snapshot first so any in-flight FGS fix stops uploading.
     await DutyStatusSnapshot.clear();
 
     if (Platform.isIOS) {
@@ -1394,7 +1381,8 @@ class DutyHeartbeatService {
     if (upgradedToAlways) {
       if (kDebugMode) {
         debugPrint(
-          '[DutyHeartbeatService] ios permission upgraded to always; restarting tracking',
+          '[DutyHeartbeatService] ios permission upgraded to always; '
+          '${BackgroundLocationController.isUiBackgrounded ? "soft-applying (UI backgrounded)" : "restarting tracking"}',
         );
       }
       await _restartTrackingWithCurrentPermission();
@@ -1407,7 +1395,9 @@ class DutyHeartbeatService {
     final result = await BackgroundLocationController.restart();
     if (kDebugMode) {
       debugPrint(
-        '[DutyHeartbeatService] tracking restarted after permission change ok=${result['ok'] == true}',
+        '[DutyHeartbeatService] tracking restarted after permission change '
+        'ok=${result['ok'] == true} soft=${result['softRebuilt'] == true} '
+        'deferred=${result['deferredHardRestart'] == true}',
       );
     }
     if (result['ok'] == true) {

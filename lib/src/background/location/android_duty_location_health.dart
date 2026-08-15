@@ -5,15 +5,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Android FGS GPS health.
-///
-/// Freshness is persisted to [SharedPreferences] from the FGS isolate so the
-/// UI isolate can still judge health after being backgrounded (when it may
-/// miss live `FlutterBackgroundService` events).
-///
-/// The "upload" timestamp is updated after each accepted GPS fix is processed
-/// (including ping-only stationary fixes). Batch trail upload may pause while
-/// stationary; that alone must not look stale.
 class AndroidDutyLocationHealth {
   AndroidDutyLocationHealth._();
 
@@ -60,7 +51,6 @@ class AndroidDutyLocationHealth {
     _uploadSub ??= FlutterBackgroundService().on(uploadEvent).listen((event) {
       final at = _parseAt(event) ?? DateTime.now();
       markUpload(at: at);
-      // Prefs already written by FGS; keep memory in sync.
     });
   }
 
@@ -111,11 +101,9 @@ class AndroidDutyLocationHealth {
     } catch (_) {}
   }
 
-  /// Pull latest timestamps written by the FGS isolate.
   static Future<void> hydrateFromPrefs() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      // FGS writes from another isolate; refresh UI-isolate cache.
       await prefs.reload();
       final uploadMs = prefs.getInt(_prefsLastUploadMs);
       final startedMs = prefs.getInt(_prefsStartedMs);
@@ -134,10 +122,6 @@ class AndroidDutyLocationHealth {
     } catch (_) {}
   }
 
-  /// True when FGS is up but uploads look genuinely stale.
-  ///
-  /// Never treat "no in-memory marks" alone as stale — that happens after UI
-  /// hot-restart / background suspend even while FGS is healthy.
   static Future<bool> computeNeedsRecovery() async {
     if (!Platform.isAndroid) return false;
     await hydrateFromPrefs();
@@ -152,7 +136,6 @@ class AndroidDutyLocationHealth {
       return DateTime.now().difference(started) > staleThreshold;
     }
 
-    // Running with no timestamps yet: give the stream time; don't kill FGS.
     return false;
   }
 }

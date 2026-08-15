@@ -121,7 +121,6 @@ class MotionActivityService {
     try {
       await _methods.invokeMethod<dynamic>('stop');
     } on MissingPluginException {
-      // Expected only if native plugin failed to register on this isolate.
     } catch (e) {
       if (kDebugMode) {
         debugPrint('[MotionActivity] stop failed: $e');
