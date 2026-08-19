@@ -18,7 +18,8 @@ class ApiClient {
     dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (options, handler) async {
-          if (AuthRepository.isRefreshRequest(options)) {
+          if (AuthRepository.isRefreshRequest(options) ||
+              AuthRepository.isLoginRequest(options)) {
             handler.next(options);
             return;
           }
@@ -30,7 +31,8 @@ class ApiClient {
           handler.next(options);
         },
         onResponse: (response, handler) async {
-          if (response.statusCode == 401) {
+          if (response.statusCode == 401 &&
+              !AuthRepository.isLoginRequest(response.requestOptions)) {
             final retried = await _refreshAndRetryRequest(response.requestOptions);
             if (retried != null) {
               _logApiResult(retried.requestOptions, retried.statusCode);
@@ -42,7 +44,8 @@ class ApiClient {
           handler.next(response);
         },
         onError: (error, handler) async {
-          if (error.response?.statusCode == 401) {
+          if (error.response?.statusCode == 401 &&
+              !AuthRepository.isLoginRequest(error.requestOptions)) {
             final retried = await _refreshAndRetryRequest(error.requestOptions);
             if (retried != null) {
               _logApiResult(retried.requestOptions, retried.statusCode);
@@ -103,6 +106,7 @@ class ApiClient {
     RequestOptions request,
   ) async {
     if (AuthRepository.isRefreshRequest(request)) return null;
+    if (AuthRepository.isLoginRequest(request)) return null;
     if (AuthRepository.hasRefreshRetry(request)) return null;
 
     AuthRepository.markRefreshRetry(request);

@@ -16,6 +16,7 @@ import '../../auth/location_disclosure_account_sync.dart';
 import '../../permissions/required_permissions_gate.dart';
 import '../../utilities/overlay_prompt_guard.dart';
 import '../../utilities/permission_settings_helper.dart';
+import '../../utilities/device_identity.dart';
 import '../../widgets/dialogs/location_tracking_disclosure_dialog.dart';
 import '../location/android_duty_location_health.dart';
 import '../location/background_location_controller.dart';
@@ -37,6 +38,13 @@ class DutyHeartbeatService {
       IosDutyLocationPinger.confirmOnDutyBeforeStart = () {
         return confirmOnDutyFromApiForTracking(stopIfNotOnDuty: true);
       };
+      IosSignificantLocationChangeService.setOnLocationWake(() {
+        return recoverAfterIosLocationWakeIfNeeded();
+      });
+      AuthRepository.onSecureTokensChanged = () {
+        unawaited(_mirrorNativeAuthSession());
+      };
+      unawaited(_mirrorNativeAuthSession());
     }
   }
 
@@ -66,6 +74,7 @@ class DutyHeartbeatService {
   bool _locationSharingArmedThisDuty = false;
   Future<void>? _applyOnDutyFuture;
   Future<void>? _ensureTrackingFuture;
+  Future<void>? _locationWakeRecoverFuture;
   Future<bool>? _disclosurePromptFuture;
   LocationPermission? _lastKnownIosPermission;
   bool _deferTrackingStart = false;
@@ -115,6 +124,104 @@ class DutyHeartbeatService {
       return true;
     }
     return _lastAppliedStatus == onDuty;
+  }
+
+  Future<void> recoverAfterIosLocationWakeIfNeeded() async {
+    if (!Platform.isIOS) return;
+
+    final inFlight = _locationWakeRecoverFuture;
+    if (inFlight != null) {
+      await inFlight;
+      return;
+    }
+
+    final future = _recoverAfterIosLocationWakeIfNeededImpl();
+    _locationWakeRecoverFuture = future;
+    try {
+      await future;
+    } finally {
+      if (identical(_locationWakeRecoverFuture, future)) {
+        _locationWakeRecoverFuture = null;
+      }
+    }
+  }
+
+  Future<void> _recoverAfterIosLocationWakeIfNeededImpl() async {
+    final ready = await IosSignificantLocationChangeService.ensureNativeReady();
+    if (!ready) {
+      if (kDebugMode) {
+        debugPrint(
+          '[DutyHeartbeatService] iOS location wake skipped; SLC channel not ready',
+        );
+      }
+      return;
+    }
+
+    final status = await IosSignificantLocationChangeService.status();
+    final launchedForLocation = status['launchedForLocation'] == true;
+    final nativeOnDuty = status['onDuty'] == true;
+    final nativeRunning = status['running'] == true;
+
+    if (!nativeOnDuty && !nativeRunning) {
+      if (kDebugMode) {
+        debugPrint(
+          '[DutyHeartbeatService] iOS location wake ignored; native duty/slc not armed',
+        );
+      }
+      return;
+    }
+
+    if (launchedForLocation) {
+      await IosSignificantLocationChangeService.claimWake();
+    }
+
+    if (!nativeOnDuty) {
+      if (kDebugMode) {
+        debugPrint(
+          '[DutyHeartbeatService] iOS location wake stopped; native onDuty=false',
+        );
+      }
+      await IosSignificantLocationChangeService.setOnDuty(false);
+      return;
+    }
+
+    debugPrint(
+      launchedForLocation
+          ? '[DutyHeartbeatService] iOS location wake; confirming duty before GPS'
+          : '[DutyHeartbeatService] iOS on-duty launch; confirming duty before GPS',
+    );
+
+    final allowed = await confirmOnDutyFromApiForTracking(
+      stopIfNotOnDuty: true,
+    );
+    if (!allowed) {
+      debugPrint(
+        '[DutyHeartbeatService] iOS location wake stopped; officer is not on_duty',
+      );
+      return;
+    }
+
+    _lastAppliedStatus = onDuty;
+    await IosDutyLocationPinger.recoverIfNeeded(
+      fromLocationWake: true,
+      dutyAlreadyConfirmed: true,
+    );
+    start();
+  }
+
+  static Future<void> _mirrorNativeAuthSession() async {
+    if (!Platform.isIOS) return;
+    final access = await AuthRepository.instance.getAccessToken();
+    final refresh = await AuthRepository.instance.getRefreshToken();
+    if (access == null || access.isEmpty) {
+      await IosSignificantLocationChangeService.syncNativeAuth(clear: true);
+      return;
+    }
+    await IosSignificantLocationChangeService.syncNativeAuth(
+      accessToken: access,
+      refreshToken: refresh,
+      deviceId: await DeviceIdentity.getDeviceId(),
+    );
   }
 
   Future<bool> confirmOnDutyFromApiForTracking({

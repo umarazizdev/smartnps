@@ -55,6 +55,8 @@ class AuthRepository {
 
   Future<void> Function()? onRefreshSessionExpired;
 
+  static VoidCallback? onSecureTokensChanged;
+
   Completer<String?>? _refreshInFlight;
 
   Future<void> saveLogin({
@@ -89,6 +91,7 @@ class AuthRepository {
         'user=$userSaved access=$accessSaved refresh=$refreshSaved flag=$flagSaved)',
       );
     }
+    onSecureTokensChanged?.call();
   }
 
   void _cacheLoginState({
@@ -146,6 +149,7 @@ class AuthRepository {
     AuthState.instance.clearNeedsReauth();
     LocationDisclosureAccountSync.onLoggedOut();
     debugPrint('[SmartNPS360][AuthRepo] cleared auth (secure storage)');
+    onSecureTokensChanged?.call();
   }
 
   Future<void> saveCredentials({
@@ -199,6 +203,7 @@ class AuthRepository {
           ? '[SmartNPS360][AuthRepo] saved access token (secure storage)'
           : '[SmartNPS360][AuthRepo] saved access token (memory cache only)',
     );
+    onSecureTokensChanged?.call();
   }
 
   Future<void> saveRefreshToken(String token) async {
@@ -210,6 +215,7 @@ class AuthRepository {
           ? '[SmartNPS360][AuthRepo] saved refresh token (secure storage)'
           : '[SmartNPS360][AuthRepo] saved refresh token (memory cache only)',
     );
+    onSecureTokensChanged?.call();
   }
 
   Future<bool> _secureWrite(String key, String value) async {
@@ -670,6 +676,10 @@ class AuthRepository {
     return options.uri.toString().contains('/api/auth/refresh');
   }
 
+  static bool isLoginRequest(RequestOptions options) {
+    return options.uri.toString().contains('/api/auth/login');
+  }
+
   static bool hasRefreshRetry(RequestOptions options) {
     return options.extra[_refreshRetryKey] == true;
   }
@@ -802,7 +812,6 @@ class AuthRepository {
   }
 
   String _safeEncode(Map<String, dynamic> user) {
-
     try {
       return jsonEncode(user);
     } catch (_) {

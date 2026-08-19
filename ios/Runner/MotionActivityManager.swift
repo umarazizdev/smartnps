@@ -17,10 +17,18 @@ final class MotionActivityManager: NSObject, FlutterStreamHandler {
     return queue
   }()
 
+  private let onDutyKey = "smartnps360.ios_duty.on_duty"
+
   private var eventSink: FlutterEventSink?
   private var isStreaming = false
   private var methodChannel: FlutterMethodChannel?
   private var lastPayload: [String: Any]?
+  private var lastSignificantActivity: String?
+
+  /// Called on walking / running / driving / cycling while on duty.
+  var onSignificantMotion: ((String) -> Void)?
+
+  var running: Bool { isStreaming }
 
   func register(with messenger: FlutterBinaryMessenger) {
     let methods = FlutterMethodChannel(
@@ -40,10 +48,19 @@ final class MotionActivityManager: NSObject, FlutterStreamHandler {
   }
 
   func dispose() {
-    stopUpdates()
+    stopDutyUpdates()
     methodChannel?.setMethodCallHandler(nil)
     methodChannel = nil
     eventSink = nil
+  }
+
+  @discardableResult
+  func startDutyUpdates() -> [String: Any] {
+    return startUpdates()
+  }
+
+  func stopDutyUpdates() {
+    stopUpdates()
   }
 
   // MARK: - FlutterStreamHandler
@@ -148,6 +165,19 @@ final class MotionActivityManager: NSObject, FlutterStreamHandler {
   }
 
   private func startUpdates() -> [String: Any] {
+    guard UserDefaults.standard.bool(forKey: onDutyKey) else {
+      stopUpdates()
+      return [
+        "ok": false,
+        "running": false,
+        "onDuty": false,
+        "error": [
+          "code": "off_duty",
+          "message": "Motion activity is only allowed while the officer is on duty",
+        ],
+      ]
+    }
+
     guard CMMotionActivityManager.isActivityAvailable() else {
       return [
         "ok": false,
@@ -186,6 +216,12 @@ final class MotionActivityManager: NSObject, FlutterStreamHandler {
 
     activityManager.startActivityUpdates(to: activityQueue) { [weak self] activity in
       guard let self = self, let activity = activity else { return }
+      guard UserDefaults.standard.bool(forKey: self.onDutyKey) else {
+        DispatchQueue.main.async {
+          self.stopUpdates()
+        }
+        return
+      }
       // Skip unknown-only samples when we already have a better last payload.
       let mapped = self.mapActivity(activity)
       if mapped.activity == "unknown", self.lastPayload != nil {
@@ -198,6 +234,7 @@ final class MotionActivityManager: NSObject, FlutterStreamHandler {
       self.lastPayload = payload
       DispatchQueue.main.async {
         self.eventSink?(payload)
+        self.emitSignificantMotionIfNeeded(mapped.activity)
       }
     }
     isStreaming = true
@@ -211,9 +248,24 @@ final class MotionActivityManager: NSObject, FlutterStreamHandler {
   }
 
   private func stopUpdates() {
+    lastSignificantActivity = nil
     guard isStreaming else { return }
     activityManager.stopActivityUpdates()
     isStreaming = false
+    NSLog("[SmartNPS360][Motion] stopped")
+  }
+
+  private func emitSignificantMotionIfNeeded(_ activity: String) {
+    switch activity {
+    case "walking", "running", "driving", "cycling":
+      break
+    default:
+      lastSignificantActivity = activity
+      return
+    }
+    if lastSignificantActivity == activity { return }
+    lastSignificantActivity = activity
+    onSignificantMotion?(activity)
   }
 
   /// Immediate historical query so the screen paints without waiting on live OS lag.

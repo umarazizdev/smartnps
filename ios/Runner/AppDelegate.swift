@@ -14,10 +14,20 @@ import flutter_background_service_ios
   private let slcEnabledKey = "smartnps360.ios_slc.enabled"
   private let onDutyKey = "smartnps360.ios_duty.on_duty"
   private let slcPendingLocationsKey = "smartnps360.ios_slc.pending_locations"
+  private let geofenceLatKey = "smartnps360.ios_geofence.lat"
+  private let geofenceLonKey = "smartnps360.ios_geofence.lon"
+  private let dutyGeofenceIdPrefix = "smartnps360.duty.geofence."
+  private let dutyGeofenceLegacyIdentifier = "smartnps360.duty.geofence.v1"
+  private let dutyGeofenceRadius: CLLocationDistance = 100
+  private let dutyGeofenceRingOffset: CLLocationDistance = 75
+  private let dutyGeofenceRecenterMeters: CLLocationDistance = 50
   private var settingsChannelRegistered = false
   private var slcChannelRegistered = false
   private var motionChannelRegistered = false
   private var settingsMethodChannel: FlutterMethodChannel?
+  private var slcMethodChannel: FlutterMethodChannel?
+  private var launchedForLocation = false
+  private var awaitingFlutterDutyConfirm = false
   private var slcLocationManager: CLLocationManager?
   private var dutyGpsLocationManager: CLLocationManager?
   private var dutyPollLocationManager: CLLocationManager?
@@ -26,6 +36,7 @@ import flutter_background_service_ios
   private var lastNativeGpsAt: Date?
   private let dutyGpsDistanceFilter: CLLocationDistance = 5
   private let gpsPollInterval: TimeInterval = 30
+  private var lastGeofenceCoordinate: CLLocationCoordinate2D?
   private var slcEventSink: FlutterEventSink?
   private var motionActivityManager: MotionActivityManager?
 
@@ -46,10 +57,12 @@ import flutter_background_service_ios
     }
 
     let didLaunch = super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    wireDutyWakeUploader()
+    restoreSlcMonitoringIfNeeded(application: application, launchOptions: launchOptions)
     registerPlatformChannelsIfNeeded()
     observeLowPowerModeChanges()
     observeBackgroundAppRefreshChanges()
-    restoreSlcMonitoringIfNeeded(launchOptions: launchOptions)
+    notifyFlutterOfLocationWakeIfNeeded()
     application.registerForRemoteNotifications()
 
     return didLaunch
@@ -60,10 +73,12 @@ import flutter_background_service_ios
     registerPlatformChannels(
       with: engineBridge.applicationRegistrar.messenger()
     )
+    notifyFlutterOfLocationWakeIfNeeded()
   }
 
   override func applicationDidBecomeActive(_ application: UIApplication) {
     registerPlatformChannelsIfNeeded()
+    notifyFlutterOfLocationWakeIfNeeded()
     super.applicationDidBecomeActive(application)
   }
 
@@ -87,6 +102,9 @@ import flutter_background_service_ios
   private func registerMotionActivityChannelIfNeeded(with messenger: FlutterBinaryMessenger) {
     guard !motionChannelRegistered else { return }
     let manager = motionActivityManager ?? MotionActivityManager()
+    manager.onSignificantMotion = { [weak self] activity in
+      self?.handleSignificantMotion(activity)
+    }
     manager.register(with: messenger)
     motionActivityManager = manager
     motionChannelRegistered = true
@@ -227,6 +245,7 @@ import flutter_background_service_ios
       name: slcChannelName,
       binaryMessenger: messenger
     )
+    slcMethodChannel = channel
     channel.setMethodCallHandler { [weak self] call, result in
       guard let self = self else {
         result(FlutterError(code: "unavailable", message: "SLC manager unavailable", details: nil))
@@ -248,20 +267,26 @@ import flutter_background_service_ios
           "running": UserDefaults.standard.bool(forKey: self.slcEnabledKey),
         ])
       case "isOnDuty":
-        result([
-          "ok": true,
-          "onDuty": UserDefaults.standard.bool(forKey: self.onDutyKey),
-          "running": UserDefaults.standard.bool(forKey: self.slcEnabledKey),
-        ])
+        result(self.slcStatusMap())
       case "isMonitoring":
-        result([
-          "ok": true,
-          "running": UserDefaults.standard.bool(forKey: self.slcEnabledKey),
-          "onDuty": UserDefaults.standard.bool(forKey: self.onDutyKey),
-          "authorization": self.authorizationStatusString()
-        ])
+        result(self.slcStatusMap())
       case "drainPendingLocations":
         result(self.drainPendingSlcLocations())
+      case "syncAuthSession":
+        let args = call.arguments as? [String: Any]
+        if args?["clear"] as? Bool == true {
+          DutyWakeUploader.shared.clearSession()
+        } else {
+          DutyWakeUploader.shared.syncSession(
+            accessToken: args?["accessToken"] as? String,
+            refreshToken: args?["refreshToken"] as? String,
+            deviceId: args?["deviceId"] as? String
+          )
+        }
+        result(["ok": true])
+      case "claimWakeUpload":
+        DutyWakeUploader.shared.claimByFlutter()
+        result(["ok": true, "owner": "flutter"])
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -273,17 +298,129 @@ import flutter_background_service_ios
     )
     eventChannel.setStreamHandler(self)
     slcChannelRegistered = true
+    notifyFlutterOfLocationWakeIfNeeded()
   }
 
-  private func restoreSlcMonitoringIfNeeded(launchOptions: [UIApplication.LaunchOptionsKey: Any]?) {
-    // Never auto-start Core Location on launch/wake.
-    // Flutter must pull the heartbeat API, confirm on_duty, then start tracking.
-    // Clear any previous on-duty / SLC arming so a stale flag cannot revive GPS.
-    setOnDuty(false)
+  private func slcStatusMap() -> [String: Any] {
+    return [
+      "ok": true,
+      "running": UserDefaults.standard.bool(forKey: slcEnabledKey),
+      "onDuty": isOnDuty(),
+      "launchedForLocation": launchedForLocation,
+      "awaitingDutyConfirm": awaitingFlutterDutyConfirm,
+      "geofenceArmed": lastGeofenceCoordinate != nil && isOnDuty(),
+      "geofenceRadiusMeters": dutyGeofenceRadius,
+      "geofenceRingCount": dutyGeofenceRingSlots.count,
+      "wakeTrigger": UserDefaults.standard.string(forKey: "smartnps360.ios_wake.trigger") ?? "unknown",
+      "motionRunning": motionActivityManager?.running == true,
+      "authorization": authorizationStatusString(),
+    ]
+  }
 
-    let launchedForLocation = launchOptions?[UIApplication.LaunchOptionsKey.location] != nil
-    if launchedForLocation {
-      NSLog("[SmartNPS360][SLC] location wake deferred until Flutter confirms on_duty via heartbeat")
+  private func restoreSlcMonitoringIfNeeded(
+    application: UIApplication,
+    launchOptions: [UIApplication.LaunchOptionsKey: Any]?
+  ) {
+    let locationKey = launchOptions?[UIApplication.LaunchOptionsKey.location] != nil
+    let wasOnDuty = UserDefaults.standard.bool(forKey: onDutyKey)
+    let wasArmed = UserDefaults.standard.bool(forKey: slcEnabledKey)
+    let backgroundLaunch = application.applicationState == .background
+    launchedForLocation = locationKey || (backgroundLaunch && wasOnDuty && wasArmed)
+
+    if !launchedForLocation {
+      // Tap/open while still flagged on duty: keep SLC + GPS ring so a later
+      // swipe-kill can relaunch. Do not start 5m GPS until duty is confirmed.
+      if wasOnDuty, wasArmed, CLLocationManager.authorizationStatus() == .authorizedAlways {
+        NSLog("[SmartNPS360][SLC] cold launch on duty; keeping SLC/geofence armed")
+        restoreSlcAfterLocationWake(startNativePing: false)
+        return
+      }
+      setOnDuty(false)
+      return
+    }
+
+    guard wasOnDuty, wasArmed else {
+      NSLog("[SmartNPS360][SLC] location wake ignored; native duty/slc not armed")
+      setOnDuty(false)
+      return
+    }
+
+    let status = CLLocationManager.authorizationStatus()
+    guard status == .authorizedAlways else {
+      NSLog("[SmartNPS360][SLC] location wake ignored; Always permission missing")
+      setOnDuty(false)
+      return
+    }
+
+    NSLog(
+      "[SmartNPS360][SLC] location wake restore locationKey=\(locationKey) background=\(backgroundLaunch)"
+    )
+    restoreSlcAfterLocationWake(startNativePing: true)
+  }
+
+  /// Restores SLC + GPS ring without stopping existing iOS region monitoring.
+  /// 5m GPS stays off until Flutter or native heartbeat confirms on_duty.
+  private func restoreSlcAfterLocationWake(startNativePing: Bool) {
+    awaitingFlutterDutyConfirm = true
+    UserDefaults.standard.set(true, forKey: onDutyKey)
+    UserDefaults.standard.set(true, forKey: slcEnabledKey)
+
+    let manager = ensureWakeLocationManager()
+
+    if CLLocationManager.significantLocationChangeMonitoringAvailable() {
+      manager.startMonitoringSignificantLocationChanges()
+      NSLog("[SmartNPS360][SLC] restored SLC; GPS deferred until on_duty confirm")
+    } else {
+      NSLog("[SmartNPS360][SLC] SLC unavailable; waiting for duty confirm")
+    }
+
+    if let saved = savedGeofenceCoordinate() {
+      lastGeofenceCoordinate = saved
+      syncDutyGeofenceRing(around: saved, manager: manager)
+    }
+    requestGpsFix(reason: "wake_restore")
+    if startNativePing {
+      DutyWakeUploader.shared.beginLocationWake(flutterTimeout: 3)
+    }
+  }
+
+  private func wireDutyWakeUploader() {
+    DutyWakeUploader.shared.onConfirmedOffDuty = { [weak self] in
+      self?.setOnDuty(false)
+    }
+    DutyWakeUploader.shared.onDutyConfirmed = { [weak self] in
+      guard let self else { return }
+      self.awaitingFlutterDutyConfirm = false
+      self.startDutyGpsMonitoring()
+      self.startDutyMotionIfAllowed()
+      self.notifyFlutterOfLocationWakeIfNeeded()
+    }
+    DutyWakeUploader.shared.onNeedsGps = { [weak self] in
+      self?.requestNativeWakeGps()
+    }
+  }
+
+  private func ensureWakeLocationManager() -> CLLocationManager {
+    let manager = slcLocationManager ?? CLLocationManager()
+    manager.delegate = self
+    manager.allowsBackgroundLocationUpdates = true
+    manager.pausesLocationUpdatesAutomatically = false
+    slcLocationManager = manager
+    return manager
+  }
+
+  private func notifyFlutterOfLocationWakeIfNeeded() {
+    guard isOnDuty() else { return }
+    guard UserDefaults.standard.bool(forKey: slcEnabledKey) else { return }
+    guard launchedForLocation || awaitingFlutterDutyConfirm else { return }
+    guard let channel = slcMethodChannel else { return }
+    channel.invokeMethod(
+      "onLocationWake",
+      arguments: slcStatusMap()
+    ) { result in
+      if (result as? Bool) == true {
+        DutyWakeUploader.shared.claimByFlutter()
+      }
     }
   }
 
@@ -294,6 +431,8 @@ import flutter_background_service_ios
   private func setOnDuty(_ onDuty: Bool) {
     UserDefaults.standard.set(onDuty, forKey: onDutyKey)
     if !onDuty {
+      awaitingFlutterDutyConfirm = false
+      DutyWakeUploader.shared.cancel()
       stopSlcMonitoring()
     }
   }
@@ -305,6 +444,7 @@ import flutter_background_service_ios
         "ok": false,
         "running": false,
         "onDuty": false,
+        "launchedForLocation": launchedForLocation,
         "error": [
           "code": "off_duty",
           "message": "Background location is only allowed while the officer is on duty"
@@ -326,17 +466,21 @@ import flutter_background_service_ios
       ]
     }
 
+    awaitingFlutterDutyConfirm = false
+    DutyWakeUploader.shared.claimByFlutter()
     startDutyGpsMonitoring()
+    startDutyMotionIfAllowed()
 
+    let manager = ensureWakeLocationManager()
     if CLLocationManager.significantLocationChangeMonitoringAvailable() {
-      let manager = slcLocationManager ?? CLLocationManager()
-      manager.delegate = self
-      manager.allowsBackgroundLocationUpdates = true
-      manager.pausesLocationUpdatesAutomatically = false
-      slcLocationManager = manager
       manager.startMonitoringSignificantLocationChanges()
     } else {
       NSLog("[SmartNPS360][SLC] significant-change unavailable; duty GPS 5m keep-alive still running")
+    }
+
+    if let saved = savedGeofenceCoordinate() {
+      lastGeofenceCoordinate = saved
+      syncDutyGeofenceRing(around: saved, manager: manager)
     }
 
     UserDefaults.standard.set(true, forKey: slcEnabledKey)
@@ -346,12 +490,19 @@ import flutter_background_service_ios
       "running": true,
       "onDuty": true,
       "gpsKeepAlive": true,
+      "launchedForLocation": launchedForLocation,
+      "awaitingDutyConfirm": false,
       "distanceFilterMeters": dutyGpsDistanceFilter,
+      "geofenceRadiusMeters": dutyGeofenceRadius,
+      "geofenceArmed": lastGeofenceCoordinate != nil,
+      "geofenceRingCount": dutyGeofenceRingSlots.count,
+      "motionRunning": motionActivityManager?.running == true,
       "authorization": authorizationStatusString(status)
     ]
   }
 
   private func startDutyGpsMonitoring() {
+    guard isOnDuty() else { return }
     let manager = dutyGpsLocationManager ?? CLLocationManager()
     manager.delegate = self
     manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
@@ -379,9 +530,20 @@ import flutter_background_service_ios
   /// One-shot current GPS (not last-known). Used while stationary and on SLC wake.
   private func requestFreshGpsPoll(reason: String) {
     guard isOnDuty(), UserDefaults.standard.bool(forKey: slcEnabledKey) else { return }
+    if awaitingFlutterDutyConfirm { return }
     if let lastGps = lastNativeGpsAt, Date().timeIntervalSince(lastGps) < gpsPollInterval {
       return
     }
+    if gpsPollInFlight { return }
+    requestGpsFix(reason: reason)
+  }
+
+  private func requestNativeWakeGps() {
+    guard isOnDuty(), UserDefaults.standard.bool(forKey: slcEnabledKey) else { return }
+    requestGpsFix(reason: "native_wake")
+  }
+
+  private func requestGpsFix(reason: String) {
     if gpsPollInFlight { return }
     gpsPollInFlight = true
 
@@ -401,6 +563,8 @@ import flutter_background_service_ios
   }
 
   private func stopSlcMonitoring() {
+    awaitingFlutterDutyConfirm = false
+    startDutyMotionStopped()
     gpsPollTimer?.invalidate()
     gpsPollTimer = nil
     gpsPollInFlight = false
@@ -411,11 +575,192 @@ import flutter_background_service_ios
     dutyGpsLocationManager?.stopUpdatingLocation()
     dutyGpsLocationManager?.delegate = nil
     dutyGpsLocationManager = nil
-    slcLocationManager?.stopMonitoringSignificantLocationChanges()
-    slcLocationManager?.delegate = nil
+    let manager = slcLocationManager ?? CLLocationManager()
+    stopDutyGeofence(using: manager)
+    manager.stopMonitoringSignificantLocationChanges()
+    manager.delegate = nil
     slcLocationManager = nil
+    DutyWakeUploader.shared.cancel()
     UserDefaults.standard.set(false, forKey: slcEnabledKey)
     clearPendingSlcLocations()
+  }
+
+  private func startDutyMotionIfAllowed() {
+    guard isOnDuty() else {
+      startDutyMotionStopped()
+      return
+    }
+    let result = motionActivityManager?.startDutyUpdates()
+    NSLog("[SmartNPS360][Motion] duty start ok=\(result?["ok"] as? Bool ?? false)")
+  }
+
+  private func startDutyMotionStopped() {
+    motionActivityManager?.stopDutyUpdates()
+  }
+
+  // MARK: - Duty geofence ring (~100m overlapping circles around last GPS)
+
+  private var dutyGeofenceRingSlots: [(id: String, north: CLLocationDistance, east: CLLocationDistance)] {
+    let diagonal = dutyGeofenceRingOffset * 0.7071
+    return [
+      ("center", 0, 0),
+      ("n", dutyGeofenceRingOffset, 0),
+      ("ne", diagonal, diagonal),
+      ("e", 0, dutyGeofenceRingOffset),
+      ("se", -diagonal, diagonal),
+      ("s", -dutyGeofenceRingOffset, 0),
+      ("sw", -diagonal, -diagonal),
+      ("w", 0, -dutyGeofenceRingOffset),
+      ("nw", diagonal, -diagonal),
+    ]
+  }
+
+  /// Adds/updates the 9-fence ring without dropping iOS monitoring unless the center moved.
+  private func syncDutyGeofenceRing(around coordinate: CLLocationCoordinate2D, manager: CLLocationManager) {
+    guard isOnDuty() else {
+      stopDutyGeofence(using: slcLocationManager)
+      return
+    }
+    guard CLLocationManager.isMonitoringAvailable(for: CLCircularRegion.self) else {
+      NSLog("[SmartNPS360][Geofence] region monitoring unavailable")
+      return
+    }
+
+    let desiredIds = Set(dutyGeofenceRingSlots.map { dutyGeofenceIdPrefix + $0.id })
+    if let current = lastGeofenceCoordinate ?? savedGeofenceCoordinate() {
+      let distance = CLLocation(latitude: current.latitude, longitude: current.longitude)
+        .distance(from: CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude))
+      let existingIds = Set(manager.monitoredRegions.filter { isDutyGeofence($0) }.map(\.identifier))
+      if distance < dutyGeofenceRecenterMeters, desiredIds.isSubset(of: existingIds) {
+        lastGeofenceCoordinate = current
+        return
+      }
+    }
+
+    for region in manager.monitoredRegions where isDutyGeofence(region) && !desiredIds.contains(region.identifier) {
+      manager.stopMonitoring(for: region)
+    }
+
+    for slot in dutyGeofenceRingSlots {
+      let center = coordinateByOffsetting(coordinate, north: slot.north, east: slot.east)
+      let identifier = dutyGeofenceIdPrefix + slot.id
+      if let existing = manager.monitoredRegions.first(where: { $0.identifier == identifier }) as? CLCircularRegion {
+        let shift = CLLocation(latitude: existing.center.latitude, longitude: existing.center.longitude)
+          .distance(from: CLLocation(latitude: center.latitude, longitude: center.longitude))
+        if shift < 15 {
+          continue
+        }
+        manager.stopMonitoring(for: existing)
+      }
+      let region = CLCircularRegion(
+        center: center,
+        radius: dutyGeofenceRadius,
+        identifier: identifier
+      )
+      region.notifyOnEntry = true
+      region.notifyOnExit = true
+      manager.startMonitoring(for: region)
+    }
+
+    lastGeofenceCoordinate = coordinate
+    UserDefaults.standard.set(coordinate.latitude, forKey: geofenceLatKey)
+    UserDefaults.standard.set(coordinate.longitude, forKey: geofenceLonKey)
+    NSLog(
+      "[SmartNPS360][Geofence] armed \(dutyGeofenceRingSlots.count)x\(Int(dutyGeofenceRadius))m ring at \(coordinate.latitude), \(coordinate.longitude)"
+    )
+  }
+
+  private func startDutyGeofence(around coordinate: CLLocationCoordinate2D, manager: CLLocationManager) {
+    syncDutyGeofenceRing(around: coordinate, manager: manager)
+  }
+
+  private func updateDutyGeofenceIfNeeded(from location: CLLocation, force: Bool = false) {
+    guard isOnDuty() else { return }
+    guard location.horizontalAccuracy >= 0, location.horizontalAccuracy <= 100 else { return }
+
+    let manager = ensureWakeLocationManager()
+    if !force, let current = lastGeofenceCoordinate ?? savedGeofenceCoordinate() {
+      let distance = CLLocation(latitude: current.latitude, longitude: current.longitude)
+        .distance(from: location)
+      if distance < dutyGeofenceRecenterMeters {
+        syncDutyGeofenceRing(around: current, manager: manager)
+        return
+      }
+    }
+    syncDutyGeofenceRing(around: location.coordinate, manager: manager)
+  }
+
+  private func stopDutyGeofence(using manager: CLLocationManager? = nil, clearSavedCenter: Bool = true) {
+    let monitor = manager ?? slcLocationManager ?? CLLocationManager()
+    for region in monitor.monitoredRegions where isDutyGeofence(region) {
+      monitor.stopMonitoring(for: region)
+    }
+    if clearSavedCenter {
+      lastGeofenceCoordinate = nil
+      UserDefaults.standard.removeObject(forKey: geofenceLatKey)
+      UserDefaults.standard.removeObject(forKey: geofenceLonKey)
+    }
+  }
+
+  private func isDutyGeofence(_ region: CLRegion) -> Bool {
+    region.identifier.hasPrefix(dutyGeofenceIdPrefix) ||
+      region.identifier == dutyGeofenceLegacyIdentifier
+  }
+
+  private func coordinateByOffsetting(
+    _ coordinate: CLLocationCoordinate2D,
+    north: CLLocationDistance,
+    east: CLLocationDistance
+  ) -> CLLocationCoordinate2D {
+    guard north != 0 || east != 0 else { return coordinate }
+    let metersPerDegreeLat = 111_111.0
+    let metersPerDegreeLon = 111_111.0 * max(cos(coordinate.latitude * .pi / 180), 0.01)
+    return CLLocationCoordinate2D(
+      latitude: coordinate.latitude + (north / metersPerDegreeLat),
+      longitude: coordinate.longitude + (east / metersPerDegreeLon)
+    )
+  }
+
+  private func savedGeofenceCoordinate() -> CLLocationCoordinate2D? {
+    if let memory = lastGeofenceCoordinate {
+      return memory
+    }
+    guard UserDefaults.standard.object(forKey: geofenceLatKey) != nil,
+          UserDefaults.standard.object(forKey: geofenceLonKey) != nil
+    else {
+      return nil
+    }
+    let lat = UserDefaults.standard.double(forKey: geofenceLatKey)
+    let lon = UserDefaults.standard.double(forKey: geofenceLonKey)
+    guard lat != 0 || lon != 0 else { return nil }
+    return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+  }
+
+  private func handleSignificantMotion(_ activity: String) {
+    guard isOnDuty(), !awaitingFlutterDutyConfirm else { return }
+    NSLog("[SmartNPS360][Motion] significant activity=\(activity); requesting GPS")
+    requestFreshGpsPoll(reason: "motion_\(activity)")
+  }
+
+  private func handleGeofenceWake(region: CLRegion, event: String) {
+    guard isOnDuty(), UserDefaults.standard.bool(forKey: slcEnabledKey) else { return }
+    NSLog("[SmartNPS360][Geofence] \(event) \(region.identifier)")
+
+    if let coord = lastGeofenceCoordinate ?? savedGeofenceCoordinate() {
+      let marker = CLLocation(
+        coordinate: coord,
+        altitude: 0,
+        horizontalAccuracy: dutyGeofenceRadius,
+        verticalAccuracy: -1,
+        timestamp: Date()
+      )
+      emitLocation(marker, source: "ios_geofence")
+    }
+
+    if awaitingFlutterDutyConfirm {
+      notifyFlutterOfLocationWakeIfNeeded()
+    }
+    requestGpsFix(reason: "geofence_\(event)")
   }
 
   private func authorizationStatusString(_ status: CLAuthorizationStatus = CLLocationManager.authorizationStatus()) -> String {
@@ -501,21 +846,66 @@ import flutter_background_service_ios
     guard isOnDuty(), UserDefaults.standard.bool(forKey: slcEnabledKey) else { return }
     guard let location = locations.last else { return }
 
-    if manager === dutyPollLocationManager {
+    let isPoll = manager === dutyPollLocationManager
+    let isKeepAlive = manager === dutyGpsLocationManager
+    let isPreciseGps = isPoll || isKeepAlive
+
+    if isPoll {
       gpsPollInFlight = false
+    }
+
+    if DutyWakeUploader.shared.consumeWakeGps(location) {
       lastNativeGpsAt = Date()
-      emitLocation(location, source: "ios_gps")
+      updateDutyGeofenceIfNeeded(from: location, force: true)
       return
     }
 
-    if manager === dutyGpsLocationManager {
+    if isPreciseGps {
       lastNativeGpsAt = Date()
       emitLocation(location, source: "ios_gps")
+      updateDutyGeofenceIfNeeded(from: location, force: true)
+      if DutyWakeUploader.shared.wantsWakeGps {
+        requestGpsFix(reason: "wake_retry")
+      }
+      return
+    }
+
+    if awaitingFlutterDutyConfirm {
+      emitLocation(location, source: "ios_slc")
+      requestGpsFix(reason: "slc_wake")
       return
     }
 
     emitLocation(location, source: "ios_slc")
     requestFreshGpsPoll(reason: "slc_wake")
+  }
+
+  func locationManager(_ manager: CLLocationManager, didExitRegion region: CLRegion) {
+    guard isDutyGeofence(region) else { return }
+    handleGeofenceWake(region: region, event: "exit")
+  }
+
+  func locationManager(_ manager: CLLocationManager, didEnterRegion region: CLRegion) {
+    guard isDutyGeofence(region) else { return }
+    handleGeofenceWake(region: region, event: "enter")
+  }
+
+  func locationManager(_ manager: CLLocationManager, didStartMonitoringFor region: CLRegion) {
+    guard isDutyGeofence(region) else { return }
+    manager.requestState(for: region)
+  }
+
+  func locationManager(_ manager: CLLocationManager, didDetermineState state: CLRegionState, for region: CLRegion) {
+    guard isDutyGeofence(region) else { return }
+    guard state == .outside else { return }
+    // After swipe-kill, iOS may already be outside the saved ring. Do not use
+    // this on live GPS recenter or it retriggers every time fences re-arm.
+    guard awaitingFlutterDutyConfirm else { return }
+    handleGeofenceWake(region: region, event: "outside")
+  }
+
+  func locationManager(_ manager: CLLocationManager, monitoringDidFailFor region: CLRegion?, withError error: Error) {
+    NSLog("[SmartNPS360][Geofence] monitoring failed: \(error.localizedDescription)")
   }
 
   private func emitLocation(_ location: CLLocation, source: String) {

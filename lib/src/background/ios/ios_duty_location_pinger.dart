@@ -12,9 +12,9 @@ import '../../location/mock_location_detection.dart';
 import '../../location/mock_location_guard.dart';
 import '../../location/speed_adaptive_gps_policy.dart';
 import '../../motion/motion_activity_fusion_controller.dart';
+import '../../utilities/device_identity.dart';
 import '../duty/duty_status_snapshot.dart';
 import '../location/background_location_accuracy.dart';
-import '../location/background_location_issue_notification.dart';
 import '../location/background_location_uploader.dart';
 import '../location/location_sharing_status_notification.dart';
 import 'ios_background_location_notification.dart';
@@ -74,7 +74,6 @@ class IosDutyLocationPinger {
           '[IosDutyLocationPinger] start blocked; no duty confirmation hook',
         );
       }
-      await IosSignificantLocationChangeService.setOnDuty(false);
       return;
     }
     final allowed = await confirm();
@@ -92,13 +91,19 @@ class IosDutyLocationPinger {
     }
 
     await IosSignificantLocationChangeService.setOnDuty(true);
+    unawaited(() async {
+      await IosSignificantLocationChangeService.syncNativeAuth(
+        accessToken: await AuthRepository.instance.getAccessToken(),
+        refreshToken: await AuthRepository.instance.getRefreshToken(),
+        deviceId: await DeviceIdentity.getDeviceId(),
+      );
+    }());
 
     try {
       _uploader = BackgroundLocationUploader();
       await _uploader!.init();
       _uploader!.start();
     } catch (e) {
-      await IosSignificantLocationChangeService.setOnDuty(false);
       if (kDebugMode) {
         debugPrint('[IosDutyLocationPinger] uploader init failed: $e');
       }
@@ -336,11 +341,11 @@ class IosDutyLocationPinger {
   static Future<void> _onNativeLocation(Position pos, String source) async {
     if (_stopping) return;
 
-    if (source == 'ios_slc') {
+    if (source == 'ios_slc' || source == 'ios_geofence') {
       if (kDebugMode) {
         debugPrint(
-          '[IosDutyLocationPinger] SLC wake acc=${pos.accuracy}m; '
-          'polling latest GPS (SLC coords not uploaded)',
+          '[IosDutyLocationPinger] ${source} wake acc=${pos.accuracy}m; '
+          'polling latest GPS (wake coords not uploaded)',
         );
       }
       if (!isRunning) {
@@ -354,13 +359,24 @@ class IosDutyLocationPinger {
     await _onPosition(pos);
   }
 
-  static Future<void> recoverIfNeeded() async {
+  static Future<void> recoverIfNeeded({
+    bool fromLocationWake = false,
+    bool dutyAlreadyConfirmed = false,
+  }) async {
     if (!Platform.isIOS || _recoverInFlight) return;
     if (isRunning) return;
 
     final permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied ||
         permission == LocationPermission.deniedForever) {
+      if (fromLocationWake) {
+        if (kDebugMode) {
+          debugPrint(
+            '[IosDutyLocationPinger] location wake blocked; permission=$permission',
+          );
+        }
+        await stop();
+      }
       return;
     }
 
@@ -369,28 +385,32 @@ class IosDutyLocationPinger {
       if (kDebugMode) {
         debugPrint('[IosDutyLocationPinger] scheduling recovery');
       }
-      await Future<void>.delayed(_recoverDelay);
-      if (isRunning) return;
-
-      final confirm = confirmOnDutyBeforeStart;
-      if (confirm == null) {
-        if (kDebugMode) {
-          debugPrint(
-            '[IosDutyLocationPinger] recovery blocked; no duty confirmation hook',
-          );
-        }
-        await stop();
-        return;
+      if (!fromLocationWake) {
+        await Future<void>.delayed(_recoverDelay);
+        if (isRunning) return;
       }
-      final allowed = await confirm();
-      if (!allowed) {
-        if (kDebugMode) {
-          debugPrint(
-            '[IosDutyLocationPinger] recovery blocked; heartbeat is not on_duty',
-          );
+
+      if (!dutyAlreadyConfirmed) {
+        final confirm = confirmOnDutyBeforeStart;
+        if (confirm == null) {
+          if (kDebugMode) {
+            debugPrint(
+              '[IosDutyLocationPinger] recovery blocked; no duty confirmation hook',
+            );
+          }
+          await stop();
+          return;
         }
-        await stop();
-        return;
+        final allowed = await confirm();
+        if (!allowed) {
+          if (kDebugMode) {
+            debugPrint(
+              '[IosDutyLocationPinger] recovery blocked; heartbeat is not on_duty',
+            );
+          }
+          await stop();
+          return;
+        }
       }
 
       if (_running && _subscription == null) {
@@ -467,11 +487,6 @@ class IosDutyLocationPinger {
     if (token == null || token.isEmpty) {
       final refresh = await AuthRepository.instance.getRefreshToken();
       if (refresh == null || refresh.isEmpty) {
-        unawaited(
-          BackgroundLocationIssueNotification.showIfOnDuty(
-            issue: BackgroundLocationIssue.signedOut,
-          ),
-        );
         await stop();
         return;
       }
@@ -497,8 +512,8 @@ class IosDutyLocationPinger {
     }
     if (_stopping) return;
 
-    final motionFusion =
-        await MotionActivityFusionController.instance.evaluatePosition(pos);
+    final motionFusion = await MotionActivityFusionController.instance
+        .evaluatePosition(pos);
     if (_stopping) return;
 
     final mockFlags = MockLocationDetection.flagsFor(pos);
@@ -571,7 +586,6 @@ class IosDutyLocationPinger {
     if (!Platform.isIOS) return;
 
     if (drainNativePending) {
-
       await IosSignificantLocationChangeService.drainPendingLocations();
     }
 
@@ -612,9 +626,7 @@ class IosDutyLocationPinger {
       await LocationSharingStatusNotification.dismissSharing();
     } catch (e) {
       if (kDebugMode) {
-        debugPrint(
-          '[IosDutyLocationPinger] dismiss sharing failed: $e',
-        );
+        debugPrint('[IosDutyLocationPinger] dismiss sharing failed: $e');
       }
     }
 
@@ -659,14 +671,14 @@ class IosDutyLocationPinger {
       await LocationSharingStatusNotification.dismissSharing();
     } catch (e) {
       if (kDebugMode) {
-        debugPrint(
-          '[IosDutyLocationPinger] dismiss sharing failed: $e',
-        );
+        debugPrint('[IosDutyLocationPinger] dismiss sharing failed: $e');
       }
     }
 
     if (kDebugMode) {
-      debugPrint('[DutyLocation] STOPPED (iOS instant logout / collecting only)');
+      debugPrint(
+        '[DutyLocation] STOPPED (iOS instant logout / collecting only)',
+      );
       debugPrint('[IosDutyLocationPinger] stopped collecting (instant logout)');
     }
 
