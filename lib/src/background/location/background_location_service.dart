@@ -13,7 +13,6 @@ import '../../motion/motion_activity_fusion_controller.dart';
 import '../duty/duty_status_snapshot.dart';
 import 'android_duty_location_health.dart';
 import 'background_location_accuracy.dart';
-import 'background_location_issue_notification.dart';
 import 'background_location_uploader.dart';
 
 @pragma('vm:entry-point')
@@ -232,11 +231,6 @@ class BackgroundLocationService {
               '[DutyLocation] Android FGS stopping; no auth session',
             );
           }
-          unawaited(
-            BackgroundLocationIssueNotification.showIfOnDuty(
-              issue: BackgroundLocationIssue.signedOut,
-            ),
-          );
           await stop();
           return;
         }
@@ -347,11 +341,6 @@ class BackgroundLocationService {
 
       if (now.difference(lastAny) > _rebuildStreamAfter) {
         unawaited(rebuildStreamIfNeeded(reason: 'stream_dead'));
-        unawaited(
-          BackgroundLocationIssueNotification.showIfOnDuty(
-            issue: BackgroundLocationIssue.gpsStopped,
-          ),
-        );
       }
     });
 

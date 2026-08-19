@@ -17,9 +17,65 @@ class IosSignificantLocationChangeService {
 
   static StreamSubscription<dynamic>? _subscription;
   static Future<void> Function(Position position, String source)? _onLocation;
+  static Future<void> Function()? _onLocationWake;
+  static bool _nativeCallHandlerInstalled = false;
   static bool _nativeMonitoring = false;
 
   static bool get isMonitoring => _nativeMonitoring;
+
+  static Future<void> claimWake() async {
+    if (!Platform.isIOS) return;
+    if (!await _ensureNativeChannelsReady()) return;
+    try {
+      await _channel.invokeMethod<dynamic>('claimWakeUpload');
+    } on MissingPluginException catch (e) {
+      if (kDebugMode) {
+        debugPrint('[IosSLC] claimWake skipped: $e');
+      }
+    }
+  }
+
+  static Future<void> syncNativeAuth({
+    String? accessToken,
+    String? refreshToken,
+    String? deviceId,
+    bool clear = false,
+  }) async {
+    if (!Platform.isIOS) return;
+    if (!await _ensureNativeChannelsReady()) return;
+    try {
+      await _channel.invokeMethod<dynamic>('syncAuthSession', {
+        'accessToken': accessToken,
+        'refreshToken': refreshToken,
+        'deviceId': deviceId,
+        'clear': clear,
+      });
+    } on MissingPluginException catch (e) {
+      if (kDebugMode) {
+        debugPrint('[IosSLC] syncAuthSession skipped: $e');
+      }
+    }
+  }
+
+  static void setOnLocationWake(Future<void> Function() handler) {
+    _onLocationWake = handler;
+    _installNativeCallHandler();
+  }
+
+  static void _installNativeCallHandler() {
+    if (_nativeCallHandlerInstalled) return;
+    _nativeCallHandlerInstalled = true;
+    _channel.setMethodCallHandler((call) async {
+      if (call.method == 'onLocationWake') {
+        unawaited(_onLocationWake?.call() ?? Future<void>.value());
+        return true;
+      }
+    });
+  }
+
+  static Future<bool> ensureNativeReady({int maxAttempts = 20}) {
+    return _ensureNativeChannelsReady(maxAttempts: maxAttempts);
+  }
 
   static Future<void> setOnDuty(bool onDuty) async {
     if (!Platform.isIOS) return;
