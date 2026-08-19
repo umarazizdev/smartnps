@@ -28,14 +28,22 @@ Future<void> main() async {
   await AppVersionInfo.init();
   await AppUpgradeReconciler.reconcileIfNeeded();
   ApiClient.instance.ensureAuthInterceptorInstalled();
-  await AuthRepository.instance.warmAccessTokenCache();
-  await PushNotificationService.instance.init();
-  MockLocationGuard.ensureBackgroundListenerInstalled();
-  if (Platform.isAndroid) {
-    AndroidDutyLocationHealth.ensureListenerInstalled();
-    unawaited(BackgroundLocationService.ensureConfigured());
-  }
+  unawaited(AuthRepository.instance.warmAccessTokenCache());
+  unawaited(_initPostUiServices());
   runApp(const SmartNpsApp());
+}
+
+Future<void> _initPostUiServices() async {
+  try {
+    await PushNotificationService.instance.init();
+    MockLocationGuard.ensureBackgroundListenerInstalled();
+    if (Platform.isAndroid) {
+      AndroidDutyLocationHealth.ensureListenerInstalled();
+      unawaited(BackgroundLocationService.ensureConfigured());
+    }
+  } catch (e) {
+    debugPrint('[SmartNPS360] post-UI service init failed: $e');
+  }
 }
 
 void _disableWebViewDebugLogging() {
