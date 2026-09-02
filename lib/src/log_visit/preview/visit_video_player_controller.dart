@@ -116,13 +116,6 @@ class VisitVideoPlayerController extends GetxController {
     VideoPlayerController? controller;
     String? error;
 
-    if (controller != null && controller.value.isInitialized) {
-      await controller.setVolume(volume.value);
-
-      isPlaying.value = controller.value.isPlaying;
-      positionMs.value = controller.value.position.inMilliseconds;
-      durationMs.value = controller.value.duration.inMilliseconds;
-    }
     try {
       controller = VideoPlayerController.file(File(videoPath));
       await controller.initialize().timeout(const Duration(seconds: 8));

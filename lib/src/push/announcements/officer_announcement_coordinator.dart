@@ -80,10 +80,7 @@ class OfficerAnnouncementCoordinator {
     }
   }
 
-  void onOpened(
-    OfficerAnnouncementPush push, {
-    required String source,
-  }) {
+  void onOpened(OfficerAnnouncementPush push, {required String source}) {
     _logEvent(source, push.recipientPublicId);
     _pendingRecipientPublicId = push.recipientPublicId;
     _pendingDestinationUrl = push.destinationUrl;
@@ -101,11 +98,7 @@ class OfficerAnnouncementCoordinator {
     final pending = _pendingRecipientPublicId;
     if (pending == null) return;
     if (!(_isDeliveryReady?.call() ?? false)) return;
-    await _deliver(
-      pending,
-      source: source,
-      clearPendingOnSuccess: true,
-    );
+    await _deliver(pending, source: source, clearPendingOnSuccess: true);
   }
 
   Future<bool> _deliver(
@@ -157,9 +150,7 @@ class OfficerAnnouncementCoordinator {
   }
 
   static String buildDeliveryJavaScript(String recipientPublicId) {
-    final payload = jsonEncode({
-      'recipient_public_id': recipientPublicId,
-    });
+    final payload = jsonEncode({'recipient_public_id': recipientPublicId});
     return '''
 (() => {
   if (typeof window.smartnpsOfficerAnnouncementReceived !== 'function') {
@@ -189,10 +180,12 @@ class OfficerAnnouncementCoordinator {
 
   void _logEvent(String source, String recipientPublicId) {
     if (!kDebugMode) return;
-    debugPrint(
-      '[SmartNPS360][Announcement] source=$source '
-      'Recipient: ${OfficerAnnouncementPush.redactRecipientPublicId(recipientPublicId)}',
-    );
+    if (kDebugMode) {
+      debugPrint(
+        '[SmartNPS360][Announcement] source=$source '
+        'Recipient: ${OfficerAnnouncementPush.redactRecipientPublicId(recipientPublicId)}',
+      );
+    }
   }
 
   @visibleForTesting

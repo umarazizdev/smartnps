@@ -75,6 +75,85 @@ class RequiredPermissionsGate {
   String? _lastFingerprint;
   int _actionSerial = 0;
 
+  static const Set<String> clockInPermissionIds = {
+    'locationServices',
+    'foregroundLocation',
+    'backgroundLocation',
+    'preciseLocation',
+    'motionActivity',
+  };
+
+  static const Set<String> onDutyPermissionIds = {
+    ...clockInPermissionIds,
+    'backgroundAppRefresh',
+    'notifications',
+    'push',
+  };
+
+  static const Set<String> offDutyPushPermissionIds = {
+    'notifications',
+    'push',
+  };
+
+  Future<List<RequiredPermissionItem>> buildClockInPermissionItems() async {
+    await BackgroundLocationPermissions.refreshPermissionStateFromOs();
+    final all = await _buildItems();
+    return _sortMissingFirst(
+      all
+          .where((item) => clockInPermissionIds.contains(item.id))
+          .toList(growable: false),
+    );
+  }
+
+  Future<List<RequiredPermissionItem>> missingClockInPermissionItems() async {
+    final items = await buildClockInPermissionItems();
+    return items.where((item) => item.needsAction).toList(growable: false);
+  }
+
+  Future<bool> areClockInPermissionsReady() async {
+    final missing = await missingClockInPermissionItems();
+    return missing.isEmpty;
+  }
+
+  Future<List<RequiredPermissionItem>> buildOnDutyPermissionItems() async {
+    await BackgroundLocationPermissions.refreshPermissionStateFromOs();
+    final all = await _buildItems();
+    return _sortMissingFirst(
+      all
+          .where((item) => onDutyPermissionIds.contains(item.id))
+          .toList(growable: false),
+    );
+  }
+
+  Future<List<RequiredPermissionItem>> missingOnDutyPermissionItems() async {
+    final items = await buildOnDutyPermissionItems();
+    return items.where((item) => item.needsAction).toList(growable: false);
+  }
+
+  Future<bool> areOnDutyPermissionsReady() async {
+    final missing = await missingOnDutyPermissionItems();
+    return missing.isEmpty;
+  }
+
+  Future<List<RequiredPermissionItem>> buildOffDutyPushPermissionItems() async {
+    final all = await _buildItems();
+    return _sortMissingFirst(
+      all
+          .where((item) => offDutyPushPermissionIds.contains(item.id))
+          .toList(growable: false),
+    );
+  }
+
+  Future<List<RequiredPermissionItem>> missingOffDutyPushPermissionItems() async {
+    final items = await buildOffDutyPushPermissionItems();
+    return items.where((item) => item.needsAction).toList(growable: false);
+  }
+
+  Future<bool> areOffDutyPushPermissionsReady() async {
+    final missing = await missingOffDutyPushPermissionItems();
+    return missing.isEmpty;
+  }
+
   void start() {
     if (!Platform.isAndroid && !Platform.isIOS) {
       stop();
@@ -131,7 +210,7 @@ class RequiredPermissionsGate {
         if (force || fingerprint != _lastFingerprint) {
           _lastFingerprint = fingerprint;
           items.value = next;
-          final blocking = next.any((item) => item.needsAction);
+          const blocking = false;
           if (isBlocking.value != blocking) {
             isBlocking.value = blocking;
           }
@@ -177,10 +256,13 @@ class RequiredPermissionsGate {
       switch (item.action) {
         case RequiredPermissionAction.allow:
           await _requestOsPermission(item.id);
+          break;
         case RequiredPermissionAction.openSettings:
           await _openSettingsFor(item.id);
+          break;
         case RequiredPermissionAction.enable:
           await _enableInApp(item.id);
+          break;
         case RequiredPermissionAction.none:
           break;
       }
@@ -204,26 +286,16 @@ class RequiredPermissionsGate {
       await refresh(force: true);
       if (!_active || isPrivacyNoticeVisible) return;
 
-      const promptOrder = <String>[
-        'foregroundLocation',
-        'motionActivity',
-        'notifications',
-      ];
+      const promptOrder = <String>['notifications'];
       final pending =
           items.value
               .where(
                 (item) =>
                     !item.enabled &&
-                    item.action == RequiredPermissionAction.allow,
+                    item.action == RequiredPermissionAction.allow &&
+                    promptOrder.contains(item.id),
               )
-              .toList()
-            ..sort((a, b) {
-              final ai = promptOrder.indexOf(a.id);
-              final bi = promptOrder.indexOf(b.id);
-              final aRank = ai < 0 ? promptOrder.length : ai;
-              final bRank = bi < 0 ? promptOrder.length : bi;
-              return aRank.compareTo(bRank);
-            });
+              .toList();
 
       for (final item in pending) {
         if (!_active || isPrivacyNoticeVisible) return;
@@ -237,7 +309,9 @@ class RequiredPermissionsGate {
       final enableItems = items.value
           .where(
             (item) =>
-                !item.enabled && item.action == RequiredPermissionAction.enable,
+                !item.enabled &&
+                item.action == RequiredPermissionAction.enable &&
+                item.id == 'push',
           )
           .toList();
       for (final item in enableItems) {
@@ -253,6 +327,10 @@ class RequiredPermissionsGate {
     switch (id) {
       case 'foregroundLocation':
         await PermissionSettingsHelper.requestForegroundLocationStep();
+        break;
+      case 'backgroundLocation':
+        await _requestBackgroundLocationStep();
+        break;
       case 'notifications':
         if (Platform.isAndroid) {
           await OverlayPromptGuard.runDuringOsPermissionPrompt(
@@ -269,11 +347,124 @@ class RequiredPermissionsGate {
             );
           });
         }
+        break;
       case 'motionActivity':
         await _requestMotionPermissionAndGuideIfDenied();
+        break;
       default:
         break;
     }
+  }
+
+  Future<void> _requestBackgroundLocationStep() async {
+    if (Platform.isIOS) {
+      var permission = await Geolocator.checkPermission();
+      if (kDebugMode) {
+        debugPrint(
+          '[RequiredPermissionsGate] backgroundLocation iOS before=$permission',
+        );
+      }
+      if (permission == LocationPermission.denied) {
+        permission = await OverlayPromptGuard.runDuringOsPermissionPrompt(
+          Geolocator.requestPermission,
+        );
+        if (kDebugMode) {
+          debugPrint(
+            '[RequiredPermissionsGate] backgroundLocation iOS after whenInUse '
+            'request=$permission',
+          );
+        }
+      }
+      if (permission == LocationPermission.always) return;
+
+      if (permission == LocationPermission.whileInUse) {
+        final alwaysStatus =
+            await OverlayPromptGuard.runDuringOsPermissionPrompt(
+              Permission.locationAlways.request,
+            );
+        await BackgroundLocationPermissions.refreshPermissionStateFromOs();
+        permission = await Geolocator.checkPermission();
+        if (kDebugMode) {
+          debugPrint(
+            '[RequiredPermissionsGate] backgroundLocation iOS '
+            'locationAlways=$alwaysStatus geolocator=$permission',
+          );
+        }
+        if (permission == LocationPermission.always ||
+            alwaysStatus.isGranted ||
+            alwaysStatus.isLimited) {
+          return;
+        }
+      }
+
+      if (kDebugMode) {
+        debugPrint(
+          '[RequiredPermissionsGate] backgroundLocation iOS opening Settings '
+          '(still=$permission)',
+        );
+      }
+      await PermissionSettingsHelper.openSettingsForUserTap(
+        destination: StoreSafeSettingsDestination.locationPermission,
+        waitForReturn: true,
+      );
+      return;
+    }
+
+    if (Platform.isAndroid) {
+      final fg = await Permission.location.status;
+      if (!fg.isGranted && !fg.isLimited && !fg.isProvisional) {
+        await PermissionSettingsHelper.requestForegroundLocationStep();
+      }
+      final bgBefore = await Permission.locationAlways.status;
+      if (kDebugMode) {
+        debugPrint(
+          '[RequiredPermissionsGate] backgroundLocation Android before=$bgBefore',
+        );
+      }
+      if (bgBefore.isGranted || bgBefore.isLimited || bgBefore.isProvisional) {
+        return;
+      }
+      if (!bgBefore.isPermanentlyDenied && !bgBefore.isRestricted) {
+        final bg = await OverlayPromptGuard.runDuringOsPermissionPrompt(
+          Permission.locationAlways.request,
+        );
+        if (kDebugMode) {
+          debugPrint(
+            '[RequiredPermissionsGate] backgroundLocation Android after=$bg',
+          );
+        }
+        if (bg.isGranted || bg.isLimited || bg.isProvisional) return;
+      }
+      await PermissionSettingsHelper.openSettingsForUserTap(
+        destination: StoreSafeSettingsDestination.locationPermission,
+        waitForReturn: true,
+      );
+    }
+  }
+
+  Future<RequiredPermissionAction> _backgroundLocationAction() async {
+    if (Platform.isIOS) {
+      final permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        return RequiredPermissionAction.allow;
+      }
+      if (permission == LocationPermission.whileInUse) {
+        final alwaysStatus = await Permission.locationAlways.status;
+        if (alwaysStatus.isPermanentlyDenied || alwaysStatus.isRestricted) {
+          return RequiredPermissionAction.openSettings;
+        }
+        return RequiredPermissionAction.allow;
+      }
+      return RequiredPermissionAction.openSettings;
+    }
+    if (Platform.isAndroid) {
+      final bg = await Permission.locationAlways.status;
+      if (bg.isPermanentlyDenied || bg.isRestricted) {
+        return RequiredPermissionAction.openSettings;
+      }
+      return RequiredPermissionAction.allow;
+    }
+    return RequiredPermissionAction.openSettings;
   }
 
   Future<void> _requestMotionPermissionAndGuideIfDenied() async {
@@ -301,13 +492,30 @@ class RequiredPermissionsGate {
       return;
     }
 
+    if (id == 'backgroundLocation') {
+      if (kDebugMode) {
+        debugPrint(
+          '[RequiredPermissionsGate] openSettings backgroundLocation → '
+          'try upgrade then Settings',
+        );
+      }
+      await _requestBackgroundLocationStep();
+      return;
+    }
+
     final destination = switch (id) {
       'foregroundLocation' ||
-      'backgroundLocation' ||
       'preciseLocation' => StoreSafeSettingsDestination.locationPermission,
       'locationServices' => StoreSafeSettingsDestination.systemLocationServices,
+      'backgroundAppRefresh' => StoreSafeSettingsDestination.app,
       _ => StoreSafeSettingsDestination.app,
     };
+
+    if (kDebugMode) {
+      debugPrint(
+        '[RequiredPermissionsGate] openSettings id=$id destination=$destination',
+      );
+    }
 
     await PermissionSettingsHelper.openSettingsForUserTap(
       destination: destination,
@@ -329,6 +537,7 @@ class RequiredPermissionsGate {
     final pushEnabled = await PushNotificationPreferences.readEnabled();
     final motionAvailable = await MotionActivityService.isAvailable();
     final motionGranted = motionAvailable ? await _motionGranted() : true;
+    final backgroundAppRefresh = await _backgroundAppRefreshEnabled();
 
     final list = <RequiredPermissionItem>[
       if (!serviceEnabled)
@@ -357,7 +566,7 @@ class RequiredPermissionsGate {
         enabled: background,
         action: background
             ? RequiredPermissionAction.none
-            : RequiredPermissionAction.openSettings,
+            : await _backgroundLocationAction(),
         icon: Icons.share_location_rounded,
       ),
       RequiredPermissionItem(
@@ -382,6 +591,20 @@ class RequiredPermissionsGate {
           icon: Icons.directions_walk_rounded,
         ),
       RequiredPermissionItem(
+        id: 'backgroundAppRefresh',
+        name: Platform.isAndroid
+            ? 'Background activity'
+            : 'Background App Refresh',
+        description: Platform.isAndroid
+            ? 'Allow background work so shift tracking can continue.'
+            : 'Needed for reliable location updates in the background.',
+        enabled: backgroundAppRefresh,
+        action: backgroundAppRefresh
+            ? RequiredPermissionAction.none
+            : RequiredPermissionAction.openSettings,
+        icon: Icons.sync_rounded,
+      ),
+      RequiredPermissionItem(
         id: 'notifications',
         name: 'Notifications',
         description: 'Shift alerts and updates.',
@@ -404,6 +627,19 @@ class RequiredPermissionsGate {
     ];
 
     return list;
+  }
+
+  Future<bool> _backgroundAppRefreshEnabled() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return true;
+    try {
+      final status = await _settingsChannel.invokeMethod<String>(
+        'backgroundAppRefreshStatus',
+      );
+      if (status == 'disabled' || status == 'restricted') return false;
+      return true;
+    } catch (_) {
+      return true;
+    }
   }
 
   Future<bool> _motionGranted() async {

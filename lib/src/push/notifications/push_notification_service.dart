@@ -6,7 +6,6 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:dio/dio.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -50,14 +49,6 @@ const DarwinInitializationSettings kPushIosInitializationSettings =
       defaultPresentBanner: true,
       defaultPresentList: true,
     );
-
-void debugPrintRemoteMessagePayload(String source, RemoteMessage message) {
-  final notification = message.notification;
-  debugPrint(
-    '[SmartNPS360][Push][$source] messageId=${message.messageId} '
-    'hasNotification=${notification != null} dataKeys=${message.data.length}',
-  );
-}
 
 Future<void> ensurePushLocalNotificationsReady(
   FlutterLocalNotificationsPlugin plugin,
@@ -106,11 +97,6 @@ Future<void> showPushLocalNotification({
   );
   const iosDetails = kPushIosNotificationDetails;
 
-  debugPrint(
-    '[SmartNPS360][Push] showing local notification sound=$kPushIosSoundFile '
-    'title=$title',
-  );
-
   await plugin.show(
     id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
     title: title,
@@ -127,8 +113,6 @@ Future<void> showPushLocalNotification({
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-
-  debugPrintRemoteMessagePayload('background', message);
 
   if (message.notification != null) {
     return;
@@ -315,7 +299,6 @@ class PushNotificationService {
   Future<void> enablePushNotifications() async {
     final granted = await _ensureNotificationPermission();
     if (!granted) {
-      debugPrint('[SmartNPS360][Push] enable skipped (permission not granted)');
       return;
     }
     await _refreshFcmToken(uploadIfAuthenticated: true);
@@ -328,9 +311,7 @@ class PushNotificationService {
     await deletePushToken();
     try {
       await FirebaseMessaging.instance.deleteToken();
-    } catch (e) {
-      debugPrint('[SmartNPS360][Push] deleteToken failed: $e');
-    }
+    } catch (e) {}
     _lastFcmToken = null;
     _iosPendingTokenUpload = false;
   }
@@ -349,15 +330,9 @@ class PushNotificationService {
 
   Future<void> requestPermissionAfterAuth({bool immediate = false}) async {
     if (!pushNotificationsEnabled) {
-      debugPrint(
-        '[SmartNPS360][Push] skip permission prompt (disabled by user)',
-      );
       return;
     }
     if (!immediate && _shouldDeferPermissionPrompt) {
-      debugPrint(
-        '[SmartNPS360][Push] deferring notification permission (auth route)',
-      );
       return;
     }
     if (_permissionPromptFuture != null) {
@@ -380,6 +355,36 @@ class PushNotificationService {
     }
   }
 
+  /// After the privacy notice is closed: always try the OS notification prompt
+  /// if permission is not granted yet (store-safe soft ask).
+  Future<void> requestPermissionAfterPrivacyNotice() async {
+    await _loadPushEnabledPreference();
+    if (!pushNotificationsEnabled) {
+      await _persistPushEnabledPreference(true);
+      _onPushPreferenceChanged?.call();
+    }
+
+    if (_shouldDeferPermissionPrompt) {
+      return;
+    }
+
+    final granted = await _hasNotificationPermission();
+    if (granted) {
+      _permissionPromptAttempted = true;
+      await _refreshFcmToken(uploadIfAuthenticated: true);
+      if (Platform.isIOS) {
+        await _iosRetryFcmTokenAndUpload();
+      }
+      return;
+    }
+
+    // Allow a fresh OS prompt after privacy UI even if an earlier deferred
+    // attempt marked the flag without showing a dialog.
+    _permissionPromptAttempted = false;
+
+    await requestPermissionAfterAuth(immediate: true);
+  }
+
   Future<void> _requestPermissionAfterAuthImpl({bool immediate = false}) async {
     if (_permissionPromptAttempted) {
       await _refreshFcmToken(uploadIfAuthenticated: true);
@@ -391,9 +396,6 @@ class PushNotificationService {
       await Future<void>.delayed(const Duration(seconds: 1));
     }
 
-    debugPrint(
-      '[SmartNPS360][Push] requesting notification permission (after auth)',
-    );
     await _ensureNotificationPermission();
     await _refreshFcmToken(uploadIfAuthenticated: true);
     if (Platform.isIOS) {
@@ -403,13 +405,9 @@ class PushNotificationService {
 
   Future<void> syncPushTokenAfterLogin() async {
     if (!pushNotificationsEnabled) {
-      debugPrint('[SmartNPS360][Push] skip push sync (disabled by user)');
       return;
     }
     if (_shouldDeferPermissionPrompt) {
-      debugPrint(
-        '[SmartNPS360][Push] deferring push sync until post-login route',
-      );
       return;
     }
     if (!_permissionPromptAttempted) {
@@ -431,9 +429,6 @@ class PushNotificationService {
         iOS: kPushIosInitializationSettings,
       ),
       onDidReceiveNotificationResponse: (details) {
-        debugPrint(
-          '[SmartNPS360][Push] notification tapped payloadPresent=${details.payload != null}',
-        );
         _handleLocalNotificationTap(details.payload);
       },
     );
@@ -477,25 +472,19 @@ class PushNotificationService {
 
     FirebaseMessaging.instance.onTokenRefresh.listen((t) {
       if (!pushNotificationsEnabled) {
-        debugPrint(
-          '[SmartNPS360][Push] ignore onTokenRefresh (disabled by user)',
-        );
         return;
       }
       _lastFcmToken = t;
-      debugPrint('[SmartNPS360][Push] onTokenRefresh fcmToken=$t');
       _maybeUploadToken();
     });
 
     FirebaseMessaging.onMessage.listen((message) async {
-      debugPrintRemoteMessagePayload('foreground', message);
       if (!pushNotificationsEnabled) return;
       await _showLocalFromRemoteMessage(message);
       _handleForegroundAnnouncement(message);
     });
 
     FirebaseMessaging.onMessageOpenedApp.listen((message) {
-      debugPrintRemoteMessagePayload('openedApp', message);
       _handleRemoteMessageOpened(message, source: 'opened-app');
     });
 
@@ -503,12 +492,9 @@ class PushNotificationService {
       _initialMessageHandled = true;
       final initial = await messaging.getInitialMessage();
       if (initial != null) {
-        debugPrintRemoteMessagePayload('initialMessage', initial);
         _handleRemoteMessageOpened(initial, source: 'cold-launch');
       }
     }
-
-    debugPrint('[SmartNPS360][Push] Firebase messaging listeners ready');
   }
 
   Future<bool> _hasNotificationPermission() async {
@@ -530,9 +516,6 @@ class PushNotificationService {
 
     final current = await Permission.notification.status;
     if (current.isGranted) {
-      debugPrint(
-        '[SmartNPS360][Push] android notification permission=already granted',
-      );
       return true;
     }
 
@@ -543,9 +526,6 @@ class PushNotificationService {
     if (android != null) {
       final granted = await android.requestNotificationsPermission();
       if (granted == true) {
-        debugPrint(
-          '[SmartNPS360][Push] android notification permission=granted',
-        );
         return true;
       }
     }
@@ -553,7 +533,6 @@ class PushNotificationService {
     final status = await OverlayPromptGuard.runDuringOsPermissionPrompt(
       Permission.notification.request,
     );
-    debugPrint('[SmartNPS360][Push] android notification permission=$status');
     if (!status.isGranted &&
         PermissionSettingsHelper.shouldOpenSettings(status) &&
         !_notificationSettingsPromptShown &&
@@ -577,7 +556,6 @@ class PushNotificationService {
     final current = await messaging.getNotificationSettings();
     if (current.authorizationStatus == AuthorizationStatus.authorized ||
         current.authorizationStatus == AuthorizationStatus.provisional) {
-      debugPrint('[SmartNPS360][Push] ios permission=already granted');
       return true;
     }
 
@@ -588,9 +566,6 @@ class PushNotificationService {
         sound: true,
         provisional: false,
       ),
-    );
-    debugPrint(
-      '[SmartNPS360][Push] ios permission=${settings.authorizationStatus}',
     );
     final granted =
         settings.authorizationStatus == AuthorizationStatus.authorized ||
@@ -619,13 +594,10 @@ class PushNotificationService {
       final token = await FirebaseMessaging.instance.getToken();
       if (token == null || token.isEmpty) return;
       _lastFcmToken = token;
-      debugPrint('[SmartNPS360][Push] fcmToken=$token');
       if (uploadIfAuthenticated) {
         await _maybeUploadToken();
       }
-    } catch (e) {
-      debugPrint('[SmartNPS360][Push] getToken failed: $e');
-    }
+    } catch (e) {}
   }
 
   Future<String?> _resolveAccessToken() async {
@@ -671,7 +643,6 @@ class PushNotificationService {
 
   Future<void> _maybeUploadToken() async {
     if (!pushNotificationsEnabled) {
-      debugPrint('[SmartNPS360][Push] skip upload (disabled by user)');
       return;
     }
     final token = _lastFcmToken;
@@ -688,7 +659,6 @@ class PushNotificationService {
     if (Platform.isIOS) {
       final webUpload = _iosWebPushUpload;
       if (webUpload != null) {
-        debugPrint('[SmartNPS360][Push] ios upload via web session fetch');
         final uploaded = await webUpload(payload);
         if (uploaded) {
           _iosPendingTokenUpload = false;
@@ -706,19 +676,13 @@ class PushNotificationService {
       }
 
       _iosPendingTokenUpload = true;
-      debugPrint(
-        '[SmartNPS360][Push] ios upload failed (API requires bearer token)',
-      );
       return;
     }
-
-    debugPrint('[SmartNPS360][Push] skip upload (no accessToken yet)');
   }
 
   Future<bool> uploadPushToken({bool useSessionCookies = false}) async {
     final token = _lastFcmToken;
     if (token == null || token.isEmpty) {
-      debugPrint('[SmartNPS360][Push] skip upload (no FCM token)');
       return false;
     }
 
@@ -731,18 +695,12 @@ class PushNotificationService {
     );
 
     if (fingerprint == _lastUploadedPushTokenFingerprint) {
-      if (kDebugMode) {
-        debugPrint('[SmartNPS360][Push] skip upload (unchanged token)');
-      }
       return true;
     }
 
     final inFlight = _pushTokenUploadInFlight;
     if (inFlight != null &&
         fingerprint == _pushTokenUploadInFlightFingerprint) {
-      if (kDebugMode) {
-        debugPrint('[SmartNPS360][Push] join upload (unchanged token)');
-      }
       return inFlight;
     }
 
@@ -802,7 +760,6 @@ class PushNotificationService {
   Future<bool> deletePushToken() async {
     final token = _lastFcmToken;
     if (token == null || token.isEmpty) {
-      debugPrint('[SmartNPS360][Push] skip delete (no FCM token)');
       return true;
     }
 
@@ -820,7 +777,6 @@ class PushNotificationService {
     if (!deleted && Platform.isIOS) {
       final webDelete = _iosWebPushDelete;
       if (webDelete != null) {
-        debugPrint('[SmartNPS360][Push] ios delete via web session fetch');
         deleted = await webDelete(payload);
       }
 
@@ -835,7 +791,6 @@ class PushNotificationService {
     }
 
     if (!deleted) {
-      debugPrint('[SmartNPS360][Push] delete failed or skipped (no auth)');
     } else {
       _lastUploadedPushTokenFingerprint = null;
     }
@@ -958,9 +913,7 @@ class PushNotificationService {
           return;
         }
       }
-    } catch (e) {
-      debugPrint('[SmartNPS360][Push] invalid tap payload: $e');
-    }
+    } catch (e) {}
 
     _dispatchNotificationTap(AppRoutes.defaultPushUrl);
   }
@@ -999,7 +952,6 @@ class PushNotificationService {
 
   void _dispatchNotificationTap(String url) {
     final normalized = normalizeNotificationUrl(url);
-    debugPrint('[SmartNPS360][Push] open url=$normalized');
     final handler = _onNotificationTap;
     if (handler != null) {
       handler(normalized);

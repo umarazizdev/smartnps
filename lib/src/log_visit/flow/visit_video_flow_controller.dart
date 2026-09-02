@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
@@ -40,8 +39,9 @@ class VisitBatchNote {
     return VisitBatchNote(
       enabled: enabled ?? this.enabled,
       textNote: textNote ?? this.textNote,
-      voiceNotePath:
-          clearVoiceNote ? null : (voiceNotePath ?? this.voiceNotePath),
+      voiceNotePath: clearVoiceNote
+          ? null
+          : (voiceNotePath ?? this.voiceNotePath),
     );
   }
 
@@ -138,8 +138,9 @@ class VisitMediaItem {
       path: path ?? this.path,
       type: type ?? this.type,
       textNote: textNote ?? this.textNote,
-      voiceNotePath:
-          clearVoiceNote ? null : (voiceNotePath ?? this.voiceNotePath),
+      voiceNotePath: clearVoiceNote
+          ? null
+          : (voiceNotePath ?? this.voiceNotePath),
       capturedAt: capturedAt ?? this.capturedAt,
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,
@@ -181,7 +182,6 @@ class VisitVideoFlowController extends GetxController {
   Future<void> _restoreDraft() async {
     _restoring = true;
     try {
-
       var snapshot = await _store.loadDraftSnapshot();
       if (!snapshot.hasItems) {
         final pending = await _store.listPendingDrafts();
@@ -373,8 +373,8 @@ class VisitVideoFlowController extends GetxController {
       clientDraftId: current?.clientDraftId?.isNotEmpty == true
           ? current!.clientDraftId
           : (incoming.clientDraftId?.isNotEmpty == true
-              ? incoming.clientDraftId
-              : VisitPatrolContext.generateClientDraftId()),
+                ? incoming.clientDraftId
+                : VisitPatrolContext.generateClientDraftId()),
       regionId: incoming.regionId ?? current?.regionId,
       siteId: incoming.siteId ?? current?.siteId,
       regionName: incoming.regionName ?? current?.regionName,
@@ -389,12 +389,14 @@ class VisitVideoFlowController extends GetxController {
       await _store.setActiveKey(targetKey);
       unawaited(persistCurrentDraft());
       final reopenedPending = mediaItems.isNotEmpty;
-      debugPrint(
-        '[VisitDraft] bridge open key=$targetKey '
-        'reopenedPending=$reopenedPending items=${mediaItems.length} '
-        'siteId=${merged.siteId} regionId=${merged.regionId} '
-        'keptInMemory=true',
-      );
+      if (kDebugMode) {
+        debugPrint(
+          '[VisitDraft] bridge open key=$targetKey '
+          'reopenedPending=$reopenedPending items=${mediaItems.length} '
+          'siteId=${merged.siteId} regionId=${merged.regionId} '
+          'keptInMemory=true',
+        );
+      }
       return reopenedPending;
     }
 
@@ -413,11 +415,13 @@ class VisitVideoFlowController extends GetxController {
     _applyContextToState(merged);
 
     final reopenedPending = mediaItems.isNotEmpty;
-    debugPrint(
-      '[VisitDraft] bridge open key=$targetKey '
-      'reopenedPending=$reopenedPending items=${mediaItems.length} '
-      'siteId=${merged.siteId} regionId=${merged.regionId}',
-    );
+    if (kDebugMode) {
+      debugPrint(
+        '[VisitDraft] bridge open key=$targetKey '
+        'reopenedPending=$reopenedPending items=${mediaItems.length} '
+        'siteId=${merged.siteId} regionId=${merged.regionId}',
+      );
+    }
     return reopenedPending;
   }
 
@@ -498,11 +502,9 @@ class VisitVideoFlowController extends GetxController {
     final siteName = draftSiteName.value;
     final context = patrolContext.value;
     final note = batchNote.value;
-    final key =
-        activeDraftKey.value ?? VisitDraftKey.fromContext(context);
+    final key = activeDraftKey.value ?? VisitDraftKey.fromContext(context);
     activeDraftKey.value = key;
     _persistQueue = (_persistQueue ?? Future<void>.value()).then((_) async {
-
       await _store.saveDraft(
         snapshot,
         startedAt: startedAt,
@@ -600,11 +602,7 @@ class VisitVideoFlowController extends GetxController {
       if (!await File(previewPath).exists()) return existing;
     }
 
-    final updated = (existing ??
-            VisitMediaItem(
-              path: durablePath,
-              type: type,
-            ))
+    final updated = (existing ?? VisitMediaItem(path: durablePath, type: type))
         .copyWith(
           path: durablePath,
           capturedAt: geo?.capturedAt ?? existing?.capturedAt,
@@ -765,8 +763,8 @@ class VisitVideoFlowController extends GetxController {
   }
 
   Future<void> clearAll({bool deleteFiles = true}) async {
-    final key = activeDraftKey.value ??
-        VisitDraftKey.fromContext(patrolContext.value);
+    final key =
+        activeDraftKey.value ?? VisitDraftKey.fromContext(patrolContext.value);
     if (deleteFiles) {
       for (final item in mediaItems) {
         await _store.deleteQuietly(item.voiceNotePath);

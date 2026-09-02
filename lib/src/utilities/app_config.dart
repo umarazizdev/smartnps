@@ -17,7 +17,13 @@ class AppConfig {
   static const int cDarkCardColor = 0xFF1A2332;
   static const int cBottomBarActive = 0xFF0F93D2;
 
-  static const bool enableMockLocationDetection = true;
+  static const bool enableMockLocationDetection = false;
+  static const bool enablePingDebugLog = false;
+  static const bool enableBatchDebugLog = false;
+  static const bool enableDutyHeartbeatDebugLog = false;
+  static const bool enablePermissionStatusDebugLog = false;
+
+  static const bool enableBgLocationStartTestAlert = false;
 
   static const double keyboardOpenThreshold = 50.0;
 
@@ -61,6 +67,16 @@ class AppConfig {
         exact == '${AppRoutes.webLoginUrl}/';
   }
 
+  static bool isAuthEntryRoute(Uri? uri) {
+    if (uri == null) return false;
+    if (!isAllowedHost(uri.host)) return false;
+    if (isLoginRoute(uri)) return true;
+
+    final exact = _exactUrl(uri);
+    return exact == AppRoutes.webSignupUrl ||
+        exact == '${AppRoutes.webSignupUrl}/';
+  }
+
   static bool isOfficerApplicationUrl(Uri? uri) {
     if (uri == null) return false;
     if (!isAllowedHost(uri.host)) return false;
@@ -68,6 +84,7 @@ class AppConfig {
 
     final exact = _exactUrl(uri);
     return exact == AppRoutes.webDashboardUrl ||
+        exact == AppRoutes.webShiftLogUrl ||
         exact == AppRoutes.webTimesheetUrl ||
         exact == AppRoutes.webProfileUrl;
   }
@@ -86,13 +103,17 @@ class AppConfig {
   static int? bottomTabIndexForUri(Uri? uri) {
     final path = normalizeWebPath(uri);
     if (path == null) return null;
-    for (var i = 0; i < AppRoutes.bottomBarWebPaths.length; i++) {
-      if (AppRoutes.bottomBarWebPaths[i] == path) return i;
+    for (var i = 0; i < AppRoutes.bottomTabWebPaths.length; i++) {
+      if (AppRoutes.bottomTabWebPaths[i] == path) return i;
     }
     return null;
   }
 
-  static bool isBottomBarRoute(Uri? uri) => bottomTabIndexForUri(uri) != null;
+  static bool isBottomBarRoute(Uri? uri) {
+    final path = normalizeWebPath(uri);
+    if (path == null) return false;
+    return AppRoutes.bottomBarWebPaths.contains(path);
+  }
 
   static String _exactUrl(Uri uri) {
     final text = uri.toString();

@@ -187,7 +187,9 @@ class VisitUploadApi {
     } catch (error, stack) {
       if (kDebugMode) {
         debugPrint('[VisitUploadApi] ERROR unexpected=$error');
-        debugPrint('[VisitUploadApi] stack=$stack');
+        if (kDebugMode) {
+          debugPrint('[VisitUploadApi] stack=$stack');
+        }
       }
       final fallback = VisitUploadResult(
         success: false,
@@ -201,17 +203,21 @@ class VisitUploadApi {
   void _logResult(VisitUploadResult result, {dynamic responseBody}) {
     if (!kDebugMode) return;
     if (result.success) {
-      debugPrint(
-        '[VisitUploadApi] SUCCESS status=${result.statusCode} '
-        'visitId=${result.visitId} clientDraftId=${result.clientDraftId} '
-        'itemsSaved=${result.itemsSaved} message=${result.displayMessage}',
-      );
+      if (kDebugMode) {
+        debugPrint(
+          '[VisitUploadApi] SUCCESS status=${result.statusCode} '
+          'visitId=${result.visitId} clientDraftId=${result.clientDraftId} '
+          'itemsSaved=${result.itemsSaved} message=${result.displayMessage}',
+        );
+      }
     } else {
-      debugPrint(
-        '[VisitUploadApi] FAIL status=${result.statusCode} '
-        'message=${result.displayMessage} errors=${result.errors} '
-        'body=$responseBody',
-      );
+      if (kDebugMode) {
+        debugPrint(
+          '[VisitUploadApi] FAIL status=${result.statusCode} '
+          'message=${result.displayMessage} errors=${result.errors} '
+          'body=$responseBody',
+        );
+      }
     }
   }
 
@@ -227,10 +233,12 @@ class VisitUploadApi {
     final name = p.basename(item.path);
 
     if (item.isVideo) {
-      debugPrint(
-        '[VisitUploadApi] media[$index] video '
-        'bytes=$bytes (${kb}KB) file=$name',
-      );
+      if (kDebugMode) {
+        debugPrint(
+          '[VisitUploadApi] media[$index] video '
+          'bytes=$bytes (${kb}KB) file=$name',
+        );
+      }
       return;
     }
 
@@ -239,10 +247,12 @@ class VisitUploadApi {
     final warn = size != null && (size.$1 < 1600 || size.$2 < 900)
         ? ' LOW_RES'
         : '';
-    debugPrint(
-      '[VisitUploadApi] media[$index] photo '
-      'pixels=$pixels bytes=$bytes (${kb}KB) file=$name$warn',
-    );
+    if (kDebugMode) {
+      debugPrint(
+        '[VisitUploadApi] media[$index] photo '
+        'pixels=$pixels bytes=$bytes (${kb}KB) file=$name$warn',
+      );
+    }
   }
 
   Future<(int, int)?> _photoPixelSize(File file) async {
@@ -255,7 +265,9 @@ class VisitUploadApi {
       frame.image.dispose();
       return (width, height);
     } catch (error) {
-      debugPrint('[VisitUploadApi] photo dimension read failed: $error');
+      if (kDebugMode) {
+        debugPrint('[VisitUploadApi] photo dimension read failed: $error');
+      }
       return null;
     }
   }

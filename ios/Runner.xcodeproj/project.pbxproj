@@ -17,10 +17,12 @@
 		7884E8682EC3CC0700C636F2 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */; };
 		A1B2C3D42EC4000100F1A201 /* MotionActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D42EC4000100F1A200 /* MotionActivityManager.swift */; };
 		A1B2C3D52EC4000200F1A201 /* DutyWakeUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D52EC4000200F1A200 /* DutyWakeUploader.swift */; };
+		A1B2C3D62EC4000300F1A201 /* DeviceCheckManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D62EC4000300F1A200 /* DeviceCheckManager.swift */; };
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
 		FAD29EC62FECBCEE00227623 /* alert_sound.caf in Resources */ = {isa = PBXBuildFile; fileRef = FAD29EC52FECBCEE00227623 /* alert_sound.caf */; };
+		B7E1A0022FECBCEE00227624 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = B7E1A0012FECBCEE00227624 /* PrivacyInfo.xcprivacy */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -64,6 +66,7 @@
 		7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
 		A1B2C3D42EC4000100F1A200 /* MotionActivityManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionActivityManager.swift; sourceTree = "<group>"; };
 		A1B2C3D52EC4000200F1A200 /* DutyWakeUploader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DutyWakeUploader.swift; sourceTree = "<group>"; };
+		A1B2C3D62EC4000300F1A200 /* DeviceCheckManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceCheckManager.swift; sourceTree = "<group>"; };
 		79A43A0F3B2B4D9EB3AF7AE1 /* Profile.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Profile.xcconfig; path = Flutter/Profile.xcconfig; sourceTree = "<group>"; };
 		7AFA3C8E1D35360C0083082E /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Release.xcconfig; path = Flutter/Release.xcconfig; sourceTree = "<group>"; };
 		7C0692456B17B8FD4B00EB48 /* Pods_Runner.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Runner.framework; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -77,6 +80,7 @@
 		FA17B41DFFE5D6F35CC6A6AD /* GoogleService-Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; name = "GoogleService-Info.plist"; path = "Runner/GoogleService-Info.plist"; sourceTree = "<group>"; };
 		FA75A6412FD5072100E3580D /* Runner.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Runner.entitlements; sourceTree = "<group>"; };
 		FAD29EC52FECBCEE00227623 /* alert_sound.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = alert_sound.caf; sourceTree = "<group>"; };
+		B7E1A0012FECBCEE00227624 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -172,12 +176,14 @@
 				97C146FD1CF9000F007C117D /* Assets.xcassets */,
 				97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */,
 				97C147021CF9000F007C117D /* Info.plist */,
+				B7E1A0012FECBCEE00227624 /* PrivacyInfo.xcprivacy */,
 				1498D2321E8E86230040F4C2 /* GeneratedPluginRegistrant.h */,
 				1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */,
 				74858FAE1ED2DC5600515810 /* AppDelegate.swift */,
 				7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */,
 				A1B2C3D42EC4000100F1A200 /* MotionActivityManager.swift */,
 				A1B2C3D52EC4000200F1A200 /* DutyWakeUploader.swift */,
+				A1B2C3D62EC4000300F1A200 /* DeviceCheckManager.swift */,
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
 			);
 			path = Runner;
@@ -286,6 +292,7 @@
 				97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */,
 				97C146FC1CF9000F007C117D /* Main.storyboard in Resources */,
 				23A73A1770EA163F3FCEC49D /* GoogleService-Info.plist in Resources */,
+				B7E1A0022FECBCEE00227624 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -439,6 +446,7 @@
 				7884E8682EC3CC0700C636F2 /* SceneDelegate.swift in Sources */,
 				A1B2C3D42EC4000100F1A201 /* MotionActivityManager.swift in Sources */,
 				A1B2C3D52EC4000200F1A201 /* DutyWakeUploader.swift in Sources */,
+				A1B2C3D62EC4000300F1A201 /* DeviceCheckManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

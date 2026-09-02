@@ -83,11 +83,13 @@ class SiteReachability {
     Object? error,
   }) {
     if (!kDebugMode) return;
-    debugPrint(
-      '[SmartNPS360][Reachability] reachable=$reachable'
-      '${method != null ? ' $method' : ''}'
-      '${status != null ? ' status=$status' : ''}'
-      '${error != null ? ' error=$error' : ''}',
-    );
+    if (kDebugMode) {
+      debugPrint(
+        '[SmartNPS360][Reachability] reachable=$reachable'
+        '${method != null ? ' $method' : ''}'
+        '${status != null ? ' status=$status' : ''}'
+        '${error != null ? ' error=$error' : ''}',
+      );
+    }
   }
 }

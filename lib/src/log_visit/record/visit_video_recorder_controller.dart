@@ -22,7 +22,6 @@ enum CaptureFlashMode { off, on, auto }
 
 class VisitVideoRecorderController extends GetxController
     with WidgetsBindingObserver {
-
   static const List<ResolutionPreset> _preferredPresets = [
     ResolutionPreset.max,
     ResolutionPreset.ultraHigh,
@@ -44,10 +43,7 @@ class VisitVideoRecorderController extends GetxController
         ..._fallbackPresets,
       ];
     }
-    return const [
-      ..._preferredPresets,
-      ..._fallbackPresets,
-    ];
+    return const [..._preferredPresets, ..._fallbackPresets];
   }
 
   static const ImageFormatGroup _imageFormat = ImageFormatGroup.jpeg;
@@ -297,10 +293,13 @@ class VisitVideoRecorderController extends GetxController
   void _restoreAndroidZoomCache(List<CameraDescription> backs) {
     final ids = backs.map((c) => c.name).toList()..sort();
     final cachedIds = _cachedBackCameraIds;
-    final cacheValid = cachedIds != null &&
+    final cacheValid =
+        cachedIds != null &&
         cachedIds.length == ids.length &&
-        List.generate(ids.length, (i) => cachedIds[i] == ids[i])
-            .every((match) => match);
+        List.generate(
+          ids.length,
+          (i) => cachedIds[i] == ids[i],
+        ).every((match) => match);
 
     if (!cacheValid) {
       _androidZoomCache.clear();
@@ -363,16 +362,13 @@ class VisitVideoRecorderController extends GetxController
     var lowestMin = _androidLogicalZoomCamera == null
         ? double.infinity
         : (_androidZoomRanges[_androidLogicalZoomCamera!.name]?.min ??
-            double.infinity);
+              double.infinity);
 
     final activeName = _activeCamera?.name;
     if (activeName != null &&
         cameraController != null &&
         cameraController!.value.isInitialized) {
-      _androidZoomRanges[activeName] = (
-        min: minZoom.value,
-        max: maxZoom.value,
-      );
+      _androidZoomRanges[activeName] = (min: minZoom.value, max: maxZoom.value);
       if (minZoom.value < lowestMin) {
         lowestMin = minZoom.value;
         lowestMinCamera = _activeCamera;
@@ -571,15 +567,16 @@ class VisitVideoRecorderController extends GetxController
     bool showInitializing = false,
     bool isRecovery = false,
   }) {
-
-    final next = _cameraOpenChain.catchError((_) {}).then(
-      (_) => _openCameraUnlocked(
-        description,
-        uiZoom: uiZoom,
-        showInitializing: showInitializing,
-        isRecovery: isRecovery,
-      ),
-    );
+    final next = _cameraOpenChain
+        .catchError((_) {})
+        .then(
+          (_) => _openCameraUnlocked(
+            description,
+            uiZoom: uiZoom,
+            showInitializing: showInitializing,
+            isRecovery: isRecovery,
+          ),
+        );
     _cameraOpenChain = next.catchError((_) {});
     return next;
   }
@@ -864,11 +861,13 @@ class VisitVideoRecorderController extends GetxController
         _lastSuccessfulPreset = preset;
         if (kDebugMode) {
           final preview = controller.value.previewSize;
-          debugPrint(
-            '[VisitCamera] opened preset=$preset '
-            'preview=${preview?.width.toInt()}x${preview?.height.toInt()} '
-            'camera=${description.name}',
-          );
+          if (kDebugMode) {
+            debugPrint(
+              '[VisitCamera] opened preset=$preset '
+              'preview=${preview?.width.toInt()}x${preview?.height.toInt()} '
+              'camera=${description.name}',
+            );
+          }
         }
         return controller;
       } catch (e) {
@@ -914,7 +913,6 @@ class VisitVideoRecorderController extends GetxController
 
     final requestId = ++_focusRequestId;
     try {
-
       await controller.setFocusMode(FocusMode.auto);
       if (isClosed || requestId != _focusRequestId) return;
       await controller.setExposureMode(ExposureMode.auto);
@@ -1004,7 +1002,9 @@ class VisitVideoRecorderController extends GetxController
     try {
       final file = File(path);
       if (!await file.exists()) {
-        debugPrint('[VisitCamera] captured photo missing path=$path');
+        if (kDebugMode) {
+          debugPrint('[VisitCamera] captured photo missing path=$path');
+        }
         return;
       }
       final bytes = await file.length();
@@ -1016,13 +1016,17 @@ class VisitVideoRecorderController extends GetxController
       final height = frame.image.height;
       frame.image.dispose();
       final warn = (width < 1600 || height < 900) ? ' LOW_RES' : '';
-      debugPrint(
-        '[VisitCamera] captured photo '
-        'pixels=${width}x$height bytes=$bytes (${kb}KB) '
-        'preset=$_lastSuccessfulPreset$warn',
-      );
+      if (kDebugMode) {
+        debugPrint(
+          '[VisitCamera] captured photo '
+          'pixels=${width}x$height bytes=$bytes (${kb}KB) '
+          'preset=$_lastSuccessfulPreset$warn',
+        );
+      }
     } catch (error) {
-      debugPrint('[VisitCamera] captured photo quality log failed: $error');
+      if (kDebugMode) {
+        debugPrint('[VisitCamera] captured photo quality log failed: $error');
+      }
     }
   }
 

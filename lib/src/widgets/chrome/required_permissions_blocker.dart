@@ -25,10 +25,7 @@ class _RequiredPermissionsBlockerState extends State<RequiredPermissionsBlocker>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    unawaited(() async {
-      await _gate.refresh(force: true);
-      await _gate.requestPendingAllowPermissionsAutomatically();
-    }());
+    unawaited(_gate.refresh(force: true));
   }
 
   @override
@@ -107,7 +104,9 @@ class _RequiredPermissionsBlockerState extends State<RequiredPermissionsBlocker>
                                   ),
                                   const SizedBox(height: 8),
                                   Text(
-                                    'SmartNPS360 needs these permissions to run properly.\n\n'
+                                    'These permissions help with shift alerts and duty '
+                                    'tracking. You can keep using the app without them; '
+                                    'clock-in still needs location when you start a shift.\n\n'
                                     'Location is used only while you are on duty, and stops '
                                     'when your shift ends.',
                                     style: TextStyle(
@@ -460,7 +459,7 @@ class _PrivacyBanner extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Your privacy and security are our priority.',
+                    'Privacy notice',
                     style: TextStyle(
                       color: colors.privacyTitle,
                       fontSize: 13.5,
@@ -470,7 +469,8 @@ class _PrivacyBanner extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'We only use these permissions for core app features.',
+                    'These permissions are used solely to verify attendance '
+                    'during an active duty period. Collection stops when duty ends.',
                     style: TextStyle(
                       color: colors.privacyBody,
                       fontSize: 12,

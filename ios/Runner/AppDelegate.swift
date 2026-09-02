@@ -24,6 +24,7 @@ import flutter_background_service_ios
   private var settingsChannelRegistered = false
   private var slcChannelRegistered = false
   private var motionChannelRegistered = false
+  private var deviceCheckChannelRegistered = false
   private var settingsMethodChannel: FlutterMethodChannel?
   private var slcMethodChannel: FlutterMethodChannel?
   private var launchedForLocation = false
@@ -39,6 +40,7 @@ import flutter_background_service_ios
   private var lastGeofenceCoordinate: CLLocationCoordinate2D?
   private var slcEventSink: FlutterEventSink?
   private var motionActivityManager: MotionActivityManager?
+  private var deviceCheckManager: DeviceCheckManager?
 
   override func application(
     _ application: UIApplication,
@@ -87,16 +89,29 @@ import flutter_background_service_ios
     registerSettingsChannelIfNeeded(with: messenger)
     registerSlcChannelIfNeeded(with: messenger)
     registerMotionActivityChannelIfNeeded(with: messenger)
+    registerDeviceCheckChannelIfNeeded(with: messenger)
   }
 
   /// Fallback for engines created before implicit-engine callback wiring.
   func registerPlatformChannelsIfNeeded() {
-    if slcChannelRegistered && settingsChannelRegistered && motionChannelRegistered {
+    if slcChannelRegistered
+      && settingsChannelRegistered
+      && motionChannelRegistered
+      && deviceCheckChannelRegistered
+    {
       return
     }
     if let messenger = flutterViewController()?.binaryMessenger {
       registerPlatformChannels(with: messenger)
     }
+  }
+
+  private func registerDeviceCheckChannelIfNeeded(with messenger: FlutterBinaryMessenger) {
+    guard !deviceCheckChannelRegistered else { return }
+    let manager = deviceCheckManager ?? DeviceCheckManager()
+    manager.register(with: messenger)
+    deviceCheckManager = manager
+    deviceCheckChannelRegistered = true
   }
 
   private func registerMotionActivityChannelIfNeeded(with messenger: FlutterBinaryMessenger) {

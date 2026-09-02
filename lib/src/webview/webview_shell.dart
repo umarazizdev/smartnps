@@ -22,6 +22,7 @@ import '../app/offline_screen.dart';
 import '../app/site_reachability.dart';
 import '../widgets/chrome/platform_bottom_bar.dart';
 import '../widgets/dialogs/clock_in_blocked_dialog.dart';
+import '../widgets/dialogs/clock_in_permissions_dialog.dart';
 import '../location/mock_location_detection.dart';
 import '../location/mock_location_guard.dart';
 import '../app/app_routes.dart';
@@ -30,8 +31,11 @@ import '../auth/auth_state.dart';
 import '../auth/auth_repository.dart';
 import '../api/api_client.dart';
 import '../api/api_urls.dart';
+import '../device/device_check_service.dart';
 import '../background/duty/duty_heartbeat_service.dart';
 import '../background/duty/clock_in_gate_service.dart';
+import '../background/duty/on_duty_permissions_prompt_service.dart';
+import '../background/duty/off_duty_push_prompt_service.dart';
 import '../background/location/background_location_controller.dart';
 import '../background/location/background_location_permissions.dart';
 import '../background/duty/location_disclosure_consent.dart';
@@ -159,11 +163,16 @@ class _WebViewShellState extends State<WebViewShell>
   static const _firstPaintTimeout = Duration(seconds: 12);
   static const _recoveryTimeout = Duration(seconds: 10);
   static const _resumeHealthDelay = Duration(milliseconds: 450);
+  static const _resumeStuckWatchdogDelay = Duration(seconds: 8);
+  static const _resumeStaleReloadThreshold = Duration(minutes: 30);
   static const _maxSilentRecoveries = 2;
+
+  DateTime? _lastBackgroundedAt;
 
   Timer? _splashReleaseTimer;
   Timer? _loadWatchdog;
   Timer? _recoveryWatchdog;
+  Timer? _resumeStuckWatchdog;
   int _webViewEpoch = 0;
   int _silentRecoveryAttempts = 0;
   int _startupTimeoutExtensions = 0;
@@ -214,22 +223,28 @@ class _WebViewShellState extends State<WebViewShell>
   }) async {
     if (_nativeLogoutInFlight) return false;
     if (skipIfAlreadyLoggedOut && !await _hasActiveNativeSession()) {
-      debugPrint(
-        '[SmartNPS360][Auth] $reason skipped (session already cleared)',
-      );
+      if (kDebugMode) {
+        debugPrint(
+          '[SmartNPS360][Auth] $reason skipped (session already cleared)',
+        );
+      }
       return false;
     }
 
     if (await DutyHeartbeatService.instance.isOnDutyAccordingToHeartbeat()) {
-      debugPrint(
-        '[SmartNPS360][Auth] logout skipped ($reason): officer on duty per heartbeat',
-      );
+      if (kDebugMode) {
+        debugPrint(
+          '[SmartNPS360][Auth] logout skipped ($reason): officer on duty per heartbeat',
+        );
+      }
       return false;
     }
 
     _nativeLogoutInFlight = true;
     try {
-      debugPrint('[SmartNPS360][Auth] native logout ($reason)');
+      if (kDebugMode) {
+        debugPrint('[SmartNPS360][Auth] native logout ($reason)');
+      }
 
       _suppressResidualKeyboardInsetAfterLogin = false;
       _pendingLocationNoticeAfterLogin = false;
@@ -248,10 +263,12 @@ class _WebViewShellState extends State<WebViewShell>
 
       await AuthSessionManager.clearNativeSession(deletePushToken: false);
 
-      debugPrint(
-        '[SmartNPS360][Auth] native logout completed '
-        '(officerLoggedIn=false, session cleared)',
-      );
+      if (kDebugMode) {
+        debugPrint(
+          '[SmartNPS360][Auth] native logout completed '
+          '(officerLoggedIn=false, session cleared)',
+        );
+      }
       return true;
     } finally {
       _nativeLogoutInFlight = false;
@@ -261,6 +278,7 @@ class _WebViewShellState extends State<WebViewShell>
   void _showLocationNoticeAfterLogin({bool syncPushAfterDismiss = true}) {
     if (!mounted) return;
     _syncPushAfterLocationNotice = syncPushAfterDismiss;
+
     if (AuthSessionManager.isLoginRoute(_ui.currentUri.value)) {
       _pendingLocationNoticeAfterLogin = true;
       _ui.showLocationNotice.value = false;
@@ -307,18 +325,25 @@ class _WebViewShellState extends State<WebViewShell>
       return;
     }
 
-    await RequiredPermissionsGate.instance
-        .requestPendingAllowPermissionsAutomatically();
-
+    // Let the privacy overlay finish dismissing, then ask for notifications
+    // only (location/motion wait for clock-in Allow).
+    await Future<void>.delayed(const Duration(milliseconds: 450));
     if (!mounted ||
         !_ui.officerLoggedIn.value ||
-        _ui.showLocationNotice.value) {
+        _ui.showLocationNotice.value ||
+        _pendingLocationNoticeAfterLogin) {
       return;
     }
 
-    if (syncPush) {
-      await _syncPushTokenAfterLogin(immediate: true);
+    await PushNotificationService.instance
+        .requestPermissionAfterPrivacyNotice();
+
+    if (syncPush && Platform.isIOS) {
+      await _prepareIosPushAuthFromWeb();
+      await _notifyWebPushTokenReady();
     }
+
+    if (!mounted || !_ui.officerLoggedIn.value) return;
     await _maybeStartDutyHeartbeat();
   }
 
@@ -332,10 +357,12 @@ class _WebViewShellState extends State<WebViewShell>
   Future<void> _onRefreshSessionExpired() async {
     if (AuthState.instance.needsReauth.value) return;
     AuthState.instance.markNeedsReauth();
-    debugPrint(
-      '[SmartNPS360][Auth] refresh failed → token unavailable snackbar '
-      '(no logout, tokens kept)',
-    );
+    if (kDebugMode) {
+      debugPrint(
+        '[SmartNPS360][Auth] refresh failed → token unavailable snackbar '
+        '(no logout, tokens kept)',
+      );
+    }
     _showTokenUnavailableSnackbar();
   }
 
@@ -476,7 +503,9 @@ class _WebViewShellState extends State<WebViewShell>
 
     if (_lastBottomBarVisibilityLog == signature) return;
     _lastBottomBarVisibilityLog = signature;
-    debugPrint('[SmartNPS360][BottomBar] $signature');
+    if (kDebugMode) {
+      debugPrint('[SmartNPS360][BottomBar] $signature');
+    }
   }
 
   Future<void> _reconcileBottomBarFromWebView(
@@ -508,7 +537,7 @@ class _WebViewShellState extends State<WebViewShell>
     if (_ui.preserveBottomBarDuringLoad.value) return;
 
     if (_isAuthRoute(from)) return;
-    if (_isBottomBarRoute(from) || _isBottomBarRoute(to)) {
+    if (_isBottomBarRoute(from) && to != null && _isBottomBarRoute(to)) {
       _ui.preserveBottomBarDuringLoad.value = true;
       return;
     }
@@ -1147,6 +1176,16 @@ class _WebViewShellState extends State<WebViewShell>
             .then(function () {
               return window.flutter_inappwebview.callHandler(
                 'clock_in_success',
+                data
+              );
+            });
+        };
+        window.SmartNPS360.notifyClockInCancelled = function (payload) {
+          var data = payload == null ? {} : payload;
+          return ensureFlutterBridge()
+            .then(function () {
+              return window.flutter_inappwebview.callHandler(
+                'clock_in_cancelled',
                 data
               );
             });
@@ -1818,6 +1857,133 @@ class _WebViewShellState extends State<WebViewShell>
     injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
   );
 
+  static final UserScript _iosKeyboardInputFixScript = UserScript(
+    source: r'''
+    (function () {
+      'use strict';
+      if (window.__smartnps_ios_keyboard_fix_installed) return;
+      window.__smartnps_ios_keyboard_fix_installed = true;
+
+      var SKIP_INPUT_TYPES = {
+        password: true,
+        hidden: true,
+        submit: true,
+        button: true,
+        checkbox: true,
+        radio: true,
+        file: true,
+        reset: true,
+        image: true
+      };
+
+      function isEditable(el) {
+        if (!el || el.nodeType !== 1) return false;
+        var tag = el.tagName;
+        if (tag === 'TEXTAREA') return true;
+        if (tag === 'INPUT') {
+          var type = (el.getAttribute('type') || 'text').toLowerCase();
+          return !SKIP_INPUT_TYPES[type];
+        }
+        if (el.isContentEditable) return true;
+        var editable = (el.getAttribute('contenteditable') || '').toLowerCase();
+        return editable === '' || editable === 'true' || editable === 'plaintext-only';
+      }
+
+      function enableSuggestionsOnly(el) {
+        if (!isEditable(el)) return;
+        el.setAttribute('autocorrect', 'on');
+        el.setAttribute('autocapitalize', 'sentences');
+      }
+
+      function scan(root) {
+        if (!root || !root.querySelectorAll) return;
+        var nodes = root.querySelectorAll(
+          'textarea, input, [contenteditable], [contenteditable="true"], [contenteditable="plaintext-only"]'
+        );
+        for (var i = 0; i < nodes.length; i++) {
+          enableSuggestionsOnly(nodes[i]);
+        }
+      }
+
+      function insertSpace(el) {
+        if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+          var start = el.selectionStart;
+          var end = el.selectionEnd;
+          if (start == null || end == null) return;
+          var value = el.value || '';
+          el.value = value.slice(0, start) + ' ' + value.slice(end);
+          var pos = start + 1;
+          el.setSelectionRange(pos, pos);
+          try {
+            el.dispatchEvent(new InputEvent('input', {
+              bubbles: true,
+              inputType: 'insertText',
+              data: ' '
+            }));
+          } catch (_) {
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          return;
+        }
+        if (el.isContentEditable) {
+          try {
+            document.execCommand('insertText', false, ' ');
+          } catch (_) {}
+        }
+      }
+
+      var lastKeyWasSpace = false;
+
+      document.addEventListener('keydown', function (event) {
+        if (!isEditable(event.target)) return;
+        lastKeyWasSpace = event.key === ' ' || event.keyCode === 32;
+      }, true);
+
+      document.addEventListener('beforeinput', function (event) {
+        if (!isEditable(event.target)) return;
+        if (!lastKeyWasSpace) return;
+
+        if (event.inputType === 'insertReplacementText') {
+          event.preventDefault();
+          insertSpace(event.target);
+        }
+
+        lastKeyWasSpace = false;
+      }, true);
+
+      window.__smartnpsIosKeyboardInputFixScan = function () {
+        scan(document);
+      };
+
+      document.addEventListener('focusin', function (event) {
+        enableSuggestionsOnly(event.target);
+      }, true);
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function () { scan(document); });
+      } else {
+        scan(document);
+      }
+
+      if (typeof MutationObserver !== 'undefined' && document.documentElement) {
+        var observer = new MutationObserver(function (mutations) {
+          for (var i = 0; i < mutations.length; i++) {
+            var added = mutations[i].addedNodes;
+            for (var j = 0; j < added.length; j++) {
+              var node = added[j];
+              if (node.nodeType !== 1) continue;
+              enableSuggestionsOnly(node);
+              scan(node);
+            }
+          }
+        });
+        observer.observe(document.documentElement, { childList: true, subtree: true });
+      }
+    })();
+  ''',
+    injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+  );
+
   late final JsBridge _bridge = JsBridge(
     getCurrentUrlHost: () => _ui.currentUri.value?.host,
     onDownloadRequested: _downloadAndReturn,
@@ -1865,6 +2031,7 @@ class _WebViewShellState extends State<WebViewShell>
     unawaited(AppUpgradeReconciler.reconcileOsAfterEngineReady());
     RequiredPermissionsGate.privacyNoticeVisibleChecker = () =>
         _ui.showLocationNotice.value || _pendingLocationNoticeAfterLogin;
+    OffDutyPushPromptService.currentUriChecker = () => _ui.currentUri.value;
     PushNotificationService.instance.setDeferPermissionPromptWhile(
       () =>
           _ui.showLocationNotice.value ||
@@ -1961,7 +2128,9 @@ class _WebViewShellState extends State<WebViewShell>
       final result = await controller.evaluateJavascript(source: javascript);
       return OfficerAnnouncementCoordinator.normalizeJavaScriptBoolean(result);
     } catch (e) {
-      debugPrint('[SmartNPS360][Announcement] evaluateJavascript failed: $e');
+      if (kDebugMode) {
+        debugPrint('[SmartNPS360][Announcement] evaluateJavascript failed: $e');
+      }
       return false;
     }
   }
@@ -1973,13 +2142,11 @@ class _WebViewShellState extends State<WebViewShell>
 
     final uri = Uri.tryParse(url);
     if (uri == null || !_isInternalUrl(uri)) {
-      debugPrint('[SmartNPS360][Push] ignored untrusted url=$url');
       _pendingPushUrl = null;
       return;
     }
 
     _pendingPushUrl = null;
-    debugPrint('[SmartNPS360][Push] navigating to $url');
     await controller.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
     await _reconcileBottomBarFromWebView(controller);
   }
@@ -2039,9 +2206,11 @@ class _WebViewShellState extends State<WebViewShell>
       ''',
       );
     } catch (e) {
-      debugPrint(
-        '[SmartNPS360] notify web background location status failed: $e',
-      );
+      if (kDebugMode) {
+        debugPrint(
+          '[SmartNPS360] notify web background location status failed: $e',
+        );
+      }
     }
   }
 
@@ -2076,9 +2245,7 @@ class _WebViewShellState extends State<WebViewShell>
         })();
       ''',
       );
-    } catch (e) {
-      debugPrint('[SmartNPS360][Push] notify web status failed: $e');
-    }
+    } catch (e) {}
   }
 
   @override
@@ -2129,6 +2296,7 @@ class _WebViewShellState extends State<WebViewShell>
         unawaited(BackgroundLocationController.notifyAppBackgrounded());
       } else if (state == AppLifecycleState.paused ||
           state == AppLifecycleState.hidden) {
+        _lastBackgroundedAt = DateTime.now();
         unawaited(BackgroundLocationController.notifyAppBackgrounded());
       } else if (state == AppLifecycleState.resumed) {
         unawaited(BackgroundLocationController.notifyAppForegrounded());
@@ -2136,7 +2304,11 @@ class _WebViewShellState extends State<WebViewShell>
     }
 
     if (state == AppLifecycleState.resumed) {
-      unawaited(_checkWebViewHealthAfterResume());
+      final staleBackground = _isStaleBackgroundResume();
+      if (!staleBackground) {
+        unawaited(_checkWebViewHealthAfterResume());
+        _scheduleResumeStuckRecoveryWatchdog();
+      }
       unawaited(_syncOfflineFromConnectivity());
       if (_ui.officerLoggedIn.value && !_ui.showLocationNotice.value) {
         unawaited(RequiredPermissionsGate.instance.refresh(force: true));
@@ -2166,6 +2338,7 @@ class _WebViewShellState extends State<WebViewShell>
           if (controller != null) {
             await _reconcileBottomBarFromWebView(controller);
           }
+          await _maybeReloadWebViewAfterLongBackground();
           return;
         }
 
@@ -2182,9 +2355,22 @@ class _WebViewShellState extends State<WebViewShell>
         DutyHeartbeatService.instance.beginResumeDutyReconcile();
         try {
           await _maybeStartDutyHeartbeat();
+          // Show before heavier duty reconcile so resume isn't blocked by
+          // notification / tracking prompts racing this dialog.
+          await OnDutyPermissionsPromptService.instance.maybeShow(
+            fromResume: true,
+          );
           await DutyHeartbeatService.instance.recheckOnDutyPrompts(
             fromResume: true,
           );
+          await OnDutyPermissionsPromptService.instance.maybeShow(
+            fromResume: true,
+          );
+          if (_ui.officerLoggedIn.value &&
+              !_ui.showLocationNotice.value &&
+              !AppConfig.isAuthEntryRoute(_ui.currentUri.value)) {
+            await OffDutyPushPromptService.instance.maybeShow(fromResume: true);
+          }
         } finally {
           DutyHeartbeatService.instance.endResumeDutyReconcile();
         }
@@ -2192,15 +2378,21 @@ class _WebViewShellState extends State<WebViewShell>
           await IosDutyLocationPinger.flushPendingBatchNow();
         }
         await ClockInGateService.instance.recheckAfterAppResume();
-        await _notifyWebBackgroundLocationStatus();
-        await _notifyWebPushNotificationStatus();
+        if (!ClockInGateService.instance.isPrepareInFlight &&
+            !ClockInPermissionsDialog.isVisible) {
+          await _notifyWebBackgroundLocationStatus();
+          await _notifyWebPushNotificationStatus();
+        }
 
         await NativePermissionStatusService.instance
             .ensureLatestPermissionsSynced();
         await OfficerAnnouncementCoordinator.instance.tryDeliverPending(
           source: 'resumed',
         );
+        await _maybeReloadWebViewAfterLongBackground();
       }());
+    } else if (state == AppLifecycleState.resumed) {
+      unawaited(_maybeReloadWebViewAfterLongBackground());
     }
   }
 
@@ -2216,6 +2408,7 @@ class _WebViewShellState extends State<WebViewShell>
     }
     RequiredPermissionsGate.instance.stop();
     RequiredPermissionsGate.privacyNoticeVisibleChecker = null;
+    OffDutyPushPromptService.currentUriChecker = null;
     OfficerAnnouncementCoordinator.instance.detach();
     PushNotificationService.instance.setDeferPermissionPromptWhile(null);
     PushNotificationService.instance.setOnNotificationTap(null);
@@ -2358,6 +2551,8 @@ class _WebViewShellState extends State<WebViewShell>
     _loadWatchdog = null;
     _recoveryWatchdog?.cancel();
     _recoveryWatchdog = null;
+    _resumeStuckWatchdog?.cancel();
+    _resumeStuckWatchdog = null;
   }
 
   void _scheduleStartupWatchdogs() {
@@ -2385,6 +2580,8 @@ class _WebViewShellState extends State<WebViewShell>
     _loadWatchdog = null;
     _recoveryWatchdog?.cancel();
     _recoveryWatchdog = null;
+    _resumeStuckWatchdog?.cancel();
+    _resumeStuckWatchdog = null;
     _silentRecoveryAttempts = 0;
     _recoveryInFlight = false;
     _awaitingRecoveryLoad = false;
@@ -2440,6 +2637,36 @@ class _WebViewShellState extends State<WebViewShell>
     _showOffline(needsReload: true);
   }
 
+  bool _isStaleBackgroundResume() {
+    final lastBackgrounded = _lastBackgroundedAt;
+    if (lastBackgrounded == null) return false;
+    return DateTime.now().difference(lastBackgrounded) >=
+        _resumeStaleReloadThreshold;
+  }
+
+  Future<void> _maybeReloadWebViewAfterLongBackground() async {
+    if (!mounted) return;
+    if (_ui.showOffline.value) return;
+    if (_ui.showingLogVisit.value) return;
+    if (_ui.pullToRefreshActive.value) return;
+    if (!_ui.firstPageLoaded.value) return;
+
+    final lastBackgrounded = _lastBackgroundedAt;
+    _lastBackgroundedAt = null;
+    if (lastBackgrounded == null) return;
+
+    final away = DateTime.now().difference(lastBackgrounded);
+    if (away < _resumeStaleReloadThreshold) return;
+
+    if (kDebugMode) {
+      debugPrint(
+        '[SmartNPS360][WebView] stale background reload after '
+        '${away.inMinutes}m',
+      );
+    }
+    await _recoverWebView(reason: 'resume_stale_background', recreate: true);
+  }
+
   Future<_WebViewHealth> _probeWebViewHealth(
     InAppWebViewController controller,
   ) async {
@@ -2475,24 +2702,83 @@ class _WebViewShellState extends State<WebViewShell>
     }
   }
 
+  void _clearStuckWebViewRecoveryState({bool resetAttempts = false}) {
+    _recoveryWatchdog?.cancel();
+    _recoveryWatchdog = null;
+    _recoveryInFlight = false;
+    _awaitingRecoveryLoad = false;
+    _ui.endNavigation();
+    if (resetAttempts) {
+      _silentRecoveryAttempts = 0;
+    }
+  }
+
+  void _scheduleResumeStuckRecoveryWatchdog() {
+    _resumeStuckWatchdog?.cancel();
+    _resumeStuckWatchdog = Timer(_resumeStuckWatchdogDelay, () {
+      unawaited(_recoverFromResumeStuckIfNeeded());
+    });
+  }
+
+  Future<void> _recoverFromResumeStuckIfNeeded() async {
+    if (!mounted) return;
+    if (_ui.showOffline.value) return;
+    if (_ui.showingLogVisit.value) return;
+    if (_ui.pullToRefreshActive.value) return;
+    if (!_ui.firstPageLoaded.value) return;
+
+    final controller = _controller;
+    final health = controller == null
+        ? _WebViewHealth.blank
+        : await _probeWebViewHealth(controller);
+    if (!mounted) return;
+
+    final stuckRecovery = _recoveryInFlight || _awaitingRecoveryLoad;
+    final stuckNavigation =
+        _ui.isNavigating.value && _ui.loadProgress.value < 100;
+
+    if (health == _WebViewHealth.ok && !stuckRecovery && !stuckNavigation) {
+      return;
+    }
+
+    if (health == _WebViewHealth.ok && (stuckRecovery || stuckNavigation)) {
+      _clearStuckWebViewRecoveryState(resetAttempts: true);
+      return;
+    }
+
+    _clearStuckWebViewRecoveryState(resetAttempts: true);
+    await _recoverWebView(reason: 'resume_stuck_watchdog', recreate: true);
+  }
+
   Future<void> _checkWebViewHealthAfterResume() async {
     await Future<void>.delayed(_resumeHealthDelay);
     if (!mounted) return;
     if (_ui.showOffline.value) return;
     if (_ui.showingLogVisit.value) return;
-    if (_ui.pullToRefreshActive.value || _ui.isNavigating.value) return;
+    if (_ui.pullToRefreshActive.value) return;
     if (!_ui.firstPageLoaded.value) return;
-    if (_recoveryInFlight || _awaitingRecoveryLoad) return;
 
     final controller = _controller;
-    if (controller == null) {
-      await _recoverWebView(reason: 'resume_no_controller', recreate: true);
+    final health = controller == null
+        ? _WebViewHealth.blank
+        : await _probeWebViewHealth(controller);
+    if (!mounted) return;
+
+    final stuckRecovery = _recoveryInFlight || _awaitingRecoveryLoad;
+    final stuckNavigation =
+        _ui.isNavigating.value && _ui.loadProgress.value < 100;
+
+    if (health == _WebViewHealth.ok && !stuckRecovery && !stuckNavigation) {
       return;
     }
 
-    final health = await _probeWebViewHealth(controller);
-    if (!mounted || health == _WebViewHealth.ok) return;
-    await _recoverWebView(reason: 'resume_${health.name}');
+    if (health == _WebViewHealth.ok && (stuckRecovery || stuckNavigation)) {
+      _clearStuckWebViewRecoveryState(resetAttempts: true);
+      return;
+    }
+
+    _clearStuckWebViewRecoveryState(resetAttempts: true);
+    await _recoverWebView(reason: 'resume_${health.name}', recreate: true);
   }
 
   void _armRecoveryWatchdog() {
@@ -2535,15 +2821,22 @@ class _WebViewShellState extends State<WebViewShell>
     if (_recoveryInFlight) return;
     if (_ui.showingLogVisit.value) return;
 
+    final forceRecreate =
+        recreate ||
+        reason.startsWith('resume_') ||
+        reason == 'ios_content_process_terminated';
+
     _recoveryInFlight = true;
     _silentRecoveryAttempts++;
     _releaseSplash();
     _ui.beginNavigation();
-    debugPrint(
-      '[SmartNPS360][WebView] recover '
-      'attempt=$_silentRecoveryAttempts/$_maxSilentRecoveries '
-      'reason=$reason recreate=$recreate',
-    );
+    if (kDebugMode) {
+      debugPrint(
+        '[SmartNPS360][WebView] recover '
+        'attempt=$_silentRecoveryAttempts/$_maxSilentRecoveries '
+        'reason=$reason recreate=$recreate',
+      );
+    }
 
     if (_silentRecoveryAttempts > _maxSilentRecoveries) {
       _recoveryInFlight = false;
@@ -2551,7 +2844,7 @@ class _WebViewShellState extends State<WebViewShell>
       return;
     }
 
-    final shouldRecreate = recreate || _controller == null;
+    final shouldRecreate = forceRecreate || _controller == null;
     if (shouldRecreate) {
       _awaitingRecoveryLoad = true;
       _controller = null;
@@ -2568,7 +2861,11 @@ class _WebViewShellState extends State<WebViewShell>
       await _controller!.loadUrl(urlRequest: URLRequest(url: WebUri(target)));
       _armRecoveryWatchdog();
     } catch (e) {
-      debugPrint('[SmartNPS360][WebView] recover loadUrl failed ($reason): $e');
+      if (kDebugMode) {
+        debugPrint(
+          '[SmartNPS360][WebView] recover loadUrl failed ($reason): $e',
+        );
+      }
       _recoveryInFlight = false;
       _awaitingRecoveryLoad = false;
       await _recoverWebView(reason: '${reason}_recreate', recreate: true);
@@ -2809,20 +3106,28 @@ class _WebViewShellState extends State<WebViewShell>
       );
 
       if (result?.error != null) {
-        debugPrint('[PolicyDocument] fetch JS error: ${result!.error}');
+        if (kDebugMode) {
+          debugPrint('[PolicyDocument] fetch JS error: ${result!.error}');
+        }
         return null;
       }
 
       final raw = result?.value;
       if (raw is! String || raw.isEmpty) {
-        debugPrint('[PolicyDocument] fetch empty result: $raw');
+        if (kDebugMode) {
+          debugPrint('[PolicyDocument] fetch empty result: $raw');
+        }
         return null;
       }
 
       final decoded = jsonDecode(raw);
       if (decoded is! Map) return null;
       if (decoded['ok'] != true) {
-        debugPrint('[PolicyDocument] fetch not ok status=${decoded['status']}');
+        if (kDebugMode) {
+          debugPrint(
+            '[PolicyDocument] fetch not ok status=${decoded['status']}',
+          );
+        }
         return null;
       }
 
@@ -2831,16 +3136,22 @@ class _WebViewShellState extends State<WebViewShell>
         final base64 = decoded['base64'];
         if (base64 is! String || base64.isEmpty) return null;
         final bytes = base64Decode(base64);
-        debugPrint('[PolicyDocument] fetch pdf bytes=${bytes.length}');
+        if (kDebugMode) {
+          debugPrint('[PolicyDocument] fetch pdf bytes=${bytes.length}');
+        }
         return PolicyDocumentContent.pdf(bytes);
       }
 
       final html = decoded['html'];
       if (html is! String || html.isEmpty) return null;
-      debugPrint('[PolicyDocument] fetch html bytes=${html.length}');
+      if (kDebugMode) {
+        debugPrint('[PolicyDocument] fetch html bytes=${html.length}');
+      }
       return PolicyDocumentContent.html(html);
     } catch (e) {
-      debugPrint('[PolicyDocument] fetch failed: $e');
+      if (kDebugMode) {
+        debugPrint('[PolicyDocument] fetch failed: $e');
+      }
       return null;
     }
   }
@@ -2878,15 +3189,17 @@ class _WebViewShellState extends State<WebViewShell>
     final reopenedPending = await flow.applyBridgePatrolContext(normalized);
     final ctx = flow.patrolContext.value;
 
-    debugPrint(
-      '[SmartNPS360] patrol draft ready '
-      'reopenedPending=$reopenedPending '
-      'items=${flow.mediaItems.length} '
-      'siteId=${ctx?.siteId} regionId=${ctx?.regionId} '
-      'siteName=${ctx?.siteName} regionName=${ctx?.regionName} '
-      'clientDraftId=${ctx?.clientDraftId} '
-      'resumeUri=$_uriBeforeLogVisit',
-    );
+    if (kDebugMode) {
+      debugPrint(
+        '[SmartNPS360] patrol draft ready '
+        'reopenedPending=$reopenedPending '
+        'items=${flow.mediaItems.length} '
+        'siteId=${ctx?.siteId} regionId=${ctx?.regionId} '
+        'siteName=${ctx?.siteName} regionName=${ctx?.regionName} '
+        'clientDraftId=${ctx?.clientDraftId} '
+        'resumeUri=$_uriBeforeLogVisit',
+      );
+    }
 
     if (Get.currentRoute == AppRoutes.visitVideoPreview) {
       Get.back();
@@ -3022,7 +3335,9 @@ class _WebViewShellState extends State<WebViewShell>
       }
       return _normalizeBridgeMap(text);
     } catch (e) {
-      print('[SmartNPS360] read patrolDraftContext failed: $e');
+      if (kDebugMode) {
+        debugPrint('[SmartNPS360] read patrolDraftContext failed: $e');
+      }
       return null;
     }
   }
@@ -3070,7 +3385,9 @@ class _WebViewShellState extends State<WebViewShell>
       controller.addJavaScriptHandler(
         handlerName: 'iosPopoverFixDebug',
         callback: (args) {
-          debugPrint('[SmartNPS360][iOS PopoverFix] event received');
+          if (kDebugMode) {
+            debugPrint('[SmartNPS360][iOS PopoverFix] event received');
+          }
         },
       );
     }
@@ -3096,12 +3413,14 @@ class _WebViewShellState extends State<WebViewShell>
         final error = result['error'];
         final errorCode = error is Map ? error['code']?.toString() : null;
         final errorMessage = error is Map ? error['message']?.toString() : null;
-        debugPrint(
-          '[SmartNPS360] getCurrentLocation ok=${result['ok'] == true}'
-          '${errorCode != null ? ' error=$errorCode' : ''}'
-          '${errorMessage != null ? ' message=$errorMessage' : ''}'
-          '${result['bestAccuracySeenMeters'] != null ? ' bestAccuracy=${result['bestAccuracySeenMeters']}' : ''}',
-        );
+        if (kDebugMode) {
+          debugPrint(
+            '[SmartNPS360] getCurrentLocation ok=${result['ok'] == true}'
+            '${errorCode != null ? ' error=$errorCode' : ''}'
+            '${errorMessage != null ? ' message=$errorMessage' : ''}'
+            '${result['bestAccuracySeenMeters'] != null ? ' bestAccuracy=${result['bestAccuracySeenMeters']}' : ''}',
+          );
+        }
         MockLocationGuard.maybeShowDialogFromBridgeResult(result);
         return result;
       },
@@ -3251,9 +3570,11 @@ class _WebViewShellState extends State<WebViewShell>
         final result = await _bridge.setPushNotificationsEnabled(
           args.isEmpty ? null : args.first,
         );
-        debugPrint(
-          '[SmartNPS360] setPushNotificationsEnabled ok=${result['ok'] == true}',
-        );
+        if (kDebugMode) {
+          debugPrint(
+            '[SmartNPS360] setPushNotificationsEnabled ok=${result['ok'] == true}',
+          );
+        }
         return result;
       },
     );
@@ -3263,15 +3584,17 @@ class _WebViewShellState extends State<WebViewShell>
         final result = await _bridge.getBackgroundLocationStatus(
           args.isEmpty ? null : args.first,
         );
-        debugPrint(
-          '[SmartNPS360] getBackgroundLocationStatus '
-          'ok=${result['ok'] == true} '
-          'canClockIn=${result['canClockIn'] == true} '
-          'backgroundReady=${result['backgroundReady'] == true} '
-          'disclosureAccepted=${result['disclosureAccepted'] == true} '
-          'serviceEnabled=${result['serviceEnabled'] == true}'
-          '${result['deniedReason'] != null ? ' deniedReason=${result['deniedReason']}' : ''}',
-        );
+        if (kDebugMode) {
+          debugPrint(
+            '[SmartNPS360] getBackgroundLocationStatus '
+            'ok=${result['ok'] == true} '
+            'canClockIn=${result['canClockIn'] == true} '
+            'backgroundReady=${result['backgroundReady'] == true} '
+            'disclosureAccepted=${result['disclosureAccepted'] == true} '
+            'serviceEnabled=${result['serviceEnabled'] == true}'
+            '${result['deniedReason'] != null ? ' deniedReason=${result['deniedReason']}' : ''}',
+          );
+        }
         return result;
       },
     );
@@ -3285,15 +3608,19 @@ class _WebViewShellState extends State<WebViewShell>
           final canClockIn = result['canClockIn'] == true;
           final reason = result['reason']?.toString();
           final message = result['message']?.toString();
-          debugPrint(
-            '[SmartNPS360] prepareClockIn ok=${result['ok'] == true} '
-            'canClockIn=$canClockIn'
-            '${reason != null ? ' reason=$reason' : ''}'
-            '${message != null ? ' message=$message' : ''}',
-          );
+          if (kDebugMode) {
+            debugPrint(
+              '[SmartNPS360] prepareClockIn ok=${result['ok'] == true} '
+              'canClockIn=$canClockIn'
+              '${reason != null ? ' reason=$reason' : ''}'
+              '${message != null ? ' message=$message' : ''}',
+            );
+          }
           return result;
         } catch (e, st) {
-          debugPrint('[SmartNPS360] prepareClockIn failed: $e\n$st');
+          if (kDebugMode) {
+            debugPrint('[SmartNPS360] prepareClockIn failed: $e\n$st');
+          }
           rethrow;
         }
       },
@@ -3323,12 +3650,47 @@ class _WebViewShellState extends State<WebViewShell>
       }
 
       if (clockInSuccess == true) {
-        DutyHeartbeatService.instance.pollAfterClockInSuccess();
+        DutyHeartbeatService.instance.onClockInSuccessFromBridge();
+      } else if (clockInSuccess == false) {
+        unawaited(
+          ClockInGateService.instance.abandonClockInAttempt(
+            reason: 'clock_in_success_false',
+          ),
+        );
       }
 
       return {'ok': true, 'clock_in_success': clockInSuccess};
     }
 
+    Future<Map<String, dynamic>> handleClockInCancelled(
+      List<dynamic> args,
+    ) async {
+      final currentHost = _ui.currentUri.value?.host;
+      if (!AppConfig.isAllowedHost(currentHost)) {
+        return {
+          'ok': false,
+          'error': {'code': 'untrusted_origin', 'message': 'Untrusted origin'},
+        };
+      }
+
+      final raw = args.isNotEmpty ? args.first : null;
+      final payload = _normalizeBridgeMap(raw);
+      final reason =
+          _stringFromPayload(payload, const ['reason', 'source', 'action']) ??
+          'webview_cancelled';
+
+      await ClockInGateService.instance.abandonClockInAttempt(reason: reason);
+      return {'ok': true, 'cancelled': true, 'reason': reason};
+    }
+
+    controller.addJavaScriptHandler(
+      handlerName: 'clock_in_cancelled',
+      callback: handleClockInCancelled,
+    );
+    controller.addJavaScriptHandler(
+      handlerName: 'notifyClockInCancelled',
+      callback: handleClockInCancelled,
+    );
     controller.addJavaScriptHandler(
       handlerName: 'clock_in_success',
       callback: handleClockInSuccess,
@@ -3358,13 +3720,19 @@ class _WebViewShellState extends State<WebViewShell>
     controller.addJavaScriptHandler(
       handlerName: 'openLogVisit',
       callback: (args) async {
-        print(
-          '[SmartNPS360] openLogVisit called argsCount=${args.length} args=$args',
-        );
+        if (kDebugMode) {
+          debugPrint(
+            '[SmartNPS360] openLogVisit called argsCount=${args.length}',
+          );
+        }
 
         final currentHost = _ui.currentUri.value?.host;
         if (!AppConfig.isAllowedHost(currentHost)) {
-          print('[SmartNPS360] denied openLogVisit from host=$currentHost');
+          if (kDebugMode) {
+            debugPrint(
+              '[SmartNPS360] denied openLogVisit from host=$currentHost',
+            );
+          }
           return {
             'ok': false,
             'error': {
@@ -3383,9 +3751,11 @@ class _WebViewShellState extends State<WebViewShell>
                     null)) {
           final fromContext = await _readPatrolDraftContextFromWeb();
           if (fromContext != null) {
-            print(
-              '[SmartNPS360] openLogVisit using patrolDraftContext=$fromContext',
-            );
+            if (kDebugMode) {
+              debugPrint(
+                '[SmartNPS360] openLogVisit using patrolDraftContext keys=${fromContext.keys.toList()}',
+              );
+            }
             payload = {...?payload, ...fromContext};
           }
         }
@@ -3406,19 +3776,23 @@ class _WebViewShellState extends State<WebViewShell>
           'region',
         ]);
 
-        print(
-          '[SmartNPS360] openLogVisit site/region '
-          'siteId=$siteId regionId=$regionId '
-          'siteName=$siteName regionName=$regionName '
-          'payload=$payload',
-        );
+        if (kDebugMode) {
+          debugPrint(
+            '[SmartNPS360] openLogVisit site/region '
+            'siteId=$siteId regionId=$regionId '
+            'hasSiteName=${siteName != null && siteName.isNotEmpty} '
+            'hasRegionName=${regionName != null && regionName.isNotEmpty}',
+          );
+        }
 
         final result = await _openLogVisitScreen(payload);
-        print(
-          '[SmartNPS360] openLogVisit ok=${result['ok']} '
-          'reopenedPending=${result['reopenedPending']} '
-          'itemCount=${result['itemCount']}',
-        );
+        if (kDebugMode) {
+          debugPrint(
+            '[SmartNPS360] openLogVisit ok=${result['ok']} '
+            'reopenedPending=${result['reopenedPending']} '
+            'itemCount=${result['itemCount']}',
+          );
+        }
         return result;
       },
     );
@@ -3427,9 +3801,11 @@ class _WebViewShellState extends State<WebViewShell>
       callback: (args) async {
         final currentHost = _ui.currentUri.value?.host;
         if (!AppConfig.isAllowedHost(currentHost)) {
-          debugPrint(
-            '[SmartNPS360][Auth] denied loginWithSanctum from host=$currentHost',
-          );
+          if (kDebugMode) {
+            debugPrint(
+              '[SmartNPS360][Auth] denied loginWithSanctum from host=$currentHost',
+            );
+          }
           return {
             'ok': false,
             'error': {
@@ -3463,9 +3839,11 @@ class _WebViewShellState extends State<WebViewShell>
           };
         }
 
-        debugPrint(
-          '[SmartNPS360][Auth] loginWithSanctum request host=$currentHost',
-        );
+        if (kDebugMode) {
+          debugPrint(
+            '[SmartNPS360][Auth] loginWithSanctum request host=$currentHost',
+          );
+        }
 
         final ok = await _performSanctumLogin(
           username: username,
@@ -3490,9 +3868,11 @@ class _WebViewShellState extends State<WebViewShell>
       callback: (args) async {
         final currentHost = _ui.currentUri.value?.host;
         if (!AppConfig.isAllowedHost(currentHost)) {
-          debugPrint(
-            '[SmartNPS360][Auth] denied authEvent from host=$currentHost',
-          );
+          if (kDebugMode) {
+            debugPrint(
+              '[SmartNPS360][Auth] denied authEvent from host=$currentHost',
+            );
+          }
           return {
             'ok': false,
             'error': {
@@ -3513,10 +3893,12 @@ class _WebViewShellState extends State<WebViewShell>
 
         final action = (payload['action'] ?? payload['type'] ?? '').toString();
         if (action == 'logout') {
-          debugPrint(
-            '[SmartNPS360][Auth] authEvent logout received from web (primary) '
-            '(host=$currentHost path=${_ui.currentUri.value?.path})',
-          );
+          if (kDebugMode) {
+            debugPrint(
+              '[SmartNPS360][Auth] authEvent logout received from web (primary) '
+              '(host=$currentHost path=${_ui.currentUri.value?.path})',
+            );
+          }
           final completed = await _performNativeLogout(
             reason: 'primary: authEvent',
           );
@@ -3627,40 +4009,6 @@ class _WebViewShellState extends State<WebViewShell>
     );
   }
 
-  Future<void> _syncPushTokenAfterLogin({bool immediate = false}) async {
-    if (Platform.isIOS) {
-      await _syncPushTokenAfterLoginIos(immediate: immediate);
-      return;
-    }
-    if (immediate) {
-      await PushNotificationService.instance.requestPermissionAfterAuth(
-        immediate: true,
-      );
-      return;
-    }
-    await PushNotificationService.instance.syncPushTokenAfterLogin();
-  }
-
-  Future<void> _syncPushTokenAfterLoginIos({bool immediate = false}) async {
-    await _prepareIosPushAuthFromWeb();
-    for (var attempt = 0; attempt < 4; attempt++) {
-      final token = await AuthRepository.instance.getAccessToken();
-      if (token != null && token.isNotEmpty) break;
-      if (attempt < 3) {
-        await Future<void>.delayed(Duration(milliseconds: 400 * (attempt + 1)));
-        await _prepareIosPushAuthFromWeb();
-      }
-    }
-    if (immediate) {
-      await PushNotificationService.instance.requestPermissionAfterAuth(
-        immediate: true,
-      );
-    } else {
-      await PushNotificationService.instance.syncPushTokenAfterLogin();
-    }
-    await _notifyWebPushTokenReady();
-  }
-
   Future<bool> _performSanctumLogin({
     required String username,
     required String password,
@@ -3670,12 +4018,14 @@ class _WebViewShellState extends State<WebViewShell>
     ApiClient.instance.ensureAuthInterceptorInstalled();
     final dio = ApiClient.instance.dio;
     try {
+      final deviceCheckExtras = await DeviceCheckService.authPayloadExtras();
       final response = await dio.postUri(
         Uri.parse(ApiUrls.sanctumLoginUrl),
         data: {
           'employee_no': username,
           'password': password,
           'device_name': 'mobile-app',
+          ...deviceCheckExtras,
         },
         options: Options(
           headers: const {'Accept': 'application/json'},
@@ -3687,9 +4037,11 @@ class _WebViewShellState extends State<WebViewShell>
 
       final statusCode = response.statusCode ?? 0;
       if (statusCode < 200 || statusCode >= 300) {
-        debugPrint(
-          '[SmartNPS360][Auth] sanctum login rejected status=$statusCode',
-        );
+        if (kDebugMode) {
+          debugPrint(
+            '[SmartNPS360][Auth] sanctum login rejected status=$statusCode',
+          );
+        }
         return false;
       }
 
@@ -3698,9 +4050,11 @@ class _WebViewShellState extends State<WebViewShell>
           ? Map<String, dynamic>.from(body)
           : null;
       if (map == null || AuthRepository.extractAccessToken(map) == null) {
-        debugPrint(
-          '[SmartNPS360][Auth] sanctum login missing token in response',
-        );
+        if (kDebugMode) {
+          debugPrint(
+            '[SmartNPS360][Auth] sanctum login missing token in response',
+          );
+        }
         return false;
       }
 
@@ -3712,9 +4066,11 @@ class _WebViewShellState extends State<WebViewShell>
 
       final token = await AuthRepository.instance.getAccessToken();
       if (token == null || token.isEmpty) {
-        debugPrint(
-          '[SmartNPS360][Auth] sanctum login missing access token after save',
-        );
+        if (kDebugMode) {
+          debugPrint(
+            '[SmartNPS360][Auth] sanctum login missing access token after save',
+          );
+        }
         return false;
       }
 
@@ -3733,7 +4089,9 @@ class _WebViewShellState extends State<WebViewShell>
       }
       return true;
     } catch (e) {
-      debugPrint('[SmartNPS360][Auth] sanctum login failed: $e');
+      if (kDebugMode) {
+        debugPrint('[SmartNPS360][Auth] sanctum login failed: $e');
+      }
       return false;
     }
   }
@@ -3770,9 +4128,6 @@ class _WebViewShellState extends State<WebViewShell>
       url: WebUri(AppRoutes.webBaseUrl),
     );
     if (cookies.isEmpty) {
-      debugPrint(
-        '[SmartNPS360][Push] ios no bearer token and no web cookies yet',
-      );
       PushNotificationService.instance.setIosSessionAuth();
       return;
     }
@@ -3789,9 +4144,6 @@ class _WebViewShellState extends State<WebViewShell>
     PushNotificationService.instance.setIosSessionAuth(
       cookieHeader: cookieHeader,
       xsrfToken: xsrfToken,
-    );
-    debugPrint(
-      '[SmartNPS360][Push] ios using web session cookies for push upload',
     );
   }
 
@@ -3876,12 +4228,9 @@ class _WebViewShellState extends State<WebViewShell>
         await AuthRepository.instance.setOfficerLoggedIn(true);
         _ui.setOfficerLoggedIn(true);
         _setNativeAuthSession(true);
-        debugPrint('[SmartNPS360][Push] ios harvested web access token');
         return result;
       }
-    } catch (e) {
-      debugPrint('[SmartNPS360][Push] ios harvest token failed: $e');
-    }
+    } catch (e) {}
     return null;
   }
 
@@ -3926,7 +4275,6 @@ class _WebViewShellState extends State<WebViewShell>
         return false;
       }
 
-      debugPrint('[SmartNPS360][Push] ios minting sanctum bearer token');
       return _performSanctumLogin(
         username: username,
         password: password,
@@ -3934,7 +4282,6 @@ class _WebViewShellState extends State<WebViewShell>
         promptLocationNotice: false,
       );
     } catch (e) {
-      debugPrint('[SmartNPS360][Push] ios mint sanctum token failed: $e');
       return false;
     }
   }
@@ -3989,20 +4336,12 @@ class _WebViewShellState extends State<WebViewShell>
       if (result is String) {
         final decoded = jsonDecode(result);
         if (decoded is Map) {
-          final ok = decoded['ok'] == true;
-          final status = decoded['status'];
-          if (ok) {
-            debugPrint('[SmartNPS360][Push] ios web upload ok status=$status');
+          if (decoded['ok'] == true) {
             return true;
           }
-          debugPrint(
-            '[SmartNPS360][Push] ios web upload failed status=$status',
-          );
         }
       }
-    } catch (e) {
-      debugPrint('[SmartNPS360][Push] ios web upload failed: $e');
-    }
+    } catch (e) {}
     return false;
   }
 
@@ -4056,20 +4395,12 @@ class _WebViewShellState extends State<WebViewShell>
       if (result is String) {
         final decoded = jsonDecode(result);
         if (decoded is Map) {
-          final ok = decoded['ok'] == true;
-          final status = decoded['status'];
-          if (ok) {
-            debugPrint('[SmartNPS360][Push] ios web delete ok status=$status');
+          if (decoded['ok'] == true) {
             return true;
           }
-          debugPrint(
-            '[SmartNPS360][Push] ios web delete failed status=$status',
-          );
         }
       }
-    } catch (e) {
-      debugPrint('[SmartNPS360][Push] ios web delete failed: $e');
-    }
+    } catch (e) {}
     return false;
   }
 
@@ -4101,9 +4432,7 @@ class _WebViewShellState extends State<WebViewShell>
         })();
       ''',
       );
-    } catch (e) {
-      debugPrint('[SmartNPS360][Push] ios notify web push token failed: $e');
-    }
+    } catch (e) {}
   }
 
   Future<void> _installThemeListener(InAppWebViewController controller) async {
@@ -4234,8 +4563,26 @@ class _WebViewShellState extends State<WebViewShell>
         injectionTime: _geolocationScript.injectionTime,
       ),
       if (Platform.isIOS) _iosPopoverFixScript,
+      if (Platform.isIOS) _iosKeyboardInputFixScript,
     ];
     return UnmodifiableListView(scripts);
+  }
+
+  Future<void> _runIosKeyboardInputFix(InAppWebViewController controller) async {
+    if (!Platform.isIOS) return;
+    try {
+      await controller.evaluateJavascript(
+        source: '''
+        (function () {
+          try {
+            if (typeof window.__smartnpsIosKeyboardInputFixScan === 'function') {
+              window.__smartnpsIosKeyboardInputFixScan();
+            }
+          } catch (_) {}
+        })();
+      ''',
+      );
+    } catch (_) {}
   }
 
   Future<void> _runIosPopoverFix(InAppWebViewController controller) async {
@@ -4276,6 +4623,7 @@ class _WebViewShellState extends State<WebViewShell>
       preferredContentMode: Platform.isIOS
           ? UserPreferredContentMode.MOBILE
           : null,
+      disableInputAccessoryView: Platform.isIOS ? true : null,
       geolocationEnabled: false,
       allowsBackForwardNavigationGestures: true,
       verticalScrollBarEnabled: true,
@@ -4345,7 +4693,9 @@ class _WebViewShellState extends State<WebViewShell>
                             Padding(
                               padding: const EdgeInsets.only(bottom: 0),
                               child: InAppWebView(
-                                key: ValueKey('smartnps-webview-$_webViewEpoch'),
+                                key: ValueKey(
+                                  'smartnps-webview-$_webViewEpoch',
+                                ),
                                 initialUrlRequest: URLRequest(
                                   url: WebUri(_webViewRecoveryTarget()),
                                 ),
@@ -4485,6 +4835,7 @@ class _WebViewShellState extends State<WebViewShell>
                                             );
                                       await _installThemeListener(controller);
                                       await _runIosPopoverFix(controller);
+                                      await _runIosKeyboardInputFix(controller);
                                       if (isSamePageReload) {
                                         _restoreUriAfterReload(preservedUri);
                                       } else {
@@ -4519,6 +4870,18 @@ class _WebViewShellState extends State<WebViewShell>
                                             .recheckOnDutyPrompts(
                                               pageReload: isSamePageReload,
                                             );
+                                        await OnDutyPermissionsPromptService
+                                            .instance
+                                            .maybeShow(fromResume: false);
+                                        if (_ui.officerLoggedIn.value &&
+                                            !_ui.showLocationNotice.value &&
+                                            !AppConfig.isAuthEntryRoute(
+                                              nextUri,
+                                            )) {
+                                          await OffDutyPushPromptService
+                                              .instance
+                                              .maybeShow(fromResume: false);
+                                        }
                                         await _notifyWebBackgroundLocationStatus();
                                         await _notifyWebPushNotificationStatus();
                                         await NativePermissionStatusService
@@ -4664,7 +5027,7 @@ class _WebViewShellState extends State<WebViewShell>
                                   unawaited(
                                     _reloadWebViewAfterProcessDeath(
                                       reason: 'ios_content_process_terminated',
-                                      recreate: false,
+                                      recreate: true,
                                     ),
                                   );
                                 },
@@ -4881,6 +5244,9 @@ class _WebViewShellState extends State<WebViewShell>
     final nextUri = Uri.tryParse(item.url);
     if (nextUri != null) {
       _ui.currentUri.value = nextUri;
+      if (!_isBottomBarRoute(nextUri)) {
+        _ui.preserveBottomBarDuringLoad.value = false;
+      }
       _recheckBottomBarForUri(nextUri);
     }
     _ui.beginNavigation();
@@ -4964,6 +5330,7 @@ enum _BottomItem {
     'assets/postFil.png',
     AppRoutes.webDashboardUrl,
   ),
+  shiftLog('Shift Log', '', '', AppRoutes.webShiftLogUrl),
   timesheet(
     'TimeSheet',
     'assets/calendar_outline.png',
@@ -5009,6 +5376,7 @@ class _BottomBar extends StatelessWidget {
   Widget build(BuildContext context) {
     const visibleItems = <_BottomItem>[
       _BottomItem.dashboard,
+      _BottomItem.shiftLog,
       _BottomItem.timesheet,
       _BottomItem.profile,
     ];
@@ -5020,8 +5388,17 @@ class _BottomBar extends StatelessWidget {
           index: index,
           iosSymbolName: switch (item) {
             _BottomItem.dashboard => 'house.fill',
+            _BottomItem.shiftLog => 'list.clipboard',
             _BottomItem.timesheet => 'calendar',
             _BottomItem.profile => 'person.crop.circle.fill',
+          },
+          iosSymbolPointSize: switch (item) {
+            _BottomItem.shiftLog => 19,
+            _ => null,
+          },
+          materialIcon: switch (item) {
+            _BottomItem.shiftLog => Icons.assignment_outlined,
+            _ => null,
           },
           activeAssetIcon: item.iconAssetSelected.isEmpty
               ? null

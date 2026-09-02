@@ -20,6 +20,7 @@ import 'background_location_accuracy.dart';
 import '../../utilities/app_config.dart';
 import '../../utilities/app_version_info.dart';
 import '../../utilities/device_identity.dart';
+import '../../utilities/app_debug_log.dart';
 
 class BackgroundLocationUploader {
   BackgroundLocationUploader({Dio? dio})
@@ -80,20 +81,16 @@ class BackgroundLocationUploader {
         _box = await Hive.openBox<Map>(_boxName);
         await _migrateFallbackQueueToHive();
       } catch (e) {
-        if (kDebugMode) {
-          debugPrint(
-            '[BackgroundLocationUploader] Hive storage init skipped '
-            '(file fallback enabled): $e',
-          );
-        }
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        debugPrint(
-          '[BackgroundLocationUploader] storage path init failed '
-          '(memory fallback only): $e',
+        batchDebugLog(
+          '[BackgroundLocationUploader] Hive storage init skipped '
+          '(file fallback enabled): $e',
         );
       }
+    } catch (e) {
+      batchDebugLog(
+        '[BackgroundLocationUploader] storage path init failed '
+        '(memory fallback only): $e',
+      );
     }
   }
 
@@ -133,11 +130,9 @@ class BackgroundLocationUploader {
         } catch (_) {}
       }
     } catch (e) {
-      if (kDebugMode) {
-        debugPrint(
-          '[BackgroundLocationUploader] fallback queue read failed: $e',
-        );
-      }
+      batchDebugLog(
+        '[BackgroundLocationUploader] fallback queue read failed: $e',
+      );
     }
     return points;
   }
@@ -242,11 +237,9 @@ class BackgroundLocationUploader {
 
       unawaited(
         flushBatch().catchError((Object e) {
-          if (kDebugMode) {
-            debugPrint(
-              '[BackgroundLocationUploader] connectivity flush failed: $e',
-            );
-          }
+          batchDebugLog(
+            '[BackgroundLocationUploader] connectivity flush failed: $e',
+          );
         }),
       );
     });
@@ -298,7 +291,7 @@ class BackgroundLocationUploader {
     }
     await _rewriteFallbackQueue(const []);
     if (kDebugMode && discarded > 0) {
-      debugPrint(
+      batchDebugLog(
         '[BackgroundLocationUploader] discarded $discarded queued GPS point(s)',
       );
     }
@@ -318,17 +311,15 @@ class BackgroundLocationUploader {
     final before = _queuedPointCount();
     if (before == 0) return;
 
-    if (kDebugMode) {
-      debugPrint(
-        '[BackgroundLocationUploader] logout drain start queued=$before '
-        'timeout=${timeout.inSeconds}s',
-      );
-    }
+    batchDebugLog(
+      '[BackgroundLocationUploader] logout drain start queued=$before '
+      'timeout=${timeout.inSeconds}s',
+    );
 
     await flushAllPendingBatchesBounded(timeout: timeout);
     final remaining = await discardPendingQueue();
     if (kDebugMode && remaining > 0) {
-      debugPrint(
+      batchDebugLog(
         '[BackgroundLocationUploader] logout drain complete '
         'uploaded=${before - remaining} discarded=$remaining',
       );
@@ -454,12 +445,10 @@ class BackgroundLocationUploader {
       await _appendFallbackPoint(point);
       _memoryBatch.clear();
     } catch (e) {
-      if (kDebugMode) {
-        debugPrint(
-          '[BackgroundLocationUploader] fallback file append failed '
-          '(memory fallback used): $e',
-        );
-      }
+      batchDebugLog(
+        '[BackgroundLocationUploader] fallback file append failed '
+        '(memory fallback used): $e',
+      );
       _memoryBatch.add(point);
       while (_memoryBatch.length > 2000) {
         _memoryBatch.removeAt(0);
@@ -555,26 +544,24 @@ class BackgroundLocationUploader {
         options: options,
       );
       final code = response.statusCode;
-      if (kDebugMode) {
-        debugPrint(
-          '[DutyLocation] ping API status=$code '
-          'success=${_isHttpSuccess(code)}',
-        );
-      }
+      locationDebugLog(
+        '[DutyLocation] ping API status=$code '
+        'success=${_isHttpSuccess(code)}',
+      );
     } on DioException catch (e) {
       if (kDebugMode) {
         final code = e.response?.statusCode ?? '-';
         final body = e.response?.data;
-        debugPrint(
+        locationDebugLog(
           '[DutyLocation] ping API status=$code '
           'success=false'
           '${body == null ? '' : ' body=$body'}',
         );
       }
     } catch (e) {
-      if (kDebugMode) {
-        debugPrint('[DutyLocation] ping API status=- success=false error=$e');
-      }
+      locationDebugLog(
+        '[DutyLocation] ping API status=- success=false error=$e',
+      );
     }
   }
 
@@ -623,7 +610,9 @@ class BackgroundLocationUploader {
       'latitude': position.latitude,
       'longitude': position.longitude,
       'accuracy': position.accuracy,
-      'altitudeAccuracy': _validSensorNumOrNull(() => position.altitudeAccuracy),
+      'altitudeAccuracy': _validSensorNumOrNull(
+        () => position.altitudeAccuracy,
+      ),
       'timestampMs': recordedAtUtc.millisecondsSinceEpoch,
       'timestamp': recordedAtUtc.toIso8601String(),
       'altitude': position.altitude,
@@ -857,7 +846,7 @@ class BackgroundLocationUploader {
         'queued_before=$queuedBeforeUpload '
         '${_batchTotalsLabel()}',
       );
-      debugPrint(
+      batchDebugLog(
         '[BackgroundLocationUploader] flushBatch count=${apiBatch.length}',
       );
     }
@@ -883,7 +872,7 @@ class BackgroundLocationUploader {
 
       final code = response.statusCode;
       if (kDebugMode) {
-        debugPrint(
+        batchDebugLog(
           '[DutyLocation] batch API status=$code '
           'success=${_isHttpSuccess(code)} count=${batch.length}',
         );
@@ -903,7 +892,7 @@ class BackgroundLocationUploader {
       if (delay > _maxBackoff) delay = _maxBackoff;
 
       if (kDebugMode) {
-        debugPrint(
+        batchDebugLog(
           '[DutyLocation] batch API status=${e.response?.statusCode ?? '-'} '
           'success=false count=${batch.length}',
         );
@@ -926,7 +915,7 @@ class BackgroundLocationUploader {
       if (delay > _maxBackoff) delay = _maxBackoff;
 
       if (kDebugMode) {
-        debugPrint(
+        batchDebugLog(
           '[DutyLocation] batch API status=- success=false count=${batch.length}',
         );
         _logBatchQueueSnapshot(
@@ -1001,12 +990,9 @@ class BackgroundLocationUploader {
     required VehicleSessionSnapshot fusion,
     required String storage,
   }) {
-    if (!kDebugMode) return;
-    debugPrint(
+    batchDebugLog(
       '[DutyLocation] batch add queued $pointId storage=$storage '
       'queued=${_queuedPointCount()} ${_batchTotalsLabel()} '
-      'lat=${position.latitude.toStringAsFixed(6)} '
-      'lng=${position.longitude.toStringAsFixed(6)} '
       'acc=${position.accuracy.toStringAsFixed(1)}m '
       'speedKmh=${(policy.smoothedSpeedKmh ?? policy.rawSpeedKmh)?.toStringAsFixed(1)} '
       'band=${policy.band.label} '
@@ -1019,8 +1005,7 @@ class BackgroundLocationUploader {
   }
 
   void _batchConsoleLog(String message) {
-    if (!kDebugMode) return;
-    debugPrint('[BackgroundLocationUploader] $message');
+    batchDebugLog('[BackgroundLocationUploader] $message');
   }
 
   String _batchTotalsLabel() {
@@ -1032,7 +1017,6 @@ class BackgroundLocationUploader {
     String action, {
     int? batchRun,
     String? uploadedIds,
-    String? newPointId,
     String? detail,
   }) {
     if (!kDebugMode) return;

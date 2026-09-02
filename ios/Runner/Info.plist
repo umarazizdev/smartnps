@@ -33,7 +33,11 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Microphone access is required to record audio with visit videos.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>SmartNPS360 uses your location only while you are on duty or in an active shift. With background location permission, the app may collect and upload your location even when the app is not open to support attendance verification, patrol tracking, visit logs, and live operational monitoring. Location tracking stops when your shift ends.</string>
+	<string>You may see this reminder because SmartNPS360 has background location permission. This does not mean you are being tracked while off duty.
+
+SmartNPS360 uses your location only while you are clocked in and actively working a shift to support attendance verification, time tracking, timesheets, and site patrols.
+
+Location tracking automatically stops when you clock out. SmartNPS360 does not track or share your location while you are off duty.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Location access is used only while you are on duty (shift active) to verify attendance, breaks, and visits.</string>
 	<key>NSMotionUsageDescription</key>
