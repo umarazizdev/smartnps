@@ -266,12 +266,23 @@ class GlassActionDialog extends StatelessWidget {
       return shrunk.clamp(0.0, value).toDouble();
     }
 
+    double compactVerticalInset(double value) {
+      // Default dialog padding is often horizontal-only (top/bottom = 0).
+      // Avoid clamp(4, 0) which throws ArgumentError.
+      if (value <= 0) return 4.0;
+      final half = value * 0.5;
+      if (value < 4.0) return half.clamp(0.0, value).toDouble();
+      return half.clamp(4.0, value).toDouble();
+    }
+
     final effectiveInset = EdgeInsets.only(
       left: insetPadding.left,
       right: insetPadding.right,
-      top: compact ? (insetPadding.top * 0.5).clamp(4.0, insetPadding.top) : keyboardAwareInset(insetPadding.top),
+      top: compact
+          ? compactVerticalInset(insetPadding.top)
+          : keyboardAwareInset(insetPadding.top),
       bottom: compact
-          ? (insetPadding.bottom * 0.5).clamp(4.0, insetPadding.bottom)
+          ? compactVerticalInset(insetPadding.bottom)
           : keyboardAwareInset(insetPadding.bottom),
     );
 

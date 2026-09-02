@@ -294,7 +294,9 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       }
       if (kDebugMode) {
         debugPrint('[VisitUpload] FAIL unexpected=$error');
-        debugPrint('[VisitUpload] stack=$stack');
+        if (kDebugMode) {
+          debugPrint('[VisitUpload] stack=$stack');
+        }
       }
       _showTopSnack(
         title: 'Upload failed',

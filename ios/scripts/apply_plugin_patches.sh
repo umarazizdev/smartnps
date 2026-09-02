@@ -141,10 +141,6 @@ patch_cupertino_native() {
   patch_file_in_place "$root/CupertinoIconPlatformView.swift" perl -pi -e 's/var img:/let img:/'
   patch_file_in_place "$root/CupertinoButtonPlatformView.swift" perl -pi -e 's/var img = img0/let img = img0/'
   patch_file_in_place "$root/CupertinoTabBarPlatformView.swift" perl -0pi -e '
-    s/\n    var sizes: \[NSNumber\] = \[\] \/\/ ignored; use system metrics//;
-    s/\n    var colors: \[NSNumber\] = \[\] \/\/ ignored; use tintColor//;
-    s/\n      sizes = \(dict\["sfSymbolSizes"\] as\? \[NSNumber\]\) \?\? \[\]//;
-    s/\n      colors = \(dict\["sfSymbolColors"\] as\? \[NSNumber\]\) \?\? \[\]//;
     s/var leftInset: CGFloat = 0/let leftInset: CGFloat = 0/g;
     s/var rightInset: CGFloat = 0/let rightInset: CGFloat = 0/g;
     s/let symbols = self\.currentSymbols\n          let appearance:/let symbols = self.currentSymbols\n          let _:/s;

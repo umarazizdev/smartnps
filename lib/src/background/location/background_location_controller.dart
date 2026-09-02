@@ -1,11 +1,11 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 
+import '../duty/clock_in_engine_warm_snapshot.dart';
 import '../duty/duty_status_snapshot.dart';
 import 'android_duty_location_health.dart';
 import 'background_location_permissions.dart';
@@ -13,6 +13,7 @@ import 'background_location_service.dart';
 import 'location_sharing_status_notification.dart';
 import '../ios/ios_duty_location_pinger.dart';
 import '../ios/ios_significant_location_change_service.dart';
+import '../../utilities/app_debug_log.dart';
 
 class BackgroundLocationController {
   BackgroundLocationController._();
@@ -31,9 +32,28 @@ class BackgroundLocationController {
   }
 
   static void _log(String message) {
-    if (kDebugMode) {
-      debugPrint('[DutyLocation] $message');
-    }
+    locationDebugLog('[DutyLocation] $message');
+  }
+
+  static Future<Map<String, dynamic>?> _tryActivateAndroidWarmEngine() async {
+    if (!Platform.isAndroid) return null;
+    if (!await FlutterBackgroundService().isRunning()) return null;
+    if (!await ClockInEngineWarmSnapshot.isValidPending()) return null;
+
+    _log('Android FGS warm engine ready → activating GPS tracking');
+    await BackgroundLocationService.activateFromClockInWarm();
+    unawaited(
+      LocationSharingStatusNotification.showBgLocationStartedTestAlert()
+          .catchError((Object e) {
+        _log('bg start test alert failed: $e');
+      }),
+    );
+    return {
+      'ok': true,
+      'started': true,
+      'running': true,
+      'warmActivated': true,
+    };
   }
 
   static Future<bool> _confirmOnDutyOrBlock() async {
@@ -61,6 +81,9 @@ class BackgroundLocationController {
 
   static Future<bool> isTrackingHealthy() async {
     if (!await isTrackingRunning()) return false;
+    if (Platform.isAndroid && await ClockInEngineWarmSnapshot.isValidPending()) {
+      return false;
+    }
     return !await needsRecovery();
   }
 
@@ -115,6 +138,11 @@ class BackgroundLocationController {
         };
       }
       return ensureStarted();
+    }
+
+    final warmActivated = await _tryActivateAndroidWarmEngine();
+    if (warmActivated != null) {
+      return {...warmActivated, 'recovered': true};
     }
 
     if (!await AndroidDutyLocationHealth.computeNeedsRecovery()) {
@@ -174,7 +202,11 @@ class BackgroundLocationController {
     FlutterBackgroundService().invoke('app_foregrounded');
   }
 
-  static Future<void> _yieldForStartIfForeground() async {
+  static Future<void> _yieldForStartIfForeground({bool skip = false}) async {
+    if (skip) {
+      _log('clock-in fast start: skipping UI yield');
+      return;
+    }
     if (isUiBackgrounded) {
       await Future<void>.delayed(const Duration(milliseconds: 50));
       return;
@@ -189,11 +221,13 @@ class BackgroundLocationController {
     await Future<void>.delayed(const Duration(milliseconds: 300));
   }
 
-  static Future<Map<String, dynamic>> ensureStarted() async {
+  static Future<Map<String, dynamic>> ensureStarted({
+    bool clockInFastStart = false,
+  }) async {
     final inFlight = _ensureStartedFuture;
     if (inFlight != null) return inFlight;
 
-    final future = _ensureStartedImpl();
+    final future = _ensureStartedImpl(clockInFastStart: clockInFastStart);
     _ensureStartedFuture = future;
     try {
       return await future;
@@ -204,7 +238,9 @@ class BackgroundLocationController {
     }
   }
 
-  static Future<Map<String, dynamic>> _ensureStartedImpl() async {
+  static Future<Map<String, dynamic>> _ensureStartedImpl({
+    bool clockInFastStart = false,
+  }) async {
     try {
       if (Platform.isIOS) {
         if (IosDutyLocationPinger.isRunning) {
@@ -236,6 +272,12 @@ class BackgroundLocationController {
               },
             };
           }
+
+          final warmActivated = await _tryActivateAndroidWarmEngine();
+          if (warmActivated != null) {
+            return warmActivated;
+          }
+
           if (await AndroidDutyLocationHealth.computeNeedsRecovery()) {
             if (isUiBackgrounded) {
               await softRecoverAndroidTracking(
@@ -310,13 +352,13 @@ class BackgroundLocationController {
 
       await BackgroundLocationPermissions.ensureAndroidNotificationForService();
 
-      await _yieldForStartIfForeground();
+      await _yieldForStartIfForeground(skip: clockInFastStart);
 
-      await LocationSharingStatusNotification.clearStopped().catchError(
-        (Object e) {
-          _log('clearStopped failed: $e');
-        },
-      );
+      await LocationSharingStatusNotification.clearStopped().catchError((
+        Object e,
+      ) {
+        _log('clearStopped failed: $e');
+      });
 
       if (Platform.isIOS) {
         _log('starting iOS duty location pinger…');
@@ -334,8 +376,7 @@ class BackgroundLocationController {
             'ok': false,
             'started': false,
             'running': false,
-            'permissions':
-                await BackgroundLocationPermissions.statusSnapshot(),
+            'permissions': await BackgroundLocationPermissions.statusSnapshot(),
             'error': {
               'code': 'duty_not_confirmed',
               'message':
@@ -346,6 +387,10 @@ class BackgroundLocationController {
         _log('RUNNING now (iOS pinger started)');
       } else {
         if (await FlutterBackgroundService().isRunning()) {
+          final warmActivated = await _tryActivateAndroidWarmEngine();
+          if (warmActivated != null) {
+            return warmActivated;
+          }
           _log('RUNNING already (Android background service active)');
           return {'ok': true, 'started': false, 'running': true};
         }
@@ -382,6 +427,12 @@ class BackgroundLocationController {
           };
         }
         _log('RUNNING now (Android background service started)');
+        unawaited(
+          LocationSharingStatusNotification.showBgLocationStartedTestAlert()
+              .catchError((Object e) {
+            _log('bg start test alert failed: $e');
+          }),
+        );
       }
 
       return {
@@ -420,9 +471,7 @@ class BackgroundLocationController {
       }
       if (Platform.isIOS && isUiBackgrounded) {
         if (IosDutyLocationPinger.isRunning) {
-          _log(
-            'SKIP hard-restart; UI is backgrounded (keep live iOS stream)',
-          );
+          _log('SKIP hard-restart; UI is backgrounded (keep live iOS stream)');
           await IosDutyLocationPinger.rebuildForCurrentPermission(
             reason: 'permission_while_backgrounded',
           );
@@ -501,6 +550,7 @@ class BackgroundLocationController {
 
       final service = FlutterBackgroundService();
       final bool runningBeforeStop = await service.isRunning();
+      await BackgroundLocationService.cancelClockInWarm();
       if (!runningBeforeStop) {
         _log('STOP skipped: Android location was not running');
       } else {

@@ -6,24 +6,22 @@ import 'package:geolocator/geolocator.dart';
 
 import '../app/app_navigator.dart';
 import '../utilities/app_config.dart';
-import '../widgets/dialogs/mock_location_dialog.dart';
-import '../utilities/overlay_prompt_guard.dart';
+import '../widgets/dialogs/glass_action_dialog.dart';
 import 'mock_location_detection.dart';
+import '../utilities/app_debug_log.dart';
 
-enum MockLocationClockInCheck {
-
-  clear,
-
-  mockDetected,
-
-  gpsUnavailable,
-}
+enum MockLocationClockInCheck { clear, mockDetected, gpsUnavailable }
 
 class MockLocationGuard {
   MockLocationGuard._();
 
   static const Duration _clockInGpsTimeout = Duration(seconds: 15);
   static const Duration _cooldown = Duration(minutes: 2);
+
+  static const String _title = 'Mock location detected';
+  static const String _message =
+      'Your device appears to be using a fake/mock GPS location. '
+      'Please disable mock location and try again.';
 
   static DateTime? _lastDialogAt;
   static bool _dialogVisible = false;
@@ -32,6 +30,7 @@ class MockLocationGuard {
 
   static void ensureBackgroundListenerInstalled() {
     if (!AppConfig.enableMockLocationDetection) return;
+    unawaited(MockLocationDetection.warmDeviceClass());
     _backgroundSub ??= FlutterBackgroundService().on('mock_location').listen((
       event,
     ) {
@@ -45,11 +44,14 @@ class MockLocationGuard {
 
   static void maybeShowDialogForPosition(Position position) {
     if (!AppConfig.enableMockLocationDetection) return;
-    final flags = MockLocationDetection.flagsFor(position);
-    maybeShowDialog(
-      isMocked: flags.isMocked,
-      isSimulatedBySoftware: flags.isSimulatedBySoftware,
-    );
+    unawaited(() async {
+      await MockLocationDetection.warmDeviceClass();
+      final flags = MockLocationDetection.flagsFor(position);
+      maybeShowDialog(
+        isMocked: flags.isMocked,
+        isSimulatedBySoftware: flags.isSimulatedBySoftware,
+      );
+    }());
   }
 
   static void maybeShowDialogFromBridgeResult(Map<String, dynamic> result) {
@@ -70,9 +72,11 @@ class MockLocationGuard {
       return MockLocationClockInCheck.clear;
     }
 
+    await MockLocationDetection.warmDeviceClass();
+
     final position = await _readPositionOrNull();
     if (position == null) {
-      debugPrint(
+      locationDebugLog(
         '[MockLocationGuard] ensureClearForClockIn: GPS unavailable/timeout',
       );
       return MockLocationClockInCheck.gpsUnavailable;
@@ -81,7 +85,7 @@ class MockLocationGuard {
     final flags = MockLocationDetection.flagsFor(position);
     if (!flags.isDetected) return MockLocationClockInCheck.clear;
 
-    debugPrint(
+    locationDebugLog(
       '[MockLocationGuard] ensureClearForClockIn: mock detected '
       'isMocked=${flags.isMocked} isSimulated=${flags.isSimulatedBySoftware}',
     );
@@ -89,13 +93,13 @@ class MockLocationGuard {
 
     final recheck = await _readPositionOrNull();
     if (recheck == null) {
-      debugPrint(
+      locationDebugLog(
         '[MockLocationGuard] ensureClearForClockIn: GPS unavailable after dialog',
       );
       return MockLocationClockInCheck.gpsUnavailable;
     }
     final clear = !MockLocationDetection.isDetected(recheck);
-    debugPrint(
+    locationDebugLog(
       '[MockLocationGuard] ensureClearForClockIn: after dialog clear=$clear',
     );
     return clear
@@ -120,9 +124,7 @@ class MockLocationGuard {
     if (_dialogVisible) return;
 
     for (var attempt = 0; attempt < 8; attempt++) {
-      final navigator = AppNavigator.key.currentState;
-      final context =
-          navigator?.overlay?.context ?? AppNavigator.key.currentContext;
+      final context = AppNavigator.key.currentContext;
       if (context == null || !context.mounted) {
         await Future<void>.delayed(const Duration(milliseconds: 50));
         continue;
@@ -130,18 +132,19 @@ class MockLocationGuard {
 
       _pendingShowAttempts = 0;
       _dialogVisible = true;
-      OverlayPromptGuard.registerBlockingOverlay();
-
-      await showDialog<void>(
-        context: context,
-        barrierDismissible: false,
-        barrierColor: Colors.black.withValues(alpha: 0.32),
-        builder: (context) => const MockLocationDialog(),
-      ).whenComplete(() {
-        OverlayPromptGuard.unregisterBlockingOverlay();
+      try {
+        await GlassActionDialog.show(
+          context: context,
+          icon: Icons.location_off_rounded,
+          title: _title,
+          message: _message,
+          primaryLabel: 'OK',
+          variant: GlassActionDialogVariant.error,
+          useRootNavigator: true,
+        );
+      } finally {
         _dialogVisible = false;
-      });
-
+      }
       return;
     }
   }
@@ -151,7 +154,10 @@ class MockLocationGuard {
     required bool isSimulatedBySoftware,
   }) {
     if (!AppConfig.enableMockLocationDetection) return;
-    if (!isMocked && !isSimulatedBySoftware) return;
+    final simulated =
+        isSimulatedBySoftware &&
+        !MockLocationDetection.ignoreSimulatedSoftwareFlag;
+    if (!isMocked && !simulated) return;
     if (_dialogVisible) return;
 
     final now = DateTime.now();
@@ -168,9 +174,7 @@ class MockLocationGuard {
   static void _presentDialog() {
     if (_dialogVisible) return;
 
-    final navigator = AppNavigator.key.currentState;
-    final context =
-        navigator?.overlay?.context ?? AppNavigator.key.currentContext;
+    final context = AppNavigator.key.currentContext;
     if (context == null || !context.mounted) {
       if (_pendingShowAttempts >= 8) return;
       _pendingShowAttempts++;
@@ -181,16 +185,23 @@ class MockLocationGuard {
     _pendingShowAttempts = 0;
     _lastDialogAt = DateTime.now();
     _dialogVisible = true;
-    OverlayPromptGuard.registerBlockingOverlay();
 
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      barrierColor: Colors.black.withValues(alpha: 0.32),
-      builder: (context) => const MockLocationDialog(),
-    ).whenComplete(() {
-      OverlayPromptGuard.unregisterBlockingOverlay();
-      _dialogVisible = false;
-    });
+    unawaited(() async {
+      try {
+        await GlassActionDialog.show(
+          context: context,
+          icon: Icons.location_off_rounded,
+          title: _title,
+          message: _message,
+          primaryLabel: 'OK',
+          variant: GlassActionDialogVariant.error,
+          useRootNavigator: true,
+        );
+      } catch (e, st) {
+        locationDebugLog('[MockLocationGuard] present dialog failed: $e\n$st');
+      } finally {
+        _dialogVisible = false;
+      }
+    }());
   }
 }

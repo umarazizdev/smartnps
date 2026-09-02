@@ -25,9 +25,11 @@ class AuthSessionManager {
     await DutyHeartbeatService.instance.finalizeLogoutInstant();
 
     if (kDebugMode && deletePushToken) {
-      debugPrint(
-        '[AuthSessionManager] skip FCM/APNs delete on logout (temporarily disabled)',
-      );
+      if (kDebugMode) {
+        debugPrint(
+          '[AuthSessionManager] skip FCM/APNs delete on logout (temporarily disabled)',
+        );
+      }
     }
 
     if (kDebugMode) {

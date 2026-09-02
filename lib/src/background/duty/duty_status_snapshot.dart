@@ -84,9 +84,6 @@ class DutyStatusSnapshot {
 
   static Future<void> clear() async {
     await _storage.delete(key: _key);
-    if (kDebugMode) {
-      debugPrint('[DutyStatusSnapshot] cleared');
-    }
   }
 
   static Future<bool> isValidOnDutyForCurrentUser() async {

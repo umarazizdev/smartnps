@@ -67,14 +67,17 @@ class PermissionSettingsHelper {
       switch (destination) {
         case StoreSafeSettingsDestination.locationPermission:
           await launchLocationPermissionSettings();
+          break;
         case StoreSafeSettingsDestination.systemLocationServices:
           if (Platform.isAndroid) {
             await Geolocator.openLocationSettings();
             break;
           }
           await launchAppSettings();
+          break;
         case StoreSafeSettingsDestination.app:
           await launchAppSettings();
+          break;
       }
 
       if (shouldWaitForReturn) {
@@ -185,6 +188,9 @@ class PermissionSettingsHelper {
   static Future<void> launchAppSettings() => _openAppSettingsWithFallback();
 
   static Future<void> launchLocationPermissionSettings() async {
+    if (kDebugMode) {
+      debugPrint('[PermissionSettings] launchLocationPermissionSettings');
+    }
     if (Platform.isAndroid) {
       try {
         await _settingsChannel.invokeMethod<void>(

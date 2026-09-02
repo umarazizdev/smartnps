@@ -1,12 +1,12 @@
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../utilities/overlay_prompt_guard.dart';
 import '../../utilities/permission_settings_helper.dart';
+import '../../utilities/app_debug_log.dart';
 
 enum LocationPermissionPhase { none, foregroundOnly, backgroundReady }
 
@@ -102,9 +102,9 @@ class BackgroundLocationPermissions {
 
   static Future<BackgroundPermissionOutcome> _ensureAndroidGranted() async {
     final fgBefore = await Permission.location.status;
-    if (kDebugMode) {
-      print('[BackgroundLocationPermissions] android fg(before)=$fgBefore');
-    }
+    locationDebugLog(
+      '[BackgroundLocationPermissions] android fg(before)=$fgBefore',
+    );
     final fg = fgBefore.isGranted
         ? fgBefore
         : await OverlayPromptGuard.runDuringOsPermissionPrompt(
@@ -122,20 +122,16 @@ class BackgroundLocationPermissions {
     }
 
     final notificationBefore = await Permission.notification.status;
-    if (kDebugMode) {
-      print(
-        '[BackgroundLocationPermissions] android notification(before)=$notificationBefore',
-      );
-    }
+    locationDebugLog(
+      '[BackgroundLocationPermissions] android notification(before)=$notificationBefore',
+    );
     if (!notificationBefore.isGranted) {
       final notification = await OverlayPromptGuard.runDuringOsPermissionPrompt(
         Permission.notification.request,
       );
-      if (kDebugMode) {
-        print(
-          '[BackgroundLocationPermissions] android notification(after)=$notification',
-        );
-      }
+      locationDebugLog(
+        '[BackgroundLocationPermissions] android notification(after)=$notification',
+      );
       if (!notification.isGranted &&
           PermissionSettingsHelper.shouldOpenSettings(notification)) {
         return const BackgroundPermissionOutcome(
@@ -147,17 +143,15 @@ class BackgroundLocationPermissions {
     }
 
     final bgBefore = await Permission.locationAlways.status;
-    if (kDebugMode) {
-      print('[BackgroundLocationPermissions] android bg(before)=$bgBefore');
-    }
+    locationDebugLog(
+      '[BackgroundLocationPermissions] android bg(before)=$bgBefore',
+    );
     final bg = bgBefore.isGranted
         ? bgBefore
         : await OverlayPromptGuard.runDuringOsPermissionPrompt(
             Permission.locationAlways.request,
           );
-    if (kDebugMode) {
-      print('[BackgroundLocationPermissions] android bg(after)=$bg');
-    }
+    locationDebugLog('[BackgroundLocationPermissions] android bg(after)=$bg');
     if (bg.isGranted) {
       return const BackgroundPermissionOutcome(granted: true);
     }
@@ -175,21 +169,17 @@ class BackgroundLocationPermissions {
 
   static Future<BackgroundPermissionOutcome> _ensureIosGranted() async {
     var geoPermission = await refreshIosLocationPermission();
-    if (kDebugMode) {
-      print(
-        '[BackgroundLocationPermissions] ios geolocator(before)=$geoPermission',
-      );
-    }
+    locationDebugLog(
+      '[BackgroundLocationPermissions] ios geolocator(before)=$geoPermission',
+    );
 
     if (geoPermission == LocationPermission.denied) {
       geoPermission = await OverlayPromptGuard.runDuringOsPermissionPrompt(
         Geolocator.requestPermission,
       );
-      if (kDebugMode) {
-        print(
-          '[BackgroundLocationPermissions] ios geolocator(after request)=$geoPermission',
-        );
-      }
+      locationDebugLog(
+        '[BackgroundLocationPermissions] ios geolocator(after request)=$geoPermission',
+      );
     }
 
     if (geoPermission == LocationPermission.denied ||
@@ -278,31 +268,25 @@ class BackgroundLocationPermissions {
         return precise;
       }
     } catch (error) {
-      if (kDebugMode) {
-        debugPrint(
-          '[BackgroundLocationPermissions] ios native precise check failed: '
-          '$error',
-        );
-      }
+      locationDebugLog(
+        '[BackgroundLocationPermissions] ios native precise check failed: '
+        '$error',
+      );
     }
 
     try {
       final accuracy = await Geolocator.getLocationAccuracy();
       final granted = accuracy == LocationAccuracyStatus.precise;
-      if (kDebugMode) {
-        debugPrint(
-          '[BackgroundLocationPermissions] ios geolocator precise=$granted '
-          '($accuracy)',
-        );
-      }
+      locationDebugLog(
+        '[BackgroundLocationPermissions] ios geolocator precise=$granted '
+        '($accuracy)',
+      );
       return granted;
     } catch (error) {
-      if (kDebugMode) {
-        debugPrint(
-          '[BackgroundLocationPermissions] ios geolocator precise failed: '
-          '$error',
-        );
-      }
+      locationDebugLog(
+        '[BackgroundLocationPermissions] ios geolocator precise failed: '
+        '$error',
+      );
 
       return !(await hasForegroundLocationAccess());
     }
@@ -315,12 +299,10 @@ class BackgroundLocationPermissions {
       );
       if (precise != null) return precise;
     } catch (error) {
-      if (kDebugMode) {
-        debugPrint(
-          '[BackgroundLocationPermissions] android precise check failed: '
-          '$error',
-        );
-      }
+      locationDebugLog(
+        '[BackgroundLocationPermissions] android precise check failed: '
+        '$error',
+      );
     }
 
     try {
@@ -370,11 +352,9 @@ class BackgroundLocationPermissions {
       );
       if (nativeGranted == true) return true;
     } catch (error) {
-      if (kDebugMode) {
-        debugPrint(
-          '[BackgroundLocationPermissions] native bg check failed: $error',
-        );
-      }
+      locationDebugLog(
+        '[BackgroundLocationPermissions] native bg check failed: $error',
+      );
     }
 
     final bg = await Permission.locationAlways.status;
@@ -519,7 +499,7 @@ class BackgroundLocationPermissions {
         if (Platform.isIOS) {
           return _backgroundAccessSettingsStepsMessage(
             trailingClause:
-                'Without ${alwaysLabel} access, shift attendance cannot be '
+                'Without $alwaysLabel access, shift attendance cannot be '
                 'verified from this app.',
           );
         }

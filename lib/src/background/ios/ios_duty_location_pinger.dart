@@ -19,6 +19,7 @@ import '../location/background_location_uploader.dart';
 import '../location/location_sharing_status_notification.dart';
 import 'ios_background_location_notification.dart';
 import 'ios_significant_location_change_service.dart';
+import '../../utilities/app_debug_log.dart';
 
 class IosDutyLocationPinger {
   IosDutyLocationPinger._();
@@ -67,10 +68,10 @@ class IosDutyLocationPinger {
     final confirm = confirmOnDutyBeforeStart;
     if (confirm == null) {
       if (kDebugMode) {
-        debugPrint(
+        locationDebugLog(
           '[DutyLocation] NOT RUNNING: start blocked (no duty confirmation hook)',
         );
-        debugPrint(
+        locationDebugLog(
           '[IosDutyLocationPinger] start blocked; no duty confirmation hook',
         );
       }
@@ -79,10 +80,10 @@ class IosDutyLocationPinger {
     final allowed = await confirm();
     if (!allowed) {
       if (kDebugMode) {
-        debugPrint(
+        locationDebugLog(
           '[DutyLocation] NOT RUNNING: start blocked (duty not on_duty)',
         );
-        debugPrint(
+        locationDebugLog(
           '[IosDutyLocationPinger] start blocked; heartbeat is not on_duty',
         );
       }
@@ -104,9 +105,7 @@ class IosDutyLocationPinger {
       await _uploader!.init();
       _uploader!.start();
     } catch (e) {
-      if (kDebugMode) {
-        debugPrint('[IosDutyLocationPinger] uploader init failed: $e');
-      }
+      locationDebugLog('[IosDutyLocationPinger] uploader init failed: $e');
       rethrow;
     }
 
@@ -114,9 +113,7 @@ class IosDutyLocationPinger {
 
     unawaited(
       IosBackgroundLocationNotification.show().catchError((Object e) {
-        if (kDebugMode) {
-          debugPrint('[IosDutyLocationPinger] notification failed: $e');
-        }
+        locationDebugLog('[IosDutyLocationPinger] notification failed: $e');
       }),
     );
 
@@ -131,17 +128,25 @@ class IosDutyLocationPinger {
 
     _running = true;
     _stopping = false;
+    unawaited(
+      LocationSharingStatusNotification.showBgLocationStartedTestAlert()
+          .catchError((Object e) {
+        locationDebugLog(
+          '[IosDutyLocationPinger] bg start test alert failed: $e',
+        );
+      }),
+    );
     unawaited(_startSignificantLocationChanges());
     _restartPeriodicPing();
     if (kDebugMode) {
       final permission = await Geolocator.checkPermission();
-      debugPrint(
+      locationDebugLog(
         '[DutyLocation] RUNNING (iOS) '
         'lockedFilter=${AdaptiveGpsStreamController.iosLockedDistanceFilterMeters}m '
         'permission=$permission '
         'bgUpdates=${permission == LocationPermission.always}',
       );
-      debugPrint(
+      locationDebugLog(
         '[IosDutyLocationPinger] started '
         '(lockedFilter=${AdaptiveGpsStreamController.iosLockedDistanceFilterMeters}m '
         'permission=$permission)',
@@ -161,9 +166,7 @@ class IosDutyLocationPinger {
         .listen(
           _onPosition,
           onError: (Object error) {
-            if (kDebugMode) {
-              debugPrint('[IosDutyLocationPinger] stream error: $error');
-            }
+            locationDebugLog('[IosDutyLocationPinger] stream error: $error');
             unawaited(_onStreamError(error));
           },
         );
@@ -181,26 +184,20 @@ class IosDutyLocationPinger {
           _subscription != null &&
           _subscribedAllowBackground == allowBackground;
       if (alreadyLive) {
-        if (kDebugMode) {
-          debugPrint(
-            '[IosDutyLocationPinger] skip rebuild reason=$reason '
-            '(live stream kept, filter='
-            '${AdaptiveGpsStreamController.iosLockedDistanceFilterMeters}m)',
-          );
-        }
+        locationDebugLog(
+          '[IosDutyLocationPinger] skip rebuild reason=$reason '
+          '(live stream kept, filter='
+          '${AdaptiveGpsStreamController.iosLockedDistanceFilterMeters}m)',
+        );
         return;
       }
-      if (kDebugMode) {
-        debugPrint(
-          '[IosDutyLocationPinger] resubscribe reason=$reason '
-          'allowBackground=$allowBackground',
-        );
-      }
+      locationDebugLog(
+        '[IosDutyLocationPinger] resubscribe reason=$reason '
+        'allowBackground=$allowBackground',
+      );
       await _subscribePositionStream();
     } catch (e) {
-      if (kDebugMode) {
-        debugPrint('[IosDutyLocationPinger] stream resubscribe failed: $e');
-      }
+      locationDebugLog('[IosDutyLocationPinger] stream resubscribe failed: $e');
     } finally {
       _streamRebuildInFlight = false;
     }
@@ -219,13 +216,9 @@ class IosDutyLocationPinger {
       final result = await IosSignificantLocationChangeService.start(
         onLocation: _onNativeLocation,
       );
-      if (kDebugMode) {
-        debugPrint('[IosDutyLocationPinger] SLC start result: $result');
-      }
+      locationDebugLog('[IosDutyLocationPinger] SLC start result: $result');
     } catch (e) {
-      if (kDebugMode) {
-        debugPrint('[IosDutyLocationPinger] SLC start failed: $e');
-      }
+      locationDebugLog('[IosDutyLocationPinger] SLC start failed: $e');
     }
   }
 
@@ -242,13 +235,11 @@ class IosDutyLocationPinger {
   static void _syncPollIntervalIfNeeded() {
     final every = _streamController.pollInterval;
     if (_appliedPollInterval == every) return;
-    if (kDebugMode) {
-      debugPrint(
-        '[IosDutyLocationPinger] poll interval '
-        '${_appliedPollInterval?.inSeconds ?? '-'}s → ${every.inSeconds}s '
-        '(speed band, stream not rebuilt)',
-      );
-    }
+    locationDebugLog(
+      '[IosDutyLocationPinger] poll interval '
+      '${_appliedPollInterval?.inSeconds ?? '-'}s → ${every.inSeconds}s '
+      '(speed band, stream not rebuilt)',
+    );
     _restartPeriodicPing();
   }
 
@@ -322,16 +313,14 @@ class IosDutyLocationPinger {
         return fallback;
       }
       if (kDebugMode && fallback != null) {
-        debugPrint(
+        locationDebugLog(
           '[IosDutyLocationPinger] precise fetch timed out; '
           'best acc=${fallback.accuracy}m rejected',
         );
       }
       return null;
     } catch (e) {
-      if (kDebugMode) {
-        debugPrint('[IosDutyLocationPinger] precise fetch failed: $e');
-      }
+      locationDebugLog('[IosDutyLocationPinger] precise fetch failed: $e');
       return null;
     } finally {
       await sub?.cancel();
@@ -342,12 +331,10 @@ class IosDutyLocationPinger {
     if (_stopping) return;
 
     if (source == 'ios_slc' || source == 'ios_geofence') {
-      if (kDebugMode) {
-        debugPrint(
-          '[IosDutyLocationPinger] ${source} wake acc=${pos.accuracy}m; '
-          'polling latest GPS (wake coords not uploaded)',
-        );
-      }
+      locationDebugLog(
+        '[IosDutyLocationPinger] $source wake acc=${pos.accuracy}m; '
+        'polling latest GPS (wake coords not uploaded)',
+      );
       if (!isRunning) {
         unawaited(recoverIfNeeded());
         return;
@@ -370,11 +357,9 @@ class IosDutyLocationPinger {
     if (permission == LocationPermission.denied ||
         permission == LocationPermission.deniedForever) {
       if (fromLocationWake) {
-        if (kDebugMode) {
-          debugPrint(
-            '[IosDutyLocationPinger] location wake blocked; permission=$permission',
-          );
-        }
+        locationDebugLog(
+          '[IosDutyLocationPinger] location wake blocked; permission=$permission',
+        );
         await stop();
       }
       return;
@@ -382,9 +367,7 @@ class IosDutyLocationPinger {
 
     _recoverInFlight = true;
     try {
-      if (kDebugMode) {
-        debugPrint('[IosDutyLocationPinger] scheduling recovery');
-      }
+      locationDebugLog('[IosDutyLocationPinger] scheduling recovery');
       if (!fromLocationWake) {
         await Future<void>.delayed(_recoverDelay);
         if (isRunning) return;
@@ -393,21 +376,17 @@ class IosDutyLocationPinger {
       if (!dutyAlreadyConfirmed) {
         final confirm = confirmOnDutyBeforeStart;
         if (confirm == null) {
-          if (kDebugMode) {
-            debugPrint(
-              '[IosDutyLocationPinger] recovery blocked; no duty confirmation hook',
-            );
-          }
+          locationDebugLog(
+            '[IosDutyLocationPinger] recovery blocked; no duty confirmation hook',
+          );
           await stop();
           return;
         }
         final allowed = await confirm();
         if (!allowed) {
-          if (kDebugMode) {
-            debugPrint(
-              '[IosDutyLocationPinger] recovery blocked; heartbeat is not on_duty',
-            );
-          }
+          locationDebugLog(
+            '[IosDutyLocationPinger] recovery blocked; heartbeat is not on_duty',
+          );
           await stop();
           return;
         }
@@ -415,9 +394,7 @@ class IosDutyLocationPinger {
 
       if (_running && _subscription == null) {
         await _rebuildStreamIfNeeded(reason: 'subscription_missing');
-        if (kDebugMode) {
-          debugPrint('[IosDutyLocationPinger] resubscribed dead stream');
-        }
+        locationDebugLog('[IosDutyLocationPinger] resubscribed dead stream');
         return;
       }
 
@@ -429,11 +406,9 @@ class IosDutyLocationPinger {
           lifecycle == AppLifecycleState.hidden ||
           lifecycle == AppLifecycleState.inactive;
       if (uiBackgrounded) {
-        if (kDebugMode) {
-          debugPrint(
-            '[IosDutyLocationPinger] starting after wake (UI backgrounded)',
-          );
-        }
+        locationDebugLog(
+          '[IosDutyLocationPinger] starting after wake (UI backgrounded)',
+        );
       }
 
       final previousConfirm = confirmOnDutyBeforeStart;
@@ -443,13 +418,9 @@ class IosDutyLocationPinger {
       } finally {
         confirmOnDutyBeforeStart = previousConfirm;
       }
-      if (kDebugMode) {
-        debugPrint('[IosDutyLocationPinger] recovery complete');
-      }
+      locationDebugLog('[IosDutyLocationPinger] recovery complete');
     } catch (e) {
-      if (kDebugMode) {
-        debugPrint('[IosDutyLocationPinger] recovery failed: $e');
-      }
+      locationDebugLog('[IosDutyLocationPinger] recovery failed: $e');
     } finally {
       _recoverInFlight = false;
     }
@@ -460,9 +431,7 @@ class IosDutyLocationPinger {
     _subscription = null;
     _subscribedAllowBackground = null;
 
-    if (kDebugMode) {
-      debugPrint('[IosDutyLocationPinger] stream stopped after error');
-    }
+    locationDebugLog('[IosDutyLocationPinger] stream stopped after error');
 
     if (_stopping || !_running) return;
     unawaited(_rebuildStreamIfNeeded(reason: 'stream_error'));
@@ -472,11 +441,9 @@ class IosDutyLocationPinger {
     if (_stopping) return;
 
     if (!BackgroundLocationAccuracy.isAcceptable(pos)) {
-      if (kDebugMode) {
-        debugPrint(
-          '[IosDutyLocationPinger] skipped inaccurate fix acc=${pos.accuracy}m',
-        );
-      }
+      locationDebugLog(
+        '[IosDutyLocationPinger] skipped inaccurate fix acc=${pos.accuracy}m',
+      );
       return;
     }
     _latestAcceptedPosition = pos;
@@ -490,11 +457,9 @@ class IosDutyLocationPinger {
         await stop();
         return;
       }
-      if (kDebugMode) {
-        debugPrint(
-          '[IosDutyLocationPinger] auth transient fail; keeping GPS, skipping upload',
-        );
-      }
+      locationDebugLog(
+        '[IosDutyLocationPinger] auth transient fail; keeping GPS, skipping upload',
+      );
       return;
     }
 
@@ -524,22 +489,20 @@ class IosDutyLocationPinger {
       );
     }
 
-    if (kDebugMode) {
-      debugPrint(
-        '[IosDutyLocationPinger] location '
-        'acc=${pos.accuracy} '
-        'speedBand=${policyDecision.band.label} '
-        'motion=${motionFusion.apiMotionActivity} '
-        'fused=${motionFusion.fusedState} '
-        'session=${motionFusion.active} '
-        'reason=${motionFusion.reason} '
-        'streamEvery=${_streamController.interval.inSeconds}s '
-        'distanceFilter=${AdaptiveGpsStreamController.iosLockedDistanceFilterMeters}m '
-        'trigger=${keepDecision.trigger?.name} '
-        'dist=${keepDecision.distanceMeters?.toStringAsFixed(1)}m '
-        'mocked=${mockFlags.isMocked} simulated=${mockFlags.isSimulatedBySoftware}',
-      );
-    }
+    locationDebugLog(
+      '[IosDutyLocationPinger] location '
+      'acc=${pos.accuracy} '
+      'speedBand=${policyDecision.band.label} '
+      'motion=${motionFusion.apiMotionActivity} '
+      'fused=${motionFusion.fusedState} '
+      'session=${motionFusion.active} '
+      'reason=${motionFusion.reason} '
+      'streamEvery=${_streamController.interval.inSeconds}s '
+      'distanceFilter=${AdaptiveGpsStreamController.iosLockedDistanceFilterMeters}m '
+      'trigger=${keepDecision.trigger?.name} '
+      'dist=${keepDecision.distanceMeters?.toStringAsFixed(1)}m '
+      'mocked=${mockFlags.isMocked} simulated=${mockFlags.isSimulatedBySoftware}',
+    );
 
     final uploader = _uploader;
     if (uploader == null || _stopping) return;
@@ -560,9 +523,7 @@ class IosDutyLocationPinger {
       _lastUploadAt = DateTime.now();
       await _flushBatchIfDue(uploader);
     } catch (e) {
-      if (kDebugMode) {
-        debugPrint('[IosDutyLocationPinger] upload failed: $e');
-      }
+      locationDebugLog('[IosDutyLocationPinger] upload failed: $e');
     }
   }
 
@@ -625,14 +586,12 @@ class IosDutyLocationPinger {
     try {
       await LocationSharingStatusNotification.dismissSharing();
     } catch (e) {
-      if (kDebugMode) {
-        debugPrint('[IosDutyLocationPinger] dismiss sharing failed: $e');
-      }
+      locationDebugLog('[IosDutyLocationPinger] dismiss sharing failed: $e');
     }
 
     if (kDebugMode) {
-      debugPrint('[DutyLocation] STOPPED (iOS)');
-      debugPrint('[IosDutyLocationPinger] stopped');
+      locationDebugLog('[DutyLocation] STOPPED (iOS)');
+      locationDebugLog('[IosDutyLocationPinger] stopped');
     }
 
     _stopping = false;
@@ -642,9 +601,7 @@ class IosDutyLocationPinger {
     if (!Platform.isIOS) return;
     if (!_running && _subscription == null && _uploader == null) {
       await IosSignificantLocationChangeService.setOnDuty(false);
-      if (kDebugMode) {
-        debugPrint('[DutyLocation] STOPPED already (iOS collecting clear)');
-      }
+      locationDebugLog('[DutyLocation] STOPPED already (iOS collecting clear)');
       return;
     }
 
@@ -670,16 +627,16 @@ class IosDutyLocationPinger {
     try {
       await LocationSharingStatusNotification.dismissSharing();
     } catch (e) {
-      if (kDebugMode) {
-        debugPrint('[IosDutyLocationPinger] dismiss sharing failed: $e');
-      }
+      locationDebugLog('[IosDutyLocationPinger] dismiss sharing failed: $e');
     }
 
     if (kDebugMode) {
-      debugPrint(
+      locationDebugLog(
         '[DutyLocation] STOPPED (iOS instant logout / collecting only)',
       );
-      debugPrint('[IosDutyLocationPinger] stopped collecting (instant logout)');
+      locationDebugLog(
+        '[IosDutyLocationPinger] stopped collecting (instant logout)',
+      );
     }
 
     _stopping = false;
