@@ -46,6 +46,13 @@ Location tracking automatically stops when you clock out. SmartNPS360 does not t
 	<string>Photo library access is required to select profile and ID images during registration and to attach images to reports.</string>
 	<key>NSUserNotificationsUsageDescription</key>
 	<string>Enable notifications to receive important updates and messages related to your account and activity.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>dev.flutter.background.refresh</string>

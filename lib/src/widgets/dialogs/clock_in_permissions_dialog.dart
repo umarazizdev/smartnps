@@ -278,16 +278,7 @@ class _ClockInPermissionsBlockerScreenState
                                   PermissionPrivacyBanner(colors: colors),
                                   const SizedBox(height: 16),
                                   if (_loading)
-                                    const Padding(
-                                      padding: EdgeInsets.symmetric(
-                                        vertical: 28,
-                                      ),
-                                      child: Center(
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2.4,
-                                        ),
-                                      ),
-                                    )
+                                    const PermissionBlockerShimmerList()
                                   else
                                     for (var i = 0; i < _items.length; i++) ...[
                                       if (i > 0) const SizedBox(height: 10),

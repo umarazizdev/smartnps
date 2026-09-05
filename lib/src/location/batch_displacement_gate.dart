@@ -3,18 +3,24 @@ import 'dart:math' as math;
 import 'package:geolocator/geolocator.dart';
 
 class BatchDisplacementGate {
-
-  static const double minDisplacementMeters = 20;
-
+  static const double defaultMinDisplacementMeters = 25;
   static const double maxAccuracyBoostMeters = 40;
 
   Position? _lastQueued;
+  DateTime? _lastQueuedAt;
 
   void reset() {
     _lastQueued = null;
+    _lastQueuedAt = null;
   }
 
-  bool shouldQueue(Position position) {
+  bool shouldQueue(
+    Position position, {
+    double? minDisplacementMeters,
+    double? maxAccuracyBoostOverride,
+    Duration? pathHeartbeat,
+    double heartbeatMinDisplacementMeters = 0,
+  }) {
     final last = _lastQueued;
     if (last == null) {
       return true;
@@ -26,14 +32,39 @@ class BatchDisplacementGate {
       position.latitude,
       position.longitude,
     );
-    return distanceMeters >= _requiredMeters(position);
+
+    if (pathHeartbeat != null) {
+      final lastAt = _lastQueuedAt;
+      if (lastAt != null &&
+          DateTime.now().difference(lastAt) >= pathHeartbeat &&
+          distanceMeters >= heartbeatMinDisplacementMeters) {
+        return true;
+      }
+    }
+
+    return distanceMeters >=
+        _requiredMeters(
+          position,
+          minDisplacementMeters: minDisplacementMeters,
+          maxAccuracyBoostOverride: maxAccuracyBoostOverride,
+        );
   }
 
   void markQueued(Position position) {
     _lastQueued = position;
+    _lastQueuedAt = DateTime.now();
   }
 
-  double requiredMetersFor(Position position) => _requiredMeters(position);
+  double requiredMetersFor(
+    Position position, {
+    double? minDisplacementMeters,
+    double? maxAccuracyBoostOverride,
+  }) =>
+      _requiredMeters(
+        position,
+        minDisplacementMeters: minDisplacementMeters,
+        maxAccuracyBoostOverride: maxAccuracyBoostOverride,
+      );
 
   double distanceFromLastQueuedMeters(Position position) {
     final last = _lastQueued;
@@ -46,13 +77,19 @@ class BatchDisplacementGate {
     );
   }
 
-  double _requiredMeters(Position position) {
+  double _requiredMeters(
+    Position position, {
+    double? minDisplacementMeters,
+    double? maxAccuracyBoostOverride,
+  }) {
     final accuracy = position.accuracy;
     final accuracyBoost =
         (accuracy.isFinite && accuracy > 0) ? accuracy : 0.0;
+    final minDisp = minDisplacementMeters ?? defaultMinDisplacementMeters;
+    final boostCap = maxAccuracyBoostOverride ?? maxAccuracyBoostMeters;
     return math.max(
-      minDisplacementMeters,
-      math.min(accuracyBoost, maxAccuracyBoostMeters),
+      minDisp,
+      math.min(accuracyBoost, boostCap),
     );
   }
 }

@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../../app/native_theme_controller.dart';
+import '../../debug/debug_env_pin_dialog.dart';
 import '../../permissions/required_permissions_gate.dart';
 import '../../utilities/app_config.dart';
 import '../../utilities/app_version_info.dart';
@@ -84,11 +85,32 @@ class _RequiredPermissionsBlockerState extends State<RequiredPermissionsBlocker>
                                 mainAxisSize: MainAxisSize.min,
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
-                                  Image.asset(
-                                    'assets/npslogo.png',
-                                    height: 88,
-                                    fit: BoxFit.contain,
-                                    filterQuality: FilterQuality.high,
+                                  Center(
+                                    child: Material(
+                                      color: Colors.transparent,
+                                      child: InkWell(
+                                        borderRadius: BorderRadius.circular(16),
+                                        onLongPress: isDebugEnvSupported
+                                            ? () {
+                                                unawaited(
+                                                  openDebugEnvFromLogo(context),
+                                                );
+                                              }
+                                            : null,
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 24,
+                                            vertical: 8,
+                                          ),
+                                          child: Image.asset(
+                                            'assets/npslogo.png',
+                                            height: 88,
+                                            fit: BoxFit.contain,
+                                            filterQuality: FilterQuality.high,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
                                   ),
                                   const SizedBox(height: 14),
                                   Text(

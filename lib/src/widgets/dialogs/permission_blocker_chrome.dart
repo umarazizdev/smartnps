@@ -246,6 +246,187 @@ class PermissionBlockerRow extends StatelessWidget {
   }
 }
 
+class PermissionBlockerShimmerColors {
+  const PermissionBlockerShimmerColors({
+    required this.base,
+    required this.highlight,
+  });
+
+  final Color base;
+  final Color highlight;
+
+  static PermissionBlockerShimmerColors of(bool isDark) {
+    if (isDark) {
+      return const PermissionBlockerShimmerColors(
+        base: Color(0xFF243044),
+        highlight: Color(0xFF3A4F6A),
+      );
+    }
+    return const PermissionBlockerShimmerColors(
+      base: Color(0xFFE5EBF5),
+      highlight: Color(0xFFF7F9FC),
+    );
+  }
+}
+
+class PermissionBlockerShimmerList extends StatefulWidget {
+  const PermissionBlockerShimmerList({
+    super.key,
+    this.itemCount = 4,
+    this.compact = false,
+  });
+
+  final int itemCount;
+  final bool compact;
+
+  @override
+  State<PermissionBlockerShimmerList> createState() =>
+      _PermissionBlockerShimmerListState();
+}
+
+class _PermissionBlockerShimmerListState
+    extends State<PermissionBlockerShimmerList>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1300),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = NativeThemeController.instance.isDark;
+    final colors = PermissionBlockerColors.of(isDark);
+    final shimmer = PermissionBlockerShimmerColors.of(isDark);
+    final gap = widget.compact ? 8.0 : 10.0;
+
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) {
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (var i = 0; i < widget.itemCount; i++) ...[
+              if (i > 0) SizedBox(height: gap),
+              _PermissionBlockerShimmerRow(
+                colors: colors,
+                shimmer: shimmer,
+                shimmerValue: _controller.value,
+              ),
+            ],
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _PermissionBlockerShimmerRow extends StatelessWidget {
+  const _PermissionBlockerShimmerRow({
+    required this.colors,
+    required this.shimmer,
+    required this.shimmerValue,
+  });
+
+  final PermissionBlockerColors colors;
+  final PermissionBlockerShimmerColors shimmer;
+  final double shimmerValue;
+
+  Widget _bone({
+    required double height,
+    double? width,
+    double widthFactor = 1,
+    required double radius,
+  }) {
+    final bone = Container(
+      height: height,
+      width: width,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(radius),
+        gradient: LinearGradient(
+          begin: Alignment(-1.2 + shimmerValue * 2.4, 0),
+          end: Alignment(-0.2 + shimmerValue * 2.4, 0),
+          colors: [
+            shimmer.base,
+            shimmer.highlight,
+            shimmer.base,
+          ],
+          stops: const [0.35, 0.5, 0.65],
+        ),
+      ),
+    );
+
+    if (width != null) return bone;
+    return FractionallySizedBox(widthFactor: widthFactor, child: bone);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: colors.cardBg,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: colors.cardShadow,
+            blurRadius: 12,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+        child: Row(
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(
+                  begin: Alignment(-1.2 + shimmerValue * 2.4, 0),
+                  end: Alignment(-0.2 + shimmerValue * 2.4, 0),
+                  colors: [
+                    shimmer.base,
+                    shimmer.highlight,
+                    shimmer.base,
+                  ],
+                  stops: const [0.35, 0.5, 0.65],
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _bone(height: 12, radius: 6),
+                  const SizedBox(height: 8),
+                  _bone(height: 10, widthFactor: 0.72, radius: 5),
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            _bone(height: 28, width: 68, radius: 9),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class PermissionPrivacyBanner extends StatelessWidget {
   const PermissionPrivacyBanner({
     super.key,

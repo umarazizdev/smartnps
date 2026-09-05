@@ -129,6 +129,8 @@ class ClockInGateService {
           'mock GPS deferred to clock-in gate',
         );
       }
+      // Do not start FGS here — DutyHeartbeatService owns on-duty ensureStarted
+      // after resume reconcile / permission-ready transitions.
       return;
     }
     clearGeoUnlock();

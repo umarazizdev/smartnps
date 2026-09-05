@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../auth/auth_repository.dart';
+import 'android_duty_kill_watch.dart';
 
 class DutyStatusSnapshot {
   DutyStatusSnapshot._();
@@ -33,6 +34,12 @@ class DutyStatusSnapshot {
     };
 
     await _storage.write(key: _key, value: jsonEncode(payload));
+    // Arm once per session; repeated markOnDuty only refreshes tokens quietly.
+    if (await AndroidDutyKillWatch.isKillWatchArmed()) {
+      await AndroidDutyKillWatch.syncTokens();
+    } else {
+      await AndroidDutyKillWatch.arm();
+    }
   }
 
   static Future<bool> renewIfStillOnDuty() async {
@@ -73,6 +80,7 @@ class DutyStatusSnapshot {
         'expiresAt': now.add(ttl).toIso8601String(),
       };
       await _storage.write(key: _key, value: jsonEncode(payload));
+      await AndroidDutyKillWatch.syncTokens();
       return true;
     } catch (e) {
       if (kDebugMode) {

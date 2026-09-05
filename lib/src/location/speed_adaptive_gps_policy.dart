@@ -1,6 +1,7 @@
 import 'package:geolocator/geolocator.dart';
 
 import '../background/location/background_location_accuracy.dart';
+import 'location_path_freshness.dart';
 
 class SpeedAdaptiveGpsPolicyBand {
   const SpeedAdaptiveGpsPolicyBand({
@@ -113,12 +114,14 @@ class SpeedAdaptiveGpsPolicyDecision {
   final double? speedAccuracyMetersPerSecond;
   final bool isTrusted;
 
+  static const double minPathSpeedKmh = 3;
+
   bool get shouldQueueForBatch {
     if (band.motionActivity == 'stationary') return false;
     final maxKmh = band.maxKmh;
-    if (maxKmh != null && maxKmh <= 2) return false;
+    if (maxKmh != null && maxKmh <= minPathSpeedKmh) return false;
     final speedKmh = smoothedSpeedKmh ?? rawSpeedKmh;
-    if (speedKmh != null && speedKmh < 2) return false;
+    if (speedKmh != null && speedKmh < minPathSpeedKmh) return false;
     return true;
   }
 
@@ -136,8 +139,15 @@ class SpeedAdaptiveGpsPolicyDecision {
   }
 }
 
+class _TrustedSpeedSample {
+  const _TrustedSpeedSample({required this.speedKmh, required this.at});
+
+  final double speedKmh;
+  final DateTime at;
+}
+
 class SpeedAdaptiveGpsPolicyTracker {
-  final List<double> _recentTrustedSpeedsKmh = [];
+  final List<_TrustedSpeedSample> _recentTrustedSpeedsKmh = [];
   SpeedAdaptiveGpsPolicyBand _currentBand =
       SpeedAdaptiveGpsPolicyBand.bands.first;
   double? _lastSmoothedSpeedKmh;
@@ -147,15 +157,22 @@ class SpeedAdaptiveGpsPolicyTracker {
     final speedAccuracy = readSpeedAccuracyMetersPerSecond(position);
     final trusted =
         rawSpeedKmh != null &&
-        BackgroundLocationAccuracy.isAcceptable(position) &&
+        BackgroundLocationAccuracy.isTrustedForSpeed(position) &&
         (speedAccuracy == null || speedAccuracy <= 5);
 
+    final sampleAt = position.timestamp.toUtc();
+    _purgeStaleSpeeds(sampleAt);
+
     if (trusted) {
-      _recentTrustedSpeedsKmh.add(rawSpeedKmh);
-      if (_recentTrustedSpeedsKmh.length > 5) {
+      _recentTrustedSpeedsKmh.add(
+        _TrustedSpeedSample(speedKmh: rawSpeedKmh, at: sampleAt),
+      );
+      while (_recentTrustedSpeedsKmh.length > 5) {
         _recentTrustedSpeedsKmh.removeAt(0);
       }
-      _lastSmoothedSpeedKmh = _median(_recentTrustedSpeedsKmh);
+      final speeds =
+          _recentTrustedSpeedsKmh.map((sample) => sample.speedKmh).toList();
+      _lastSmoothedSpeedKmh = _median(speeds);
       _currentBand = SpeedAdaptiveGpsPolicyBand.forSpeedKmh(
         _lastSmoothedSpeedKmh!,
       );
@@ -168,6 +185,16 @@ class SpeedAdaptiveGpsPolicyTracker {
       speedAccuracyMetersPerSecond: speedAccuracy,
       isTrusted: trusted,
     );
+  }
+
+  void _purgeStaleSpeeds(DateTime nowUtc) {
+    final cutoff = nowUtc.subtract(LocationPathFreshness.reuseMaxAge);
+    _recentTrustedSpeedsKmh.removeWhere(
+      (sample) => sample.at.isBefore(cutoff),
+    );
+    if (_recentTrustedSpeedsKmh.isEmpty) {
+      _lastSmoothedSpeedKmh = null;
+    }
   }
 
   static double? readSpeedAccuracyMetersPerSecond(Position position) {

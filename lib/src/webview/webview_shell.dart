@@ -14,7 +14,9 @@ import 'package:get/get.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../debug/location_path_curve_debug_screen.dart';
 import '../utilities/app_config.dart';
+import '../utilities/app_debug_log.dart';
 import '../utilities/app_upgrade_reconciler.dart';
 import '../utilities/app_version_info.dart';
 import 'js_bridge.dart';
@@ -79,9 +81,12 @@ class _WebViewShellUiController extends GetxController {
   final selectedBottomTabIndex = 0.obs;
   final bottomTabNavigationActive = false.obs;
   final showingLogVisit = false.obs;
+  final showingGpsCurveDebug = false.obs;
   final showLocationNotice = false.obs;
 
   final preserveBottomBarDuringLoad = false.obs;
+  /// Web-driven hide (e.g. popup/modal open). Cleared on navigation / logout.
+  final webHidesBottomBar = false.obs;
   final flutterKeyboardInset = 0.0.obs;
 
   void setFlutterKeyboardInset(double inset) {
@@ -127,6 +132,7 @@ class _WebViewShellUiController extends GetxController {
       RequiredPermissionsGate.instance.stop();
       showLocationNotice.value = false;
       showingLogVisit.value = false;
+      showingGpsCurveDebug.value = false;
     }
   }
 }
@@ -152,6 +158,7 @@ class _WebViewShellState extends State<WebViewShell>
   bool _syncPushAfterLocationNotice = true;
   bool _pendingLocationNoticeAfterLogin = false;
   Uri? _uriBeforeLogVisit;
+  double? _scrollYBeforeLogVisit;
 
   bool _offlineNeedsReload = false;
 
@@ -173,6 +180,8 @@ class _WebViewShellState extends State<WebViewShell>
   Timer? _loadWatchdog;
   Timer? _recoveryWatchdog;
   Timer? _resumeStuckWatchdog;
+  Timer? _loginTrackingStopTimer;
+  int _loginTrackingStopGeneration = 0;
   int _webViewEpoch = 0;
   int _silentRecoveryAttempts = 0;
   int _startupTimeoutExtensions = 0;
@@ -206,15 +215,52 @@ class _WebViewShellState extends State<WebViewShell>
     unawaited(VisitGpsSession.instance.stop());
   }
 
+  /// Login URL can flash for ~1s on cold start before redirect. Only stop GPS
+  /// after the login route stays put.
+  static const Duration _loginTrackingStopDelay = Duration(seconds: 3);
+
   Future<void> _pauseNativeSessionForLoginScreen() async {
     _suppressResidualKeyboardInsetAfterLogin = false;
     _pendingLocationNoticeAfterLogin = false;
     _ui.showLocationNotice.value = false;
     _ui.setOfficerLoggedIn(false);
     _setNativeAuthSession(false);
+    _clearWebBottomBarHide();
     _draftResumePrompted = false;
     NativePermissionStatusService.instance.stopBatteryMonitoring();
     _releaseUiLocationOnLogout();
+    // UI only for now — GPS stop is deferred so a brief login flash (cold
+    // start redirect) does not kill on-duty tracking.
+    _scheduleLoginTrackingStop();
+  }
+
+  void _cancelPendingLoginTrackingStop() {
+    _loginTrackingStopTimer?.cancel();
+    _loginTrackingStopTimer = null;
+    _loginTrackingStopGeneration++;
+  }
+
+  void _scheduleLoginTrackingStop() {
+    _loginTrackingStopTimer?.cancel();
+    final generation = ++_loginTrackingStopGeneration;
+    _loginTrackingStopTimer = Timer(_loginTrackingStopDelay, () {
+      unawaited(_commitLoginTrackingStop(generation));
+    });
+  }
+
+  Future<void> _commitLoginTrackingStop(int generation) async {
+    if (generation != _loginTrackingStopGeneration) return;
+    if (!mounted) return;
+    if (!AuthSessionManager.isLoginRoute(_ui.currentUri.value)) return;
+
+    if (kDebugMode) {
+      debugPrint(
+        '[SmartNPS360][Auth] login route stable '
+        '(${_loginTrackingStopDelay.inSeconds}s) → stop duty GPS',
+      );
+    }
+    await AuthRepository.instance.setOfficerLoggedIn(false);
+    await _stopDutyHeartbeat(stopBackgroundLocation: true);
   }
 
   Future<bool> _performNativeLogout({
@@ -252,6 +298,7 @@ class _WebViewShellState extends State<WebViewShell>
       _ui.setOfficerLoggedIn(false);
       _setNativeAuthSession(false);
       _ui.showingLogVisit.value = false;
+      _clearWebBottomBarHide();
       _releaseUiLocationOnLogout();
       _draftResumePrompted = false;
       unawaited(
@@ -392,6 +439,8 @@ class _WebViewShellState extends State<WebViewShell>
       return;
     }
 
+    _cancelPendingLoginTrackingStop();
+
     final loggedIn = await AuthRepository.instance.isOfficerLoggedIn();
     final token = await AuthRepository.instance.getAccessToken();
     final hasToken = token != null && token.isNotEmpty;
@@ -442,8 +491,15 @@ class _WebViewShellState extends State<WebViewShell>
     final uriText = uri?.toString();
     if (_ui.currentUri.value?.toString() != uriText) {
       _ui.currentUri.value = uri;
+      // Popups don't survive full navigations; restore bar unless web re-hides.
+      _ui.webHidesBottomBar.value = false;
     }
     _recheckBottomBarForUri(uri);
+  }
+
+  void _clearWebBottomBarHide() {
+    if (!_ui.webHidesBottomBar.value) return;
+    _ui.webHidesBottomBar.value = false;
   }
 
   void _recheckBottomBarForUri(Uri? uri) {
@@ -476,6 +532,7 @@ class _WebViewShellState extends State<WebViewShell>
     if (isAuth) reasons.add('authRoute');
     if (_ui.showingLogVisit.value) reasons.add('showingLogVisit');
     if (uploadingFromDialog) reasons.add('uploadingFromDialog');
+    if (_ui.webHidesBottomBar.value) reasons.add('webHidesBottomBar');
     if (!isBottomRoute && !preserve) {
       reasons.add('notBottomBarRoute+noPreserve');
     }
@@ -492,6 +549,7 @@ class _WebViewShellState extends State<WebViewShell>
         'authRoute=$isAuth '
         'showingLogVisit=${_ui.showingLogVisit.value} '
         'uploadingFromDialog=$uploadingFromDialog '
+        'webHidesBottomBar=${_ui.webHidesBottomBar.value} '
         'isBottomBarRoute=$isBottomRoute '
         'preserveDuringLoad=$preserve '
         'selectedTab=${_ui.selectedBottomTabIndex.value} '
@@ -763,6 +821,41 @@ class _WebViewShellState extends State<WebViewShell>
           return ensureFlutterBridge()
             .then(function () {
               return window.flutter_inappwebview.callHandler('themeChanged', isDark);
+            });
+        };
+        window.SmartNPS360.setBottomBarVisible = function (visible) {
+          var next = false;
+          if (typeof visible === 'boolean') {
+            next = visible;
+          } else if (typeof visible === 'number') {
+            next = visible !== 0;
+          } else if (typeof visible === 'string') {
+            var text = visible.toLowerCase();
+            next = text === 'true' || text === '1';
+          } else if (visible && typeof visible === 'object') {
+            if (Object.prototype.hasOwnProperty.call(visible, 'hidden')) {
+              next = !(
+                visible.hidden === true ||
+                visible.hidden === 1 ||
+                visible.hidden === '1' ||
+                visible.hidden === 'true'
+              );
+            } else {
+              var raw =
+                visible.visible != null ? visible.visible : visible.show;
+              next =
+                raw === true ||
+                raw === 1 ||
+                raw === '1' ||
+                raw === 'true';
+            }
+          }
+          return ensureFlutterBridge()
+            .then(function () {
+              return window.flutter_inappwebview.callHandler(
+                'setBottomBarVisible',
+                { visible: next }
+              );
             });
         };
         window.SmartNPS360.openLogVisit = function (payload) {
@@ -2032,6 +2125,8 @@ class _WebViewShellState extends State<WebViewShell>
     RequiredPermissionsGate.privacyNoticeVisibleChecker = () =>
         _ui.showLocationNotice.value || _pendingLocationNoticeAfterLogin;
     OffDutyPushPromptService.currentUriChecker = () => _ui.currentUri.value;
+    OnDutyPermissionsPromptService.currentUriChecker = () =>
+        _ui.currentUri.value;
     PushNotificationService.instance.setDeferPermissionPromptWhile(
       () =>
           _ui.showLocationNotice.value ||
@@ -2248,6 +2343,27 @@ class _WebViewShellState extends State<WebViewShell>
     } catch (e) {}
   }
 
+  Future<void> _promptAfterWebPushDisabled() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+    if (_ui.showLocationNotice.value) return;
+    if (AuthSessionManager.isLoginRoute(_ui.currentUri.value)) return;
+    if (AppConfig.isAuthEntryRoute(_ui.currentUri.value)) return;
+
+    await RequiredPermissionsGate.instance.refresh(force: true);
+
+    await OnDutyPermissionsPromptService.instance.maybeShow(
+      fromResume: false,
+      forceImmediate: true,
+    );
+
+    if (_ui.officerLoggedIn.value && !_ui.showLocationNotice.value) {
+      await OffDutyPushPromptService.instance.maybeShow(
+        fromResume: false,
+        forceImmediate: true,
+      );
+    }
+  }
+
   @override
   void didChangeMetrics() {
     super.didChangeMetrics();
@@ -2364,7 +2480,7 @@ class _WebViewShellState extends State<WebViewShell>
             fromResume: true,
           );
           await OnDutyPermissionsPromptService.instance.maybeShow(
-            fromResume: true,
+            fromResume: false,
           );
           if (_ui.officerLoggedIn.value &&
               !_ui.showLocationNotice.value &&
@@ -2378,6 +2494,9 @@ class _WebViewShellState extends State<WebViewShell>
           await IosDutyLocationPinger.flushPendingBatchNow();
         }
         await ClockInGateService.instance.recheckAfterAppResume();
+        // Explicit Flutter FGS start after resume (native kill-watch does not
+        // start FGS while the UI is open).
+        await DutyHeartbeatService.instance.retryOnDutyTrackingIfReady();
         if (!ClockInGateService.instance.isPrepareInFlight &&
             !ClockInPermissionsDialog.isVisible) {
           await _notifyWebBackgroundLocationStatus();
@@ -2409,6 +2528,7 @@ class _WebViewShellState extends State<WebViewShell>
     RequiredPermissionsGate.instance.stop();
     RequiredPermissionsGate.privacyNoticeVisibleChecker = null;
     OffDutyPushPromptService.currentUriChecker = null;
+    OnDutyPermissionsPromptService.currentUriChecker = null;
     OfficerAnnouncementCoordinator.instance.detach();
     PushNotificationService.instance.setDeferPermissionPromptWhile(null);
     PushNotificationService.instance.setOnNotificationTap(null);
@@ -2418,6 +2538,7 @@ class _WebViewShellState extends State<WebViewShell>
     }
     _connectivitySub?.cancel();
     _offlineConnectivityDebounce?.cancel();
+    _cancelPendingLoginTrackingStop();
     _cancelWebViewWatchdogs();
     DutyHeartbeatService.instance.backgroundLocationPermissionMissing
         .removeListener(_onBackgroundLocationPermissionChanged);
@@ -2999,11 +3120,14 @@ class _WebViewShellState extends State<WebViewShell>
 
   Future<void> _closeLogVisit({required bool openDashboard}) async {
     await _persistActivePatrolDraft();
+    final resumeUri = _uriBeforeLogVisit;
+    final resumeScrollY = _scrollYBeforeLogVisit;
+    _uriBeforeLogVisit = null;
+    _scrollYBeforeLogVisit = null;
     _ui.showingLogVisit.value = false;
     unawaited(VisitGpsSession.instance.stop());
 
     if (openDashboard) {
-      _uriBeforeLogVisit = null;
       final dashboard = Uri.parse(_BottomItem.dashboard.url);
       await _navigateWebTo(dashboard);
       _ui.selectedBottomTabIndex.value = _BottomItem.dashboard.index;
@@ -3011,27 +3135,138 @@ class _WebViewShellState extends State<WebViewShell>
       return;
     }
 
-    final resumeUri = _uriBeforeLogVisit ?? _ui.currentUri.value;
-    _uriBeforeLogVisit = null;
+    // Back from Patrol Draft: restore the page the officer left on without a
+    // fresh load whenever possible (keeps dashboard scroll/SPA state).
+    await _restoreWebAfterLogVisit(
+      resumeUri: resumeUri,
+      resumeScrollY: resumeScrollY,
+    );
+  }
 
-    if (resumeUri != null) {
-      final current = _ui.currentUri.value;
-      final samePage =
-          current != null && current.toString() == resumeUri.toString();
-      if (!samePage) {
-        await _navigateWebTo(resumeUri);
-      } else {
-        _recheckBottomBarForUri(resumeUri);
-      }
+  Future<void> _restoreWebAfterLogVisit({
+    Uri? resumeUri,
+    double? resumeScrollY,
+  }) async {
+    final controller = _controller;
+    Uri? liveUri;
+    if (controller != null) {
+      try {
+        final live = await controller.getUrl();
+        liveUri = live?.uriValue ?? Uri.tryParse(live?.toString() ?? '');
+      } catch (_) {}
     }
 
-    final tab = _bottomTabIndexFromUri(resumeUri);
+    if (liveUri != null) {
+      _ui.currentUri.value = liveUri;
+    }
+
+    final target = resumeUri ?? liveUri ?? _ui.currentUri.value;
+    final alreadyOnResume =
+        liveUri != null &&
+        target != null &&
+        _normalizePageUrl(liveUri) == _normalizePageUrl(target);
+
+    if (!alreadyOnResume && target != null && controller != null) {
+      final restoredByHistory = await _tryWebHistoryBackTo(
+        controller,
+        target,
+      );
+      if (!restoredByHistory) {
+        // Last resort only — avoids leaving the officer on an unrelated page.
+        await _navigateWebTo(target);
+      }
+    } else if (target != null) {
+      _recheckBottomBarForUri(target);
+    }
+
+    if (resumeScrollY != null) {
+      await _restoreWebScrollY(resumeScrollY);
+    }
+
+    final tabUri = _ui.currentUri.value ?? target;
+    final tab = _bottomTabIndexFromUri(tabUri);
     if (tab != null) {
       _ui.selectedBottomTabIndex.value = tab;
       _ui.preserveBottomBarDuringLoad.value = true;
     } else {
       _ui.preserveBottomBarDuringLoad.value = false;
     }
+  }
+
+  Future<bool> _tryWebHistoryBackTo(
+    InAppWebViewController controller,
+    Uri target,
+  ) async {
+    try {
+      final canGoBack = await controller.canGoBack();
+      if (!canGoBack) return false;
+      await controller.goBack();
+      await Future<void>.delayed(const Duration(milliseconds: 180));
+      final live = await controller.getUrl();
+      final liveUri = live?.uriValue ?? Uri.tryParse(live?.toString() ?? '');
+      if (liveUri == null) return false;
+      _ui.currentUri.value = liveUri;
+      _recheckBottomBarForUri(liveUri);
+      return _normalizePageUrl(liveUri) == _normalizePageUrl(target);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _captureWebResumePoint() async {
+    final controller = _controller;
+    if (controller != null) {
+      try {
+        final live = await controller.getUrl();
+        final liveUri = live?.uriValue ?? Uri.tryParse(live?.toString() ?? '');
+        if (liveUri != null) {
+          _uriBeforeLogVisit = liveUri;
+          _ui.currentUri.value = liveUri;
+        }
+      } catch (_) {
+        _uriBeforeLogVisit ??= _ui.currentUri.value;
+      }
+      _scrollYBeforeLogVisit = await _readWebScrollY(controller);
+    } else {
+      _uriBeforeLogVisit ??= _ui.currentUri.value;
+      _scrollYBeforeLogVisit = null;
+    }
+  }
+
+  Future<double?> _readWebScrollY(InAppWebViewController controller) async {
+    try {
+      final result = await controller.evaluateJavascript(
+        source: '''
+          (function () {
+            const el = document.scrollingElement || document.documentElement;
+            const y = (el && el.scrollTop) || window.scrollY || 0;
+            return y;
+          })();
+        ''',
+      );
+      if (result is num) return result.toDouble();
+      return double.tryParse(result?.toString() ?? '');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _restoreWebScrollY(double y) async {
+    final controller = _controller;
+    if (controller == null) return;
+    final safeY = y.isFinite ? y : 0.0;
+    try {
+      await controller.evaluateJavascript(
+        source: '''
+          (function () {
+            const y = $safeY;
+            const el = document.scrollingElement || document.documentElement;
+            if (el) el.scrollTop = y;
+            window.scrollTo(0, y);
+          })();
+        ''',
+      );
+    } catch (_) {}
   }
 
   Future<void> _navigateWebTo(Uri uri) async {
@@ -3159,10 +3394,18 @@ class _WebViewShellState extends State<WebViewShell>
   void _openLogVisitTab() {
     VisitDraftResumeDialog.ensureFlowController();
     _uriBeforeLogVisit ??= _ui.currentUri.value;
+    unawaited(_ensureScrollCapturedBeforeLogVisit());
     _ui.showingLogVisit.value = true;
     _ui.bottomTabNavigationActive.value = false;
     _ui.preserveBottomBarDuringLoad.value = true;
     unawaited(VisitGpsSession.instance.start());
+  }
+
+  Future<void> _ensureScrollCapturedBeforeLogVisit() async {
+    if (_scrollYBeforeLogVisit != null) return;
+    final controller = _controller;
+    if (controller == null) return;
+    _scrollYBeforeLogVisit = await _readWebScrollY(controller);
   }
 
   Future<Map<String, dynamic>> _openLogVisitScreen([Map? payload]) async {
@@ -3170,36 +3413,24 @@ class _WebViewShellState extends State<WebViewShell>
     unawaited(VisitGpsSession.instance.start());
     final normalized = _normalizeBridgeMap(payload);
 
-    final controller = _controller;
-    if (controller != null) {
-      try {
-        final live = await controller.getUrl();
-        final liveUri = live?.uriValue ?? Uri.tryParse(live?.toString() ?? '');
-        if (liveUri != null) {
-          _uriBeforeLogVisit = liveUri;
-          _ui.currentUri.value = liveUri;
-        }
-      } catch (_) {
-        _uriBeforeLogVisit ??= _ui.currentUri.value;
-      }
-    } else {
-      _uriBeforeLogVisit ??= _ui.currentUri.value;
-    }
+    await _captureWebResumePoint();
 
     final reopenedPending = await flow.applyBridgePatrolContext(normalized);
     final ctx = flow.patrolContext.value;
 
-    if (kDebugMode) {
-      debugPrint(
-        '[SmartNPS360] patrol draft ready '
-        'reopenedPending=$reopenedPending '
-        'items=${flow.mediaItems.length} '
-        'siteId=${ctx?.siteId} regionId=${ctx?.regionId} '
-        'siteName=${ctx?.siteName} regionName=${ctx?.regionName} '
-        'clientDraftId=${ctx?.clientDraftId} '
-        'resumeUri=$_uriBeforeLogVisit',
-      );
-    }
+    patrolLogDebugLog(
+      '[SmartNPS360] patrol draft ready '
+      'reopenedPending=$reopenedPending '
+      'items=${flow.mediaItems.length} '
+      'checkpoints=${ctx?.checkpoints.length ?? 0} '
+      'siteId=${ctx?.siteId} regionId=${ctx?.regionId} '
+      'siteName=${ctx?.siteName} regionName=${ctx?.regionName} '
+      'clientDraftId=${ctx?.clientDraftId} '
+      'sitePatrolWindowId=${ctx?.sitePatrolWindowId} '
+      'resumeUri=$_uriBeforeLogVisit '
+      'scrollY=$_scrollYBeforeLogVisit '
+      'payload=$normalized',
+    );
 
     if (Get.currentRoute == AppRoutes.visitVideoPreview) {
       Get.back();
@@ -3316,8 +3547,33 @@ class _WebViewShellState extends State<WebViewShell>
         source: '''
         (function () {
           try {
-            var ctx = window.SmartNPS360 && window.SmartNPS360.patrolDraftContext;
+            var ctx = null;
+            if (window.SmartNPS360) {
+              if (typeof window.SmartNPS360.getPatrolDraftContext === 'function') {
+                try { ctx = window.SmartNPS360.getPatrolDraftContext(); } catch (e) {}
+              }
+              if (!ctx) ctx = window.SmartNPS360.patrolDraftContext || null;
+            }
+            if (!ctx && window.SmartNPSWeb &&
+                typeof window.SmartNPSWeb.getPatrolDraftContext === 'function') {
+              try { ctx = window.SmartNPSWeb.getPatrolDraftContext(); } catch (e) {}
+            }
             if (!ctx) return null;
+
+            var checkpoints = null;
+            if (window.SmartNPS360 &&
+                typeof window.SmartNPS360.getPatrolCheckpoints === 'function') {
+              try { checkpoints = window.SmartNPS360.getPatrolCheckpoints(); } catch (e) {}
+            }
+            if ((!checkpoints || !checkpoints.length) &&
+                window.SmartNPSWeb &&
+                typeof window.SmartNPSWeb.getPatrolCheckpoints === 'function') {
+              try { checkpoints = window.SmartNPSWeb.getPatrolCheckpoints(); } catch (e) {}
+            }
+            if (checkpoints && checkpoints.length &&
+                (!ctx.checkpoints || !ctx.checkpoints.length)) {
+              ctx = Object.assign({}, ctx, { checkpoints: checkpoints });
+            }
             return JSON.stringify(ctx);
           } catch (e) {
             return null;
@@ -3335,11 +3591,202 @@ class _WebViewShellState extends State<WebViewShell>
       }
       return _normalizeBridgeMap(text);
     } catch (e) {
-      if (kDebugMode) {
-        debugPrint('[SmartNPS360] read patrolDraftContext failed: $e');
-      }
+      patrolLogDebugLog(
+        '[SmartNPS360] read patrolDraftContext failed: $e',
+      );
       return null;
     }
+  }
+
+  Future<List<dynamic>?> _readPatrolCheckpointsFromWeb() async {
+    final controller = _controller;
+    if (controller == null) return null;
+    try {
+      final result = await controller.evaluateJavascript(
+        source: '''
+        (function () {
+          try {
+            var checkpoints = null;
+            if (window.SmartNPS360 &&
+                typeof window.SmartNPS360.getPatrolCheckpoints === 'function') {
+              try { checkpoints = window.SmartNPS360.getPatrolCheckpoints(); } catch (e) {}
+            }
+            if ((!checkpoints || !checkpoints.length) &&
+                window.SmartNPS360 && window.SmartNPS360.patrolDraftContext &&
+                window.SmartNPS360.patrolDraftContext.checkpoints) {
+              checkpoints = window.SmartNPS360.patrolDraftContext.checkpoints;
+            }
+            if ((!checkpoints || !checkpoints.length) &&
+                window.SmartNPSWeb &&
+                typeof window.SmartNPSWeb.getPatrolCheckpoints === 'function') {
+              try { checkpoints = window.SmartNPSWeb.getPatrolCheckpoints(); } catch (e) {}
+            }
+            if (!checkpoints) return null;
+            return JSON.stringify(checkpoints);
+          } catch (e) {
+            return null;
+          }
+        })();
+        ''',
+      );
+      if (result == null) return null;
+      var text = result.toString().trim();
+      if (text.isEmpty || text == 'null') return null;
+      if ((text.startsWith('"') && text.endsWith('"')) ||
+          (text.startsWith("'") && text.endsWith("'"))) {
+        text = text.substring(1, text.length - 1);
+        text = text.replaceAll(r'\"', '"').replaceAll(r'\\', r'\');
+      }
+      final decoded = jsonDecode(text);
+      if (decoded is List) return decoded;
+      return null;
+    } catch (e) {
+      patrolLogDebugLog('[SmartNPS360] read patrol checkpoints failed: $e');
+      return null;
+    }
+  }
+
+  void _logRawCheckpoints(dynamic raw) {
+    if (raw is! List) {
+      patrolLogDebugLog(
+        '[SmartNPS360] checkpoints raw type=${raw.runtimeType} value=$raw',
+      );
+      return;
+    }
+    for (var i = 0; i < raw.length; i++) {
+      final entry = raw[i];
+      if (entry is! Map) {
+        patrolLogDebugLog(
+          '[SmartNPS360] checkpoint[$i] non-map type=${entry.runtimeType} value=$entry',
+        );
+        continue;
+      }
+      final map = Map<String, dynamic>.from(entry);
+      patrolLogDebugLog(
+        '[SmartNPS360] checkpoint[$i] keys=${map.keys.toList()} '
+        'id=${map['id'] ?? map['site_checkpoint_id'] ?? map['checkpoint_id']} '
+        'name=${map['name']} '
+        'photo_url=${map['photo_url'] ?? map['photoUrl']} '
+        'photo_path=${map['photo_path'] ?? map['photoPath']} '
+        'image_url=${map['image_url'] ?? map['imageUrl']} '
+        'image=${map['image']} photo=${map['photo']} '
+        'raw=$map',
+      );
+    }
+  }
+
+  bool _checkpointsMissingPhotos(dynamic raw) {
+    if (raw is! List || raw.isEmpty) return true;
+    for (final entry in raw) {
+      if (entry is! Map) return true;
+      final map = Map<String, dynamic>.from(entry);
+      final hasUrl = _checkpointMapHasPhoto(map);
+      if (!hasUrl) return true;
+    }
+    return false;
+  }
+
+  bool _checkpointMapHasPhoto(Map<String, dynamic> map) {
+    for (final key in const [
+      'photo_url',
+      'photoUrl',
+      'image_url',
+      'imageUrl',
+      'thumbnail_url',
+      'thumbnailUrl',
+      'photo_path',
+      'photoPath',
+      'image_path',
+      'imagePath',
+      'file_url',
+      'fileUrl',
+      'url',
+      'src',
+    ]) {
+      final value = map[key];
+      if (value == null) continue;
+      final text = value.toString().trim();
+      if (text.isNotEmpty && text != 'null') return true;
+    }
+    for (final key in const [
+      'photo',
+      'image',
+      'media',
+      'file',
+      'attachment',
+      'reference_photo',
+      'referencePhoto',
+    ]) {
+      final nested = map[key];
+      if (nested == null) continue;
+      if (nested is String && nested.trim().isNotEmpty) return true;
+      if (nested is Map && nested.isNotEmpty) return true;
+    }
+    return false;
+  }
+
+  List<dynamic> _mergeCheckpointPhotos(
+    dynamic existingRaw,
+    List<dynamic> fromWeb,
+  ) {
+    if (existingRaw is! List) return fromWeb;
+    final byId = <int, Map<String, dynamic>>{};
+    for (final entry in fromWeb) {
+      if (entry is! Map) continue;
+      final map = Map<String, dynamic>.from(entry);
+      final id = _checkpointIdFromMap(map);
+      if (id == null) continue;
+      byId[id] = map;
+    }
+
+    return existingRaw.map((entry) {
+      if (entry is! Map) return entry;
+      final current = Map<String, dynamic>.from(entry);
+      if (_checkpointMapHasPhoto(current)) return current;
+      final id = _checkpointIdFromMap(current);
+      if (id == null) return current;
+      final richer = byId[id];
+      if (richer == null) return current;
+      return <String, dynamic>{
+        ...current,
+        ...richer,
+      };
+    }).toList();
+  }
+
+  int? _checkpointIdFromMap(Map<String, dynamic> map) {
+    final raw =
+        map['site_checkpoint_id'] ??
+        map['siteCheckpointId'] ??
+        map['checkpoint_id'] ??
+        map['checkpointId'] ??
+        map['id'];
+    if (raw is int) return raw;
+    if (raw is num) return raw.toInt();
+    return int.tryParse(raw?.toString() ?? '');
+  }
+
+  String _checkpointPhotoDebugSummary(dynamic raw) {
+    if (raw is! List || raw.isEmpty) return '[]';
+    final parts = <String>[];
+    for (var i = 0; i < raw.length; i++) {
+      final entry = raw[i];
+      if (entry is! Map) {
+        parts.add('#$i:type=${entry.runtimeType}');
+        continue;
+      }
+      final map = Map<String, dynamic>.from(entry);
+      parts.add(
+        '#$i:{id=${map['id'] ?? map['site_checkpoint_id']},'
+        'keys=${map.keys.toList()},'
+        'photo_url=${map['photo_url'] ?? map['photoUrl']},'
+        'photo_path=${map['photo_path'] ?? map['photoPath']},'
+        'image_url=${map['image_url'] ?? map['imageUrl']},'
+        'image=${map['image']},'
+        'photo=${map['photo']}}',
+      );
+    }
+    return parts.join(' | ');
   }
 
   Future<void> _maybePromptUnfinishedDraft() async {
@@ -3371,6 +3818,7 @@ class _WebViewShellState extends State<WebViewShell>
         unawaited(
           VisitVideoPreviewScreen.uploadCurrentDraft(
             onSuccess: _finishLogVisitUploadSuccess,
+            skipCompletionConfirm: true,
           ),
         );
         break;
@@ -3575,6 +4023,12 @@ class _WebViewShellState extends State<WebViewShell>
             '[SmartNPS360] setPushNotificationsEnabled ok=${result['ok'] == true}',
           );
         }
+        final disabled = result['ok'] == true &&
+            result['enabled'] == false &&
+            result['unchanged'] != true;
+        if (disabled) {
+          unawaited(_promptAfterWebPushDisabled());
+        }
         return result;
       },
     );
@@ -3700,6 +4154,35 @@ class _WebViewShellState extends State<WebViewShell>
       callback: handleClockInSuccess,
     );
     controller.addJavaScriptHandler(
+      handlerName: 'attendance_status_changed',
+      callback: (args) async {
+        final currentHost = _ui.currentUri.value?.host;
+        if (!AppConfig.isAllowedHost(currentHost)) {
+          return {
+            'ok': false,
+            'error': {
+              'code': 'untrusted_origin',
+              'message': 'Untrusted origin',
+            },
+          };
+        }
+
+        final raw = args.isNotEmpty ? args.first : null;
+        if (kDebugMode) {
+          debugPrint(
+            '[SmartNPS360] attendance_status_changed bridge payload=$raw',
+          );
+        }
+        dutyHeartbeatDebugLog(
+          '[SmartNPS360] attendance_status_changed bridge payload=$raw',
+        );
+
+        await DutyHeartbeatService.instance
+            .onAttendanceStatusChangedFromBridge(raw);
+        return {'ok': true};
+      },
+    );
+    controller.addJavaScriptHandler(
       handlerName: 'themeChanged',
       callback: (args) {
         final value = args.isNotEmpty ? args.first : null;
@@ -3718,21 +4201,58 @@ class _WebViewShellState extends State<WebViewShell>
       },
     );
     controller.addJavaScriptHandler(
-      handlerName: 'openLogVisit',
-      callback: (args) async {
+      handlerName: 'setBottomBarVisible',
+      callback: (args) {
+        final currentHost = _ui.currentUri.value?.host;
+        if (!AppConfig.isAllowedHost(currentHost)) {
+          return {
+            'ok': false,
+            'error': {
+              'code': 'untrusted_origin',
+              'message': 'Untrusted origin',
+            },
+          };
+        }
+
+        final value = args.isNotEmpty ? args.first : null;
+        final visible = _parseBottomBarVisibleArg(value);
+        if (visible == null) {
+          return {
+            'ok': false,
+            'error': {
+              'code': 'invalid_args',
+              'message':
+                  'Expected boolean or {visible/show/hidden}',
+            },
+          };
+        }
+
+        final hide = !visible;
+        if (_ui.webHidesBottomBar.value != hide) {
+          _ui.webHidesBottomBar.value = hide;
+        }
         if (kDebugMode) {
           debugPrint(
-            '[SmartNPS360] openLogVisit called argsCount=${args.length}',
+            '[SmartNPS360][BottomBar] setBottomBarVisible '
+            'visible=$visible hide=$hide',
           );
         }
+        return {'ok': true, 'visible': visible};
+      },
+    );
+    controller.addJavaScriptHandler(
+      handlerName: 'openLogVisit',
+      callback: (args) async {
+        patrolLogDebugLog(
+          '[SmartNPS360] openLogVisit called argsCount=${args.length} '
+          'rawArgs=$args',
+        );
 
         final currentHost = _ui.currentUri.value?.host;
         if (!AppConfig.isAllowedHost(currentHost)) {
-          if (kDebugMode) {
-            debugPrint(
-              '[SmartNPS360] denied openLogVisit from host=$currentHost',
-            );
-          }
+          patrolLogDebugLog(
+            '[SmartNPS360] denied openLogVisit from host=$currentHost',
+          );
           return {
             'ok': false,
             'error': {
@@ -3751,12 +4271,45 @@ class _WebViewShellState extends State<WebViewShell>
                     null)) {
           final fromContext = await _readPatrolDraftContextFromWeb();
           if (fromContext != null) {
-            if (kDebugMode) {
-              debugPrint(
-                '[SmartNPS360] openLogVisit using patrolDraftContext keys=${fromContext.keys.toList()}',
-              );
-            }
+            patrolLogDebugLog(
+              '[SmartNPS360] openLogVisit using patrolDraftContext '
+              'keys=${fromContext.keys.toList()} context=$fromContext',
+            );
             payload = {...?payload, ...fromContext};
+          }
+        }
+
+        final existingCheckpoints = payload?['checkpoints'];
+        final hasCheckpoints =
+            existingCheckpoints is List && existingCheckpoints.isNotEmpty;
+        if (!hasCheckpoints) {
+          final fromWeb = await _readPatrolCheckpointsFromWeb();
+          if (fromWeb != null && fromWeb.isNotEmpty) {
+            payload = {...?payload, 'checkpoints': fromWeb};
+            patrolLogDebugLog(
+              '[SmartNPS360] openLogVisit merged checkpoints '
+              'count=${fromWeb.length}',
+            );
+          }
+        } else {
+          _logRawCheckpoints(existingCheckpoints);
+          final needsPhotos = _checkpointsMissingPhotos(existingCheckpoints);
+          if (needsPhotos) {
+            final fromWeb = await _readPatrolCheckpointsFromWeb();
+            if (fromWeb != null && fromWeb.isNotEmpty) {
+              payload = {
+                ...?payload,
+                'checkpoints': _mergeCheckpointPhotos(
+                  existingCheckpoints,
+                  fromWeb,
+                ),
+              };
+              patrolLogDebugLog(
+                '[SmartNPS360] openLogVisit enriched checkpoint photos '
+                'from getPatrolCheckpoints count=${fromWeb.length}',
+              );
+              _logRawCheckpoints(payload!['checkpoints']);
+            }
           }
         }
 
@@ -3775,24 +4328,28 @@ class _WebViewShellState extends State<WebViewShell>
           'region_name',
           'region',
         ]);
+        final checkpointCount = payload?['checkpoints'] is List
+            ? (payload!['checkpoints'] as List).length
+            : 0;
+        final checkpointPhotoDebug = _checkpointPhotoDebugSummary(
+          payload?['checkpoints'],
+        );
 
-        if (kDebugMode) {
-          debugPrint(
-            '[SmartNPS360] openLogVisit site/region '
-            'siteId=$siteId regionId=$regionId '
-            'hasSiteName=${siteName != null && siteName.isNotEmpty} '
-            'hasRegionName=${regionName != null && regionName.isNotEmpty}',
-          );
-        }
+        patrolLogDebugLog(
+          '[SmartNPS360] openLogVisit site/region '
+          'siteId=$siteId regionId=$regionId '
+          'siteName=$siteName regionName=$regionName '
+          'checkpoints=$checkpointCount '
+          'checkpointPhotos=$checkpointPhotoDebug',
+        );
 
         final result = await _openLogVisitScreen(payload);
-        if (kDebugMode) {
-          debugPrint(
-            '[SmartNPS360] openLogVisit ok=${result['ok']} '
-            'reopenedPending=${result['reopenedPending']} '
-            'itemCount=${result['itemCount']}',
-          );
-        }
+        patrolLogDebugLog(
+          '[SmartNPS360] openLogVisit ok=${result['ok']} '
+          'reopenedPending=${result['reopenedPending']} '
+          'itemCount=${result['itemCount']} '
+          'result=$result',
+        );
         return result;
       },
     );
@@ -4858,8 +5415,8 @@ class _WebViewShellState extends State<WebViewShell>
                                           ) &&
                                           !isSamePageReload) {
                                         await _pauseNativeSessionForLoginScreen();
-                                        await _stopDutyHeartbeat();
                                       } else {
+                                        _cancelPendingLoginTrackingStop();
                                         await _refreshNativeAuthSessionFromStorage();
                                         _activatePendingLocationNoticeIfNeeded();
                                         await _requestNotificationPermissionForRoute(
@@ -5105,6 +5662,14 @@ class _WebViewShellState extends State<WebViewShell>
                               );
                             }),
                             Obx(() {
+                              if (!_ui.showingGpsCurveDebug.value) {
+                                return const SizedBox.shrink();
+                              }
+                              return const Positioned.fill(
+                                child: LocationPathCurveDebugScreen(),
+                              );
+                            }),
+                            Obx(() {
                               final uploadingFromDialog =
                                   !_ui.showingLogVisit.value &&
                                   _ui.officerLoggedIn.value &&
@@ -5119,8 +5684,11 @@ class _WebViewShellState extends State<WebViewShell>
                                   !_ui.isKeyboardOpen &&
                                   !_isAuthRoute(_ui.currentUri.value) &&
                                   !_ui.showingLogVisit.value &&
+                                  !_ui.webHidesBottomBar.value &&
                                   !uploadingFromDialog &&
-                                  (_isBottomBarRoute(_ui.currentUri.value) ||
+                                  (_ui.showingGpsCurveDebug.value ||
+                                      kDebugMode ||
+                                      _isBottomBarRoute(_ui.currentUri.value) ||
                                       _ui.preserveBottomBarDuringLoad.value);
                               _logBottomBarVisibility(
                                 show: showBottomBar,
@@ -5224,13 +5792,52 @@ class _WebViewShellState extends State<WebViewShell>
     return null;
   }
 
+  bool? _parseBottomBarVisibleArg(dynamic value) {
+    if (value is bool) return value;
+    if (value is num) return value != 0;
+    if (value is Map) {
+      if (value.containsKey('hidden')) {
+        final hidden = _parseBottomBarVisibleArg(value['hidden']);
+        return hidden == null ? null : !hidden;
+      }
+      return _parseBottomBarVisibleArg(
+        value['visible'] ?? value['show'] ?? value['value'],
+      );
+    }
+    final normalized = value?.toString().trim().toLowerCase();
+    if (normalized == null || normalized.isEmpty) return null;
+    if (normalized == 'true' || normalized == '1' || normalized == 'show') {
+      return true;
+    }
+    if (normalized == 'false' ||
+        normalized == '0' ||
+        normalized == 'hide' ||
+        normalized == 'hidden') {
+      return false;
+    }
+    return null;
+  }
+
   Future<void> _onBottomTap(_BottomItem item) async {
     final controller = _controller;
     if (controller == null) return;
 
+    if (item == _BottomItem.gpsDebug) {
+      _ui.selectedBottomTabIndex.value = item.index;
+      if (_ui.showingLogVisit.value) {
+        unawaited(VisitGpsSession.instance.stop());
+      }
+      _ui.showingLogVisit.value = false;
+      _ui.showingGpsCurveDebug.value = true;
+      _ui.bottomTabNavigationActive.value = false;
+      _clearWebBottomBarHide();
+      return;
+    }
+
     if (_ui.selectedBottomTabIndex.value == item.index &&
         !_ui.isNavigating.value &&
-        !_ui.showingLogVisit.value) {
+        !_ui.showingLogVisit.value &&
+        !_ui.showingGpsCurveDebug.value) {
       return;
     }
 
@@ -5239,6 +5846,8 @@ class _WebViewShellState extends State<WebViewShell>
       unawaited(VisitGpsSession.instance.stop());
     }
     _ui.showingLogVisit.value = false;
+    _ui.showingGpsCurveDebug.value = false;
+    _clearWebBottomBarHide();
     _ui.bottomTabNavigationActive.value = true;
     _pendingBottomTabLoadStarted = false;
     final nextUri = Uri.tryParse(item.url);
@@ -5328,37 +5937,41 @@ enum _BottomItem {
     'Dashboard',
     'assets/postFilFill.png',
     'assets/postFil.png',
-    AppRoutes.webDashboardUrl,
+    '/officer/dashboard',
   ),
-  shiftLog('Shift Log', '', '', AppRoutes.webShiftLogUrl),
+  shiftLog('Shift Log', '', '', '/officer/shift-log'),
   timesheet(
     'TimeSheet',
     'assets/calendar_outline.png',
     'assets/schedule.png',
-    AppRoutes.webTimesheetUrl,
+    '/officer/timesheet/monthly',
   ),
   profile(
     'Profile',
     'assets/avatar.png',
     'assets/profile.png',
-    AppRoutes.webProfileUrl,
-  );
+    '/officer/profile',
+  ),
+  gpsDebug('GPS', '', '', '/__native__/gps-curve-debug');
 
   const _BottomItem(
     this.label,
     this.iconAsset,
     this.iconAssetSelected,
-    this.url,
+    this.path,
   );
   final String label;
   final String iconAsset;
   final String iconAssetSelected;
-  final String url;
+  final String path;
 
-  String get normalizedPath {
-    final uri = Uri.tryParse(url);
-    return AppConfig.normalizeWebPath(uri) ?? '';
+  String get url {
+    final base = AppRoutes.webBaseUrl;
+    final root = base.endsWith('/') ? base.substring(0, base.length - 1) : base;
+    return '$root$path';
   }
+
+  String get normalizedPath => path;
 }
 
 class _BottomBar extends StatelessWidget {
@@ -5379,6 +5992,7 @@ class _BottomBar extends StatelessWidget {
       _BottomItem.shiftLog,
       _BottomItem.timesheet,
       _BottomItem.profile,
+      _BottomItem.gpsDebug,
     ];
 
     final tabs = <PlatformBottomTab>[
@@ -5391,13 +6005,16 @@ class _BottomBar extends StatelessWidget {
             _BottomItem.shiftLog => 'list.clipboard',
             _BottomItem.timesheet => 'calendar',
             _BottomItem.profile => 'person.crop.circle.fill',
+            _BottomItem.gpsDebug => 'location.fill',
           },
           iosSymbolPointSize: switch (item) {
             _BottomItem.shiftLog => 19,
+            _BottomItem.gpsDebug => 20,
             _ => null,
           },
           materialIcon: switch (item) {
             _BottomItem.shiftLog => Icons.assignment_outlined,
+            _BottomItem.gpsDebug => Icons.gps_fixed,
             _ => null,
           },
           activeAssetIcon: item.iconAssetSelected.isEmpty

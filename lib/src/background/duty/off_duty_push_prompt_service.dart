@@ -63,17 +63,28 @@ class OffDutyPushPromptService {
     return false;
   }
 
-  Future<void> maybeShow({required bool fromResume}) async {
+  Future<void> maybeShow({
+    required bool fromResume,
+    bool forceImmediate = false,
+  }) async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
 
-    final first = await _attempt(fromResume: fromResume);
+    final first = await _attempt(
+      fromResume: fromResume,
+      forceImmediate: forceImmediate,
+    );
     if (fromResume && first == _PromptAttemptResult.blocked) {
+      if (_blockedByOtherUi || _checkInFlight) return;
       await Future<void>.delayed(const Duration(milliseconds: 900));
+      if (_blockedByOtherUi || _checkInFlight) return;
       await _attempt(fromResume: true);
     }
   }
 
-  Future<_PromptAttemptResult> _attempt({required bool fromResume}) async {
+  Future<_PromptAttemptResult> _attempt({
+    required bool fromResume,
+    bool forceImmediate = false,
+  }) async {
     if (_checkInFlight) return _PromptAttemptResult.blocked;
     if (_blockedByOtherUi || _onAuthOrPrivacySurface) {
       if (_onAuthOrPrivacySurface) stopRemindLoop();
@@ -128,7 +139,7 @@ class OffDutyPushPromptService {
       final justBecameMissing = _pushWasReady;
       _pushWasReady = false;
 
-      if (!fromResume) {
+      if (!fromResume && !forceImmediate) {
         if (!justBecameMissing) {
           final last = _lastDismissedAt;
           if (last == null ||
@@ -146,7 +157,8 @@ class OffDutyPushPromptService {
 
       if (kDebugMode) {
         debugPrint(
-          '[OffDutyPushPrompt] showing dialog (fromResume=$fromResume)',
+          '[OffDutyPushPrompt] showing dialog '
+          '(fromResume=$fromResume forceImmediate=$forceImmediate)',
         );
       }
 

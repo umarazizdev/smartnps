@@ -5,6 +5,7 @@ import '../../app/app_navigator.dart';
 import '../../utilities/overlay_prompt_guard.dart';
 import '../../widgets/dialogs/glass_action_dialog.dart';
 import '../notes/visit_batch_notes_panel.dart';
+import '../notes/visit_media_notes_sheet.dart';
 import 'visit_media_draft_store.dart';
 import 'visit_video_flow_controller.dart';
 
@@ -182,12 +183,34 @@ class VisitDraftResumeDialog {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final location = draft.locationLabel ?? 'this site';
     final activeFlow = flow ?? ensureFlowController();
+    final canSubmitReport = !activeFlow.hasIncompleteCheckpoints;
+    final bodyColor = isDark
+        ? Colors.white.withValues(alpha: 0.78)
+        : const Color(0xFF475467);
+
+    final title = canSubmitReport
+        ? 'Patrol Round completed?'
+        : 'Continue patrol report?';
+    final titleColor = canSubmitReport
+        ? const Color(0xFFDC2626)
+        : (isDark ? Colors.white : const Color(0xFF171717));
+    final icon = canSubmitReport
+        ? Icons.assignment_late_outlined
+        : Icons.pending_actions_rounded;
+    final iconColor = canSubmitReport
+        ? const Color(0xFF3B82F6)
+        : const Color(0xFF2563EB);
+
+    final message = canSubmitReport
+        ? 'Have you done your patrol round at $location'
+        : _continueReportMessage(flow: activeFlow, location: location);
+
     return GlassActionDialog.showWithActions<VisitDraftResumeAction>(
       context: context,
-      icon: Icons.assignment_late_outlined,
-      iconColor: const Color(0xFF3B82F6),
-      title: 'Patrol Round completed?',
-      titleColor: const Color(0xFFDC2626),
+      icon: icon,
+      iconColor: iconColor,
+      title: title,
+      titleColor: titleColor,
       barrierDismissible: true,
       showCloseButton: true,
       messageMaxHeightFactor: 0.58,
@@ -196,39 +219,78 @@ class VisitDraftResumeDialog {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
-            'Have you done your patrol round at $location',
+            message,
             textAlign: TextAlign.center,
             style: TextStyle(
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.78)
-                  : const Color(0xFF475467),
+              color: bodyColor,
               fontSize: 15,
               height: 1.48,
               fontWeight: FontWeight.w500,
             ),
           ),
-          const SizedBox(height: 14),
-          VisitBatchNotesPanel(flow: activeFlow, isDark: isDark),
+          if (canSubmitReport) ...[
+            const SizedBox(height: 14),
+            VisitBatchNotesPanel(flow: activeFlow, isDark: isDark),
+            const SizedBox(height: 8),
+            VisitBatchNotesPanel(
+              flow: activeFlow,
+              isDark: isDark,
+              scope: VisitBatchNoteScope.generalNote,
+            ),
+          ],
         ],
       ),
-      actions: const [
-        GlassDialogAction(
-          label: 'No, continue report',
-          value: VisitDraftResumeAction.continueReport,
-          tone: GlassDialogActionTone.neutral,
-        ),
-        GlassDialogAction(
-          label: 'Yes, patrol completed upload report',
-          value: VisitDraftResumeAction.submitReport,
-          tone: GlassDialogActionTone.primary,
-        ),
-        GlassDialogAction(
-          label: 'Discard report',
-          value: VisitDraftResumeAction.discardReport,
-          tone: GlassDialogActionTone.destructive,
-        ),
+      actions: [
+        if (canSubmitReport) ...[
+          const GlassDialogAction(
+            label: 'No, continue report',
+            value: VisitDraftResumeAction.continueReport,
+            tone: GlassDialogActionTone.neutral,
+          ),
+          const GlassDialogAction(
+            label: 'Yes, patrol completed upload report',
+            value: VisitDraftResumeAction.submitReport,
+            tone: GlassDialogActionTone.primary,
+          ),
+          const GlassDialogAction(
+            label: 'Discard report',
+            value: VisitDraftResumeAction.discardReport,
+            tone: GlassDialogActionTone.destructive,
+          ),
+        ] else ...[
+          const GlassDialogAction(
+            label: 'Yes, continue report',
+            value: VisitDraftResumeAction.continueReport,
+            tone: GlassDialogActionTone.primary,
+          ),
+          const GlassDialogAction(
+            label: 'Discard report',
+            value: VisitDraftResumeAction.discardReport,
+            tone: GlassDialogActionTone.destructive,
+          ),
+        ],
       ],
     );
+  }
+
+  static String _continueReportMessage({
+    required VisitVideoFlowController flow,
+    required String location,
+  }) {
+    final total = flow.checkpoints.length;
+    final completed = flow.completedCheckpointCount;
+    if (total > 0) {
+      final remaining = total - completed;
+      if (completed <= 0) {
+        return 'Your patrol report at $location is still in progress. '
+            'Continue to capture the $total checkpoint${total == 1 ? '' : 's'}.';
+      }
+      return 'Your patrol report at $location is still in progress. '
+          '$completed of $total checkpoint${total == 1 ? '' : 's'} done — '
+          '$remaining remaining. Continue to finish capturing.';
+    }
+    return 'Your patrol report at $location is still in progress. '
+        'Continue to finish capturing media.';
   }
 
   static Future<VisitDraftResumeAction?> show({

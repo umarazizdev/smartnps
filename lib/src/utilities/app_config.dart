@@ -1,4 +1,5 @@
 import '../app/app_routes.dart';
+import '../debug/debug_env_config.dart';
 
 class AppConfig {
   AppConfig._();
@@ -17,11 +18,12 @@ class AppConfig {
   static const int cDarkCardColor = 0xFF1A2332;
   static const int cBottomBarActive = 0xFF0F93D2;
 
-  static const bool enableMockLocationDetection = false;
+  static const bool enableMockLocationDetection = true;
   static const bool enablePingDebugLog = false;
   static const bool enableBatchDebugLog = false;
   static const bool enableDutyHeartbeatDebugLog = false;
   static const bool enablePermissionStatusDebugLog = false;
+  static const bool enablePatrolLogDebugLog = true;
 
   static const bool enableBgLocationStartTestAlert = false;
 
@@ -31,7 +33,9 @@ class AppConfig {
     if (host == null) return false;
     final h = host.toLowerCase();
     if (allowedHosts.contains(h)) return true;
-    return h.endsWith('.$allowedHost');
+    if (h.endsWith('.$allowedHost')) return true;
+    if (DebugEnvConfig.instance.overrideHosts.contains(h)) return true;
+    return false;
   }
 
   static bool isTrustedSubresourceHost(String? host) {
@@ -112,7 +116,8 @@ class AppConfig {
   static bool isBottomBarRoute(Uri? uri) {
     final path = normalizeWebPath(uri);
     if (path == null) return false;
-    return AppRoutes.bottomBarWebPaths.contains(path);
+    // Keep bar on all main officer tabs (incl. shift-log), not a subset.
+    return AppRoutes.bottomTabWebPaths.contains(path);
   }
 
   static String _exactUrl(Uri uri) {

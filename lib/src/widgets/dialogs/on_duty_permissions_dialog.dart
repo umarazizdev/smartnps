@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../../app/app_navigator.dart';
 import '../../app/native_theme_controller.dart';
+import '../../debug/debug_env_pin_dialog.dart';
 import '../../permissions/required_permissions_gate.dart';
 import '../../utilities/app_version_info.dart';
 import '../../utilities/overlay_prompt_guard.dart';
@@ -15,28 +16,44 @@ class OnDutyPermissionsDialog {
   OnDutyPermissionsDialog._();
 
   static bool _visible = false;
+  static Future<bool>? _activeShow;
 
-  static bool get isVisible => _visible;
+  static bool get isVisible => _visible || _activeShow != null;
 
   static Future<bool> showIfNeeded() async {
+    final existing = _activeShow;
+    if (existing != null) return existing;
+
+    final show = _presentIfNeeded();
+    _activeShow = show;
+    try {
+      return await show;
+    } finally {
+      if (identical(_activeShow, show)) {
+        _activeShow = null;
+      }
+    }
+  }
+
+  static Future<bool> _presentIfNeeded() async {
     if (_visible) return false;
     if (RequiredPermissionsGate.isPrivacyNoticeVisible) return false;
 
     final context = AppNavigator.key.currentContext;
     if (context == null || !context.mounted) return false;
 
-    await OverlayPromptGuard.waitUntilReady();
-
-    final readyContext = AppNavigator.key.currentContext;
-    if (readyContext == null || !readyContext.mounted) return false;
-
-    final gate = RequiredPermissionsGate.instance;
-    final missing = await gate.missingOnDutyPermissionItems();
-    if (missing.isEmpty) return false;
-
     _visible = true;
     OverlayPromptGuard.registerBlockingOverlay();
     try {
+      await OverlayPromptGuard.waitUntilReady();
+
+      final readyContext = AppNavigator.key.currentContext;
+      if (readyContext == null || !readyContext.mounted) return false;
+
+      final gate = RequiredPermissionsGate.instance;
+      final missing = await gate.missingOnDutyPermissionItems();
+      if (missing.isEmpty) return false;
+
       await showDialog<void>(
         context: readyContext,
         useRootNavigator: true,
@@ -268,11 +285,32 @@ class _OnDutyPermissionsDialogPanelState
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Image.asset(
-                    'assets/npslogo.png',
-                    height: 72,
-                    fit: BoxFit.contain,
-                    filterQuality: FilterQuality.high,
+                  Center(
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(16),
+                        onLongPress: isDebugEnvSupported
+                            ? () {
+                                final navContext =
+                                    AppNavigator.key.currentContext ?? context;
+                                unawaited(openDebugEnvFromLogo(navContext));
+                              }
+                            : null,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 24,
+                            vertical: 8,
+                          ),
+                          child: Image.asset(
+                            'assets/npslogo.png',
+                            height: 72,
+                            fit: BoxFit.contain,
+                            filterQuality: FilterQuality.high,
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 8),
                   Text(
@@ -313,8 +351,11 @@ class _OnDutyPermissionsDialogPanelState
                   const SizedBox(height: 10),
                   Expanded(
                     child: _loading
-                        ? const Center(
-                            child: CircularProgressIndicator(strokeWidth: 2.4),
+                        ? const SingleChildScrollView(
+                            child: PermissionBlockerShimmerList(
+                              itemCount: 5,
+                              compact: true,
+                            ),
                           )
                         : ListView.separated(
                             padding: EdgeInsets.zero,

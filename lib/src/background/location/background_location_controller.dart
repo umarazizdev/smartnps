@@ -45,8 +45,8 @@ class BackgroundLocationController {
     unawaited(
       LocationSharingStatusNotification.showBgLocationStartedTestAlert()
           .catchError((Object e) {
-        _log('bg start test alert failed: $e');
-      }),
+            _log('bg start test alert failed: $e');
+          }),
     );
     return {
       'ok': true,
@@ -81,7 +81,8 @@ class BackgroundLocationController {
 
   static Future<bool> isTrackingHealthy() async {
     if (!await isTrackingRunning()) return false;
-    if (Platform.isAndroid && await ClockInEngineWarmSnapshot.isValidPending()) {
+    if (Platform.isAndroid &&
+        await ClockInEngineWarmSnapshot.isValidPending()) {
       return false;
     }
     return !await needsRecovery();
@@ -430,8 +431,8 @@ class BackgroundLocationController {
         unawaited(
           LocationSharingStatusNotification.showBgLocationStartedTestAlert()
               .catchError((Object e) {
-            _log('bg start test alert failed: $e');
-          }),
+                _log('bg start test alert failed: $e');
+              }),
         );
       }
 

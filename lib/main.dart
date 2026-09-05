@@ -15,6 +15,7 @@ import 'src/background/location/background_location_service.dart';
 import 'src/push/notifications/push_notification_service.dart';
 import 'src/api/api_client.dart';
 import 'src/auth/auth_repository.dart';
+import 'src/debug/debug_env_config.dart';
 import 'src/location/mock_location_guard.dart';
 import 'src/utilities/app_upgrade_reconciler.dart';
 import 'src/utilities/app_version_info.dart';
@@ -26,6 +27,9 @@ Future<void> main() async {
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.dark);
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  if (!kIsWeb && Platform.isAndroid) {
+    await DebugEnvConfig.instance.init();
+  }
   await AppVersionInfo.init();
   await AppUpgradeReconciler.reconcileIfNeeded();
   ApiClient.instance.ensureAuthInterceptorInstalled();

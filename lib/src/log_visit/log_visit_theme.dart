@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 const Color cPrimary = Color(0xFF022A67);
@@ -13,6 +15,28 @@ const Color cDarkIconColor = Color(0xFF94A3B8);
 const Color cDarkBorderColor = Color(0xFF334155);
 const Color cDarkInputFillColor = Color(0xFF1E293B);
 const Color cSurface = Color(0xFFFBFBFD);
+
+class VisitPageBackground extends StatelessWidget {
+  const VisitPageBackground({super.key, required this.isDark});
+
+  final bool isDark;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF0F1724) : const Color(0xFFF3F7FB),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? const [Color(0xFF0F1724), Color(0xFF172033), Color(0xFF111827)]
+              : const [Color(0xFFF7FAFC), Color(0xFFEAF2F8), Color(0xFFF8FAFC)],
+        ),
+      ),
+    );
+  }
+}
 
 BoxDecoration getCardDecoration(BuildContext context, {Color? customColor}) {
   final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -65,5 +89,54 @@ class VisitDeleteIcon extends StatelessWidget {
         gaplessPlayback: true,
       ),
     );
+  }
+}
+
+class VisitDottedRoundedRectPainter extends CustomPainter {
+  const VisitDottedRoundedRectPainter({
+    required this.color,
+    required this.radius,
+    this.strokeWidth = 1.2,
+    this.dashLength = 5,
+    this.gapLength = 4,
+  });
+
+  final Color color;
+  final double radius;
+  final double strokeWidth;
+  final double dashLength;
+  final double gapLength;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    final rrect = RRect.fromRectAndRadius(
+      rect.deflate(strokeWidth / 2),
+      Radius.circular(radius),
+    );
+    final path = Path()..addRRect(rrect);
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..strokeCap = StrokeCap.round;
+
+    for (final metric in path.computeMetrics()) {
+      var distance = 0.0;
+      while (distance < metric.length) {
+        final next = math.min(distance + dashLength, metric.length);
+        canvas.drawPath(metric.extractPath(distance, next), paint);
+        distance = next + gapLength;
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant VisitDottedRoundedRectPainter oldDelegate) {
+    return oldDelegate.color != color ||
+        oldDelegate.radius != radius ||
+        oldDelegate.strokeWidth != strokeWidth ||
+        oldDelegate.dashLength != dashLength ||
+        oldDelegate.gapLength != gapLength;
   }
 }

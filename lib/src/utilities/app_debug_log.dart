@@ -19,3 +19,9 @@ void dutyHeartbeatDebugLog(String message) {
   if (!kDebugMode) return;
   debugPrint(message);
 }
+
+void patrolLogDebugLog(String message) {
+  if (!AppConfig.enablePatrolLogDebugLog) return;
+  if (!kDebugMode) return;
+  debugPrint(message);
+}

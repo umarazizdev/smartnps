@@ -10,6 +10,8 @@ import '../../api/visit_upload_api.dart';
 import '../../app/app_navigator.dart';
 import '../../app/app_routes.dart';
 import '../../widgets/dialogs/glass_action_dialog.dart';
+import '../checkpoint/visit_checkpoint_screen.dart';
+import '../flow/visit_checkpoint.dart';
 import '../flow/visit_gps_session.dart';
 import '../flow/visit_media_geo.dart';
 import '../flow/visit_video_flow_controller.dart';
@@ -177,6 +179,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
   }
 
   Future<void> _openCaptureScreen() async {
+    controller.endCheckpointCapture();
     await Get.to(
       () => const VisitVideoRecorderScreen(),
       routeName: AppRoutes.visitVideoRecorder,
@@ -186,9 +189,14 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     );
   }
 
+  Future<void> _openCheckpoint(VisitCheckpoint checkpoint) async {
+    await VisitCheckpointScreen.open(checkpointId: checkpoint.id);
+  }
+
   static Future<void> uploadCurrentDraft({
     BuildContext? context,
     VoidCallback? onSuccess,
+    bool skipCompletionConfirm = false,
   }) async {
     final flow = Get.isRegistered<VisitVideoFlowController>()
         ? Get.find<VisitVideoFlowController>()
@@ -226,12 +234,16 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       return;
     }
 
-    final confirmed = await _confirmPatrolUploadCompletion(
-      flow: flow,
-      isDark: isDark,
-      context: context,
-    );
-    if (!confirmed) return;
+    if (flow.hasIncompleteCheckpoints) return;
+
+    if (!skipCompletionConfirm) {
+      final confirmed = await _confirmPatrolUploadCompletion(
+        flow: flow,
+        isDark: isDark,
+        context: context,
+      );
+      if (!confirmed) return;
+    }
 
     flow.isUploading.value = true;
     _showUploadingSnack(itemCount: items.length, isDark: isDark);
@@ -246,6 +258,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
         meta: meta,
         items: items,
         batchVoicePath: flow.batchNote.value.voiceNotePath,
+        generalVoicePath: flow.generalNote.value.voiceNotePath,
       );
 
       if (Get.isSnackbarOpen) {
@@ -537,40 +550,62 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            _VisitPageBackground(isDark: isDark),
+            VisitPageBackground(isDark: isDark),
             Obx(() {
-              final media = controller.mediaItems.toList();
-              final hasMedia = media.isNotEmpty;
-              final photoCount = media.where((e) => e.isPhoto).length;
-              final videoCount = media.where((e) => e.isVideo).length;
+              final allMedia = controller.mediaItems.toList();
+              final checkpoints = controller.checkpoints;
+              final hasCheckpoints = checkpoints.isNotEmpty;
+              final additionalMedia = hasCheckpoints
+                  ? controller.additionalMediaItems
+                  : allMedia;
+              final hasMedia = allMedia.isNotEmpty;
+              final photoCount = additionalMedia.where((e) => e.isPhoto).length;
+              final videoCount = additionalMedia.where((e) => e.isVideo).length;
               final activeFilter = _mediaFilter.value;
               final visibleMedia = switch (activeFilter) {
-                _VisitMediaFilter.all => media,
+                _VisitMediaFilter.all => additionalMedia,
                 _VisitMediaFilter.photos =>
-                  media.where((e) => e.isPhoto).toList(),
+                  additionalMedia.where((e) => e.isPhoto).toList(),
                 _VisitMediaFilter.videos =>
-                  media.where((e) => e.isVideo).toList(),
+                  additionalMedia.where((e) => e.isVideo).toList(),
               };
               final locationLabel = controller.locationSubtitle;
               controller.patrolContext.value;
               controller.draftSiteName.value;
               controller.draftRegionName.value;
+              final completedCheckpoints = controller.completedCheckpointCount;
 
               return Column(
                 children: [
                   _VisitHeader(
                     isDark: isDark,
                     isLandscape: isLandscape,
-                    totalCount: media.length,
+                    totalCount: additionalMedia.length,
                     photoCount: photoCount,
                     videoCount: videoCount,
                     activeFilter: activeFilter,
                     onFilterChanged: (filter) => _mediaFilter.value = filter,
                     locationLabel: locationLabel,
                     onBack: () => _handleBack(context),
+                    hasCheckpoints: hasCheckpoints,
+                    checkpointCompleted: completedCheckpoints,
+                    checkpointTotal: checkpoints.length,
+                    showMediaFilters:
+                        !hasCheckpoints || additionalMedia.isNotEmpty,
                   ),
                   Expanded(
-                    child: hasMedia
+                    child: hasCheckpoints
+                        ? _buildCheckpointAwareBody(
+                            context,
+                            isDark: isDark,
+                            isLandscape: isLandscape,
+                            checkpoints: checkpoints,
+                            visibleMedia: visibleMedia,
+                            additionalMedia: additionalMedia,
+                            activeFilter: activeFilter,
+                            locationLabel: locationLabel,
+                          )
+                        : hasMedia
                         ? visibleMedia.isEmpty
                               ? _buildFilteredEmptyState(
                                   context,
@@ -594,6 +629,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                     context,
                     hasMedia,
                     isLandscape: isLandscape,
+                    hasCheckpoints: hasCheckpoints,
                   ),
                   if (bottomBarClearance > 0)
                     SizedBox(height: bottomBarClearance),
@@ -688,7 +724,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                   ],
                   SizedBox(height: isLandscape ? 6 : 8),
                   Text(
-                    'Capture a clear photo or hold the capture button to record a visit video.',
+                    'Capture a clear photo or hold the capture button to record a patrol round video.',
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       height: 1.45,
@@ -727,6 +763,115 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     );
   }
 
+  Widget _buildCheckpointAwareBody(
+    BuildContext context, {
+    required bool isDark,
+    required bool isLandscape,
+    required List<VisitCheckpoint> checkpoints,
+    required List<VisitMediaItem> visibleMedia,
+    required List<VisitMediaItem> additionalMedia,
+    required _VisitMediaFilter activeFilter,
+    String? locationLabel,
+  }) {
+    return ListView(
+      padding: EdgeInsets.fromLTRB(
+        isLandscape ? 18 : 16,
+        isLandscape ? 4 : 6,
+        isLandscape ? 18 : 16,
+        isLandscape ? 12 : 16,
+      ),
+      children: [
+        Text(
+          'Patrol Checkpoints',
+          style: TextStyle(
+            color: _visitTitleColor(isDark),
+            fontSize: isLandscape ? 13 : 14,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        SizedBox(height: isLandscape ? 8 : 10),
+        _CheckpointProgressBar(
+          isDark: isDark,
+          completed: controller.completedCheckpointCount,
+          total: checkpoints.length,
+        ),
+        SizedBox(height: isLandscape ? 8 : 10),
+        for (var i = 0; i < checkpoints.length; i++) ...[
+          if (i > 0) const SizedBox(height: 8),
+          _CheckpointListCard(
+            checkpoint: checkpoints[i],
+            index: i,
+            isDark: isDark,
+            completed: controller.isCheckpointCompleted(checkpoints[i].id),
+            mediaCount: controller.mediaForCheckpoint(checkpoints[i].id).length,
+            onTap: () => _openCheckpoint(checkpoints[i]),
+          ),
+        ],
+        SizedBox(height: isLandscape ? 16 : 20),
+        Text(
+          additionalMedia.isEmpty
+              ? 'Additional media'
+              : 'Additional media (${additionalMedia.length})',
+          style: TextStyle(
+            color: _visitTitleColor(isDark),
+            fontSize: isLandscape ? 13 : 14,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+
+        SizedBox(height: isLandscape ? 8 : 10),
+        if (additionalMedia.isEmpty)
+          _AdditionalMediaEmptyCard(
+            isDark: isDark,
+            isLandscape: isLandscape,
+            onCapture: _openCaptureScreen,
+          )
+        else if (visibleMedia.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 18),
+            child: Text(
+              activeFilter == _VisitMediaFilter.videos
+                  ? 'No additional videos yet'
+                  : 'No additional photos yet',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: _visitBodyColor(isDark),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          )
+        else
+          for (var i = 0; i < visibleMedia.length; i++) ...[
+            if (i > 0) const SizedBox(height: 8),
+            Builder(
+              builder: (context) {
+                final item = visibleMedia[i];
+                return VisitMediaPreviewCard(
+                  key: ValueKey('extra-media-${item.path}'),
+                  item: item,
+                  index: i,
+                  isDark: isDark,
+                  compact: isLandscape,
+                  thumbnailFuture: item.isVideo
+                      ? controller.videoThumbnail(item.path)
+                      : null,
+                  onPreview: () => _openMediaPreview(item, i),
+                  onDelete: () {
+                    final actualIndex = controller.mediaItems.indexWhere(
+                      (e) => e.path == item.path,
+                    );
+                    if (actualIndex >= 0) {
+                      _confirmDelete(context, item, actualIndex);
+                    }
+                  },
+                );
+              },
+            ),
+          ],
+      ],
+    );
+  }
+
   Widget _buildMediaGrid(
     BuildContext context,
     List<VisitMediaItem> media,
@@ -750,7 +895,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
 
         Widget cardFor(int index) {
           final item = media[index];
-          return _MediaPreviewCard(
+          return VisitMediaPreviewCard(
             key: ValueKey('media-card-${item.path}'),
             item: item,
             index: index,
@@ -821,8 +966,12 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     BuildContext context,
     bool hasMedia, {
     bool isLandscape = false,
+    bool hasCheckpoints = false,
   }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final captureLabel = hasCheckpoints
+        ? 'Add More'
+        : (hasMedia ? 'Capture More' : 'Capture');
     return Container(
       padding: EdgeInsets.fromLTRB(
         isLandscape ? 16 : 18,
@@ -871,7 +1020,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                   onPressed: uploading ? null : _openCaptureScreen,
                   icon: const Icon(Icons.camera_alt_rounded, size: 18),
                   label: Text(
-                    hasMedia ? 'Capture More' : 'Capture',
+                    captureLabel,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
@@ -910,10 +1059,14 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
           Expanded(
             child: Obx(() {
               final uploading = controller.isUploading.value;
+              controller.mediaItems.length;
+              controller.patrolContext.value;
+              final canComplete =
+                  hasMedia &&
+                  !uploading &&
+                  !controller.hasIncompleteCheckpoints;
               return ElevatedButton.icon(
-                onPressed: hasMedia && !uploading
-                    ? () => _uploadAllMedia(context)
-                    : null,
+                onPressed: canComplete ? () => _uploadAllMedia(context) : null,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _visitPrimaryActionColor(isDark),
                   disabledBackgroundColor: isDark
@@ -924,7 +1077,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                       ? cDarkTextSecondary
                       : const Color(0xFF9AA4B2),
                   minimumSize: Size.fromHeight(isLandscape ? 42 : 48),
-                  elevation: hasMedia && !uploading ? 2 : 0,
+                  elevation: canComplete ? 2 : 0,
                   shadowColor: _visitPrimaryActionColor(
                     isDark,
                   ).withValues(alpha: 0.24),
@@ -935,9 +1088,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                 ),
                 icon: const Icon(Icons.cloud_upload_rounded, size: 18),
                 label: Text(
-                  hasMedia
-                      ? 'Complete Report (${controller.mediaItems.length})'
-                      : 'Complete Report',
+                  'Complete Report',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
@@ -949,6 +1100,451 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
             }),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _CheckpointProgressBar extends StatelessWidget {
+  const _CheckpointProgressBar({
+    required this.isDark,
+    required this.completed,
+    required this.total,
+  });
+
+  final bool isDark;
+  final int completed;
+  final int total;
+
+  @override
+  Widget build(BuildContext context) {
+    final progress = total <= 0 ? 0.0 : (completed / total).clamp(0.0, 1.0);
+    final allDone = total > 0 && completed >= total;
+    final accent = allDone
+        ? const Color(0xFF059669)
+        : _visitPrimaryActionColor(isDark);
+    final track = isDark
+        ? Colors.white.withValues(alpha: 0.10)
+        : const Color(0xFFE6EAF1);
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: _visitCardColor(isDark),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: allDone
+              ? accent.withValues(alpha: isDark ? 0.40 : 0.26)
+              : _visitBorderColor(isDark),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(
+                allDone ? Icons.verified_rounded : Icons.flag_circle_outlined,
+                size: 18,
+                color: accent,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  allDone
+                      ? 'All checkpoints completed'
+                      : completed == 0
+                      ? 'No checkpoints completed yet'
+                      : '$completed of $total checkpoints completed',
+                  style: TextStyle(
+                    color: _visitTitleColor(isDark),
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              Text(
+                '${(progress * 100).round()}%',
+                style: TextStyle(
+                  color: accent,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: TweenAnimationBuilder<double>(
+              tween: Tween<double>(begin: 0, end: progress),
+              duration: const Duration(milliseconds: 420),
+              curve: Curves.easeOutCubic,
+              builder: (context, value, _) {
+                return LinearProgressIndicator(
+                  value: value,
+                  minHeight: 7,
+                  backgroundColor: track,
+                  color: accent,
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HeaderCheckpointProgressChip extends StatelessWidget {
+  const _HeaderCheckpointProgressChip({
+    required this.isDark,
+    required this.completed,
+    required this.total,
+  });
+
+  final bool isDark;
+  final int completed;
+  final int total;
+
+  @override
+  Widget build(BuildContext context) {
+    final allDone = total > 0 && completed >= total;
+    final accent = allDone
+        ? const Color(0xFF059669)
+        : _visitPrimaryActionColor(isDark);
+    final progress = total <= 0 ? 0.0 : (completed / total).clamp(0.0, 1.0);
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(8, 5, 10, 5),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: isDark ? 0.18 : 0.10),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: accent.withValues(alpha: 0.28)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 18,
+            height: 18,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                CircularProgressIndicator(
+                  value: progress,
+                  strokeWidth: 2.4,
+                  backgroundColor: accent.withValues(alpha: 0.22),
+                  color: accent,
+                ),
+                if (allDone) Icon(Icons.check_rounded, size: 11, color: accent),
+              ],
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            '$completed/$total',
+            style: TextStyle(
+              color: accent,
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CheckpointListCard extends StatelessWidget {
+  const _CheckpointListCard({
+    required this.checkpoint,
+    required this.index,
+    required this.isDark,
+    required this.completed,
+    required this.mediaCount,
+    required this.onTap,
+  });
+
+  final VisitCheckpoint checkpoint;
+  final int index;
+  final bool isDark;
+  final bool completed;
+  final int mediaCount;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = completed
+        ? const Color(0xFF059669)
+        : _visitPrimaryActionColor(isDark);
+    final statusLabel = completed
+        ? (mediaCount > 1 ? 'Completed · $mediaCount items' : 'Completed')
+        : (mediaCount > 0
+              ? 'In progress · $mediaCount item${mediaCount == 1 ? '' : 's'}'
+              : null);
+    final photoUrl = checkpoint.photoUrl?.trim();
+    final hasPhoto = photoUrl != null && photoUrl.isNotEmpty;
+    final description = checkpoint.description?.trim();
+    final hasDescription = description != null && description.isNotEmpty;
+    // Prefer the task line; fall back to status when no description.
+    final subtitle = hasDescription ? description : statusLabel;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Ink(
+          decoration: BoxDecoration(
+            color: completed
+                ? accent.withValues(alpha: isDark ? 0.14 : 0.07)
+                : _visitCardColor(isDark),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: completed
+                  ? accent.withValues(alpha: isDark ? 0.48 : 0.30)
+                  : _visitBorderColor(isDark),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: isDark ? 0.16 : 0.035),
+                blurRadius: 10,
+                offset: const Offset(0, 3),
+              ),
+            ],
+          ),
+          padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
+          child: Row(
+            children: [
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(11),
+                    child: SizedBox(
+                      width: 40,
+                      height: 40,
+                      child: hasPhoto
+                          ? Image.network(
+                              photoUrl,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, error, stackTrace) =>
+                                  ColoredBox(
+                                    color: accent,
+                                    child: const Icon(
+                                      Icons.location_on_rounded,
+                                      color: Colors.white,
+                                      size: 20,
+                                    ),
+                                  ),
+                            )
+                          : ColoredBox(
+                              color: accent,
+                              child: const Icon(
+                                Icons.location_on_rounded,
+                                color: Colors.white,
+                                size: 20,
+                              ),
+                            ),
+                    ),
+                  ),
+                  if (completed)
+                    Positioned(
+                      right: -3,
+                      bottom: -3,
+                      child: Container(
+                        width: 17,
+                        height: 17,
+                        decoration: BoxDecoration(
+                          color: accent,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: isDark
+                                ? const Color(0xFF0F1724)
+                                : Colors.white,
+                            width: 1.5,
+                          ),
+                        ),
+                        child: const Icon(
+                          Icons.check_rounded,
+                          size: 10,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(width: 11),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${index + 1}. ${checkpoint.name}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: _visitTitleColor(isDark),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                        height: 1.2,
+                      ),
+                    ),
+                    if (subtitle != null) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        subtitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: completed && !hasDescription
+                              ? (isDark
+                                    ? const Color(0xFF6EE7B7)
+                                    : const Color(0xFF047857))
+                              : _visitBodyColor(isDark),
+                          fontSize: 12,
+                          height: 1.25,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              if (completed)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 9,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: accent.withValues(alpha: isDark ? 0.22 : 0.12),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    'Done',
+                    style: TextStyle(
+                      color: isDark
+                          ? const Color(0xFF6EE7B7)
+                          : const Color(0xFF047857),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                )
+              else
+                Container(
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    color: _visitPrimaryActionColor(
+                      isDark,
+                    ).withValues(alpha: isDark ? 0.16 : 0.08),
+                    borderRadius: BorderRadius.circular(9),
+                  ),
+                  child: Icon(
+                    Icons.chevron_right_rounded,
+                    color: _visitPrimaryActionColor(isDark),
+                    size: 20,
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AdditionalMediaEmptyCard extends StatelessWidget {
+  const _AdditionalMediaEmptyCard({
+    required this.isDark,
+    required this.onCapture,
+    this.isLandscape = false,
+  });
+
+  final bool isDark;
+  final VoidCallback onCapture;
+  final bool isLandscape;
+
+  @override
+  Widget build(BuildContext context) {
+    final borderColor = isDark
+        ? Colors.white.withValues(alpha: 0.22)
+        : const Color(0xFF9AA8BC);
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onCapture,
+        child: CustomPaint(
+          painter: VisitDottedRoundedRectPainter(
+            color: borderColor,
+            radius: 16,
+            strokeWidth: 1.4,
+            dashLength: 6,
+            gapLength: 4,
+          ),
+          child: Container(
+            width: double.infinity,
+            padding: EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: isLandscape ? 14 : 16,
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: _visitPrimaryActionColor(
+                      isDark,
+                    ).withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(13),
+                  ),
+                  child: Icon(
+                    Icons.add_a_photo_outlined,
+                    color: _visitPrimaryActionColor(isDark),
+                    size: 22,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Add More',
+                        style: TextStyle(
+                          color: _visitTitleColor(isDark),
+                          fontWeight: FontWeight.w800,
+                          fontSize: 14,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Optional photos or videos for this patrol',
+                        style: TextStyle(
+                          color: _visitBodyColor(isDark),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(
+                  Icons.chevron_right_rounded,
+                  color: _visitBodyColor(isDark),
+                  size: 24,
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -986,29 +1582,13 @@ class _PatrolCompleteDialogBody extends StatelessWidget {
         ),
         const SizedBox(height: 14),
         VisitBatchNotesPanel(flow: flow, isDark: isDark),
-      ],
-    );
-  }
-}
-
-class _VisitPageBackground extends StatelessWidget {
-  const _VisitPageBackground({required this.isDark});
-
-  final bool isDark;
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF0F1724) : const Color(0xFFF3F7FB),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? const [Color(0xFF0F1724), Color(0xFF172033), Color(0xFF111827)]
-              : const [Color(0xFFF7FAFC), Color(0xFFEAF2F8), Color(0xFFF8FAFC)],
+        const SizedBox(height: 8),
+        VisitBatchNotesPanel(
+          flow: flow,
+          isDark: isDark,
+          scope: VisitBatchNoteScope.generalNote,
         ),
-      ),
+      ],
     );
   }
 }
@@ -1024,6 +1604,10 @@ class _VisitHeader extends StatelessWidget {
     required this.onBack,
     this.locationLabel,
     this.isLandscape = false,
+    this.hasCheckpoints = false,
+    this.checkpointCompleted = 0,
+    this.checkpointTotal = 0,
+    this.showMediaFilters = true,
   });
 
   final bool isDark;
@@ -1035,6 +1619,10 @@ class _VisitHeader extends StatelessWidget {
   final VoidCallback onBack;
   final String? locationLabel;
   final bool isLandscape;
+  final bool hasCheckpoints;
+  final int checkpointCompleted;
+  final int checkpointTotal;
+  final bool showMediaFilters;
 
   @override
   Widget build(BuildContext context) {
@@ -1073,6 +1661,14 @@ class _VisitHeader extends StatelessWidget {
                   ),
                 ),
               ),
+              if (hasCheckpoints) ...[
+                const SizedBox(width: 8),
+                _HeaderCheckpointProgressChip(
+                  isDark: isDark,
+                  completed: checkpointCompleted,
+                  total: checkpointTotal,
+                ),
+              ],
               if (isLandscape && hasLocation) ...[
                 const SizedBox(width: 8),
                 Flexible(
@@ -1170,33 +1766,37 @@ class _VisitHeader extends StatelessWidget {
               ),
             ),
           ],
-          SizedBox(height: isLandscape ? 6 : 10),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'Captured Media ($totalCount)',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    color: titleColor,
-                    fontWeight: FontWeight.w800,
-                    fontSize: isLandscape ? 13 : null,
+          if (!hasCheckpoints) ...[
+            SizedBox(height: isLandscape ? 6 : 10),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Captured Media ($totalCount)',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      color: titleColor,
+                      fontWeight: FontWeight.w800,
+                      fontSize: isLandscape ? 13 : null,
+                    ),
                   ),
                 ),
-              ),
-            ],
-          ),
-          SizedBox(height: isLandscape ? 6 : 8),
-          _MediaFilterBar(
-            isDark: isDark,
-            activeFilter: activeFilter,
-            totalCount: totalCount,
-            photoCount: photoCount,
-            videoCount: videoCount,
-            onChanged: onFilterChanged,
-            compact: isLandscape,
-          ),
+              ],
+            ),
+          ],
+          if (showMediaFilters && !hasCheckpoints) ...[
+            SizedBox(height: isLandscape ? 6 : 8),
+            _MediaFilterBar(
+              isDark: isDark,
+              activeFilter: activeFilter,
+              totalCount: totalCount,
+              photoCount: photoCount,
+              videoCount: videoCount,
+              onChanged: onFilterChanged,
+              compact: isLandscape,
+            ),
+          ],
         ],
       ),
     );
@@ -1357,8 +1957,8 @@ class _HeaderIconButton extends StatelessWidget {
   }
 }
 
-class _MediaPreviewCard extends StatelessWidget {
-  const _MediaPreviewCard({
+class VisitMediaPreviewCard extends StatelessWidget {
+  const VisitMediaPreviewCard({
     super.key,
     required this.item,
     required this.index,

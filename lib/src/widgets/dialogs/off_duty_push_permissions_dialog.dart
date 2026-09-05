@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../app/app_navigator.dart';
 import '../../app/native_theme_controller.dart';
 import '../../background/duty/off_duty_push_prompt_service.dart';
+import '../../debug/debug_env_pin_dialog.dart';
 import '../../permissions/required_permissions_gate.dart';
 import '../../utilities/app_config.dart';
 import '../../utilities/overlay_prompt_guard.dart';
@@ -152,11 +153,32 @@ class _OffDutyPushPermissionsDialogPanelState
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Image.asset(
-                    'assets/npslogo.png',
-                    height: 64,
-                    fit: BoxFit.contain,
-                    filterQuality: FilterQuality.high,
+                  Center(
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(16),
+                        onLongPress: isDebugEnvSupported
+                            ? () {
+                                final navContext =
+                                    AppNavigator.key.currentContext ?? context;
+                                unawaited(openDebugEnvFromLogo(navContext));
+                              }
+                            : null,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 24,
+                            vertical: 8,
+                          ),
+                          child: Image.asset(
+                            'assets/npslogo.png',
+                            height: 64,
+                            fit: BoxFit.contain,
+                            filterQuality: FilterQuality.high,
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 12),
                   Text(
@@ -195,12 +217,7 @@ class _OffDutyPushPermissionsDialogPanelState
                   ),
                   const SizedBox(height: 14),
                   if (_loading)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 24),
-                      child: Center(
-                        child: CircularProgressIndicator(strokeWidth: 2.4),
-                      ),
-                    )
+                    const PermissionBlockerShimmerList(itemCount: 2)
                   else
                     for (var i = 0; i < _items.length; i++) ...[
                       if (i > 0) const SizedBox(height: 10),

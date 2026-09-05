@@ -663,6 +663,25 @@
         <tr><td>Push notification tap</td><td>Native app loads deep-link URL directly</td></tr>
       </tbody>
     </table>
+
+    <div class="endpoint">
+      <span class="direction web-native">Web → Native</span>
+      <span class="name">setBottomBarVisible</span>
+    </div>
+    <h3>Web entry points</h3>
+    <ul>
+      <li><code>SmartNPS360.setBottomBarVisible(false)</code> — hide native bottom bar (e.g. when a popup/modal opens)</li>
+      <li><code>SmartNPS360.setBottomBarVisible(true)</code> — show again when the popup closes</li>
+    </ul>
+    <h3>Request</h3>
+    <p>Boolean or <code>{ "visible": false }</code> / <code>{ "show": false }</code> / <code>{ "hidden": true }</code></p>
+    <h3>Response</h3>
+    <pre>{ "ok": true, "visible": false }</pre>
+    <p>
+      Hides the native bottom bar while a web popup is open. The flag is cleared
+      automatically on URL navigation, bottom-tab tap, and logout. Call
+      <code>setBottomBarVisible(true)</code> when the popup closes without navigating away.
+    </p>
   </section>
 
   <!-- THEME -->
@@ -757,6 +776,7 @@
       <tbody>
         <tr><td><code>isNativeApp()</code></td><td>User-Agent check</td><td>Detection</td></tr>
         <tr><td><code>notifyTheme(mode)</code></td><td><code>themeChanged</code></td><td>Theme</td></tr>
+        <tr><td><code>setBottomBarVisible(visible)</code></td><td><code>setBottomBarVisible</code></td><td>UI</td></tr>
         <tr><td><code>getBackgroundLocationStatus()</code></td><td><code>getBackgroundLocationStatus</code></td><td>Clock-in</td></tr>
         <tr><td><code>ensureCanClockIn()</code></td><td><code>prepareClockIn</code></td><td>Clock-in</td></tr>
         <tr><td><code>bindClockInGate(button, onAllowed, onBlocked)</code></td><td>Gate + status listener</td><td>Clock-in</td></tr>
@@ -859,7 +879,8 @@
       <code>getDeviceInfo</code>, <code>openExternalUrl</code>, <code>shareContent</code>,
       <code>downloadFile</code>, <code>getPushNotificationToken</code>, <code>getPushNotificationStatus</code>,
       <code>setPushNotificationsEnabled</code>, <code>getBackgroundLocationStatus</code>,
-      <code>prepareClockIn</code>, <code>themeChanged</code>, <code>loginWithSanctum</code>, <code>authEvent</code>.
+      <code>prepareClockIn</code>, <code>themeChanged</code>, <code>setBottomBarVisible</code>,
+      <code>loginWithSanctum</code>, <code>authEvent</code>.
     </p>
   </section>
 

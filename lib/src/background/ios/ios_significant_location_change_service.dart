@@ -78,10 +78,45 @@ class IosSignificantLocationChangeService {
     if (!await _ensureNativeChannelsReady()) return;
     try {
       await _channel.invokeMethod<dynamic>('setOnDuty', {'onDuty': onDuty});
+      if (!onDuty) {
+        await setUnpaidBreak(false);
+      }
     } on MissingPluginException catch (e) {
       locationDebugLog(
         '[IosSLC] setOnDuty skipped; native channel unavailable: $e',
       );
+    }
+  }
+
+  static Future<void> setUnpaidBreak(bool unpaid) async {
+    if (!Platform.isIOS) return;
+    if (!await _ensureNativeChannelsReady()) return;
+    try {
+      await _channel.invokeMethod<dynamic>('setUnpaidBreak', {
+        'unpaid': unpaid,
+      });
+    } on MissingPluginException catch (e) {
+      locationDebugLog(
+        '[IosSLC] setUnpaidBreak skipped; native channel unavailable: $e',
+      );
+    }
+  }
+
+  static Future<void> armForUnpaidBreak() async {
+    if (!Platform.isIOS) return;
+    if (!await _ensureNativeChannelsReady()) return;
+    await setOnDuty(true);
+    await setUnpaidBreak(true);
+    await _ensureEventSubscription();
+    try {
+      final result = await _invokeMap('startMonitoring');
+      _nativeMonitoring = result['running'] == true;
+      locationDebugLog(
+        '[IosSLC] armForUnpaidBreak running=$_nativeMonitoring '
+        'unpaid=${result['unpaidBreak'] == true}',
+      );
+    } catch (e) {
+      locationDebugLog('[IosSLC] armForUnpaidBreak failed: $e');
     }
   }
 

@@ -12,24 +12,33 @@ class VisitBatchNotesPanel extends StatelessWidget {
     super.key,
     required this.flow,
     required this.isDark,
+    this.scope = VisitBatchNoteScope.attentionNeeded,
   });
 
   final VisitVideoFlowController flow;
   final bool isDark;
+  final VisitBatchNoteScope scope;
+
+  bool get _isAttention => scope == VisitBatchNoteScope.attentionNeeded;
 
   @override
   Widget build(BuildContext context) {
-    const attentionRed = Color(0xFFDC2626);
-    final titleColor = attentionRed;
-    final border = attentionRed.withValues(alpha: isDark ? 0.42 : 0.28);
-    final cardBg = attentionRed.withValues(alpha: isDark ? 0.16 : 0.08);
-    final accent = isDark ? const Color(0xFF93C5FD) : const Color(0xFF4F46E5);
+    final accentColor = _isAttention
+        ? const Color(0xFFDC2626)
+        : (isDark ? const Color(0xFF60A5FA) : const Color(0xFF2563EB));
+    final titleColor = accentColor;
+    final border = accentColor.withValues(alpha: isDark ? 0.42 : 0.28);
+    final cardBg = accentColor.withValues(alpha: isDark ? 0.16 : 0.08);
+    final actionAccent = isDark
+        ? const Color(0xFF93C5FD)
+        : const Color(0xFF4F46E5);
     final bodyColor = isDark
         ? Colors.white.withValues(alpha: 0.82)
         : const Color(0xFF374151);
+    final title = _isAttention ? 'Attention needed' : 'General note';
 
     return Obx(() {
-      final note = flow.batchNote.value;
+      final note = _isAttention ? flow.batchNote.value : flow.generalNote.value;
       final enabled = note.enabled;
 
       return Container(
@@ -50,7 +59,7 @@ class VisitBatchNotesPanel extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      'Attention needed',
+                      title,
                       style: TextStyle(
                         color: titleColor,
                         fontSize: 13,
@@ -65,10 +74,14 @@ class VisitBatchNotesPanel extends StatelessWidget {
                     child: Switch.adaptive(
                       value: enabled,
                       materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      activeTrackColor: attentionRed.withValues(alpha: 0.45),
-                      activeThumbColor: attentionRed,
+                      activeTrackColor: accentColor.withValues(alpha: 0.45),
+                      activeThumbColor: accentColor,
                       onChanged: (value) {
-                        unawaited(flow.setBatchNotesEnabled(value));
+                        unawaited(
+                          _isAttention
+                              ? flow.setBatchNotesEnabled(value)
+                              : flow.setGeneralNotesEnabled(value),
+                        );
                       },
                     ),
                   ),
@@ -85,10 +98,11 @@ class VisitBatchNotesPanel extends StatelessWidget {
                       label: note.hasTextNote ? 'Edit text' : 'Text note',
                       active: note.hasTextNote,
                       isDark: isDark,
-                      accent: accent,
+                      accent: actionAccent,
                       onTap: () => openVisitBatchNotesSheet(
                         context: context,
                         kind: VisitMediaNoteKind.text,
+                        scope: scope,
                       ),
                     ),
                   ),
@@ -99,10 +113,11 @@ class VisitBatchNotesPanel extends StatelessWidget {
                       label: note.hasVoiceNote ? 'Edit voice' : 'Voice note',
                       active: note.hasVoiceNote,
                       isDark: isDark,
-                      accent: accent,
+                      accent: actionAccent,
                       onTap: () => openVisitBatchNotesSheet(
                         context: context,
                         kind: VisitMediaNoteKind.voice,
+                        scope: scope,
                       ),
                     ),
                   ),
@@ -114,14 +129,14 @@ class VisitBatchNotesPanel extends StatelessWidget {
                   text: note.textNote.trim(),
                   isDark: isDark,
                   bodyColor: bodyColor,
-                  accent: accent,
+                  accent: actionAccent,
                 ),
               ] else if (note.hasVoiceNote) ...[
                 const SizedBox(height: 6),
                 _SavedVoiceNote(
                   path: note.voiceNotePath!,
                   isDark: isDark,
-                  accent: accent,
+                  accent: actionAccent,
                 ),
               ],
             ],
