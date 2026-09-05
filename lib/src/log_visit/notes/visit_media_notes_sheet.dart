@@ -8,7 +8,8 @@ import '../log_visit_theme.dart';
 import 'visit_media_notes_controller.dart';
 import 'voice/voice_waveform_painter.dart';
 
-export 'visit_media_notes_controller.dart' show VisitMediaNoteKind;
+export 'visit_media_notes_controller.dart'
+    show VisitMediaNoteKind, VisitBatchNoteScope;
 
 Future<void> openVisitMediaNotesSheet({
   required BuildContext context,
@@ -37,26 +38,34 @@ Future<void> openVisitMediaNotesSheet({
 Future<void> openVisitBatchNotesSheet({
   required BuildContext context,
   VisitMediaNoteKind kind = VisitMediaNoteKind.text,
+  VisitBatchNoteScope scope = VisitBatchNoteScope.attentionNeeded,
 }) async {
   final flow = Get.isRegistered<VisitVideoFlowController>()
       ? Get.find<VisitVideoFlowController>()
       : null;
-  final note = flow?.batchNote.value ?? const VisitBatchNote();
+  final isGeneral = scope == VisitBatchNoteScope.generalNote;
+  final note = isGeneral
+      ? (flow?.generalNote.value ?? const VisitBatchNote())
+      : (flow?.batchNote.value ?? const VisitBatchNote());
+  final label = isGeneral ? 'General' : 'Attention Needed';
   await _openNotesDialog(
     context: context,
     kind: kind,
-    tag: 'notes-batch',
+    tag: isGeneral ? 'notes-general' : 'notes-batch',
     item: null,
     batchMode: true,
+    batchScope: scope,
     hasTextNote: note.hasTextNote,
     hasVoiceNote: note.hasVoiceNote,
     title: kind == VisitMediaNoteKind.text
-        ? 'Attention Needed Text Note'
-        : 'Attention Needed Voice Note',
+        ? '$label Text Note'
+        : '$label Voice Note',
     subtitle: kind == VisitMediaNoteKind.text
-        ? 'Add an attention needed text note.'
-        : 'Record an attention needed voice note.',
-    textHint: 'Type your attention needed note...',
+        ? 'Add a ${isGeneral ? 'general' : 'attention needed'} text note.'
+        : 'Record a ${isGeneral ? 'general' : 'attention needed'} voice note.',
+    textHint: isGeneral
+        ? 'Type your general note...'
+        : 'Type your attention needed note...',
   );
 }
 
@@ -66,6 +75,7 @@ Future<void> _openNotesDialog({
   required String tag,
   required VisitMediaItem? item,
   required bool batchMode,
+  VisitBatchNoteScope batchScope = VisitBatchNoteScope.attentionNeeded,
   required bool hasTextNote,
   required bool hasVoiceNote,
   required String title,
@@ -145,6 +155,7 @@ Future<void> _openNotesDialog({
       kind: kind,
       replacingOther: replacingOther,
       batchMode: batchMode,
+      batchScope: batchScope,
     ),
     tag: tag,
   );

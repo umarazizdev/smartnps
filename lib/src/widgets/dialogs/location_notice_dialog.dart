@@ -8,6 +8,7 @@ import 'package:pdfx/pdfx.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../app/native_theme_controller.dart';
+import '../../app/app_routes.dart';
 import '../../utilities/app_config.dart';
 
 class _LocationNoticeColors {
@@ -1160,7 +1161,7 @@ class _PolicyDocumentDialog extends StatelessWidget {
                           data: html,
                           mimeType: 'text/html',
                           encoding: 'utf-8',
-                          baseUrl: WebUri('https://smartnps360.com/'),
+                          baseUrl: WebUri(AppRoutes.webBaseUrl),
                           historyUrl: WebUri.uri(uri),
                         ),
                         initialSettings: InAppWebViewSettings(

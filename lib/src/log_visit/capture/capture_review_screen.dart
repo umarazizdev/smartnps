@@ -11,6 +11,10 @@ import '../log_visit_theme.dart';
 import '../notes/visit_media_notes_sheet.dart';
 import 'capture_review_controller.dart';
 
+/// Bright accent for cinema (black) chrome — brand navy (`cPrimary`) vanishes on black.
+const Color _kReviewAccent = Color(0xFF3B82F6);
+const Color _kReviewAccentPressed = Color(0xFF2563EB);
+
 class CaptureReviewScreen extends GetView<CaptureReviewController> {
   const CaptureReviewScreen({super.key});
 
@@ -186,7 +190,7 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
               : Column(
                   children: [
                     Padding(
-                      padding: const EdgeInsets.fromLTRB(4, 4, 4, 6),
+                      padding: const EdgeInsets.fromLTRB(8, 6, 10, 6),
                       child: SizedBox(
                         height: 44,
                         child: Row(
@@ -197,10 +201,12 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
                                     ? null
                                     : controller.cancel,
                                 style: TextButton.styleFrom(
-                                  foregroundColor: Colors.white,
+                                  foregroundColor: Colors.white.withValues(
+                                    alpha: 0.88,
+                                  ),
                                   disabledForegroundColor: Colors.white38,
                                   padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
+                                    horizontal: 10,
                                   ),
                                   minimumSize: const Size(64, 40),
                                   tapTargetSize:
@@ -229,32 +235,15 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
                                 ),
                               ),
                             ),
-                            Obx(
-                              () => TextButton(
-                                onPressed:
-                                    (controller.isBusy.value ||
-                                        controller.isDoneBlockedByMissingGps)
-                                    ? null
-                                    : controller.done,
-                                style: TextButton.styleFrom(
-                                  foregroundColor: cPrimary,
-                                  disabledForegroundColor: Colors.white38,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                  ),
-                                  minimumSize: const Size(64, 40),
-                                  tapTargetSize:
-                                      MaterialTapTargetSize.shrinkWrap,
-                                ),
-                                child: const Text(
-                                  'Done',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 15,
-                                  ),
-                                ),
-                              ),
-                            ),
+                            Obx(() {
+                              final blocked =
+                                  controller.isBusy.value ||
+                                  controller.isDoneBlockedByMissingGps;
+                              return _ReviewHeaderDoneButton(
+                                enabled: !blocked,
+                                onPressed: blocked ? null : controller.done,
+                              );
+                            }),
                           ],
                         ),
                       ),
@@ -356,7 +345,7 @@ class _CaptureReviewActionBar extends StatelessWidget {
       children: [
         Expanded(
           child: _ReviewActionChip(
-            height: 38,
+            height: 42,
             icon: hasTextNote
                 ? Icons.edit_note_rounded
                 : Icons.sticky_note_2_outlined,
@@ -367,7 +356,7 @@ class _CaptureReviewActionBar extends StatelessWidget {
         const SizedBox(width: 8),
         Expanded(
           child: _ReviewActionChip(
-            height: 38,
+            height: 42,
             icon: hasVoiceNote ? Icons.mic_rounded : Icons.mic_none_rounded,
             label: hasVoiceNote ? 'Edit Voice' : 'Voice',
             onPressed: busy ? null : onVoiceNote,
@@ -376,7 +365,7 @@ class _CaptureReviewActionBar extends StatelessWidget {
         const SizedBox(width: 8),
         Expanded(
           child: _ReviewSecondaryButton(
-            height: 38,
+            height: 42,
             label: 'Retake',
             onPressed: busy ? null : onRetake,
           ),
@@ -415,6 +404,45 @@ class _CaptureReviewActionBar extends StatelessWidget {
   }
 }
 
+class _ReviewHeaderDoneButton extends StatelessWidget {
+  const _ReviewHeaderDoneButton({
+    required this.enabled,
+    required this.onPressed,
+  });
+
+  final bool enabled;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: enabled
+          ? _kReviewAccent
+          : _kReviewAccent.withValues(alpha: 0.32),
+      borderRadius: BorderRadius.circular(999),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onPressed,
+        splashColor: Colors.white.withValues(alpha: 0.18),
+        highlightColor: _kReviewAccentPressed.withValues(alpha: 0.55),
+        child: const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 18, vertical: 9),
+          child: Text(
+            'Done',
+            style: TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+              fontSize: 14,
+              letterSpacing: 0.15,
+              height: 1.1,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ReviewActionChip extends StatelessWidget {
   const _ReviewActionChip({
     required this.height,
@@ -435,23 +463,23 @@ class _ReviewActionChip extends StatelessWidget {
       child: OutlinedButton.icon(
         onPressed: onPressed,
         style: OutlinedButton.styleFrom(
-          foregroundColor: Colors.white.withValues(alpha: 0.92),
+          foregroundColor: Colors.white.withValues(alpha: 0.94),
           disabledForegroundColor: Colors.white38,
-          backgroundColor: Colors.white.withValues(alpha: 0.055),
-          side: BorderSide(color: Colors.white.withValues(alpha: 0.18)),
-          padding: const EdgeInsets.symmetric(horizontal: 6),
+          backgroundColor: Colors.white.withValues(alpha: 0.07),
+          side: BorderSide(color: Colors.white.withValues(alpha: 0.16)),
+          padding: const EdgeInsets.symmetric(horizontal: 8),
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           visualDensity: VisualDensity.compact,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(14),
           ),
         ),
-        icon: Icon(icon, size: 14),
+        icon: Icon(icon, size: 16),
         label: Text(
           label,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700),
+          style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700),
         ),
       ),
     );
@@ -474,17 +502,18 @@ class _ReviewSecondaryButton extends StatelessWidget {
     return OutlinedButton(
       onPressed: onPressed,
       style: OutlinedButton.styleFrom(
-        foregroundColor: Colors.white.withValues(alpha: 0.92),
+        foregroundColor: Colors.white.withValues(alpha: 0.94),
         disabledForegroundColor: Colors.white38,
+        backgroundColor: Colors.white.withValues(alpha: 0.04),
         side: BorderSide(color: Colors.white.withValues(alpha: 0.28)),
         minimumSize: Size.fromHeight(height),
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         padding: const EdgeInsets.symmetric(horizontal: 8),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       ),
       child: Text(
         label,
-        style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700),
+        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
       ),
     );
   }
@@ -498,16 +527,18 @@ class _ReviewDoneButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Landscape chrome is also black — never use navy `cPrimary` here.
     return FilledButton(
       onPressed: onPressed,
       style: FilledButton.styleFrom(
-        backgroundColor: cPrimary,
+        backgroundColor: _kReviewAccent,
         foregroundColor: Colors.white,
-        disabledBackgroundColor: cPrimary.withValues(alpha: 0.45),
+        disabledBackgroundColor: _kReviewAccent.withValues(alpha: 0.35),
+        disabledForegroundColor: Colors.white70,
         minimumSize: Size.fromHeight(height),
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         padding: const EdgeInsets.symmetric(horizontal: 8),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       ),
       child: const Text(
         'Done',

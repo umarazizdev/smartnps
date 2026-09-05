@@ -47,12 +47,17 @@
     <application
         android:label="SmartNPS360"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="true">
         <service
             android:name="id.flutter.flutter_background_service.BackgroundService"
             android:exported="false"
+            android:stopWithTask="false"
             android:foregroundServiceType="location"
-            tools:replace="android:foregroundServiceType,android:exported" />
+            tools:replace="android:foregroundServiceType,android:exported,android:stopWithTask" />
+        <receiver
+            android:name=".duty.AndroidDutyKillReceiver"
+            android:exported="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

@@ -47,6 +47,7 @@ class VisitUploadApi {
     required Map<String, dynamic> meta,
     required List<VisitMediaItem> items,
     String? batchVoicePath,
+    String? generalVoicePath,
   }) async {
     if (items.isEmpty) {
       const result = VisitUploadResult(
@@ -130,6 +131,16 @@ class VisitUploadApi {
     if (batchVoiceResult != null) {
       _logResult(batchVoiceResult);
       return batchVoiceResult;
+    }
+
+    final generalVoiceResult = await _attachGeneralVoice(
+      form: form,
+      meta: meta,
+      generalVoicePath: generalVoicePath,
+    );
+    if (generalVoiceResult != null) {
+      _logResult(generalVoiceResult);
+      return generalVoiceResult;
     }
 
     if (kDebugMode) {
@@ -312,6 +323,50 @@ class VisitUploadApi {
         await MultipartFile.fromFile(
           path,
           filename: 'attention_voice${_extension(path) ?? '.m4a'}',
+          contentType: _voiceContentType(path),
+        ),
+      ),
+    );
+    return null;
+  }
+
+  Future<VisitUploadResult?> _attachGeneralVoice({
+    required FormData form,
+    required Map<String, dynamic> meta,
+    required String? generalVoicePath,
+  }) async {
+    final generalNote = meta['general_note'];
+    if (generalNote is! Map) return null;
+
+    final enabledRaw = generalNote['enabled']?.toString().trim().toLowerCase();
+    final enabledYes =
+        enabledRaw == 'yes' ||
+        enabledRaw == 'true' ||
+        generalNote['enabled'] == true;
+    final wantsVoice = enabledYes && generalNote['has_voice_note'] == true;
+    if (!wantsVoice) return null;
+
+    final path = generalVoicePath?.trim();
+    if (path == null || path.isEmpty) {
+      return const VisitUploadResult(
+        success: false,
+        message: 'General note voice missing.',
+      );
+    }
+    final voiceFile = File(path);
+    if (!await voiceFile.exists()) {
+      return const VisitUploadResult(
+        success: false,
+        message: 'General note voice file missing.',
+      );
+    }
+
+    form.files.add(
+      MapEntry(
+        'general_voice',
+        await MultipartFile.fromFile(
+          path,
+          filename: 'general_voice${_extension(path) ?? '.m4a'}',
           contentType: _voiceContentType(path),
         ),
       ),

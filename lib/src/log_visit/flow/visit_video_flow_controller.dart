@@ -1,10 +1,14 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
 import 'package:video_thumbnail/video_thumbnail.dart' as vt;
 
+import 'package:geolocator/geolocator.dart';
+
+import '../../utilities/app_debug_log.dart';
+import 'visit_checkpoint.dart';
 import 'visit_media_draft_store.dart';
 import 'visit_media_geo.dart';
 import 'visit_patrol_context.dart';
@@ -76,6 +80,21 @@ class VisitBatchNote {
       'has_voice_note': hasVoiceNote,
     };
   }
+
+  Map<String, dynamic> toGeneralUploadMeta() {
+    if (!enabled) {
+      return <String, dynamic>{
+        'enabled': 'no',
+        'text_note': '',
+        'has_voice_note': false,
+      };
+    }
+    return <String, dynamic>{
+      'enabled': 'yes',
+      'text_note': hasTextNote ? textNote.trim() : '',
+      'has_voice_note': hasVoiceNote,
+    };
+  }
 }
 
 class VisitMediaItem {
@@ -88,6 +107,7 @@ class VisitMediaItem {
     this.latitude,
     this.longitude,
     this.accuracyMeters,
+    this.siteCheckpointId,
   });
 
   final String path;
@@ -98,6 +118,7 @@ class VisitMediaItem {
   final double? latitude;
   final double? longitude;
   final double? accuracyMeters;
+  final int? siteCheckpointId;
 
   bool get isPhoto => type == VisitMediaType.photo;
   bool get isVideo => type == VisitMediaType.video;
@@ -108,6 +129,8 @@ class VisitMediaItem {
   }
 
   bool get hasNotes => hasTextNote || hasVoiceNote;
+  bool get isCheckpointMedia => siteCheckpointId != null;
+  bool get isAdditionalMedia => siteCheckpointId == null;
 
   bool get hasStamp {
     return capturedAt != null || (latitude != null && longitude != null);
@@ -133,6 +156,8 @@ class VisitMediaItem {
     double? latitude,
     double? longitude,
     double? accuracyMeters,
+    int? siteCheckpointId,
+    bool clearSiteCheckpointId = false,
   }) {
     return VisitMediaItem(
       path: path ?? this.path,
@@ -145,6 +170,9 @@ class VisitMediaItem {
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,
       accuracyMeters: accuracyMeters ?? this.accuracyMeters,
+      siteCheckpointId: clearSiteCheckpointId
+          ? null
+          : (siteCheckpointId ?? this.siteCheckpointId),
     );
   }
 }
@@ -160,6 +188,8 @@ class VisitVideoFlowController extends GetxController {
   final activeDraftKey = Rxn<VisitDraftKey>();
   final isUploading = false.obs;
   final batchNote = const VisitBatchNote().obs;
+  final generalNote = const VisitBatchNote().obs;
+  final activeCheckpointId = RxnInt();
 
   final _store = VisitMediaDraftStore.instance;
   bool _restoring = false;
@@ -171,6 +201,38 @@ class VisitVideoFlowController extends GetxController {
 
   String? get locationSubtitle =>
       patrolContext.value?.locationSubtitle ?? draftSiteName.value;
+
+  List<VisitCheckpoint> get checkpoints =>
+      patrolContext.value?.checkpoints ?? const <VisitCheckpoint>[];
+
+  List<VisitMediaItem> get additionalMediaItems =>
+      mediaItems.where((e) => e.isAdditionalMedia).toList(growable: false);
+
+  List<VisitMediaItem> mediaForCheckpoint(int checkpointId) {
+    return mediaItems
+        .where((e) => e.siteCheckpointId == checkpointId)
+        .toList(growable: false);
+  }
+
+  bool isCheckpointCompleted(int checkpointId) {
+    return mediaForCheckpoint(checkpointId).any((e) => e.isPhoto);
+  }
+
+  int get completedCheckpointCount =>
+      checkpoints.where((e) => isCheckpointCompleted(e.id)).length;
+
+  int get pendingCheckpointCount =>
+      checkpoints.length - completedCheckpointCount;
+
+  bool get hasIncompleteCheckpoints => pendingCheckpointCount > 0;
+
+  void beginCheckpointCapture(int checkpointId) {
+    activeCheckpointId.value = checkpointId;
+  }
+
+  void endCheckpointCapture() {
+    activeCheckpointId.value = null;
+  }
 
   @override
   void onInit() {
@@ -202,6 +264,7 @@ class VisitVideoFlowController extends GetxController {
     _startedAt = snapshot.startedAt;
     activeDraftKey.value = snapshot.draftKey;
     batchNote.value = snapshot.batchNote;
+    generalNote.value = snapshot.generalNote;
     _applyContextToState(snapshot.context);
     if (draftSiteName.value == null || draftSiteName.value!.isEmpty) {
       draftSiteName.value = snapshot.displaySiteName;
@@ -234,6 +297,8 @@ class VisitVideoFlowController extends GetxController {
       patrolContext.value = null;
       activeDraftKey.value = null;
       batchNote.value = const VisitBatchNote();
+      generalNote.value = const VisitBatchNote();
+      activeCheckpointId.value = null;
       isUploading.value = false;
       isDraftReady.value = false;
       _restoreFuture = null;
@@ -244,7 +309,9 @@ class VisitVideoFlowController extends GetxController {
   }
 
   Future<void> reloadForAccountChange() async {
-    if (mediaItems.isNotEmpty || batchNote.value.hasContent) {
+    if (mediaItems.isNotEmpty ||
+        batchNote.value.hasContent ||
+        generalNote.value.hasContent) {
       await persistCurrentDraft();
     }
     await resetForLogout();
@@ -267,27 +334,69 @@ class VisitVideoFlowController extends GetxController {
     }
   }
 
+  Future<void> setGeneralNotesEnabled(bool enabled) async {
+    if (generalNote.value.enabled == enabled) return;
+    generalNote.value = generalNote.value.copyWith(enabled: enabled);
+    if (mediaItems.isNotEmpty) {
+      await _persistDraft();
+    }
+  }
+
   Future<void> updateBatchTextNote(String textNote) async {
+    await _updateToggleNoteText(
+      current: batchNote,
+      textNote: textNote,
+    );
+  }
+
+  Future<void> updateGeneralTextNote(String textNote) async {
+    await _updateToggleNoteText(
+      current: generalNote,
+      textNote: textNote,
+    );
+  }
+
+  Future<void> updateBatchVoiceNote(String? voiceNotePath) async {
+    await _updateToggleNoteVoice(
+      current: batchNote,
+      voiceNotePath: voiceNotePath,
+    );
+  }
+
+  Future<void> updateGeneralVoiceNote(String? voiceNotePath) async {
+    await _updateToggleNoteVoice(
+      current: generalNote,
+      voiceNotePath: voiceNotePath,
+    );
+  }
+
+  Future<void> _updateToggleNoteText({
+    required Rx<VisitBatchNote> current,
+    required String textNote,
+  }) async {
     final trimmed = textNote.trim();
-    final previousVoice = batchNote.value.voiceNotePath;
+    final previousVoice = current.value.voiceNotePath;
     if (trimmed.isNotEmpty) {
       if (previousVoice != null && previousVoice.trim().isNotEmpty) {
         await _store.deleteQuietly(previousVoice);
       }
-      batchNote.value = batchNote.value.copyWith(
+      current.value = current.value.copyWith(
         enabled: true,
         textNote: trimmed,
         clearVoiceNote: true,
       );
     } else {
-      batchNote.value = batchNote.value.copyWith(textNote: '');
+      current.value = current.value.copyWith(textNote: '');
     }
     if (mediaItems.isNotEmpty) {
       await _persistDraft();
     }
   }
 
-  Future<void> updateBatchVoiceNote(String? voiceNotePath) async {
+  Future<void> _updateToggleNoteVoice({
+    required Rx<VisitBatchNote> current,
+    required String? voiceNotePath,
+  }) async {
     String? durableVoice = voiceNotePath;
     if (voiceNotePath != null && voiceNotePath.trim().isNotEmpty) {
       try {
@@ -297,7 +406,7 @@ class VisitVideoFlowController extends GetxController {
       }
     }
 
-    final previous = batchNote.value.voiceNotePath;
+    final previous = current.value.voiceNotePath;
     if (previous != null &&
         previous != durableVoice &&
         previous.trim().isNotEmpty) {
@@ -305,9 +414,9 @@ class VisitVideoFlowController extends GetxController {
     }
 
     if (durableVoice == null || durableVoice.trim().isEmpty) {
-      batchNote.value = batchNote.value.copyWith(clearVoiceNote: true);
+      current.value = current.value.copyWith(clearVoiceNote: true);
     } else {
-      batchNote.value = batchNote.value.copyWith(
+      current.value = current.value.copyWith(
         enabled: true,
         textNote: '',
         voiceNotePath: durableVoice,
@@ -369,6 +478,24 @@ class VisitVideoFlowController extends GetxController {
     }
 
     final current = patrolContext.value;
+    final sameSite = currentKey == targetKey;
+    // Only keep prior checkpoints when reopening the same site without a
+    // fresh list. Switching sites (or an explicit empty list) restores the
+    // classic media-only log visit UI.
+    final incomingHasCheckpointList =
+        payload != null &&
+        (payload.containsKey('checkpoints') ||
+            payload.containsKey('checkpoint_count'));
+    final List<VisitCheckpoint> mergedCheckpoints;
+    if (incoming.checkpoints.isNotEmpty) {
+      mergedCheckpoints = incoming.checkpoints;
+    } else if (incomingHasCheckpointList) {
+      mergedCheckpoints = const <VisitCheckpoint>[];
+    } else if (sameSite) {
+      mergedCheckpoints = current?.checkpoints ?? const <VisitCheckpoint>[];
+    } else {
+      mergedCheckpoints = const <VisitCheckpoint>[];
+    }
     final merged = VisitPatrolContext(
       clientDraftId: current?.clientDraftId?.isNotEmpty == true
           ? current!.clientDraftId
@@ -380,7 +507,13 @@ class VisitVideoFlowController extends GetxController {
       regionName: incoming.regionName ?? current?.regionName,
       siteName: incoming.siteName ?? current?.siteName,
       scheduleId: incoming.scheduleId ?? current?.scheduleId,
+      sitePatrolWindowId:
+          incoming.sitePatrolWindowId ?? current?.sitePatrolWindowId,
       requestId: incoming.requestId ?? current?.requestId,
+      siteLatitude: incoming.siteLatitude ?? current?.siteLatitude,
+      siteLongitude: incoming.siteLongitude ?? current?.siteLongitude,
+      uploadUrl: incoming.uploadUrl ?? current?.uploadUrl,
+      checkpoints: mergedCheckpoints,
     );
 
     if (currentKey == targetKey && mediaItems.isNotEmpty) {
@@ -389,14 +522,15 @@ class VisitVideoFlowController extends GetxController {
       await _store.setActiveKey(targetKey);
       unawaited(persistCurrentDraft());
       final reopenedPending = mediaItems.isNotEmpty;
-      if (kDebugMode) {
-        debugPrint(
-          '[VisitDraft] bridge open key=$targetKey '
-          'reopenedPending=$reopenedPending items=${mediaItems.length} '
-          'siteId=${merged.siteId} regionId=${merged.regionId} '
-          'keptInMemory=true',
-        );
-      }
+      patrolLogDebugLog(
+        '[VisitDraft] bridge open key=$targetKey '
+        'reopenedPending=$reopenedPending items=${mediaItems.length} '
+        'siteId=${merged.siteId} regionId=${merged.regionId} '
+        'checkpoints=${merged.checkpoints.length} '
+        'photos=${merged.checkpoints.where((e) => e.hasReferencePhoto).length} '
+        'photoUrls=${merged.checkpoints.map((e) => e.photoUrl).toList()} '
+        'keptInMemory=true payload=$payload',
+      );
       return reopenedPending;
     }
 
@@ -415,13 +549,15 @@ class VisitVideoFlowController extends GetxController {
     _applyContextToState(merged);
 
     final reopenedPending = mediaItems.isNotEmpty;
-    if (kDebugMode) {
-      debugPrint(
-        '[VisitDraft] bridge open key=$targetKey '
-        'reopenedPending=$reopenedPending items=${mediaItems.length} '
-        'siteId=${merged.siteId} regionId=${merged.regionId}',
-      );
-    }
+    patrolLogDebugLog(
+      '[VisitDraft] bridge open key=$targetKey '
+      'reopenedPending=$reopenedPending items=${mediaItems.length} '
+      'siteId=${merged.siteId} regionId=${merged.regionId} '
+      'checkpoints=${merged.checkpoints.length} '
+      'photos=${merged.checkpoints.where((e) => e.hasReferencePhoto).length} '
+      'photoUrls=${merged.checkpoints.map((e) => e.photoUrl).toList()} '
+      'payload=$payload',
+    );
     return reopenedPending;
   }
 
@@ -480,12 +616,56 @@ class VisitVideoFlowController extends GetxController {
       });
     }
 
+    final checkpointsMeta = <Map<String, dynamic>>[];
+    final definedCheckpoints =
+        context?.checkpoints ?? const <VisitCheckpoint>[];
+    for (final checkpoint in definedCheckpoints) {
+      final linked = mediaForCheckpoint(checkpoint.id);
+      final photoIndex = mediaItems.indexWhere(
+        (e) => e.siteCheckpointId == checkpoint.id && e.isPhoto,
+      );
+      if (photoIndex < 0) continue;
+
+      final photo = mediaItems[photoIndex];
+      final notesItem = linked.firstWhere(
+        (e) => e.hasTextNote,
+        orElse: () => photo,
+      );
+      double? distanceMeters;
+      if (checkpoint.hasCoordinates &&
+          photo.latitude != null &&
+          photo.longitude != null) {
+        distanceMeters = Geolocator.distanceBetween(
+          checkpoint.latitude!,
+          checkpoint.longitude!,
+          photo.latitude!,
+          photo.longitude!,
+        );
+      }
+
+      checkpointsMeta.add(<String, dynamic>{
+        'site_checkpoint_id': checkpoint.id,
+        'status': 'completed',
+        'checked_at':
+            (photo.capturedAt ?? submitted).toUtc().toIso8601String(),
+        'latitude': photo.latitude,
+        'longitude': photo.longitude,
+        'accuracy_meters': photo.accuracyMeters,
+        if (distanceMeters != null)
+          'distance_meters': double.parse(distanceMeters.toStringAsFixed(1)),
+        'notes': notesItem.textNote.trim(),
+        'photo_client_index': photoIndex,
+      });
+    }
+
     final meta = <String, dynamic>{
       'client_draft_id': draftId,
       'started_at': started.toIso8601String(),
       'submitted_at': submitted.toIso8601String(),
       'items': items,
       'attention_needed': batchNote.value.toUploadMeta(),
+      'general_note': generalNote.value.toGeneralUploadMeta(),
+      if (checkpointsMeta.isNotEmpty) 'checkpoints': checkpointsMeta,
     };
     final contextFields = context?.toUploadMetaFields();
     if (contextFields != null) {
@@ -502,6 +682,7 @@ class VisitVideoFlowController extends GetxController {
     final siteName = draftSiteName.value;
     final context = patrolContext.value;
     final note = batchNote.value;
+    final general = generalNote.value;
     final key = activeDraftKey.value ?? VisitDraftKey.fromContext(context);
     activeDraftKey.value = key;
     _persistQueue = (_persistQueue ?? Future<void>.value()).then((_) async {
@@ -512,6 +693,7 @@ class VisitVideoFlowController extends GetxController {
         context: context,
         key: key,
         batchNote: note,
+        generalNote: general,
       );
     });
     await _persistQueue;
@@ -563,7 +745,10 @@ class VisitVideoFlowController extends GetxController {
       return null;
     }
 
-    final durableItem = item.copyWith(path: durablePath);
+    final durableItem = item.copyWith(
+      path: durablePath,
+      siteCheckpointId: item.siteCheckpointId ?? activeCheckpointId.value,
+    );
     _startedAt ??= durableItem.capturedAt ?? DateTime.now();
     if (patrolContext.value?.clientDraftId == null ||
         patrolContext.value!.clientDraftId!.trim().isEmpty) {
@@ -609,6 +794,8 @@ class VisitVideoFlowController extends GetxController {
           latitude: geo?.latitude ?? existing?.latitude,
           longitude: geo?.longitude ?? existing?.longitude,
           accuracyMeters: geo?.accuracyMeters ?? existing?.accuracyMeters,
+          siteCheckpointId:
+              existing?.siteCheckpointId ?? activeCheckpointId.value,
         );
 
     if (index >= 0) {
@@ -771,6 +958,7 @@ class VisitVideoFlowController extends GetxController {
         await _store.deleteQuietly(item.path);
       }
       await _store.deleteQuietly(batchNote.value.voiceNotePath);
+      await _store.deleteQuietly(generalNote.value.voiceNotePath);
       await _store.clearDraft(deleteFiles: true, key: key);
     } else {
       await _store.clearDraft(deleteFiles: false, key: key);
@@ -778,6 +966,8 @@ class VisitVideoFlowController extends GetxController {
     _thumbnailFutures.clear();
     mediaItems.clear();
     batchNote.value = const VisitBatchNote();
+    generalNote.value = const VisitBatchNote();
+    activeCheckpointId.value = null;
     _startedAt = null;
     draftSiteName.value = null;
     draftRegionName.value = null;

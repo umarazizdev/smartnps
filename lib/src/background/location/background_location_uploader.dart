@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:dio/dio.dart';
@@ -13,10 +14,20 @@ import '../../api/api_client.dart';
 import '../../api/api_urls.dart';
 import '../../auth/auth_repository.dart';
 import '../../location/batch_displacement_gate.dart';
+import '../../location/location_keep_point_gate.dart';
+import '../../location/location_path_coordinate_filter.dart';
+import '../../location/location_path_corner_sampler.dart';
+import '../../location/location_path_movement_mode.dart';
+import '../../location/location_path_freshness.dart';
+import '../../location/location_path_batch_policy.dart';
+import '../../location/location_path_origin_anchor_store.dart';
+import '../../location/location_path_outlier_gate.dart';
+import '../../location/location_path_stationary_guard.dart';
 import '../../location/speed_adaptive_gps_policy.dart';
 import '../../motion/motion_activity_fusion_controller.dart';
 import '../../motion/vehicle_session_fusion.dart';
 import 'background_location_accuracy.dart';
+import '../../debug/location_path_curve_debug_log.dart';
 import '../../utilities/app_config.dart';
 import '../../utilities/app_version_info.dart';
 import '../../utilities/device_identity.dart';
@@ -53,6 +64,15 @@ class BackgroundLocationUploader {
   final SpeedAdaptiveGpsPolicyTracker _policyTracker =
       SpeedAdaptiveGpsPolicyTracker();
   final BatchDisplacementGate _batchDisplacementGate = BatchDisplacementGate();
+  final LocationPathCoordinateFilter _pathCoordinateFilter =
+      LocationPathCoordinateFilter();
+  final LocationPathOutlierGate _pathOutlierGate = LocationPathOutlierGate();
+  final LocationPathStationaryGuard _pathStationaryGuard =
+      LocationPathStationaryGuard();
+  final LocationPathOriginAnchorStore _pathOriginAnchor =
+      LocationPathOriginAnchorStore();
+  final LocationPathCornerSampler _pathCornerSampler =
+      LocationPathCornerSampler();
 
   static const int _maxBatchSize = 20;
 
@@ -348,6 +368,11 @@ class BackgroundLocationUploader {
     _batchTimer = null;
     _batchTimerStartedAt = null;
     _batchDisplacementGate.reset();
+    _pathCoordinateFilter.reset();
+    _pathOutlierGate.reset();
+    _pathStationaryGuard.reset();
+    _pathOriginAnchor.reset();
+    _pathCornerSampler.reset();
 
     await _connectivitySub?.cancel();
     _connectivitySub = null;
@@ -361,6 +386,11 @@ class BackgroundLocationUploader {
     _batchTimer = null;
     _batchTimerStartedAt = null;
     _batchDisplacementGate.reset();
+    _pathCoordinateFilter.reset();
+    _pathOutlierGate.reset();
+    _pathStationaryGuard.reset();
+    _pathOriginAnchor.reset();
+    _pathCornerSampler.reset();
     await _connectivitySub?.cancel();
     _connectivitySub = null;
   }
@@ -369,9 +399,10 @@ class BackgroundLocationUploader {
     Position position, {
     SpeedAdaptiveGpsPolicyDecision? policyDecision,
     VehicleSessionSnapshot? motionFusion,
+    LocationKeepPointTrigger? keepTrigger,
   }) async {
     if (!_acceptingNewPoints) return;
-    if (!BackgroundLocationAccuracy.isAcceptable(position)) return;
+    if (!BackgroundLocationAccuracy.isValidReading(position)) return;
     if (!await _hasUploadAuth()) return;
     if (!_acceptingNewPoints) return;
     final policy = policyDecision ?? _policyTracker.evaluate(position);
@@ -380,30 +411,270 @@ class BackgroundLocationUploader {
         await MotionActivityFusionController.instance.evaluatePosition(
           position,
         );
-    if (!policy.shouldQueueForBatch) {
+    final movementMode = LocationPathMovementModePolicy.resolve(
+      policy: policy,
+      fusion: fusion,
+    );
+    _observePathFilters(
+      position: position,
+      movementMode: movementMode,
+      fusion: fusion,
+      policy: policy,
+    );
+    final speedKmh = policy.smoothedSpeedKmh ?? policy.rawSpeedKmh;
+    final modeSettings = LocationPathMovementModePolicy.settingsFor(
+      movementMode,
+      speedKmh: speedKmh,
+    );
+    final blockedByStationary = _pathStationaryGuard.blocksPathUpload;
+    if (blockedByStationary ||
+        !LocationPathBatchPolicy.shouldQueue(
+          policy: policy,
+          fusion: fusion,
+        )) {
+      _pathCoordinateFilter.reset();
+      final reason = blockedByStationary
+          ? 'stationary-lock'
+          : (keepTrigger == LocationKeepPointTrigger.stationaryPing
+                ? 'stationary-ping'
+                : 'motion/batch-policy');
+      _recordCurveDebug(
+        outcome: 'ping_only',
+        reason: reason,
+        position: position,
+        movementMode: movementMode,
+        policy: policy,
+        fusion: fusion,
+        keepTrigger: keepTrigger,
+      );
       if (kDebugMode) {
         _batchConsoleLog(
           'skipped batch queue '
+          'mode=${movementMode.name} '
           'band=${policy.band.label} '
           'motion=${fusion.apiMotionActivity} '
           'fused=${fusion.fusedState} '
+          'native=${fusion.nativeActivity} '
           'speedKmh=${(policy.smoothedSpeedKmh ?? policy.rawSpeedKmh)?.toStringAsFixed(1)} '
+          '($reason)',
+        );
+      }
+      return;
+    }
+    await _maybeEnqueuePendingOrigin(
+      policy: policy,
+      fusion: fusion,
+      movementMode: movementMode,
+    );
+    if (!LocationPathMovementModePolicy.isPathAccuracyAcceptable(
+      mode: movementMode,
+      accuracyMeters: position.accuracy,
+    )) {
+      _recordCurveDebug(
+        outcome: 'skipped',
+        reason: 'accuracy-cap',
+        position: position,
+        movementMode: movementMode,
+        policy: policy,
+        fusion: fusion,
+        keepTrigger: keepTrigger,
+        needM: modeSettings.maxPathAccuracyMeters,
+      );
+      if (kDebugMode) {
+        _batchConsoleLog(
+          'skipped batch queue '
+          'mode=${movementMode.name} '
+          'acc=${position.accuracy.toStringAsFixed(1)}m '
+          'max=${modeSettings.maxPathAccuracyMeters.toStringAsFixed(0)}m '
           '(ping-only)',
         );
       }
       return;
     }
-    if (!_batchDisplacementGate.shouldQueue(position)) {
+    final outlierDecision = _pathOutlierGate.evaluate(
+      position,
+      mode: movementMode,
+      speedKmh: policy.smoothedSpeedKmh ?? policy.rawSpeedKmh,
+    );
+    if (!outlierDecision.shouldQueue) {
+      _recordCurveDebug(
+        outcome: 'skipped',
+        reason: outlierDecision.reason?.name ?? 'outlier',
+        position: position,
+        movementMode: movementMode,
+        policy: policy,
+        fusion: fusion,
+        keepTrigger: keepTrigger,
+      );
       if (kDebugMode) {
         _batchConsoleLog(
           'skipped batch queue '
-          'dist=${_batchDisplacementGate.distanceFromLastQueuedMeters(position).toStringAsFixed(1)}m '
-          'need=${_batchDisplacementGate.requiredMetersFor(position).toStringAsFixed(1)}m '
-          '(not moved)',
+          'mode=${movementMode.name} '
+          'acc=${position.accuracy.toStringAsFixed(1)}m '
+          'reason=${outlierDecision.reason?.name ?? 'outlier'} '
+          '(ping-only)',
         );
       }
       return;
     }
+    final smoothedPosition = _pathCoordinateFilter.filter(
+      raw: position,
+      mode: movementMode,
+    );
+    var cornerDecision = _pathCornerSampler.displacementRequirement(
+      candidate: smoothedPosition,
+      mode: movementMode,
+      straightMinDisplacementMeters: modeSettings.minBatchDisplacementMeters,
+    );
+    var effectiveMinDisplacement = cornerDecision.effectiveMinDisplacementMeters;
+    var isCornerSample = cornerDecision.isCornerSample;
+    if (keepTrigger == LocationKeepPointTrigger.heading) {
+      final headingCornerMin = movementMode == LocationPathMovementMode.driving
+          ? LocationPathCornerSampler.drivingCornerMinDisplacementMeters
+          : LocationPathCornerSampler.walkingCornerMinDisplacementMeters;
+      if (headingCornerMin < effectiveMinDisplacement) {
+        effectiveMinDisplacement = headingCornerMin;
+      }
+      if (_batchDisplacementGate.distanceFromLastQueuedMeters(smoothedPosition) >=
+          headingCornerMin) {
+        isCornerSample = true;
+      }
+    }
+    final accuracyBoostCap = isCornerSample
+        ? math.min(
+            modeSettings.maxAccuracyBoostMeters,
+            effectiveMinDisplacement + 2,
+          )
+        : modeSettings.maxAccuracyBoostMeters;
+    final allowDrivingHeartbeat =
+        movementMode == LocationPathMovementMode.driving &&
+        modeSettings.pathHeartbeat != null;
+    final distMeters = _batchDisplacementGate.distanceFromLastQueuedMeters(
+      smoothedPosition,
+    );
+    final needMeters = _batchDisplacementGate.requiredMetersFor(
+      smoothedPosition,
+      minDisplacementMeters: effectiveMinDisplacement,
+      maxAccuracyBoostOverride: accuracyBoostCap,
+    );
+    if (!_batchDisplacementGate.shouldQueue(
+      smoothedPosition,
+      minDisplacementMeters: effectiveMinDisplacement,
+      maxAccuracyBoostOverride: accuracyBoostCap,
+      pathHeartbeat:
+          allowDrivingHeartbeat ? modeSettings.pathHeartbeat : null,
+      heartbeatMinDisplacementMeters:
+          modeSettings.heartbeatMinDisplacementMeters,
+    )) {
+      _recordCurveDebug(
+        outcome: 'skipped',
+        reason: isCornerSample ? 'corner-not-moved' : 'not-moved',
+        position: smoothedPosition,
+        movementMode: movementMode,
+        policy: policy,
+        fusion: fusion,
+        keepTrigger: keepTrigger,
+        distFromLastM: distMeters,
+        needM: needMeters,
+        isCorner: isCornerSample,
+      );
+      if (kDebugMode) {
+        _batchConsoleLog(
+          'skipped batch queue '
+          'mode=${movementMode.name} '
+          'dist=${distMeters.toStringAsFixed(1)}m '
+          'need=${needMeters.toStringAsFixed(1)}m '
+          '${isCornerSample ? '(corner)' : '(not moved)'}',
+        );
+      }
+      return;
+    }
+    _recordCurveDebug(
+      outcome: 'queued',
+      reason: isCornerSample
+          ? 'corner'
+          : (allowDrivingHeartbeat &&
+                  distMeters < modeSettings.minBatchDisplacementMeters
+              ? 'driving-heartbeat'
+              : 'displacement'),
+      position: smoothedPosition,
+      movementMode: movementMode,
+      policy: policy,
+      fusion: fusion,
+      keepTrigger: keepTrigger,
+      distFromLastM: distMeters,
+      needM: needMeters,
+      isCorner: isCornerSample,
+    );
+    await _enqueuePathPoint(
+      position: smoothedPosition,
+      policy: policy,
+      fusion: fusion,
+      isOrigin: false,
+      isCorner: isCornerSample,
+    );
+  }
+
+  Future<void> _maybeEnqueuePendingOrigin({
+    required SpeedAdaptiveGpsPolicyDecision policy,
+    required VehicleSessionSnapshot fusion,
+    required LocationPathMovementMode movementMode,
+  }) async {
+    if (!_pathOriginAnchor.hasPendingOriginUpload) return;
+    final origin = _pathOriginAnchor.takeOriginIfPending();
+    if (origin == null) return;
+
+    if (!LocationPathMovementModePolicy.isPathAccuracyAcceptable(
+      mode: movementMode,
+      accuracyMeters: origin.accuracy,
+    )) {
+      if (kDebugMode) {
+        _batchConsoleLog(
+          'skipped origin path point '
+          'acc=${origin.accuracy.toStringAsFixed(1)}m '
+          '(stale/low-accuracy)',
+        );
+      }
+      return;
+    }
+
+    final originAge = DateTime.now().toUtc().difference(
+      origin.timestamp.toUtc(),
+    );
+    if (originAge > LocationPathFreshness.reuseMaxAge) {
+      if (kDebugMode) {
+        _batchConsoleLog(
+          'skipped origin path point '
+          'age=${originAge.inSeconds}s '
+          '(older than ${LocationPathFreshness.reuseMaxAge.inSeconds}s)',
+        );
+      }
+      return;
+    }
+
+    if (kDebugMode) {
+      _batchConsoleLog(
+        'queue origin path point '
+        'acc=${origin.accuracy.toStringAsFixed(1)}m '
+        'age=${originAge.inSeconds}s',
+      );
+    }
+
+    await _enqueuePathPoint(
+      position: origin,
+      policy: policy,
+      fusion: fusion,
+      isOrigin: true,
+    );
+  }
+
+  Future<void> _enqueuePathPoint({
+    required Position position,
+    required SpeedAdaptiveGpsPolicyDecision policy,
+    required VehicleSessionSnapshot fusion,
+    required bool isOrigin,
+    bool isCorner = false,
+  }) async {
     await _ensureStorage();
     if (!_acceptingNewPoints) return;
     final recordedAtUtc = position.timestamp.toUtc();
@@ -412,6 +683,11 @@ class BackgroundLocationUploader {
       policyDecision: policy,
       motionFusion: fusion,
     );
+    if (isOrigin) {
+      apiPoint['pathPointRole'] = 'origin';
+    } else if (isCorner) {
+      apiPoint['pathPointRole'] = 'corner';
+    }
     if (!_acceptingNewPoints) return;
     final point = Map<String, dynamic>.from(apiPoint)
       ..['_local_point_key'] = _localPointKey(position, recordedAtUtc);
@@ -419,6 +695,9 @@ class BackgroundLocationUploader {
     final newPointId = _queueSeqLabel(point);
     _totalBatchPointsQueued++;
     _batchDisplacementGate.markQueued(position);
+    _pathOutlierGate.markAccepted(position);
+    _pathStationaryGuard.markBatchAccepted(position);
+    _pathCornerSampler.markAccepted(position);
     final box = _box;
     if (box != null) {
       await box.add(point);
@@ -434,6 +713,7 @@ class BackgroundLocationUploader {
           policy: policy,
           fusion: fusion,
           storage: 'hive',
+          isOrigin: isOrigin,
         );
       }
 
@@ -462,6 +742,7 @@ class BackgroundLocationUploader {
         policy: policy,
         fusion: fusion,
         storage: _fallbackQueueFile != null ? 'file' : 'memory',
+        isOrigin: isOrigin,
       );
     }
     await _maybeFlushBatchAfterAdd();
@@ -509,13 +790,61 @@ class BackgroundLocationUploader {
     return token != null && token.isNotEmpty;
   }
 
+  void _observePathFilters({
+    required Position position,
+    required LocationPathMovementMode movementMode,
+    required VehicleSessionSnapshot fusion,
+    required SpeedAdaptiveGpsPolicyDecision policy,
+  }) {
+    _pathOriginAnchor.observe(
+      position: position,
+      mode: movementMode,
+      fusion: fusion,
+    );
+    _pathStationaryGuard.observe(
+      position: position,
+      mode: movementMode,
+      fusion: fusion,
+      policy: policy,
+    );
+  }
+
+  void _recordCurveDebug({
+    required String outcome,
+    required String reason,
+    required Position position,
+    required LocationPathMovementMode movementMode,
+    required SpeedAdaptiveGpsPolicyDecision policy,
+    required VehicleSessionSnapshot fusion,
+    LocationKeepPointTrigger? keepTrigger,
+    double? distFromLastM,
+    double? needM,
+    bool isCorner = false,
+  }) {
+    LocationPathCurveDebugLog.instance.record(
+      outcome: outcome,
+      reason: reason,
+      mode: movementMode.name,
+      accuracyM: position.accuracy,
+      lat: position.latitude,
+      lng: position.longitude,
+      speedKmh: policy.smoothedSpeedKmh ?? policy.rawSpeedKmh,
+      distFromLastM: distFromLastM,
+      needM: needM,
+      isCorner: isCorner,
+      nativeMotion: fusion.nativeActivity,
+      fusedMotion: fusion.fusedState,
+      keepTrigger: keepTrigger?.name ?? '',
+    );
+  }
+
   Future<void> pingNow(
     Position position, {
     SpeedAdaptiveGpsPolicyDecision? policyDecision,
     VehicleSessionSnapshot? motionFusion,
   }) async {
     if (!_acceptingNewPoints) return;
-    if (!BackgroundLocationAccuracy.isAcceptable(position)) return;
+    if (!BackgroundLocationAccuracy.isAcceptableForPing(position)) return;
     if (!await _hasUploadAuth()) return;
     if (!_acceptingNewPoints) return;
     final fusion =
@@ -523,9 +852,20 @@ class BackgroundLocationUploader {
         await MotionActivityFusionController.instance.evaluatePosition(
           position,
         );
+    final policy = policyDecision ?? _policyTracker.evaluate(position);
+    final movementMode = LocationPathMovementModePolicy.resolve(
+      policy: policy,
+      fusion: fusion,
+    );
+    _observePathFilters(
+      position: position,
+      movementMode: movementMode,
+      fusion: fusion,
+      policy: policy,
+    );
     final point = await _buildApiPoint(
       position,
-      policyDecision: policyDecision,
+      policyDecision: policy,
       motionFusion: fusion,
     );
     if (!_acceptingNewPoints) return;
@@ -989,9 +1329,11 @@ class BackgroundLocationUploader {
     required SpeedAdaptiveGpsPolicyDecision policy,
     required VehicleSessionSnapshot fusion,
     required String storage,
+    bool isOrigin = false,
   }) {
     batchDebugLog(
       '[DutyLocation] batch add queued $pointId storage=$storage '
+      '${isOrigin ? 'role=origin ' : ''}'
       'queued=${_queuedPointCount()} ${_batchTotalsLabel()} '
       'acc=${position.accuracy.toStringAsFixed(1)}m '
       'speedKmh=${(policy.smoothedSpeedKmh ?? policy.rawSpeedKmh)?.toStringAsFixed(1)} '

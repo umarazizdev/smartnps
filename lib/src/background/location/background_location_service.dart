@@ -5,16 +5,20 @@ import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../../location/adaptive_gps_stream_controller.dart';
+import '../../location/duty_location_upload_coordinator.dart';
 import '../../location/location_keep_point_gate.dart';
 import '../../location/mock_location_detection.dart';
 import '../../location/speed_adaptive_gps_policy.dart';
 import '../../auth/auth_repository.dart';
 import '../../motion/motion_activity_fusion_controller.dart';
 import '../duty/clock_in_engine_warm_snapshot.dart';
+import '../duty/duty_heartbeat_client.dart';
 import '../duty/duty_status_snapshot.dart';
+import '../duty/android_duty_kill_watch.dart';
 import 'android_duty_location_health.dart';
 import 'background_location_accuracy.dart';
 import 'background_location_uploader.dart';
+import '../../debug/debug_env_config.dart';
 import '../../utilities/app_debug_log.dart';
 
 @pragma('vm:entry-point')
@@ -81,8 +85,36 @@ class BackgroundLocationService {
       final service = FlutterBackgroundService();
       if (!await service.isRunning()) return;
 
+      if (await AndroidDutyKillWatch.isForceOff()) {
+        locationDebugLog(
+          '[DutyLocation] cold start: stopping leftover Android FGS (force_off)',
+        );
+        service.invoke('stop');
+        AndroidDutyLocationHealth.markStopped();
+        return;
+      }
+
+      final token = await AuthRepository.instance.getAccessToken();
+      final hasToken = token != null && token.isNotEmpty;
+      if (!hasToken) {
+        locationDebugLog(
+          '[DutyLocation] cold start: stopping leftover Android FGS '
+          '(no auth token)',
+        );
+        await AndroidDutyKillWatch.disarm(forceOff: true);
+        await DutyStatusSnapshot.clear();
+        service.invoke('stop');
+        AndroidDutyLocationHealth.markStopped();
+        return;
+      }
+
       final onDuty = await DutyStatusSnapshot.isValidOnDutyForCurrentUser();
-      if (onDuty) {
+      final nativeOnDuty = await AndroidDutyKillWatch.isNativeApiOnDutyFresh();
+      final killWatchArmed = await AndroidDutyKillWatch.isKillWatchArmed();
+      if (onDuty || nativeOnDuty || killWatchArmed) {
+        if (!onDuty) {
+          await DutyStatusSnapshot.markOnDuty();
+        }
         AndroidDutyLocationHealth.ensureListenerInstalled();
         final now = DateTime.now();
         AndroidDutyLocationHealth.markStarted(at: now);
@@ -200,9 +232,41 @@ class BackgroundLocationService {
       '[DutyLocation] RUNNING (Android background service onStart, '
       'stable-stream v2)',
     );
+    await DebugEnvConfig.instance.init();
+
+    if (await AndroidDutyKillWatch.isForceOff()) {
+      locationDebugLog(
+        '[DutyLocation] Android FGS start aborted; native force_off',
+      );
+      service.stopSelf();
+      return;
+    }
 
     if (await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) {
       await ClockInEngineWarmSnapshot.clear();
+      await _runDutyTracking(service);
+      return;
+    }
+
+    // Native kill keep-alive may restart FGS before UI snapshot is refreshed.
+    if (await AndroidDutyKillWatch.isNativeApiOnDutyFresh() ||
+        await AndroidDutyKillWatch.isKillWatchArmed()) {
+      final token = await AuthRepository.instance.getAccessToken();
+      if (token == null || token.isEmpty) {
+        locationDebugLog(
+          '[DutyLocation] Android FGS start aborted; kill-watch armed '
+          'but no auth token',
+        );
+        await AndroidDutyKillWatch.disarm(forceOff: true);
+        await DutyStatusSnapshot.clear();
+        service.stopSelf();
+        return;
+      }
+      await DutyStatusSnapshot.markOnDuty();
+      await ClockInEngineWarmSnapshot.clear();
+      locationDebugLog(
+        '[DutyLocation] Android FGS start from native kill-watch keep-alive',
+      );
       await _runDutyTracking(service);
       return;
     }
@@ -286,6 +350,7 @@ class BackgroundLocationService {
 
     unawaited(DutyStatusSnapshot.renewIfStillOnDuty());
 
+    var uiForeground = true;
     final uploader = BackgroundLocationUploader();
     await uploader.init();
     uploader.start();
@@ -319,23 +384,83 @@ class BackgroundLocationService {
     late final Future<void> Function(Position pos) handlePosition;
     late final Future<void> Function({required String reason}) forcePoll;
     late final Future<void> Function() runDutyGate;
+    late final Future<bool> Function() trackingStillAllowed;
 
     Timer? healthTimer;
     Timer? dutyGateTimer;
+
+    trackingStillAllowed = () async {
+      if (await AndroidDutyKillWatch.isForceOff()) return false;
+      if (await AndroidDutyKillWatch.isUnpaidBreak()) return false;
+      if (await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) return true;
+      // Kill-path only: native confirmed on_duty recently and may restart FGS
+      // before Flutter snapshot is rewritten.
+      if (!uiForeground &&
+          await AndroidDutyKillWatch.isNativeApiOnDutyFresh()) {
+        await DutyStatusSnapshot.markOnDuty();
+        return true;
+      }
+      if (!uiForeground && await AndroidDutyKillWatch.isKillWatchArmed()) {
+        return true;
+      }
+      return false;
+    };
 
     runDutyGate = () async {
       if (stopping || dutyGateInFlight) return;
       dutyGateInFlight = true;
       try {
-        await DutyStatusSnapshot.renewIfStillOnDuty();
-        final stillOnDuty =
-            await DutyStatusSnapshot.isValidOnDutyForCurrentUser();
-        if (!stillOnDuty) {
+        if (await AndroidDutyKillWatch.isForceOff()) {
+          locationDebugLog(
+            '[DutyLocation] Android FGS duty gate: native force_off → stop',
+          );
+          await stop();
+          return;
+        }
+
+        if (await AndroidDutyKillWatch.isUnpaidBreak()) {
+          locationDebugLog(
+            '[DutyLocation] Android FGS duty gate: unpaid break → stop',
+          );
+          await DutyStatusSnapshot.clear();
+          await stop();
+          return;
+        }
+
+        if (!uiForeground) {
+          final payload = await DutyHeartbeatClient.fetchHeartbeat();
+          if (payload != null && payload.allowsLocationTracking) {
+            await AndroidDutyKillWatch.setUnpaidBreak(false);
+            await DutyStatusSnapshot.markOnDuty();
+            return;
+          }
+          if (payload != null && payload.isUnpaidBreak) {
+            locationDebugLog(
+              '[DutyLocation] Android FGS duty gate: API unpaid break while '
+              'UI killed/backgrounded → stop',
+            );
+            await DutyStatusSnapshot.clear();
+            await AndroidDutyKillWatch.setUnpaidBreak(true);
+            await stop();
+            return;
+          }
+          if (payload?.dutyStatus == DutyHeartbeatClient.offDuty) {
+            locationDebugLog(
+              '[DutyLocation] Android FGS duty gate: API off_duty while '
+              'UI killed/backgrounded → stop',
+            );
+            await DutyStatusSnapshot.clear();
+            await AndroidDutyKillWatch.disarm(forceOff: true);
+            await stop();
+            return;
+          }
+        }
+
+        if (!await trackingStillAllowed()) {
           locationDebugLog(
             '[DutyLocation] Android FGS duty gate: snapshot gone → stop',
           );
           await stop();
-          return;
         }
       } catch (e) {
         locationDebugLog('[DutyLocation] Android FGS duty gate failed: $e');
@@ -348,8 +473,7 @@ class BackgroundLocationService {
       if (stopping) return;
       lastAnyFixAt = DateTime.now();
 
-      await DutyStatusSnapshot.renewIfStillOnDuty();
-      if (!await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) {
+      if (!await trackingStillAllowed()) {
         locationDebugLog(
           '[DutyLocation] Android FGS stopping; on_duty snapshot gone',
         );
@@ -357,7 +481,10 @@ class BackgroundLocationService {
         return;
       }
 
-      if (!BackgroundLocationAccuracy.isAcceptable(pos)) {
+      if (!BackgroundLocationAccuracy.isValidReading(pos)) {
+        locationDebugLog(
+          '[DutyLocation] skipped invalid GPS fix acc=${pos.accuracy}m',
+        );
         return;
       }
       lastAcceptedFixAt = DateTime.now();
@@ -408,14 +535,10 @@ class BackgroundLocationService {
 
       try {
         if (stopping) return;
-        await uploader.pingNow(
-          pos,
-          policyDecision: policyDecision,
-          motionFusion: motionFusion,
-        );
-        if (stopping) return;
-        await uploader.add(
-          pos,
+        await DutyLocationUploadCoordinator.uploadKeptPoint(
+          uploader: uploader,
+          position: pos,
+          keepDecision: keepDecision,
           policyDecision: policyDecision,
           motionFusion: motionFusion,
         );
@@ -553,15 +676,17 @@ class BackgroundLocationService {
 
     service.on('app_backgrounded').listen((event) {
       if (stopping) return;
+      uiForeground = false;
       locationDebugLog(
-        '[DutyLocation] app backgrounded — GPS stream kept, adaptive upload continues',
+        '[DutyLocation] app backgrounded — GPS stream kept, '
+        'kill-watch heartbeat enabled',
       );
-      unawaited(DutyStatusSnapshot.renewIfStillOnDuty());
       unawaited(runDutyGate());
     });
 
     service.on('app_foregrounded').listen((event) {
       if (stopping) return;
+      uiForeground = true;
       locationDebugLog('[DutyLocation] app foregrounded');
       unawaited(runDutyGate());
     });

@@ -14,6 +14,7 @@ class LocationSharingStatusNotification {
   static const int sharingNotificationId = 9911;
   static const int stoppedNotificationId = 9912;
   static const int bgStartTestNotificationId = 9913;
+  static const int breakStartedNotificationId = 9914;
 
   static const String iosAppTitle = 'SmartNPS360';
   static const String androidSharingTitle = 'On Duty • Location Active';
@@ -45,11 +46,16 @@ class LocationSharingStatusNotification {
   static const String _androidBgStartTestChannelName = 'Location test alerts';
   static const String _androidBgStartTestChannelDescription =
       'Debug alerts when background location FGS starts';
+  static const String _androidBreakChannelId = 'smartnps360_break_status';
+  static const String _androidBreakChannelName = 'Break status';
+  static const String _androidBreakChannelDescription =
+      'Alerts when a paid or unpaid break starts';
 
   static FlutterLocalNotificationsPlugin? _plugin;
   static bool _sharingShown = false;
   static bool _shiftEndedAnnounced = false;
   static bool _signedOutAnnounced = false;
+  static String? _lastBreakNotificationKey;
 
   static bool get isSharingShown => _sharingShown;
 
@@ -163,9 +169,80 @@ class LocationSharingStatusNotification {
           enableVibration: true,
         ),
       );
+      await android?.createNotificationChannel(
+        const AndroidNotificationChannel(
+          _androidBreakChannelId,
+          _androidBreakChannelName,
+          description: _androidBreakChannelDescription,
+          importance: Importance.high,
+          playSound: true,
+          enableVibration: true,
+        ),
+      );
     }
 
     return plugin;
+  }
+
+  static Future<void> showBreakStarted({
+    required bool unpaid,
+    required int minutes,
+  }) async {
+    if (!Platform.isIOS && !Platform.isAndroid) return;
+
+    final safeMinutes = minutes > 0 ? minutes : 30;
+    final key = '${unpaid ? 'unpaid' : 'paid'}:$safeMinutes';
+    if (_lastBreakNotificationKey == key) return;
+    _lastBreakNotificationKey = key;
+
+    final title = unpaid
+        ? '$safeMinutes-Minute Unpaid Break Started'
+        : '$safeMinutes-Minute Paid Break Started';
+    final body = unpaid
+        ? 'GPS paused. Return onsite and resume duty when your break ends.'
+        : 'Stay onsite. GPS remains active. Approval is required before leaving site.';
+
+    final plugin = await _ensurePlugin();
+    await plugin.show(
+      id: breakStartedNotificationId,
+      title: title,
+      body: body,
+      notificationDetails: NotificationDetails(
+        iOS: const DarwinNotificationDetails(
+          presentAlert: true,
+          presentBanner: true,
+          presentList: true,
+          presentBadge: false,
+          presentSound: true,
+          sound: 'default',
+          threadIdentifier: 'smartnps360_break',
+          interruptionLevel: InterruptionLevel.active,
+        ),
+        android: AndroidNotificationDetails(
+          _androidBreakChannelId,
+          _androidBreakChannelName,
+          channelDescription: _androidBreakChannelDescription,
+          importance: Importance.high,
+          priority: Priority.high,
+          playSound: true,
+          enableVibration: true,
+          autoCancel: true,
+        ),
+      ),
+    );
+
+    locationDebugLog(
+      '[LocationSharingStatusNotification] break started shown '
+      'unpaid=$unpaid minutes=$safeMinutes',
+    );
+    dutyHeartbeatDebugLog(
+      '[LocationSharingStatusNotification] break started shown '
+      'unpaid=$unpaid minutes=$safeMinutes title=$title',
+    );
+  }
+
+  static void resetBreakStartedGate() {
+    _lastBreakNotificationKey = null;
   }
 
   static const NotificationDetails _sharingDetails = NotificationDetails(

@@ -1,3 +1,5 @@
+import '../debug/debug_env_config.dart';
+
 class AppRoutes {
   AppRoutes._();
 
@@ -6,16 +8,21 @@ class AppRoutes {
   static const captureReview = '/capture-review';
   static const visitPhotoViewer = '/visit-photo-viewer';
   static const visitVideoPlayer = '/visit-video-player';
+  static const visitCheckpoint = '/visit-checkpoint';
 
-  static const webBaseUrl = 'https://smartnps360.com/';
+  static String get webBaseUrl => DebugEnvConfig.instance.webBaseUrl;
 
-  static const webLoginUrl = 'https://smartnps360.com';
-  static const webSignupUrl = '${webBaseUrl}officer/register';
-  static const webDashboardUrl = '${webBaseUrl}officer/dashboard';
-  static const webShiftLogUrl = '${webBaseUrl}officer/shift-log';
-  static const webTimesheetUrl = '${webBaseUrl}officer/timesheet/monthly';
-  static const webProfileUrl = '${webBaseUrl}officer/profile';
-  static const defaultPushUrl = webDashboardUrl;
+  static String get webLoginUrl {
+    final base = webBaseUrl;
+    return base.endsWith('/') ? base.substring(0, base.length - 1) : base;
+  }
+
+  static String get webSignupUrl => '${webBaseUrl}officer/register';
+  static String get webDashboardUrl => '${webBaseUrl}officer/dashboard';
+  static String get webShiftLogUrl => '${webBaseUrl}officer/shift-log';
+  static String get webTimesheetUrl => '${webBaseUrl}officer/timesheet/monthly';
+  static String get webProfileUrl => '${webBaseUrl}officer/profile';
+  static String get defaultPushUrl => webDashboardUrl;
 
   static const bottomTabWebPaths = <String>[
     '/officer/dashboard',

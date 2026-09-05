@@ -14,11 +14,15 @@ class GlassDialogAction<T> {
     required this.label,
     required this.value,
     this.tone = GlassDialogActionTone.neutral,
+    this.beforePop,
   });
 
   final String label;
   final T value;
   final GlassDialogActionTone tone;
+
+  /// Return `false` to keep the dialog open (e.g. after showing a snackbar).
+  final FutureOr<bool> Function()? beforePop;
 }
 
 class GlassActionDialog extends StatelessWidget {
@@ -162,6 +166,7 @@ class GlassActionDialog extends StatelessWidget {
               label: action.label,
               value: action.value,
               tone: action.tone,
+              beforePop: action.beforePop,
             ),
         ],
         iconColor: iconColor,
@@ -643,6 +648,19 @@ class GlassActionDialog extends StatelessWidget {
     );
   }
 
+  Future<void> _handleActionTap({
+    required BuildContext context,
+    required GlassDialogAction<Object?> action,
+  }) async {
+    final guard = action.beforePop;
+    if (guard != null) {
+      final shouldClose = await guard();
+      if (!shouldClose) return;
+      if (!context.mounted) return;
+    }
+    Navigator.of(context).pop(action.value);
+  }
+
   Widget _buildToneButton({
     required BuildContext context,
     required GlassDialogAction<Object?> action,
@@ -653,7 +671,7 @@ class GlassActionDialog extends StatelessWidget {
         final bg = isDark ? const Color(0xFF4F8DF7) : const Color(0xFF2563EB);
         return _ActionButton(
           label: action.label,
-          onPressed: () => Navigator.of(context).pop(action.value),
+          onPressed: () => _handleActionTap(context: context, action: action),
           filled: true,
           foregroundColor: Colors.white,
           borderColor: bg,
@@ -663,7 +681,7 @@ class GlassActionDialog extends StatelessWidget {
       case GlassDialogActionTone.destructive:
         return _ActionButton(
           label: action.label,
-          onPressed: () => Navigator.of(context).pop(action.value),
+          onPressed: () => _handleActionTap(context: context, action: action),
           filled: false,
           foregroundColor: _errorColor,
           borderColor: _errorColor.withValues(alpha: 0.55),
@@ -675,7 +693,7 @@ class GlassActionDialog extends StatelessWidget {
         final fg = isDark ? Colors.white : const Color(0xFF253047);
         return _ActionButton(
           label: action.label,
-          onPressed: () => Navigator.of(context).pop(action.value),
+          onPressed: () => _handleActionTap(context: context, action: action),
           filled: true,
           foregroundColor: fg,
           borderColor: bg,

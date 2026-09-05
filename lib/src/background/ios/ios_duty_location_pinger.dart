@@ -7,6 +7,7 @@ import 'package:geolocator/geolocator.dart';
 
 import '../../auth/auth_repository.dart';
 import '../../location/adaptive_gps_stream_controller.dart';
+import '../../location/duty_location_upload_coordinator.dart';
 import '../../location/location_keep_point_gate.dart';
 import '../../location/mock_location_detection.dart';
 import '../../location/mock_location_guard.dart';
@@ -294,7 +295,7 @@ class IosDutyLocationPinger {
           if (bestSeen == null || position.accuracy < bestSeen!.accuracy) {
             bestSeen = position;
           }
-          if (BackgroundLocationAccuracy.isAcceptable(position)) {
+          if (BackgroundLocationAccuracy.isValidReading(position)) {
             completer.complete(position);
           }
         },
@@ -308,8 +309,7 @@ class IosDutyLocationPinger {
       return await completer.future.timeout(timeout);
     } on TimeoutException {
       final fallback = bestSeen;
-      if (fallback != null &&
-          BackgroundLocationAccuracy.isAcceptable(fallback)) {
+      if (fallback != null && BackgroundLocationAccuracy.isValidReading(fallback)) {
         return fallback;
       }
       if (kDebugMode && fallback != null) {
@@ -440,9 +440,9 @@ class IosDutyLocationPinger {
   static Future<void> _onPosition(Position pos) async {
     if (_stopping) return;
 
-    if (!BackgroundLocationAccuracy.isAcceptable(pos)) {
+    if (!BackgroundLocationAccuracy.isValidReading(pos)) {
       locationDebugLog(
-        '[IosDutyLocationPinger] skipped inaccurate fix acc=${pos.accuracy}m',
+        '[IosDutyLocationPinger] skipped invalid fix acc=${pos.accuracy}m',
       );
       return;
     }
@@ -509,14 +509,10 @@ class IosDutyLocationPinger {
 
     try {
       if (_stopping) return;
-      await uploader.pingNow(
-        pos,
-        policyDecision: policyDecision,
-        motionFusion: motionFusion,
-      );
-      if (_stopping) return;
-      await uploader.add(
-        pos,
+      await DutyLocationUploadCoordinator.uploadKeptPoint(
+        uploader: uploader,
+        position: pos,
+        keepDecision: keepDecision,
         policyDecision: policyDecision,
         motionFusion: motionFusion,
       );

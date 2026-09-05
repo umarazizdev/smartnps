@@ -63,6 +63,7 @@ class VisitMediaDraftSnapshot {
     this.context,
     this.savedAt,
     this.batchNote = const VisitBatchNote(),
+    this.generalNote = const VisitBatchNote(),
   });
 
   final List<VisitMediaItem> items;
@@ -72,6 +73,7 @@ class VisitMediaDraftSnapshot {
   final VisitPatrolContext? context;
   final DateTime? savedAt;
   final VisitBatchNote batchNote;
+  final VisitBatchNote generalNote;
 
   bool get hasItems => items.isNotEmpty;
 
@@ -360,6 +362,7 @@ class VisitMediaDraftStore {
     VisitPatrolContext? context,
     VisitDraftKey? key,
     VisitBatchNote batchNote = const VisitBatchNote(),
+    VisitBatchNote generalNote = const VisitBatchNote(),
   }) async {
     final draftKey = key ?? VisitDraftKey.fromContext(context);
 
@@ -385,13 +388,14 @@ class VisitMediaDraftStore {
             ? context!.siteName
             : siteName;
     final payload = <String, dynamic>{
-      'version': 6,
+      'version': 7,
       'draftKey': draftKey.folderName,
       'savedAt': DateTime.now().toIso8601String(),
       'startedAt': effectiveStartedAt?.toIso8601String(),
       'siteName': effectiveSiteName,
       'context': context?.toJson(),
       'attentionNeeded': batchNote.toJson(),
+      'generalNote': generalNote.toJson(),
       'items': items.map(_itemToJson).toList(),
     };
     await file.writeAsString(jsonEncode(payload), flush: true);
@@ -503,6 +507,18 @@ class VisitMediaDraftStore {
         }
       }
 
+      VisitBatchNote general = const VisitBatchNote();
+      final generalRaw = map['generalNote'] ?? map['general_note'];
+      if (generalRaw is Map) {
+        general = VisitBatchNote.fromJson(Map<String, dynamic>.from(generalRaw));
+        final voice = general.voiceNotePath;
+        if (voice != null &&
+            voice.isNotEmpty &&
+            !await File(voice).exists()) {
+          general = general.copyWith(clearVoiceNote: true);
+        }
+      }
+
       return VisitMediaDraftSnapshot(
         items: items,
         draftKey: effectiveKey,
@@ -513,6 +529,7 @@ class VisitMediaDraftStore {
             : legacySiteName,
         context: context,
         batchNote: batch,
+        generalNote: general,
       );
     } catch (_) {
       return VisitMediaDraftSnapshot(
@@ -622,6 +639,7 @@ class VisitMediaDraftStore {
       'latitude': item.latitude,
       'longitude': item.longitude,
       'accuracyMeters': item.accuracyMeters,
+      'siteCheckpointId': item.siteCheckpointId,
     };
   }
 
@@ -640,6 +658,17 @@ class VisitMediaDraftStore {
       capturedAt = DateTime.tryParse(capturedRaw);
     }
 
+    final checkpointRaw =
+        json['siteCheckpointId'] ?? json['site_checkpoint_id'];
+    int? siteCheckpointId;
+    if (checkpointRaw is int) {
+      siteCheckpointId = checkpointRaw;
+    } else if (checkpointRaw is num) {
+      siteCheckpointId = checkpointRaw.toInt();
+    } else if (checkpointRaw != null) {
+      siteCheckpointId = int.tryParse(checkpointRaw.toString());
+    }
+
     return VisitMediaItem(
       path: path,
       type: type,
@@ -649,6 +678,7 @@ class VisitMediaDraftStore {
       latitude: (json['latitude'] as num?)?.toDouble(),
       longitude: (json['longitude'] as num?)?.toDouble(),
       accuracyMeters: (json['accuracyMeters'] as num?)?.toDouble(),
+      siteCheckpointId: siteCheckpointId,
     );
   }
 }
