@@ -16,6 +16,7 @@ Future<void> openVisitMediaNotesSheet({
   required VisitMediaItem item,
   VisitMediaNoteKind kind = VisitMediaNoteKind.text,
 }) async {
+  final alert = item.attentionNeeded;
   await _openNotesDialog(
     context: context,
     kind: kind,
@@ -25,13 +26,23 @@ Future<void> openVisitMediaNotesSheet({
     hasTextNote: item.hasTextNote,
     hasVoiceNote: item.hasVoiceNote,
     title: kind == VisitMediaNoteKind.text
-        ? (item.isPhoto ? 'Photo Text Note' : 'Video Text Note')
-        : (item.isPhoto ? 'Photo Voice Note' : 'Video Voice Note'),
+        ? (alert
+              ? 'Attention Text Note'
+              : (item.isPhoto ? 'Photo Text Note' : 'Video Text Note'))
+        : (alert
+              ? 'Attention Voice Note'
+              : (item.isPhoto ? 'Photo Voice Note' : 'Video Voice Note')),
     subtitle: kind == VisitMediaNoteKind.text
-        ? 'Add a text note for this ${item.isPhoto ? 'photo' : 'video'}.'
-        : 'Record a voice note for this ${item.isPhoto ? 'photo' : 'video'}.',
-    textHint:
-        'Type your note for this ${item.isPhoto ? 'photo' : 'video'}...',
+        ? (alert
+              ? 'Add a text note for this attention-needed ${item.isPhoto ? 'photo' : 'video'}.'
+              : 'Add a text note for this ${item.isPhoto ? 'photo' : 'video'}.')
+        : (alert
+              ? 'Record a voice note for this attention-needed ${item.isPhoto ? 'photo' : 'video'}.'
+              : 'Record a voice note for this ${item.isPhoto ? 'photo' : 'video'}.'),
+    textHint: alert
+        ? 'Describe what needs attention...'
+        : 'Type your note for this ${item.isPhoto ? 'photo' : 'video'}...',
+    forceAlertAccent: alert,
   );
 }
 
@@ -81,15 +92,18 @@ Future<void> _openNotesDialog({
   required String title,
   required String subtitle,
   required String textHint,
+  bool forceAlertAccent = false,
 }) async {
   if (Get.isRegistered<VisitMediaNotesController>(tag: tag)) {
     Get.delete<VisitMediaNotesController>(tag: tag, force: true);
   }
 
   final isDark = Theme.of(context).brightness == Brightness.dark;
-  final accentColor = isDark
-      ? const Color(0xFF93C5FD)
-      : const Color(0xFF4F46E5);
+  final useAlertAccent = forceAlertAccent ||
+      (batchMode && batchScope == VisitBatchNoteScope.attentionNeeded);
+  final accentColor = useAlertAccent
+      ? const Color(0xFFDC2626)
+      : (isDark ? const Color(0xFF93C5FD) : const Color(0xFF4F46E5));
   var didSave = false;
 
   BuildContext safeDialogContext() {
@@ -219,6 +233,7 @@ Future<void> _openNotesDialog({
         kind: kind,
         subtitle: subtitle,
         textHint: textHint,
+        accent: accentColor,
       ),
     );
     if (result == true) {
@@ -250,6 +265,7 @@ class _VisitMediaNotesContent extends StatelessWidget {
     required this.kind,
     required this.subtitle,
     required this.textHint,
+    required this.accent,
   });
 
   final VisitMediaItem? item;
@@ -258,6 +274,7 @@ class _VisitMediaNotesContent extends StatelessWidget {
   final VisitMediaNoteKind kind;
   final String subtitle;
   final String textHint;
+  final Color accent;
 
   @override
   Widget build(BuildContext context) {
@@ -272,7 +289,6 @@ class _VisitMediaNotesContent extends StatelessWidget {
         ? cDarkCardColor.withValues(alpha: 0.78)
         : Colors.white.withValues(alpha: 0.72);
     final textColor = isDark ? cDarkTextPrimary : const Color(0xFF20283A);
-    final accent = isDark ? const Color(0xFF93C5FD) : const Color(0xFF4F46E5);
     final isText = kind == VisitMediaNoteKind.text;
 
     return Column(

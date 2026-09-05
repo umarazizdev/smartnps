@@ -628,12 +628,10 @@ class _CheckpointTaskCard extends StatelessWidget {
                 const SizedBox(height: 6),
                 Text(
                   text,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: _cpTitleColor(isDark),
                     fontSize: 15,
-                    height: 1.28,
+                    height: 1.35,
                     fontWeight: FontWeight.w700,
                   ),
                 ),

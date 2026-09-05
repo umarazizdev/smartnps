@@ -640,6 +640,7 @@ class VisitMediaDraftStore {
       'longitude': item.longitude,
       'accuracyMeters': item.accuracyMeters,
       'siteCheckpointId': item.siteCheckpointId,
+      'attentionNeeded': item.attentionNeeded,
     };
   }
 
@@ -669,6 +670,13 @@ class VisitMediaDraftStore {
       siteCheckpointId = int.tryParse(checkpointRaw.toString());
     }
 
+    final attentionRaw =
+        json['attentionNeeded'] ?? json['attention_needed'];
+    final attentionNeeded = attentionRaw == true ||
+        attentionRaw == 1 ||
+        attentionRaw == 'yes' ||
+        attentionRaw == 'true';
+
     return VisitMediaItem(
       path: path,
       type: type,
@@ -679,6 +687,7 @@ class VisitMediaDraftStore {
       longitude: (json['longitude'] as num?)?.toDouble(),
       accuracyMeters: (json['accuracyMeters'] as num?)?.toDouble(),
       siteCheckpointId: siteCheckpointId,
+      attentionNeeded: attentionNeeded,
     );
   }
 }

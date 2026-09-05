@@ -824,6 +824,7 @@ Accept: application/json</pre>
         <tr><td>longitude</td><td>number</td><td>No</td><td>Capture GPS longitude</td></tr>
         <tr><td>accuracy_meters</td><td>number</td><td>No</td><td>GPS accuracy in meters</td></tr>
         <tr><td>has_voice_note</td><td>boolean</td><td>Yes</td><td>If <code>true</code>, <code>voice[N]</code> must be present in the same request</td></tr>
+        <tr><td>attention_needed</td><td>string</td><td>Yes</td><td><code>"yes"</code> or <code>"no"</code> from the per-media Attention Needed toggle on capture review / media card</td></tr>
       </tbody>
     </table>
 
@@ -865,7 +866,8 @@ attention_voice   → attention_voice.m4a   (audio/mp4)  ← only when attention
       "latitude": 31.520416,
       "longitude": 74.358748,
       "accuracy_meters": 8.5,
-      "has_voice_note": true
+      "has_voice_note": true,
+      "attention_needed": "yes"
     },
     {
       "client_index": 1,
@@ -875,7 +877,8 @@ attention_voice   → attention_voice.m4a   (audio/mp4)  ← only when attention
       "latitude": 31.520901,
       "longitude": 74.359112,
       "accuracy_meters": 12.0,
-      "has_voice_note": false
+      "has_voice_note": false,
+      "attention_needed": "no"
     },
     {
       "client_index": 2,
@@ -885,7 +888,8 @@ attention_voice   → attention_voice.m4a   (audio/mp4)  ← only when attention
       "latitude": 31.521055,
       "longitude": 74.359480,
       "accuracy_meters": 6.2,
-      "has_voice_note": true
+      "has_voice_note": true,
+      "attention_needed": "yes"
     }
   ]
 }</pre>

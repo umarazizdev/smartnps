@@ -108,6 +108,7 @@ class VisitMediaItem {
     this.longitude,
     this.accuracyMeters,
     this.siteCheckpointId,
+    this.attentionNeeded = false,
   });
 
   final String path;
@@ -119,6 +120,7 @@ class VisitMediaItem {
   final double? longitude;
   final double? accuracyMeters;
   final int? siteCheckpointId;
+  final bool attentionNeeded;
 
   bool get isPhoto => type == VisitMediaType.photo;
   bool get isVideo => type == VisitMediaType.video;
@@ -158,6 +160,7 @@ class VisitMediaItem {
     double? accuracyMeters,
     int? siteCheckpointId,
     bool clearSiteCheckpointId = false,
+    bool? attentionNeeded,
   }) {
     return VisitMediaItem(
       path: path ?? this.path,
@@ -173,6 +176,7 @@ class VisitMediaItem {
       siteCheckpointId: clearSiteCheckpointId
           ? null
           : (siteCheckpointId ?? this.siteCheckpointId),
+      attentionNeeded: attentionNeeded ?? this.attentionNeeded,
     );
   }
 }
@@ -613,6 +617,7 @@ class VisitVideoFlowController extends GetxController {
         'longitude': item.longitude,
         'accuracy_meters': item.accuracyMeters,
         'has_voice_note': item.hasVoiceNote,
+        'attention_needed': item.attentionNeeded ? 'yes' : 'no',
       });
     }
 
@@ -861,6 +866,19 @@ class VisitVideoFlowController extends GetxController {
       }
       return null;
     });
+  }
+
+  Future<void> setMediaAttentionNeeded({
+    required String mediaPath,
+    required bool attentionNeeded,
+  }) async {
+    final index = mediaItems.indexWhere((e) => e.path == mediaPath);
+    if (index < 0) return;
+    if (mediaItems[index].attentionNeeded == attentionNeeded) return;
+    mediaItems[index] = mediaItems[index].copyWith(
+      attentionNeeded: attentionNeeded,
+    );
+    await _persistDraft();
   }
 
   Future<void> updateTextNote({

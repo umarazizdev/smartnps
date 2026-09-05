@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -74,6 +75,8 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
       }
       final hasTextNote = item?.hasTextNote ?? false;
       final hasVoiceNote = item?.hasVoiceNote ?? false;
+      final attentionNeeded = item?.attentionNeeded ?? false;
+      final mediaPath = item?.path ?? controller.mediaPath.value;
       return _CaptureReviewActionBar(
         isLandscape: isLandscape,
         topPlacement: topPlacement,
@@ -82,6 +85,33 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
         gpsBlockedMessage: controller.doneBlockedMessage,
         hasTextNote: hasTextNote,
         hasVoiceNote: hasVoiceNote,
+        attentionNeeded: attentionNeeded,
+        onAttentionChanged: (value) {
+          unawaited(() async {
+            var path = mediaPath;
+            if (flow.findByPath(path) == null) {
+              final registered = await flow.registerCaptureDraft(
+                VisitMediaItem(
+                  path: controller.displayPath,
+                  type: controller.mediaType,
+                  capturedAt: controller.geo.value.capturedAt,
+                  latitude: controller.geo.value.latitude,
+                  longitude: controller.geo.value.longitude,
+                  accuracyMeters: controller.geo.value.accuracyMeters,
+                  attentionNeeded: value,
+                ),
+              );
+              if (registered != null) {
+                path = registered.path;
+                if (registered.attentionNeeded == value) return;
+              }
+            }
+            await flow.setMediaAttentionNeeded(
+              mediaPath: path,
+              attentionNeeded: value,
+            );
+          }());
+        },
         onTextNote: () => _openNotes(context, kind: VisitMediaNoteKind.text),
         onVoiceNote: () => _openNotes(context, kind: VisitMediaNoteKind.voice),
         onRetake: controller.retake,
@@ -249,10 +279,7 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
                       ),
                     ),
                     const Expanded(
-                      child: _PreviewBody(
-                        isLandscape: false,
-                        edgeToEdge: true,
-                      ),
+                      child: _PreviewBody(isLandscape: false, edgeToEdge: true),
                     ),
                     _gpsBanner(isLandscape: false),
                     Padding(
@@ -280,6 +307,8 @@ class _CaptureReviewActionBar extends StatelessWidget {
     required this.gpsBlockedMessage,
     required this.hasTextNote,
     required this.hasVoiceNote,
+    required this.attentionNeeded,
+    required this.onAttentionChanged,
     required this.onTextNote,
     required this.onVoiceNote,
     required this.onRetake,
@@ -293,6 +322,8 @@ class _CaptureReviewActionBar extends StatelessWidget {
   final String gpsBlockedMessage;
   final bool hasTextNote;
   final bool hasVoiceNote;
+  final bool attentionNeeded;
+  final ValueChanged<bool> onAttentionChanged;
   final VoidCallback onTextNote;
   final VoidCallback onVoiceNote;
   final VoidCallback onRetake;
@@ -303,6 +334,13 @@ class _CaptureReviewActionBar extends StatelessWidget {
     if (topPlacement && isLandscape) {
       return Row(
         children: [
+          _ReviewAttentionChip(
+            compact: true,
+            enabled: !busy,
+            value: attentionNeeded,
+            onChanged: onAttentionChanged,
+          ),
+          const SizedBox(width: 6),
           Expanded(
             child: _ReviewActionChip(
               height: 34,
@@ -310,6 +348,7 @@ class _CaptureReviewActionBar extends StatelessWidget {
                   ? Icons.edit_note_rounded
                   : Icons.sticky_note_2_outlined,
               label: hasTextNote ? 'Edit' : 'Text',
+              alertStyle: attentionNeeded,
               onPressed: busy ? null : onTextNote,
             ),
           ),
@@ -319,6 +358,7 @@ class _CaptureReviewActionBar extends StatelessWidget {
               height: 34,
               icon: hasVoiceNote ? Icons.mic_rounded : Icons.mic_none_rounded,
               label: hasVoiceNote ? 'Edit' : 'Voice',
+              alertStyle: attentionNeeded,
               onPressed: busy ? null : onVoiceNote,
             ),
           ),
@@ -341,7 +381,7 @@ class _CaptureReviewActionBar extends StatelessWidget {
       );
     }
 
-    final notes = Row(
+    final noteActions = Row(
       children: [
         Expanded(
           child: _ReviewActionChip(
@@ -350,6 +390,7 @@ class _CaptureReviewActionBar extends StatelessWidget {
                 ? Icons.edit_note_rounded
                 : Icons.sticky_note_2_outlined,
             label: hasTextNote ? 'Edit Text' : 'Text',
+            alertStyle: attentionNeeded,
             onPressed: busy ? null : onTextNote,
           ),
         ),
@@ -359,15 +400,8 @@ class _CaptureReviewActionBar extends StatelessWidget {
             height: 42,
             icon: hasVoiceNote ? Icons.mic_rounded : Icons.mic_none_rounded,
             label: hasVoiceNote ? 'Edit Voice' : 'Voice',
+            alertStyle: attentionNeeded,
             onPressed: busy ? null : onVoiceNote,
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _ReviewSecondaryButton(
-            height: 42,
-            label: 'Retake',
-            onPressed: busy ? null : onRetake,
           ),
         ),
       ],
@@ -394,12 +428,184 @@ class _CaptureReviewActionBar extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        notes,
-        if (gpsBlocked) ...[
-          const SizedBox(height: 8),
-          blockedMessage,
-        ],
+        _ReviewAttentionToggle(
+          enabled: !busy,
+          value: attentionNeeded,
+          onChanged: onAttentionChanged,
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              flex: 2,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOut,
+                padding: attentionNeeded
+                    ? const EdgeInsets.fromLTRB(7, 7, 7, 7)
+                    : EdgeInsets.zero,
+                decoration: BoxDecoration(
+                  color: attentionNeeded
+                      ? const Color(0xFFEF4444).withValues(alpha: 0.10)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(16),
+                  border: attentionNeeded
+                      ? Border.all(
+                          color: const Color(0xFFEF4444).withValues(alpha: 0.28),
+                        )
+                      : null,
+                ),
+                child: noteActions,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _ReviewSecondaryButton(
+                height: 42,
+                label: 'Retake',
+                onPressed: busy ? null : onRetake,
+              ),
+            ),
+          ],
+        ),
+        if (gpsBlocked) ...[const SizedBox(height: 8), blockedMessage],
       ],
+    );
+  }
+}
+
+class _ReviewAttentionToggle extends StatelessWidget {
+  const _ReviewAttentionToggle({
+    required this.enabled,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final bool enabled;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    const accent = Color(0xFFEF4444);
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOut,
+      height: 40,
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(10, 0, 4, 0),
+      decoration: BoxDecoration(
+        color: value
+            ? accent.withValues(alpha: 0.14)
+            : Colors.white.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: value
+              ? accent.withValues(alpha: 0.42)
+              : Colors.white.withValues(alpha: 0.12),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            value
+                ? Icons.priority_high_rounded
+                : Icons.report_gmailerrorred_outlined,
+            size: 15,
+            color: value
+                ? const Color(0xFFF87171)
+                : Colors.white.withValues(alpha: 0.55),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Attention needed/Urgent',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: value
+                    ? const Color(0xFFFECACA)
+                    : Colors.white.withValues(alpha: 0.88),
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.1,
+                height: 1.1,
+              ),
+            ),
+          ),
+          Transform.scale(
+            scale: 0.72,
+            alignment: Alignment.centerRight,
+            child: Switch.adaptive(
+              value: value,
+              onChanged: enabled ? onChanged : null,
+              activeTrackColor: accent.withValues(alpha: 0.50),
+              activeThumbColor: accent,
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReviewAttentionChip extends StatelessWidget {
+  const _ReviewAttentionChip({
+    required this.compact,
+    required this.enabled,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final bool compact;
+  final bool enabled;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    const accent = Color(0xFFEF4444);
+    return Material(
+      color: value
+          ? accent.withValues(alpha: 0.22)
+          : Colors.white.withValues(alpha: 0.06),
+      borderRadius: BorderRadius.circular(12),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: enabled ? () => onChanged(!value) : null,
+        child: Container(
+          height: compact ? 34 : 42,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: value
+                  ? accent.withValues(alpha: 0.55)
+                  : Colors.white.withValues(alpha: 0.16),
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.priority_high_rounded,
+                size: 14,
+                color: value ? const Color(0xFFFCA5A5) : Colors.white70,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                'Alert',
+                style: TextStyle(
+                  color: value ? const Color(0xFFFECACA) : Colors.white,
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -416,9 +622,7 @@ class _ReviewHeaderDoneButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: enabled
-          ? _kReviewAccent
-          : _kReviewAccent.withValues(alpha: 0.32),
+      color: enabled ? _kReviewAccent : _kReviewAccent.withValues(alpha: 0.32),
       borderRadius: BorderRadius.circular(999),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -449,24 +653,37 @@ class _ReviewActionChip extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onPressed,
+    this.alertStyle = false,
   });
 
   final double height;
   final IconData icon;
   final String label;
   final VoidCallback? onPressed;
+  final bool alertStyle;
 
   @override
   Widget build(BuildContext context) {
+    const alert = Color(0xFFEF4444);
+    final foreground = alertStyle
+        ? const Color(0xFFFECACA)
+        : Colors.white.withValues(alpha: 0.94);
+    final background = alertStyle
+        ? alert.withValues(alpha: 0.20)
+        : Colors.white.withValues(alpha: 0.07);
+    final border = alertStyle
+        ? alert.withValues(alpha: 0.55)
+        : Colors.white.withValues(alpha: 0.16);
+
     return SizedBox(
       height: height,
       child: OutlinedButton.icon(
         onPressed: onPressed,
         style: OutlinedButton.styleFrom(
-          foregroundColor: Colors.white.withValues(alpha: 0.94),
+          foregroundColor: foreground,
           disabledForegroundColor: Colors.white38,
-          backgroundColor: Colors.white.withValues(alpha: 0.07),
-          side: BorderSide(color: Colors.white.withValues(alpha: 0.16)),
+          backgroundColor: background,
+          side: BorderSide(color: border),
           padding: const EdgeInsets.symmetric(horizontal: 8),
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           visualDensity: VisualDensity.compact,
@@ -479,7 +696,11 @@ class _ReviewActionChip extends StatelessWidget {
           label,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700),
+          style: TextStyle(
+            fontSize: 12.5,
+            fontWeight: FontWeight.w800,
+            color: foreground,
+          ),
         ),
       ),
     );
@@ -549,10 +770,7 @@ class _ReviewDoneButton extends StatelessWidget {
 }
 
 class _PreviewBody extends GetView<CaptureReviewController> {
-  const _PreviewBody({
-    required this.isLandscape,
-    required this.edgeToEdge,
-  });
+  const _PreviewBody({required this.isLandscape, required this.edgeToEdge});
 
   final bool isLandscape;
   final bool edgeToEdge;
@@ -648,10 +866,7 @@ class _MediaContent extends GetView<CaptureReviewController> {
     if (controller.isPhoto) {
       return Center(
         child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxWidth: maxWidth,
-            maxHeight: maxHeight,
-          ),
+          constraints: BoxConstraints(maxWidth: maxWidth, maxHeight: maxHeight),
           child: _MediaFrame(
             edgeToEdge: edgeToEdge,
             child: _withStamp(
@@ -680,8 +895,9 @@ class _MediaContent extends GetView<CaptureReviewController> {
                               height: 28,
                               child: CircularProgressIndicator(
                                 strokeWidth: 2.4,
-                                valueColor:
-                                    AlwaysStoppedAnimation<Color>(cOrange),
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  cOrange,
+                                ),
                               ),
                             ),
                             SizedBox(height: 12),
@@ -766,9 +982,7 @@ class _MediaContent extends GetView<CaptureReviewController> {
                         left: 0,
                         right: 0,
                         bottom: 0,
-                        child: VisitMediaStampBar(
-                          label: 'Getting location…',
-                        ),
+                        child: VisitMediaStampBar(label: 'Getting location…'),
                       ),
                   ],
                 );
@@ -782,10 +996,7 @@ class _MediaContent extends GetView<CaptureReviewController> {
 }
 
 class _MediaFrame extends StatelessWidget {
-  const _MediaFrame({
-    required this.child,
-    required this.edgeToEdge,
-  });
+  const _MediaFrame({required this.child, required this.edgeToEdge});
 
   final Widget child;
   final bool edgeToEdge;

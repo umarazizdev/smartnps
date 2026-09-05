@@ -1987,6 +1987,8 @@ class VisitMediaPreviewCard extends StatelessWidget {
         ? 118.0
         : 92.0;
     final title = item.isPhoto ? 'Photo ${index + 1}' : 'Video ${index + 1}';
+    const attentionAccent = Color(0xFFE11D48);
+    final attentionOn = item.attentionNeeded;
 
     return Material(
       color: _visitCardColor(isDark),
@@ -2004,122 +2006,141 @@ class VisitMediaPreviewCard extends StatelessWidget {
             ),
           ],
         ),
-        child: Padding(
-          padding: EdgeInsets.all(compact ? 6 : (featured ? 10 : 8)),
+        child: IntrinsicHeight(
           child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _MediaThumbnail(
-                item: item,
-                isDark: isDark,
-                size: thumbnailSize,
-                thumbnailFuture: thumbnailFuture,
-                onPreview: onPreview,
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                width: attentionOn ? 3 : 0,
+                color: attentionAccent,
               ),
-              SizedBox(width: compact ? 8 : (featured ? 12 : 9)),
               Expanded(
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(minHeight: thumbnailSize),
-                  child: Column(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    compact ? 8 : (featured ? 12 : 10),
+                    compact ? 8 : (featured ? 12 : 10),
+                    compact ? 8 : (featured ? 12 : 10),
+                    compact ? 8 : (featured ? 12 : 10),
+                  ),
+                  child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                      _MediaThumbnail(
+                        item: item,
+                        isDark: isDark,
+                        size: thumbnailSize,
+                        thumbnailFuture: thumbnailFuture,
+                        onPreview: onPreview,
+                      ),
+                      SizedBox(width: compact ? 10 : (featured ? 12 : 11)),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
                               children: [
-                                Text(
-                                  title,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    color: _visitTitleColor(isDark),
-                                    fontSize: featured ? 16 : 14,
-                                    fontWeight: FontWeight.w800,
+                                Expanded(
+                                  child: Text(
+                                    title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: _visitTitleColor(isDark),
+                                      fontSize: featured ? 15.5 : 14,
+                                      fontWeight: FontWeight.w800,
+                                      height: 1.15,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Tooltip(
+                                  message: item.isPhoto
+                                      ? 'Delete photo'
+                                      : 'Delete video',
+                                  child: Material(
+                                    color: isDark
+                                        ? Colors.white.withValues(alpha: 0.06)
+                                        : const Color(0xFFF8FAFC),
+                                    borderRadius: BorderRadius.circular(10),
+                                    clipBehavior: Clip.antiAlias,
+                                    child: InkWell(
+                                      onTap: onDelete,
+                                      child: SizedBox(
+                                        width: featured ? 34 : 32,
+                                        height: featured ? 34 : 32,
+                                        child: Center(
+                                          child: VisitDeleteIcon(
+                                            size: featured ? 15 : 14,
+                                            color: cRed.withValues(
+                                              alpha: isDark ? 0.92 : 0.88,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
                                   ),
                                 ),
                               ],
                             ),
-                          ),
-                          SizedBox(width: featured ? 8 : 6),
-                          Tooltip(
-                            message: item.isPhoto
-                                ? 'Delete photo'
-                                : 'Delete video',
-                            child: SizedBox.square(
-                              dimension: featured ? 38 : 34,
-                              child: OutlinedButton(
-                                onPressed: onDelete,
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: cRed,
-                                  backgroundColor: cRed.withValues(
-                                    alpha: isDark ? 0.12 : 0.055,
-                                  ),
-                                  side: BorderSide(
-                                    color: cRed.withValues(
-                                      alpha: isDark ? 0.38 : 0.25,
+                            SizedBox(height: compact ? 8 : 10),
+                            _MediaAttentionToggle(
+                              item: item,
+                              isDark: isDark,
+                              compact: compact,
+                            ),
+                            SizedBox(height: compact ? 7 : 8),
+                            _InlineNotePanel(
+                              item: item,
+                              isDark: isDark,
+                              compact: compact,
+                              featured: featured,
+                              attentionNeeded: attentionOn,
+                            ),
+                            SizedBox(height: compact ? 8 : 9),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: _MediaNoteButton(
+                                    label: item.hasTextNote
+                                        ? 'Edit Text'
+                                        : 'Text',
+                                    icon: item.hasTextNote
+                                        ? Icons.edit_note_rounded
+                                        : Icons.sticky_note_2_outlined,
+                                    isDark: isDark,
+                                    dense: !featured,
+                                    alertStyle: attentionOn,
+                                    onPressed: () => openVisitMediaNotesSheet(
+                                      context: context,
+                                      item: item,
+                                      kind: VisitMediaNoteKind.text,
                                     ),
                                   ),
-                                  padding: EdgeInsets.zero,
-                                  tapTargetSize:
-                                      MaterialTapTargetSize.shrinkWrap,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
+                                ),
+                                SizedBox(width: featured ? 8 : 7),
+                                Expanded(
+                                  child: _MediaNoteButton(
+                                    label: item.hasVoiceNote
+                                        ? 'Edit Voice'
+                                        : 'Voice',
+                                    icon: item.hasVoiceNote
+                                        ? Icons.mic_rounded
+                                        : Icons.mic_none_rounded,
+                                    isDark: isDark,
+                                    dense: !featured,
+                                    alertStyle: attentionOn,
+                                    onPressed: () => openVisitMediaNotesSheet(
+                                      context: context,
+                                      item: item,
+                                      kind: VisitMediaNoteKind.voice,
+                                    ),
                                   ),
                                 ),
-                                child: VisitDeleteIcon(
-                                  size: featured ? 16 : 15,
-                                  color: cRed,
-                                ),
-                              ),
+                              ],
                             ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      _InlineNotePanel(
-                        item: item,
-                        isDark: isDark,
-                        compact: compact,
-                        featured: featured,
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _MediaNoteButton(
-                              label: item.hasTextNote ? 'Edit Text' : 'Text',
-                              icon: item.hasTextNote
-                                  ? Icons.edit_note_rounded
-                                  : Icons.sticky_note_2_outlined,
-                              isDark: isDark,
-                              dense: !featured,
-                              onPressed: () => openVisitMediaNotesSheet(
-                                context: context,
-                                item: item,
-                                kind: VisitMediaNoteKind.text,
-                              ),
-                            ),
-                          ),
-                          SizedBox(width: featured ? 8 : 6),
-                          Expanded(
-                            child: _MediaNoteButton(
-                              label: item.hasVoiceNote ? 'Edit Voice' : 'Voice',
-                              icon: item.hasVoiceNote
-                                  ? Icons.mic_rounded
-                                  : Icons.mic_none_rounded,
-                              isDark: isDark,
-                              dense: !featured,
-                              onPressed: () => openVisitMediaNotesSheet(
-                                context: context,
-                                item: item,
-                                kind: VisitMediaNoteKind.voice,
-                              ),
-                            ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ],
                   ),
@@ -2133,64 +2154,142 @@ class VisitMediaPreviewCard extends StatelessWidget {
   }
 }
 
+class _MediaAttentionToggle extends StatelessWidget {
+  const _MediaAttentionToggle({
+    required this.item,
+    required this.isDark,
+    required this.compact,
+  });
+
+  final VisitMediaItem item;
+  final bool isDark;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    const accent = Color(0xFFE11D48);
+    final on = item.attentionNeeded;
+    final flow = Get.find<VisitVideoFlowController>();
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 160),
+      height: compact ? 34 : 36,
+      padding: const EdgeInsets.only(left: 10, right: 4),
+      decoration: BoxDecoration(
+        color: on
+            ? accent.withValues(alpha: isDark ? 0.16 : 0.08)
+            : (isDark
+                  ? Colors.white.withValues(alpha: 0.045)
+                  : const Color(0xFFF3F6FA)),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              'Attention needed/Urgent',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: on
+                    ? (isDark ? const Color(0xFFFFE4E6) : const Color(0xFF9F1239))
+                    : _visitTitleColor(isDark),
+                fontSize: compact ? 11 : 12,
+                fontWeight: FontWeight.w600,
+                height: 1.1,
+              ),
+            ),
+          ),
+          Transform.scale(
+            scale: 0.62,
+            alignment: Alignment.centerRight,
+            child: Switch.adaptive(
+              value: on,
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              activeTrackColor: accent.withValues(alpha: 0.55),
+              activeThumbColor: accent,
+              onChanged: (value) {
+                unawaited(
+                  flow.setMediaAttentionNeeded(
+                    mediaPath: item.path,
+                    attentionNeeded: value,
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _InlineNotePanel extends StatelessWidget {
   const _InlineNotePanel({
     required this.item,
     required this.isDark,
     required this.compact,
     required this.featured,
+    this.attentionNeeded = false,
   });
 
   final VisitMediaItem item;
   final bool isDark;
   final bool compact;
   final bool featured;
+  final bool attentionNeeded;
 
   @override
   Widget build(BuildContext context) {
-    final radius = BorderRadius.circular(12);
+    final radius = BorderRadius.circular(10);
     final padding = EdgeInsets.symmetric(
-      horizontal: compact ? 7 : 8,
-      vertical: compact ? 5 : 6,
+      horizontal: compact ? 8 : 9,
+      vertical: compact ? 7 : 8,
     );
+    // Keep note content readable; attention tint is subtle background only.
+    final accent = _visitAccentColor(isDark);
+    final bodyColor = _visitBodyColor(isDark);
+    final panelBg = attentionNeeded
+        ? (isDark
+              ? const Color(0xFF1A1520).withValues(alpha: 0.55)
+              : const Color(0xFFFFF7F8))
+        : (isDark
+              ? const Color(0xFF0F1729).withValues(alpha: 0.55)
+              : const Color(0xFFF3F6FA));
 
-    return Container(
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 160),
       width: double.infinity,
       padding: padding,
       decoration: BoxDecoration(
-        color: isDark
-            ? const Color(0xFF0F1729).withValues(alpha: 0.58)
-            : const Color(0xFFF3F6FA),
+        color: panelBg,
         borderRadius: radius,
-        border: Border.all(
-          color: _visitBorderColor(
-            isDark,
-          ).withValues(alpha: isDark ? 0.70 : 0.85),
-        ),
       ),
       child: item.hasVoiceNote
           ? InlineVoiceNotePlayer(
               path: item.voiceNotePath!,
               isDark: isDark,
-              accent: _visitAccentColor(isDark),
+              accent: accent,
               compact: compact,
             )
           : Row(
               children: [
                 Icon(
                   Icons.sticky_note_2_outlined,
-                  size: compact ? 12 : 13,
-                  color: _visitBodyColor(isDark),
+                  size: compact ? 13 : 14,
+                  color: bodyColor.withValues(alpha: 0.85),
                 ),
-                const SizedBox(width: 6),
+                const SizedBox(width: 7),
                 Expanded(
                   child: Text(
                     item.hasTextNote ? item.textNote : 'No note added',
                     maxLines: item.hasTextNote && !compact ? 2 : 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      color: _visitBodyColor(isDark),
-                      fontSize: compact ? 10.2 : (featured ? 12 : 10.8),
+                      color: item.hasTextNote
+                          ? _visitTitleColor(isDark)
+                          : bodyColor,
+                      fontSize: compact ? 11 : (featured ? 12.5 : 12),
                       height: 1.25,
                       fontWeight: item.hasTextNote
                           ? FontWeight.w600
@@ -2323,6 +2422,7 @@ class _MediaNoteButton extends StatelessWidget {
     required this.isDark,
     required this.dense,
     required this.onPressed,
+    this.alertStyle = false,
   });
 
   final String label;
@@ -2330,34 +2430,43 @@ class _MediaNoteButton extends StatelessWidget {
   final bool isDark;
   final bool dense;
   final VoidCallback onPressed;
+  final bool alertStyle;
 
   @override
   Widget build(BuildContext context) {
+    const alert = Color(0xFFE11D48);
+    final brand = _visitAccentColor(isDark);
+    final foreground = alertStyle
+        ? (isDark ? const Color(0xFFFFE4E6) : const Color(0xFF9F1239))
+        : brand;
+    final background = alertStyle
+        ? alert.withValues(alpha: isDark ? 0.14 : 0.07)
+        : brand.withValues(alpha: isDark ? 0.16 : 0.10);
+
     return SizedBox(
-      height: dense ? 32 : 38,
+      height: dense ? 34 : 38,
       child: FilledButton.icon(
         onPressed: onPressed,
         style: FilledButton.styleFrom(
-          backgroundColor: _visitAccentColor(
-            isDark,
-          ).withValues(alpha: isDark ? 0.18 : 0.12),
-          foregroundColor: _visitAccentColor(isDark),
+          backgroundColor: background,
+          foregroundColor: foreground,
           elevation: 0,
-          padding: EdgeInsets.symmetric(horizontal: dense ? 6 : 9),
+          shadowColor: Colors.transparent,
+          padding: EdgeInsets.symmetric(horizontal: dense ? 8 : 10),
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           visualDensity: VisualDensity.compact,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(dense ? 11 : 13),
+            borderRadius: BorderRadius.circular(dense ? 10 : 11),
           ),
         ),
-        icon: Icon(icon, size: dense ? 13 : 16),
+        icon: Icon(icon, size: dense ? 14 : 16),
         label: Text(
           label,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
-            fontWeight: FontWeight.w800,
-            fontSize: dense ? 10.5 : 12,
+            fontWeight: FontWeight.w700,
+            fontSize: dense ? 11 : 12,
           ),
         ),
       ),
