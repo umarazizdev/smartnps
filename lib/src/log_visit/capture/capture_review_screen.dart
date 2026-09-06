@@ -6,6 +6,8 @@ import 'package:get/get.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../app/app_routes.dart';
+import '../flow/cam_perf.dart';
+import '../flow/capture_work_coordinator.dart';
 import '../flow/visit_media_geo.dart';
 import '../flow/visit_video_flow_controller.dart';
 import '../log_visit_theme.dart';
@@ -23,7 +25,9 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
     required String filePath,
     required VisitMediaType mediaType,
     required VisitMediaGeo geo,
+    required String captureId,
     bool resolveLocationInBackground = false,
+    CaptureWorkCoordinator? coordinator,
   }) {
     return Get.off<T>(
       () => const CaptureReviewScreen(),
@@ -35,8 +39,10 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
           CaptureReviewController(
             displayPath: filePath,
             mediaType: mediaType,
+            captureId: captureId,
             initialGeo: geo,
             resolveLocationInBackground: resolveLocationInBackground,
+            coordinator: coordinator,
           ),
         );
       }),
@@ -94,11 +100,13 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
                 VisitMediaItem(
                   path: controller.displayPath,
                   type: controller.mediaType,
+                  captureId: controller.captureId,
                   capturedAt: controller.geo.value.capturedAt,
                   latitude: controller.geo.value.latitude,
                   longitude: controller.geo.value.longitude,
                   accuracyMeters: controller.geo.value.accuracyMeters,
                   attentionNeeded: value,
+                  isPendingCapture: true,
                 ),
               );
               if (registered != null) {
@@ -149,7 +157,8 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
-        if (didPop || controller.isBusy.value) return;
+        // Always route system/gesture back through cancel (idempotent).
+        if (didPop) return;
         controller.cancel();
       },
       child: Scaffold(
@@ -162,26 +171,22 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
                       padding: const EdgeInsets.fromLTRB(4, 0, 8, 6),
                       child: Row(
                         children: [
-                          Obx(
-                            () => TextButton(
-                              onPressed: controller.isBusy.value
-                                  ? null
-                                  : controller.cancel,
-                              style: TextButton.styleFrom(
-                                foregroundColor: Colors.white,
-                                disabledForegroundColor: Colors.white38,
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                ),
-                                minimumSize: const Size(64, 36),
-                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          TextButton(
+                            onPressed: controller.cancel,
+                            style: TextButton.styleFrom(
+                              foregroundColor: Colors.white,
+                              disabledForegroundColor: Colors.white38,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
                               ),
-                              child: const Text(
-                                'Cancel',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 14,
-                                ),
+                              minimumSize: const Size(64, 36),
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            child: const Text(
+                              'Cancel',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 14,
                               ),
                             ),
                           ),
@@ -225,29 +230,24 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
                         height: 44,
                         child: Row(
                           children: [
-                            Obx(
-                              () => TextButton(
-                                onPressed: controller.isBusy.value
-                                    ? null
-                                    : controller.cancel,
-                                style: TextButton.styleFrom(
-                                  foregroundColor: Colors.white.withValues(
-                                    alpha: 0.88,
-                                  ),
-                                  disabledForegroundColor: Colors.white38,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 10,
-                                  ),
-                                  minimumSize: const Size(64, 40),
-                                  tapTargetSize:
-                                      MaterialTapTargetSize.shrinkWrap,
+                            TextButton(
+                              onPressed: controller.cancel,
+                              style: TextButton.styleFrom(
+                                foregroundColor: Colors.white.withValues(
+                                  alpha: 0.88,
                                 ),
-                                child: const Text(
-                                  'Cancel',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 15,
-                                  ),
+                                disabledForegroundColor: Colors.white38,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                ),
+                                minimumSize: const Size(64, 40),
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                              child: const Text(
+                                'Cancel',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 15,
                                 ),
                               ),
                             ),
@@ -271,6 +271,7 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
                                   controller.isDoneBlockedByMissingGps;
                               return _ReviewHeaderDoneButton(
                                 enabled: !blocked,
+                                busy: controller.isBusy.value,
                                 onPressed: blocked ? null : controller.done,
                               );
                             }),
@@ -374,6 +375,7 @@ class _CaptureReviewActionBar extends StatelessWidget {
           Expanded(
             child: _ReviewDoneButton(
               height: 34,
+              busy: busy,
               onPressed: (busy || gpsBlocked) ? null : onDone,
             ),
           ),
@@ -451,7 +453,9 @@ class _CaptureReviewActionBar extends StatelessWidget {
                   borderRadius: BorderRadius.circular(16),
                   border: attentionNeeded
                       ? Border.all(
-                          color: const Color(0xFFEF4444).withValues(alpha: 0.28),
+                          color: const Color(
+                            0xFFEF4444,
+                          ).withValues(alpha: 0.28),
                         )
                       : null,
                 ),
@@ -614,26 +618,30 @@ class _ReviewHeaderDoneButton extends StatelessWidget {
   const _ReviewHeaderDoneButton({
     required this.enabled,
     required this.onPressed,
+    this.busy = false,
   });
 
   final bool enabled;
   final VoidCallback? onPressed;
+  final bool busy;
 
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: enabled ? _kReviewAccent : _kReviewAccent.withValues(alpha: 0.32),
+      color: enabled || busy
+          ? _kReviewAccent
+          : _kReviewAccent.withValues(alpha: 0.32),
       borderRadius: BorderRadius.circular(999),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onPressed,
         splashColor: Colors.white.withValues(alpha: 0.18),
         highlightColor: _kReviewAccentPressed.withValues(alpha: 0.55),
-        child: const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 18, vertical: 9),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
           child: Text(
-            'Done',
-            style: TextStyle(
+            busy ? 'Saving…' : 'Done',
+            style: const TextStyle(
               color: Colors.white,
               fontWeight: FontWeight.w800,
               fontSize: 14,
@@ -741,10 +749,15 @@ class _ReviewSecondaryButton extends StatelessWidget {
 }
 
 class _ReviewDoneButton extends StatelessWidget {
-  const _ReviewDoneButton({required this.height, required this.onPressed});
+  const _ReviewDoneButton({
+    required this.height,
+    required this.onPressed,
+    this.busy = false,
+  });
 
   final double height;
   final VoidCallback? onPressed;
+  final bool busy;
 
   @override
   Widget build(BuildContext context) {
@@ -761,9 +774,9 @@ class _ReviewDoneButton extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 8),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       ),
-      child: const Text(
-        'Done',
-        style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800),
+      child: Text(
+        busy ? 'Saving…' : 'Done',
+        style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800),
       ),
     );
   }
@@ -861,9 +874,13 @@ class _MediaContent extends GetView<CaptureReviewController> {
 
   @override
   Widget build(BuildContext context) {
-    final dpr = MediaQuery.devicePixelRatioOf(context);
-
     if (controller.isPhoto) {
+      final screen = MediaQuery.sizeOf(context);
+      final dpr = MediaQuery.devicePixelRatioOf(context);
+      // Display-only decode sized to the phone screen — original JPEG on disk
+      // is never recompressed or replaced.
+      final decodeW = (screen.longestSide * dpr).round().clamp(640, 1280);
+      final decodeH = (screen.shortestSide * dpr).round().clamp(480, 960);
       return Center(
         child: ConstrainedBox(
           constraints: BoxConstraints(maxWidth: maxWidth, maxHeight: maxHeight),
@@ -872,13 +889,23 @@ class _MediaContent extends GetView<CaptureReviewController> {
             child: _withStamp(
               Image.file(
                 File(controller.displayPath),
-                scale: dpr,
                 fit: BoxFit.scaleDown,
                 alignment: Alignment.center,
                 gaplessPlayback: true,
-                filterQuality: FilterQuality.high,
+                filterQuality: FilterQuality.low,
+                cacheWidth: decodeW,
+                cacheHeight: decodeH,
                 frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
                   if (wasSynchronouslyLoaded || frame != null) {
+                    CamPerf.firstFrameOnce(
+                      'review:${controller.captureId}',
+                      controller.captureId,
+                      'REVIEW_IMAGE_FIRST_FRAME',
+                    );
+                    // Defer out of the build/frameBuilder path.
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      controller.notifyDisplayFirstFrame();
+                    });
                     return child;
                   }
                   return SizedBox(
@@ -942,6 +969,7 @@ class _MediaContent extends GetView<CaptureReviewController> {
       final video = controller.videoController!;
       final size = video.value.size;
       final playing = controller.isPlaying.value;
+      final dpr = MediaQuery.devicePixelRatioOf(context);
       final pixelW = size.width <= 0 ? maxWidth * dpr : size.width;
       final pixelH = size.height <= 0 ? maxHeight * dpr : size.height;
       final display = _actualDisplaySize(

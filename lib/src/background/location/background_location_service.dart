@@ -5,7 +5,6 @@ import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../../location/adaptive_gps_stream_controller.dart';
-import '../../location/duty_location_upload_coordinator.dart';
 import '../../location/location_keep_point_gate.dart';
 import '../../location/mock_location_detection.dart';
 import '../../location/speed_adaptive_gps_policy.dart';
@@ -481,10 +480,7 @@ class BackgroundLocationService {
         return;
       }
 
-      if (!BackgroundLocationAccuracy.isValidReading(pos)) {
-        locationDebugLog(
-          '[DutyLocation] skipped invalid GPS fix acc=${pos.accuracy}m',
-        );
+      if (!BackgroundLocationAccuracy.isAcceptable(pos)) {
         return;
       }
       lastAcceptedFixAt = DateTime.now();
@@ -535,10 +531,14 @@ class BackgroundLocationService {
 
       try {
         if (stopping) return;
-        await DutyLocationUploadCoordinator.uploadKeptPoint(
-          uploader: uploader,
-          position: pos,
-          keepDecision: keepDecision,
+        await uploader.pingNow(
+          pos,
+          policyDecision: policyDecision,
+          motionFusion: motionFusion,
+        );
+        if (stopping) return;
+        await uploader.add(
+          pos,
           policyDecision: policyDecision,
           motionFusion: motionFusion,
         );

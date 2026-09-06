@@ -116,8 +116,7 @@ class AppConfig {
   static bool isBottomBarRoute(Uri? uri) {
     final path = normalizeWebPath(uri);
     if (path == null) return false;
-    // Keep bar on all main officer tabs (incl. shift-log), not a subset.
-    return AppRoutes.bottomTabWebPaths.contains(path);
+    return AppRoutes.bottomBarWebPaths.contains(path);
   }
 
   static String _exactUrl(Uri uri) {

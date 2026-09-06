@@ -2,14 +2,7 @@ import 'package:geolocator/geolocator.dart';
 
 import 'speed_adaptive_gps_policy.dart';
 
-enum LocationKeepPointTrigger {
-  first,
-  stream,
-  heading,
-  indoor,
-  heartbeat,
-  stationaryPing,
-}
+enum LocationKeepPointTrigger { first, stream, heading, indoor, heartbeat }
 
 class LocationKeepPointDecision {
   const LocationKeepPointDecision._({
@@ -47,17 +40,12 @@ class LocationKeepPointDecision {
 class LocationKeepPointGate {
   static const Duration minKeepInterval = Duration(seconds: 1);
 
-  static const double pathDistanceMeters = 15;
-  static const double drivingPathDistanceMeters = 10;
-  static const double headingMinDistanceMeters = 8;
-  static const double drivingHeadingMinDistanceMeters = 6;
-  static const double headingMinDegrees = 20;
-  static const double drivingHeadingMinDegrees = 12;
-  static const double drivingSpeedKmh = 8;
+  static const double pathDistanceMeters = 5;
+  static const double headingMinDistanceMeters = 4;
+  static const double headingMinDegrees = 15;
   static const double indoorMinDistanceMeters = 3;
-  static const double movingSpeedKmh = 3;
+  static const double movingSpeedKmh = 2;
   static const double accuracyWorseDeltaMeters = 10;
-  static const Duration stationaryPingInterval = Duration(seconds: 60);
 
   Position? _lastKept;
   DateTime? _lastKeptAt;
@@ -107,13 +95,6 @@ class LocationKeepPointGate {
     final speedKmh =
         policyDecision.smoothedSpeedKmh ?? policyDecision.rawSpeedKmh ?? 0;
     final isMoving = speedKmh >= movingSpeedKmh;
-    final isDriving = speedKmh >= drivingSpeedKmh;
-    final streamDistanceMeters =
-        isDriving ? drivingPathDistanceMeters : pathDistanceMeters;
-    final turnDistanceMeters =
-        isDriving ? drivingHeadingMinDistanceMeters : headingMinDistanceMeters;
-    final turnDegrees =
-        isDriving ? drivingHeadingMinDegrees : headingMinDegrees;
 
     final segmentBearing = Geolocator.bearingBetween(
       lastKept.latitude,
@@ -132,15 +113,13 @@ class LocationKeepPointGate {
     final enteredStationary = _lastKeptMoving && !isMoving;
 
     LocationKeepPointTrigger? trigger;
-    if (isMoving && elapsed >= uploadInterval) {
+    if (elapsed >= uploadInterval) {
       trigger = LocationKeepPointTrigger.heartbeat;
-    } else if (!isMoving && elapsed >= stationaryPingInterval) {
-      trigger = LocationKeepPointTrigger.stationaryPing;
-    } else if (isMoving && distanceMeters >= streamDistanceMeters) {
+    } else if (distanceMeters >= pathDistanceMeters) {
       trigger = LocationKeepPointTrigger.stream;
     } else if (isMoving &&
-        distanceMeters >= turnDistanceMeters &&
-        headingDelta >= turnDegrees) {
+        distanceMeters >= headingMinDistanceMeters &&
+        headingDelta >= headingMinDegrees) {
       trigger = LocationKeepPointTrigger.heading;
     } else if (distanceMeters >= indoorMinDistanceMeters &&
         (accuracyWorse || enteredStationary)) {
@@ -157,7 +136,7 @@ class LocationKeepPointGate {
       uploadInterval: uploadInterval,
       policyDecision: policyDecision,
       distanceMeters: distanceMeters,
-      segmentBearing: distanceMeters >= turnDistanceMeters
+      segmentBearing: distanceMeters >= headingMinDistanceMeters
           ? segmentBearing
           : prevBearing,
     );

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="native_camera_close">Close camera</string>
+    <string name="native_camera_flash">Flash</string>
+    <string name="native_camera_flip">Switch camera</string>
+    <string name="native_camera_shutter">Capture</string>
+    <string name="native_camera_stop">Stop recording</string>
+    <string name="native_camera_photo">Photo</string>
+    <string name="native_camera_video">Video</string>
+    <string name="native_camera_portrait_rejected">Capture in landscape</string>
+    <string name="native_camera_ext_hdr">HDR</string>
+    <string name="native_camera_ext_night">Night</string>
+    <string name="native_camera_ext_auto">Auto</string>
+    <string name="native_camera_ext_standard">Std</string>
+    <string name="native_camera_ext_unsupported">Mode not supported here</string>
+    <string name="native_camera_exposure_up">Increase exposure</string>
+    <string name="native_camera_exposure_down">Decrease exposure</string>
+    <string name="native_camera_exposure_plus">+</string>
+    <string name="native_camera_exposure_minus">\u2212</string>
+    <string name="native_camera_exposure_value">EV %1$d</string>
+    <string name="native_camera_hint_idle">Tap photo\nHold video</string>
+    <string name="native_camera_hint_recording">Slide up/down\nto zoom</string>
+    <string name="native_camera_busy_capturing">Capturing…</string>
+    <string name="native_camera_busy_starting">Starting…</string>
+    <string name="native_camera_busy_saving">Saving…</string>
+    <string name="native_camera_busy_switching">Switching…</string>
+    <string name="native_camera_landscape_title">Use Landscape Mode</string>
+    <string name="native_camera_landscape_message">Please rotate your device to landscape to capture photos and videos clearly.</string>
+</resources>

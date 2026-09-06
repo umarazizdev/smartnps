@@ -71,4 +71,16 @@ flutter {
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
     implementation("com.google.android.gms:play-services-location:21.3.0")
+
+    val cameraX = "1.4.1"
+    implementation("androidx.camera:camera-core:$cameraX")
+    implementation("androidx.camera:camera-camera2:$cameraX")
+    implementation("androidx.camera:camera-lifecycle:$cameraX")
+    implementation("androidx.camera:camera-view:$cameraX")
+    implementation("androidx.camera:camera-extensions:$cameraX")
+    implementation("androidx.camera:camera-video:$cameraX")
+    implementation("androidx.concurrent:concurrent-futures:1.2.0")
+    implementation("com.google.guava:guava:33.3.1-android")
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
+    implementation("androidx.appcompat:appcompat:1.7.0")
 }

@@ -14,7 +14,6 @@ import 'package:get/get.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../debug/location_path_curve_debug_screen.dart';
 import '../utilities/app_config.dart';
 import '../utilities/app_debug_log.dart';
 import '../utilities/app_upgrade_reconciler.dart';
@@ -81,7 +80,6 @@ class _WebViewShellUiController extends GetxController {
   final selectedBottomTabIndex = 0.obs;
   final bottomTabNavigationActive = false.obs;
   final showingLogVisit = false.obs;
-  final showingGpsCurveDebug = false.obs;
   final showLocationNotice = false.obs;
 
   final preserveBottomBarDuringLoad = false.obs;
@@ -132,7 +130,6 @@ class _WebViewShellUiController extends GetxController {
       RequiredPermissionsGate.instance.stop();
       showLocationNotice.value = false;
       showingLogVisit.value = false;
-      showingGpsCurveDebug.value = false;
     }
   }
 }
@@ -5662,14 +5659,6 @@ class _WebViewShellState extends State<WebViewShell>
                               );
                             }),
                             Obx(() {
-                              if (!_ui.showingGpsCurveDebug.value) {
-                                return const SizedBox.shrink();
-                              }
-                              return const Positioned.fill(
-                                child: LocationPathCurveDebugScreen(),
-                              );
-                            }),
-                            Obx(() {
                               final uploadingFromDialog =
                                   !_ui.showingLogVisit.value &&
                                   _ui.officerLoggedIn.value &&
@@ -5686,9 +5675,7 @@ class _WebViewShellState extends State<WebViewShell>
                                   !_ui.showingLogVisit.value &&
                                   !_ui.webHidesBottomBar.value &&
                                   !uploadingFromDialog &&
-                                  (_ui.showingGpsCurveDebug.value ||
-                                      kDebugMode ||
-                                      _isBottomBarRoute(_ui.currentUri.value) ||
+                                  (_isBottomBarRoute(_ui.currentUri.value) ||
                                       _ui.preserveBottomBarDuringLoad.value);
                               _logBottomBarVisibility(
                                 show: showBottomBar,
@@ -5822,22 +5809,9 @@ class _WebViewShellState extends State<WebViewShell>
     final controller = _controller;
     if (controller == null) return;
 
-    if (item == _BottomItem.gpsDebug) {
-      _ui.selectedBottomTabIndex.value = item.index;
-      if (_ui.showingLogVisit.value) {
-        unawaited(VisitGpsSession.instance.stop());
-      }
-      _ui.showingLogVisit.value = false;
-      _ui.showingGpsCurveDebug.value = true;
-      _ui.bottomTabNavigationActive.value = false;
-      _clearWebBottomBarHide();
-      return;
-    }
-
     if (_ui.selectedBottomTabIndex.value == item.index &&
         !_ui.isNavigating.value &&
-        !_ui.showingLogVisit.value &&
-        !_ui.showingGpsCurveDebug.value) {
+        !_ui.showingLogVisit.value) {
       return;
     }
 
@@ -5846,7 +5820,6 @@ class _WebViewShellState extends State<WebViewShell>
       unawaited(VisitGpsSession.instance.stop());
     }
     _ui.showingLogVisit.value = false;
-    _ui.showingGpsCurveDebug.value = false;
     _clearWebBottomBarHide();
     _ui.bottomTabNavigationActive.value = true;
     _pendingBottomTabLoadStarted = false;
@@ -5951,8 +5924,7 @@ enum _BottomItem {
     'assets/avatar.png',
     'assets/profile.png',
     '/officer/profile',
-  ),
-  gpsDebug('GPS', '', '', '/__native__/gps-curve-debug');
+  );
 
   const _BottomItem(
     this.label,
@@ -5992,7 +5964,6 @@ class _BottomBar extends StatelessWidget {
       _BottomItem.shiftLog,
       _BottomItem.timesheet,
       _BottomItem.profile,
-      _BottomItem.gpsDebug,
     ];
 
     final tabs = <PlatformBottomTab>[
@@ -6005,16 +5976,13 @@ class _BottomBar extends StatelessWidget {
             _BottomItem.shiftLog => 'list.clipboard',
             _BottomItem.timesheet => 'calendar',
             _BottomItem.profile => 'person.crop.circle.fill',
-            _BottomItem.gpsDebug => 'location.fill',
           },
           iosSymbolPointSize: switch (item) {
             _BottomItem.shiftLog => 19,
-            _BottomItem.gpsDebug => 20,
             _ => null,
           },
           materialIcon: switch (item) {
             _BottomItem.shiftLog => Icons.assignment_outlined,
-            _BottomItem.gpsDebug => Icons.gps_fixed,
             _ => null,
           },
           activeAssetIcon: item.iconAssetSelected.isEmpty
