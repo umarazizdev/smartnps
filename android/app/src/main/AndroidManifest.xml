@@ -80,6 +80,14 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <activity
+            android:name=".camera.NativeCameraActivity"
+            android:exported="false"
+            android:screenOrientation="fullUser"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|uiMode|density"
+            android:theme="@style/Theme.SmartNPS360.NativeCamera"
+            android:hardwareAccelerated="true"
+            android:excludeFromRecents="true" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

@@ -18,6 +18,11 @@
 		A1B2C3D42EC4000100F1A201 /* MotionActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D42EC4000100F1A200 /* MotionActivityManager.swift */; };
 		A1B2C3D52EC4000200F1A201 /* DutyWakeUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D52EC4000200F1A200 /* DutyWakeUploader.swift */; };
 		A1B2C3D62EC4000300F1A201 /* DeviceCheckManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D62EC4000300F1A200 /* DeviceCheckManager.swift */; };
+		A1B2C3D72EC4000400F1A201 /* NativeCameraPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D72EC4000400F1A200 /* NativeCameraPlugin.swift */; };
+		A1B2C3D82EC4000500F1A201 /* NativeCameraViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D82EC4000500F1A200 /* NativeCameraViewController.swift */; };
+		A1B2C3D92EC4000600F1A201 /* NativeCameraSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D92EC4000600F1A200 /* NativeCameraSession.swift */; };
+		A1B2C3DA2EC4000700F1A201 /* NativeCameraOrientation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3DA2EC4000700F1A200 /* NativeCameraOrientation.swift */; };
+		A1B2C3DC2EC4000900F1A201 /* CamPerf.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3DC2EC4000900F1A200 /* CamPerf.swift */; };
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
@@ -67,6 +72,11 @@
 		A1B2C3D42EC4000100F1A200 /* MotionActivityManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionActivityManager.swift; sourceTree = "<group>"; };
 		A1B2C3D52EC4000200F1A200 /* DutyWakeUploader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DutyWakeUploader.swift; sourceTree = "<group>"; };
 		A1B2C3D62EC4000300F1A200 /* DeviceCheckManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceCheckManager.swift; sourceTree = "<group>"; };
+		A1B2C3D72EC4000400F1A200 /* NativeCameraPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCameraPlugin.swift; sourceTree = "<group>"; };
+		A1B2C3D82EC4000500F1A200 /* NativeCameraViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCameraViewController.swift; sourceTree = "<group>"; };
+		A1B2C3D92EC4000600F1A200 /* NativeCameraSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCameraSession.swift; sourceTree = "<group>"; };
+		A1B2C3DA2EC4000700F1A200 /* NativeCameraOrientation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCameraOrientation.swift; sourceTree = "<group>"; };
+		A1B2C3DC2EC4000900F1A200 /* CamPerf.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CamPerf.swift; sourceTree = "<group>"; };
 		79A43A0F3B2B4D9EB3AF7AE1 /* Profile.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Profile.xcconfig; path = Flutter/Profile.xcconfig; sourceTree = "<group>"; };
 		7AFA3C8E1D35360C0083082E /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Release.xcconfig; path = Flutter/Release.xcconfig; sourceTree = "<group>"; };
 		7C0692456B17B8FD4B00EB48 /* Pods_Runner.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Runner.framework; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -184,9 +194,22 @@
 				A1B2C3D42EC4000100F1A200 /* MotionActivityManager.swift */,
 				A1B2C3D52EC4000200F1A200 /* DutyWakeUploader.swift */,
 				A1B2C3D62EC4000300F1A200 /* DeviceCheckManager.swift */,
+				A1B2C3DB2EC4000800F1A200 /* NativeCamera */,
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
 			);
 			path = Runner;
+			sourceTree = "<group>";
+		};
+		A1B2C3DB2EC4000800F1A200 /* NativeCamera */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D72EC4000400F1A200 /* NativeCameraPlugin.swift */,
+				A1B2C3D82EC4000500F1A200 /* NativeCameraViewController.swift */,
+				A1B2C3D92EC4000600F1A200 /* NativeCameraSession.swift */,
+				A1B2C3DA2EC4000700F1A200 /* NativeCameraOrientation.swift */,
+				A1B2C3DC2EC4000900F1A200 /* CamPerf.swift */,
+			);
+			path = NativeCamera;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -447,6 +470,11 @@
 				A1B2C3D42EC4000100F1A201 /* MotionActivityManager.swift in Sources */,
 				A1B2C3D52EC4000200F1A201 /* DutyWakeUploader.swift in Sources */,
 				A1B2C3D62EC4000300F1A201 /* DeviceCheckManager.swift in Sources */,
+				A1B2C3D72EC4000400F1A201 /* NativeCameraPlugin.swift in Sources */,
+				A1B2C3D82EC4000500F1A201 /* NativeCameraViewController.swift in Sources */,
+				A1B2C3D92EC4000600F1A201 /* NativeCameraSession.swift in Sources */,
+				A1B2C3DA2EC4000700F1A201 /* NativeCameraOrientation.swift in Sources */,
+				A1B2C3DC2EC4000900F1A201 /* CamPerf.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

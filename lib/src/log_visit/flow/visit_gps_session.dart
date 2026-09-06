@@ -14,8 +14,9 @@ class VisitGpsSession {
   static const Duration maxFreshAge = Duration(seconds: 15);
   static const Duration maxAcceptAge = Duration(seconds: 30);
 
-  static final Duration oneShotTimeout =
-      Duration(seconds: Platform.isIOS ? 15 : 10);
+  static final Duration oneShotTimeout = Duration(
+    seconds: Platform.isIOS ? 15 : 10,
+  );
 
   StreamSubscription<Position>? _subscription;
   Position? _latest;
@@ -45,6 +46,51 @@ class VisitGpsSession {
 
   static bool isUsableAcceptable(Position position) {
     return _isUsable(position, maxAge: maxAcceptAge);
+  }
+
+  /// Whether [position] is acceptable relative to the shutter/capture moment.
+  ///
+  /// Uses the same [maxAcceptAge] window as [isUsableAcceptable], measured
+  /// against [captureTime] instead of wall-clock "now".
+  static bool isAcceptableForCapture(
+    Position position,
+    DateTime captureTime, {
+    Duration maxAge = maxAcceptAge,
+  }) {
+    if (!_hasValidCoords(position)) return false;
+    final age = captureTime.difference(position.timestamp).abs();
+    return age <= maxAge;
+  }
+
+  /// True when location permission is already granted (never prompts).
+  static Future<bool> hasGrantedPermission() async {
+    try {
+      final permission = await Geolocator.checkPermission();
+      return permission == LocationPermission.always ||
+          permission == LocationPermission.whileInUse;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Best fix for a capture timestamp using existing age/accuracy rules.
+  Position? selectFixForCapture(DateTime captureTime) {
+    final candidates = <Position?>[
+      _latest,
+      if (Platform.isIOS) IosDutyLocationPinger.latestAcceptedPosition,
+    ];
+    Position? best;
+    Duration? bestAge;
+    for (final candidate in candidates) {
+      if (candidate == null) continue;
+      if (!isAcceptableForCapture(candidate, captureTime)) continue;
+      final age = captureTime.difference(candidate.timestamp).abs();
+      if (best == null || age < bestAge!) {
+        best = candidate;
+        bestAge = age;
+      }
+    }
+    return best;
   }
 
   static bool _isUsable(Position position, {required Duration maxAge}) {
@@ -103,20 +149,21 @@ class VisitGpsSession {
 
       await _seedLatest();
 
-      _subscription = Geolocator.getPositionStream(
-        locationSettings: _streamSettings(),
-      ).listen(
-        (position) {
-          if (!_hasValidCoords(position)) return;
-          _latest = position;
-        },
-        onError: (Object error) {
-          if (kDebugMode) {
-            debugPrint('[VisitGpsSession] stream error: $error');
-          }
-        },
-        cancelOnError: false,
-      );
+      _subscription =
+          Geolocator.getPositionStream(
+            locationSettings: _streamSettings(),
+          ).listen(
+            (position) {
+              if (!_hasValidCoords(position)) return;
+              _latest = position;
+            },
+            onError: (Object error) {
+              if (kDebugMode) {
+                debugPrint('[VisitGpsSession] stream error: $error');
+              }
+            },
+            cancelOnError: false,
+          );
       _running = true;
 
       unawaited(_seedFromCurrentPosition());
@@ -145,8 +192,7 @@ class VisitGpsSession {
       final lastKnown = await Geolocator.getLastKnownPosition();
       if (lastKnown != null && isUsableFresh(lastKnown)) {
         final current = _latest;
-        if (current == null ||
-            lastKnown.timestamp.isAfter(current.timestamp)) {
+        if (current == null || lastKnown.timestamp.isAfter(current.timestamp)) {
           _latest = lastKnown;
         }
       }

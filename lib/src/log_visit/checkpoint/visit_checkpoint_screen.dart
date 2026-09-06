@@ -8,8 +8,7 @@ import '../flow/visit_video_flow_controller.dart';
 import '../log_visit_theme.dart';
 import '../preview/visit_video_player_controller.dart';
 import '../preview/visit_video_preview_screen.dart';
-import '../record/visit_video_recorder_controller.dart';
-import '../record/visit_video_recorder_screen.dart';
+import '../record/visit_native_capture_launcher.dart';
 
 Color _cpCardColor(bool isDark) {
   return isDark
@@ -75,13 +74,7 @@ class _VisitCheckpointScreenState extends State<VisitCheckpointScreen> {
 
   Future<void> _openCapture() async {
     flow.beginCheckpointCapture(widget.checkpointId);
-    await Get.to(
-      () => const VisitVideoRecorderScreen(),
-      routeName: AppRoutes.visitVideoRecorder,
-      binding: BindingsBuilder(() {
-        Get.put(VisitVideoRecorderController());
-      }),
-    );
+    await VisitNativeCaptureLauncher.open();
     flow.beginCheckpointCapture(widget.checkpointId);
   }
 

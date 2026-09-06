@@ -26,6 +26,7 @@ import flutter_background_service_ios
   private var slcChannelRegistered = false
   private var motionChannelRegistered = false
   private var deviceCheckChannelRegistered = false
+  private var nativeCameraChannelRegistered = false
   private var settingsMethodChannel: FlutterMethodChannel?
   private var slcMethodChannel: FlutterMethodChannel?
   private var launchedForLocation = false
@@ -42,6 +43,7 @@ import flutter_background_service_ios
   private var slcEventSink: FlutterEventSink?
   private var motionActivityManager: MotionActivityManager?
   private var deviceCheckManager: DeviceCheckManager?
+  private var nativeCameraPlugin: NativeCameraPlugin?
 
   override func application(
     _ application: UIApplication,
@@ -91,6 +93,7 @@ import flutter_background_service_ios
     registerSlcChannelIfNeeded(with: messenger)
     registerMotionActivityChannelIfNeeded(with: messenger)
     registerDeviceCheckChannelIfNeeded(with: messenger)
+    registerNativeCameraChannelIfNeeded(with: messenger)
   }
 
   /// Fallback for engines created before implicit-engine callback wiring.
@@ -99,6 +102,7 @@ import flutter_background_service_ios
       && settingsChannelRegistered
       && motionChannelRegistered
       && deviceCheckChannelRegistered
+      && nativeCameraChannelRegistered
     {
       return
     }
@@ -113,6 +117,14 @@ import flutter_background_service_ios
     manager.register(with: messenger)
     deviceCheckManager = manager
     deviceCheckChannelRegistered = true
+  }
+
+  private func registerNativeCameraChannelIfNeeded(with messenger: FlutterBinaryMessenger) {
+    guard !nativeCameraChannelRegistered else { return }
+    let plugin = nativeCameraPlugin ?? NativeCameraPlugin()
+    plugin.register(with: messenger)
+    nativeCameraPlugin = plugin
+    nativeCameraChannelRegistered = true
   }
 
   private func registerMotionActivityChannelIfNeeded(with messenger: FlutterBinaryMessenger) {

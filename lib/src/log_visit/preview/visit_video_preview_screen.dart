@@ -11,6 +11,7 @@ import '../../app/app_navigator.dart';
 import '../../app/app_routes.dart';
 import '../../widgets/dialogs/glass_action_dialog.dart';
 import '../checkpoint/visit_checkpoint_screen.dart';
+import '../flow/cam_perf.dart';
 import '../flow/visit_checkpoint.dart';
 import '../flow/visit_gps_session.dart';
 import '../flow/visit_media_geo.dart';
@@ -19,8 +20,7 @@ import '../log_visit_theme.dart';
 import '../notes/visit_batch_notes_panel.dart';
 import '../notes/visit_media_notes_sheet.dart';
 import '../notes/voice/inline_voice_note_player.dart';
-import '../record/visit_video_recorder_controller.dart';
-import '../record/visit_video_recorder_screen.dart';
+import '../record/visit_native_capture_launcher.dart';
 import 'visit_video_player_controller.dart';
 
 Color _visitCardColor(bool isDark) {
@@ -180,13 +180,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
 
   Future<void> _openCaptureScreen() async {
     controller.endCheckpointCapture();
-    await Get.to(
-      () => const VisitVideoRecorderScreen(),
-      routeName: AppRoutes.visitVideoRecorder,
-      binding: BindingsBuilder(() {
-        Get.put(VisitVideoRecorderController());
-      }),
-    );
+    await VisitNativeCaptureLauncher.open();
   }
 
   Future<void> _openCheckpoint(VisitCheckpoint checkpoint) async {
@@ -211,7 +205,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
 
     if (flow.isUploading.value) return;
 
-    final items = flow.mediaItems.toList(growable: false);
+    final items = flow.visibleMediaItems;
     if (items.isEmpty) {
       _showTopSnack(
         title: 'No media',
@@ -552,7 +546,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
           children: [
             VisitPageBackground(isDark: isDark),
             Obx(() {
-              final allMedia = controller.mediaItems.toList();
+              final allMedia = controller.visibleMediaItems;
               final checkpoints = controller.checkpoints;
               final hasCheckpoints = checkpoints.isNotEmpty;
               final additionalMedia = hasCheckpoints
@@ -2192,7 +2186,9 @@ class _MediaAttentionToggle extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 color: on
-                    ? (isDark ? const Color(0xFFFFE4E6) : const Color(0xFF9F1239))
+                    ? (isDark
+                          ? const Color(0xFFFFE4E6)
+                          : const Color(0xFF9F1239))
                     : _visitTitleColor(isDark),
                 fontSize: compact ? 11 : 12,
                 fontWeight: FontWeight.w600,
@@ -2261,10 +2257,7 @@ class _InlineNotePanel extends StatelessWidget {
       duration: const Duration(milliseconds: 160),
       width: double.infinity,
       padding: padding,
-      decoration: BoxDecoration(
-        color: panelBg,
-        borderRadius: radius,
-      ),
+      decoration: BoxDecoration(color: panelBg, borderRadius: radius),
       child: item.hasVoiceNote
           ? InlineVoiceNotePlayer(
               path: item.voiceNotePath!,
@@ -2332,7 +2325,7 @@ class _MediaThumbnail extends StatelessWidget {
           child: Stack(
             fit: StackFit.expand,
             children: [
-              Positioned.fill(child: _previewImage()),
+              Positioned.fill(child: _previewImage(context)),
               Positioned(
                 top: 6,
                 left: 6,
@@ -2366,15 +2359,48 @@ class _MediaThumbnail extends StatelessWidget {
     );
   }
 
-  Widget _previewImage() {
+  Widget _previewImage(BuildContext context) {
     if (item.isPhoto) {
-      return Image.file(
-        File(item.path),
+      final dpr = MediaQuery.devicePixelRatioOf(context);
+      final px = (size * dpr).round().clamp(96, 256);
+      return Image(
+        key: ValueKey<String>('thumb-${item.captureId ?? item.path}'),
+        image: ResizeImage(
+          FileImage(File(item.path)),
+          width: px,
+          height: px,
+          allowUpscaling: false,
+        ),
         fit: BoxFit.cover,
         gaplessPlayback: true,
-        filterQuality: FilterQuality.medium,
-        errorBuilder: (context, error, stackTrace) =>
-            _fallback(Icons.broken_image_outlined),
+        filterQuality: FilterQuality.low,
+        frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+          if (wasSynchronouslyLoaded || frame != null) {
+            CamPerf.firstFrameOnce(
+              'thumb:${item.captureId ?? item.path}',
+              item.captureId,
+              'DRAFT_THUMBNAIL_FIRST_FRAME',
+              fromDraftVisible: true,
+            );
+            return child;
+          }
+          return ColoredBox(
+            color: isDark ? const Color(0xFF182334) : Colors.black12,
+          );
+        },
+        errorBuilder: (context, error, stackTrace) {
+          if (kDebugMode) {
+            final file = File(item.path);
+            final exists = file.existsSync();
+            final bytes = exists ? file.lengthSync() : 0;
+            debugPrint(
+              '[CaptureTxn] BROKEN_LOCAL_MEDIA path=${item.path} '
+              'captureId=${item.captureId} exists=$exists bytes=$bytes '
+              'pending=${item.isPendingCapture} error=$error',
+            );
+          }
+          return _fallback(Icons.broken_image_outlined);
+        },
       );
     }
 
@@ -2387,7 +2413,7 @@ class _MediaThumbnail extends StatelessWidget {
             snapshot.data!,
             fit: BoxFit.cover,
             gaplessPlayback: true,
-            filterQuality: FilterQuality.medium,
+            filterQuality: FilterQuality.low,
           );
         }
         if (snapshot.connectionState == ConnectionState.waiting) {
@@ -2614,6 +2640,14 @@ class VisitPhotoViewer extends StatelessWidget {
                                     File(imagePath),
                                     fit: BoxFit.contain,
                                     gaplessPlayback: true,
+                                    // Bound decode to screen; original file untouched.
+                                    cacheWidth:
+                                        (MediaQuery.sizeOf(context).width *
+                                                MediaQuery.devicePixelRatioOf(
+                                                  context,
+                                                ))
+                                            .round()
+                                            .clamp(720, 2560),
                                     errorBuilder:
                                         (context, error, stackTrace) =>
                                             const Text(

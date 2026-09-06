@@ -4,8 +4,6 @@ PODS:
     - FlutterMacOS
   - battery_plus (1.0.0):
     - Flutter
-  - camera_avfoundation (0.0.1):
-    - Flutter
   - connectivity_plus (0.0.1):
     - Flutter
   - cupertino_native (0.0.1):
@@ -173,7 +171,6 @@ PODS:
 DEPENDENCIES:
   - audioplayers_darwin (from `.symlinks/plugins/audioplayers_darwin/darwin`)
   - battery_plus (from `.symlinks/plugins/battery_plus/ios`)
-  - camera_avfoundation (from `.symlinks/plugins/camera_avfoundation/ios`)
   - connectivity_plus (from `.symlinks/plugins/connectivity_plus/ios`)
   - cupertino_native (from `.symlinks/plugins/cupertino_native/ios`)
   - device_info_plus (from `.symlinks/plugins/device_info_plus/ios`)
@@ -220,8 +217,6 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/audioplayers_darwin/darwin"
   battery_plus:
     :path: ".symlinks/plugins/battery_plus/ios"
-  camera_avfoundation:
-    :path: ".symlinks/plugins/camera_avfoundation/ios"
   connectivity_plus:
     :path: ".symlinks/plugins/connectivity_plus/ios"
   cupertino_native:
@@ -270,7 +265,6 @@ EXTERNAL SOURCES:
 SPEC CHECKSUMS:
   audioplayers_darwin: f15e209a3e856d1a7edcf98dc029f484fead2242
   battery_plus: 34f72fa2afeeea83bbae306c72a25828d3ec727a
-  camera_avfoundation: 769d252259fa21e39ada7399c9dc9c0921af8165
   connectivity_plus: 2a701ffec2c0ae28a48cf7540e279787e77c447d
   cupertino_native: 2bf2872026a59c9db5b72250892f7d9ca5244197
   device_info_plus: bf2e3232933866d73fe290f2942f2156cdd10342

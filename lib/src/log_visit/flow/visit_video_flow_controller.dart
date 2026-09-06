@@ -1,13 +1,14 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
 import 'package:video_thumbnail/video_thumbnail.dart' as vt;
 
 import 'package:geolocator/geolocator.dart';
 
 import '../../utilities/app_debug_log.dart';
+import 'cam_perf.dart';
 import 'visit_checkpoint.dart';
 import 'visit_media_draft_store.dart';
 import 'visit_media_geo.dart';
@@ -101,6 +102,7 @@ class VisitMediaItem {
   const VisitMediaItem({
     required this.path,
     required this.type,
+    this.captureId,
     this.textNote = '',
     this.voiceNotePath,
     this.capturedAt,
@@ -109,10 +111,14 @@ class VisitMediaItem {
     this.accuracyMeters,
     this.siteCheckpointId,
     this.attentionNeeded = false,
+    this.isPendingCapture = false,
   });
 
   final String path;
   final VisitMediaType type;
+
+  /// Stable identity for one native capture (survives import path changes).
+  final String? captureId;
   final String textNote;
   final String? voiceNotePath;
   final DateTime? capturedAt;
@@ -121,6 +127,9 @@ class VisitMediaItem {
   final double? accuracyMeters;
   final int? siteCheckpointId;
   final bool attentionNeeded;
+
+  /// True while CaptureReview owns this capture before Use Photo commits it.
+  final bool isPendingCapture;
 
   bool get isPhoto => type == VisitMediaType.photo;
   bool get isVideo => type == VisitMediaType.video;
@@ -151,6 +160,7 @@ class VisitMediaItem {
   VisitMediaItem copyWith({
     String? path,
     VisitMediaType? type,
+    String? captureId,
     String? textNote,
     String? voiceNotePath,
     bool clearVoiceNote = false,
@@ -161,10 +171,12 @@ class VisitMediaItem {
     int? siteCheckpointId,
     bool clearSiteCheckpointId = false,
     bool? attentionNeeded,
+    bool? isPendingCapture,
   }) {
     return VisitMediaItem(
       path: path ?? this.path,
       type: type ?? this.type,
+      captureId: captureId ?? this.captureId,
       textNote: textNote ?? this.textNote,
       voiceNotePath: clearVoiceNote
           ? null
@@ -177,6 +189,7 @@ class VisitMediaItem {
           ? null
           : (siteCheckpointId ?? this.siteCheckpointId),
       attentionNeeded: attentionNeeded ?? this.attentionNeeded,
+      isPendingCapture: isPendingCapture ?? this.isPendingCapture,
     );
   }
 }
@@ -201,6 +214,10 @@ class VisitVideoFlowController extends GetxController {
   Future<void>? _restoreFuture;
   DateTime? _startedAt;
 
+  /// In-flight durable imports keyed by captureId (or preview path fallback).
+  final Map<String, Future<VisitMediaItem?>> _finalizeInFlight =
+      <String, Future<VisitMediaItem?>>{};
+
   DateTime? get draftStartedAt => _startedAt;
 
   String? get locationSubtitle =>
@@ -209,12 +226,17 @@ class VisitVideoFlowController extends GetxController {
   List<VisitCheckpoint> get checkpoints =>
       patrolContext.value?.checkpoints ?? const <VisitCheckpoint>[];
 
-  List<VisitMediaItem> get additionalMediaItems =>
-      mediaItems.where((e) => e.isAdditionalMedia).toList(growable: false);
+  List<VisitMediaItem> get additionalMediaItems => mediaItems
+      .where((e) => e.isAdditionalMedia && !e.isPendingCapture)
+      .toList(growable: false);
+
+  /// Draft UI should never render in-flight CaptureReview rows.
+  List<VisitMediaItem> get visibleMediaItems =>
+      mediaItems.where((e) => !e.isPendingCapture).toList(growable: false);
 
   List<VisitMediaItem> mediaForCheckpoint(int checkpointId) {
     return mediaItems
-        .where((e) => e.siteCheckpointId == checkpointId)
+        .where((e) => e.siteCheckpointId == checkpointId && !e.isPendingCapture)
         .toList(growable: false);
   }
 
@@ -347,17 +369,11 @@ class VisitVideoFlowController extends GetxController {
   }
 
   Future<void> updateBatchTextNote(String textNote) async {
-    await _updateToggleNoteText(
-      current: batchNote,
-      textNote: textNote,
-    );
+    await _updateToggleNoteText(current: batchNote, textNote: textNote);
   }
 
   Future<void> updateGeneralTextNote(String textNote) async {
-    await _updateToggleNoteText(
-      current: generalNote,
-      textNote: textNote,
-    );
+    await _updateToggleNoteText(current: generalNote, textNote: textNote);
   }
 
   Future<void> updateBatchVoiceNote(String? voiceNotePath) async {
@@ -651,8 +667,7 @@ class VisitVideoFlowController extends GetxController {
       checkpointsMeta.add(<String, dynamic>{
         'site_checkpoint_id': checkpoint.id,
         'status': 'completed',
-        'checked_at':
-            (photo.capturedAt ?? submitted).toUtc().toIso8601String(),
+        'checked_at': (photo.capturedAt ?? submitted).toUtc().toIso8601String(),
         'latitude': photo.latitude,
         'longitude': photo.longitude,
         'accuracy_meters': photo.accuracyMeters,
@@ -682,6 +697,12 @@ class VisitVideoFlowController extends GetxController {
 
   Future<void> _persistDraft() async {
     if (_restoring) return;
+    CamPerf.stage(
+      null,
+      'PERSIST_QUEUE_WAIT_START',
+      detail: 'items=${mediaItems.length}',
+      usePhotoClock: true,
+    );
     final snapshot = mediaItems.toList(growable: false);
     final startedAt = _startedAt;
     final siteName = draftSiteName.value;
@@ -689,8 +710,45 @@ class VisitVideoFlowController extends GetxController {
     final note = batchNote.value;
     final general = generalNote.value;
     final key = activeDraftKey.value ?? VisitDraftKey.fromContext(context);
-    activeDraftKey.value = key;
+    if (activeDraftKey.value != key) {
+      activeDraftKey.value = key;
+    }
     _persistQueue = (_persistQueue ?? Future<void>.value()).then((_) async {
+      CamPerf.stage(null, 'PERSIST_QUEUE_WAIT_END', usePhotoClock: true);
+      await _store.saveDraft(
+        snapshot,
+        startedAt: startedAt,
+        siteName: siteName,
+        context: context,
+        key: key,
+        batchNote: note,
+        generalNote: general,
+      );
+    });
+    await _persistQueue;
+  }
+
+  /// Persist [snapshot] without first mutating [mediaItems] (avoids Obx rebuild
+  /// storms during Use Photo before Review has popped).
+  Future<void> _persistDraftSnapshot(List<VisitMediaItem> snapshot) async {
+    if (_restoring) return;
+    CamPerf.stage(
+      null,
+      'PERSIST_QUEUE_WAIT_START',
+      detail: 'snapshotItems=${snapshot.length}',
+      usePhotoClock: true,
+    );
+    final startedAt = _startedAt;
+    final siteName = draftSiteName.value;
+    final context = patrolContext.value;
+    final note = batchNote.value;
+    final general = generalNote.value;
+    final key = activeDraftKey.value ?? VisitDraftKey.fromContext(context);
+    if (activeDraftKey.value != key) {
+      activeDraftKey.value = key;
+    }
+    _persistQueue = (_persistQueue ?? Future<void>.value()).then((_) async {
+      CamPerf.stage(null, 'PERSIST_QUEUE_WAIT_END', usePhotoClock: true);
       await _store.saveDraft(
         snapshot,
         startedAt: startedAt,
@@ -736,12 +794,22 @@ class VisitVideoFlowController extends GetxController {
   }) async {
     if (item.path.trim().isEmpty) return null;
 
+    final captureKey = item.captureId?.trim();
+    if (captureKey != null && captureKey.isNotEmpty) {
+      final existingById = findByCaptureId(captureKey);
+      if (existingById != null && persistToDraftStore == false) {
+        _txnLog('DUPLICATE_IGNORED id=$captureKey path=${existingById.path}');
+        return existingById;
+      }
+    }
+
     String durablePath = item.path;
     if (persistToDraftStore) {
       try {
         durablePath = await _store.importMediaFile(
           sourcePath: item.path,
           type: item.type,
+          captureId: item.captureId,
         );
       } catch (_) {
         if (!await File(item.path).exists()) return null;
@@ -759,70 +827,393 @@ class VisitVideoFlowController extends GetxController {
         patrolContext.value!.clientDraftId!.trim().isEmpty) {
       ensureClientDraftId();
     }
-    final existing = mediaItems.indexWhere((e) => e.path == durablePath);
-    if (existing >= 0) {
-      mediaItems[existing] = durableItem;
-    } else {
-      mediaItems.add(durableItem);
-    }
+    _upsertMediaItem(durableItem);
     await _persistDraft();
     return durableItem;
   }
 
   Future<VisitMediaItem?> registerCaptureDraft(VisitMediaItem item) {
-    return addMediaItem(item, persistToDraftStore: false);
+    final id = item.captureId?.trim();
+    CamPerf.stage(id, 'REGISTER_CAPTURE_DRAFT_START');
+    if (id != null && id.isNotEmpty) {
+      final existing = findByCaptureId(id);
+      if (existing != null) {
+        _txnLog('DUPLICATE_IGNORED id=$id (register)');
+        CamPerf.stage(
+          id,
+          'REGISTER_CAPTURE_DRAFT_END',
+          detail: 'duplicateIgnored',
+        );
+        return Future.value(existing);
+      }
+    }
+    _txnLog('CREATED id=${item.captureId} path=${item.path} pending=true');
+    return addMediaItem(
+      item.copyWith(isPendingCapture: true),
+      persistToDraftStore: false,
+    ).then((value) {
+      CamPerf.stage(id, 'REGISTER_CAPTURE_DRAFT_END');
+      return value;
+    });
   }
 
   Future<VisitMediaItem?> finalizeCaptureDraft({
     required String previewPath,
     required VisitMediaType type,
     VisitMediaGeo? geo,
+    String? captureId,
+    bool markAccepted = false,
   }) async {
-    final index = mediaItems.indexWhere((e) => e.path == previewPath);
+    final key = (captureId != null && captureId.trim().isNotEmpty)
+        ? captureId.trim()
+        : previewPath;
+    CamPerf.stage(
+      key,
+      'FINALIZE_CAPTURE_DRAFT_START',
+      detail: 'markAccepted=$markAccepted mediaType=${type.name}',
+      usePhotoClock: true,
+    );
+    final existingFlight = _finalizeInFlight[key];
+    CamPerf.stage(
+      key,
+      'FINALIZE_INFLIGHT_FOUND',
+      detail: 'value=${existingFlight != null}',
+      usePhotoClock: true,
+    );
+    if (existingFlight != null) {
+      _txnLog('DUPLICATE_IGNORED id=$key (finalize in-flight)');
+      CamPerf.stage(key, 'FINALIZE_AWAIT_INFLIGHT_START', usePhotoClock: true);
+      final existing = await existingFlight;
+      CamPerf.stage(
+        key,
+        'FINALIZE_AWAIT_INFLIGHT_END',
+        detail: 'pending=${existing?.isPendingCapture}',
+        usePhotoClock: true,
+      );
+      if (existing != null && markAccepted && existing.isPendingCapture) {
+        return _markAccepted(existing, geo: geo);
+      }
+      if (existing != null && markAccepted && !existing.isPendingCapture) {
+        CamPerf.stage(key, 'FINALIZE_ALREADY_ACCEPTED', usePhotoClock: true);
+        if (geo != null) {
+          await updateCaptureGeo(
+            mediaPath: existing.path,
+            geo: geo,
+            captureId: existing.captureId,
+          );
+        }
+        return existing;
+      }
+      CamPerf.stage(
+        key,
+        'FINALIZE_CAPTURE_DRAFT_END',
+        detail: 'awaitedInflight',
+        usePhotoClock: true,
+      );
+      return existing;
+    }
+
+    final future = _finalizeCaptureDraftLocked(
+      previewPath: previewPath,
+      type: type,
+      geo: geo,
+      captureId: captureId,
+      markAccepted: markAccepted,
+    );
+    _finalizeInFlight[key] = future;
+    try {
+      final result = await future;
+      CamPerf.stage(key, 'FINALIZE_CAPTURE_DRAFT_END', usePhotoClock: true);
+      return result;
+    } finally {
+      if (identical(_finalizeInFlight[key], future)) {
+        _finalizeInFlight.remove(key);
+      }
+    }
+  }
+
+  Future<VisitMediaItem?> _finalizeCaptureDraftLocked({
+    required String previewPath,
+    required VisitMediaType type,
+    VisitMediaGeo? geo,
+    String? captureId,
+    bool markAccepted = false,
+  }) async {
+    final id = captureId?.trim();
+    final index = _indexForCapture(captureId: id, path: previewPath);
     final existing = index >= 0 ? mediaItems[index] : null;
 
+    if (existing != null &&
+        _store.isManagedPath(existing.path) &&
+        await _fileReady(existing.path)) {
+      _txnLog('FINALIZE_COMPLETE id=$id media reused path=${existing.path}');
+      CamPerf.stage(
+        id,
+        'FINALIZE_REUSE_DURABLE',
+        detail: 'path=${existing.path} markAccepted=$markAccepted',
+        usePhotoClock: true,
+      );
+      if (markAccepted) {
+        return _markAccepted(existing, geo: geo);
+      }
+      final reused = existing.copyWith(
+        capturedAt: geo?.capturedAt ?? existing.capturedAt,
+        latitude: geo?.latitude ?? existing.latitude,
+        longitude: geo?.longitude ?? existing.longitude,
+        accuracyMeters: geo?.accuracyMeters ?? existing.accuracyMeters,
+        isPendingCapture: existing.isPendingCapture,
+      );
+      CamPerf.stage(id, 'MEDIA_ITEM_UPSERT_START', usePhotoClock: true);
+      if (index >= 0) mediaItems[index] = reused;
+      CamPerf.stage(id, 'MEDIA_ITEM_UPSERT_END', usePhotoClock: true);
+      _removeGhostPaths(
+        keepCaptureId: reused.captureId,
+        removePath: previewPath,
+        keepPath: reused.path,
+      );
+      await _persistDraft();
+      return reused;
+    }
+
+    _txnLog('IMPORT_START id=$id path=$previewPath');
     String durablePath = previewPath;
     try {
       durablePath = await _store.importMediaFile(
         sourcePath: previewPath,
         type: type,
+        captureId: id ?? existing?.captureId,
         deleteSource: false,
       );
-    } catch (_) {
+      _txnLog('IMPORT_DEST id=$id path=$durablePath');
+    } catch (error) {
+      _txnLog('IMPORT_FAILED id=$id error=$error');
       if (!await File(previewPath).exists()) return existing;
+      rethrow;
     }
 
-    final updated = (existing ?? VisitMediaItem(path: durablePath, type: type))
-        .copyWith(
-          path: durablePath,
-          capturedAt: geo?.capturedAt ?? existing?.capturedAt,
-          latitude: geo?.latitude ?? existing?.latitude,
-          longitude: geo?.longitude ?? existing?.longitude,
-          accuracyMeters: geo?.accuracyMeters ?? existing?.accuracyMeters,
-          siteCheckpointId:
-              existing?.siteCheckpointId ?? activeCheckpointId.value,
-        );
-
-    if (index >= 0) {
-      mediaItems[index] = updated;
-    } else {
-      final durableIndex = mediaItems.indexWhere((e) => e.path == durablePath);
-      if (durableIndex >= 0) {
-        mediaItems[durableIndex] = updated;
-      } else {
-        mediaItems.add(updated);
-      }
+    if (!await _fileReady(durablePath)) {
+      _txnLog('IMPORT_FAILED id=$id empty or missing dest=$durablePath');
+      await _store.deleteQuietly(durablePath);
+      throw StateError('Durable media import failed for $previewPath');
     }
+    _txnLog('IMPORT_COMPLETE id=$id bytes=${await File(durablePath).length()}');
+
+    final updated =
+        (existing ??
+                VisitMediaItem(path: durablePath, type: type, captureId: id))
+            .copyWith(
+              path: durablePath,
+              captureId: id ?? existing?.captureId,
+              capturedAt: geo?.capturedAt ?? existing?.capturedAt,
+              latitude: geo?.latitude ?? existing?.latitude,
+              longitude: geo?.longitude ?? existing?.longitude,
+              accuracyMeters: geo?.accuracyMeters ?? existing?.accuracyMeters,
+              siteCheckpointId:
+                  existing?.siteCheckpointId ?? activeCheckpointId.value,
+              isPendingCapture: markAccepted
+                  ? false
+                  : (existing?.isPendingCapture ?? true),
+            );
+
+    _txnLog(
+      'FINALIZE_${markAccepted ? "COMPLETE" : "READY"} id=$id path=$durablePath',
+    );
+    CamPerf.stage(id, 'MEDIA_ITEM_UPSERT_START', usePhotoClock: true);
+    _upsertMediaItem(updated);
+    CamPerf.stage(id, 'MEDIA_ITEM_UPSERT_END', usePhotoClock: true);
+    // Drop any ghost rows that still point at the preview temp path.
+    _removeGhostPaths(
+      keepCaptureId: updated.captureId,
+      removePath: previewPath,
+      keepPath: durablePath,
+    );
     _startedAt ??= updated.capturedAt ?? DateTime.now();
     await _persistDraft();
     return updated;
   }
 
+  Future<VisitMediaItem?> _markAccepted(
+    VisitMediaItem item, {
+    VisitMediaGeo? geo,
+    bool applyRx = true,
+  }) async {
+    CamPerf.stage(item.captureId, 'MARK_ACCEPTED_START', usePhotoClock: true);
+    CamPerf.stage(item.captureId, 'MARK_ACCEPTED_LOOKUP', usePhotoClock: true);
+    final index = _indexForCapture(captureId: item.captureId, path: item.path);
+    if (index < 0) {
+      CamPerf.stage(
+        item.captureId,
+        'MARK_ACCEPTED_END',
+        detail: 'missingIndex',
+        usePhotoClock: true,
+      );
+      return item;
+    }
+    if (!mediaItems[index].isPendingCapture &&
+        geo == null &&
+        mediaItems[index].path == item.path) {
+      CamPerf.stage(
+        item.captureId,
+        'MARK_ACCEPTED_END',
+        detail: 'noopAlreadyAccepted',
+        usePhotoClock: true,
+      );
+      return mediaItems[index];
+    }
+    CamPerf.stage(
+      item.captureId,
+      'MARK_ACCEPTED_COPYWITH',
+      usePhotoClock: true,
+    );
+    final updated = mediaItems[index].copyWith(
+      // Prefer the durable path from [item] when warm import already moved it.
+      path: item.path,
+      capturedAt: geo?.capturedAt ?? item.capturedAt,
+      latitude: geo?.latitude ?? item.latitude,
+      longitude: geo?.longitude ?? item.longitude,
+      accuracyMeters: geo?.accuracyMeters ?? item.accuracyMeters,
+      isPendingCapture: false,
+    );
+    // Commit durable JSON BEFORE Rx mutation so Draft Obx does not rebuild /
+    // decode thumbnails while Use Photo is still on the critical path.
+    final snapshot = mediaItems.toList(growable: false);
+    snapshot[index] = updated;
+    CamPerf.stage(
+      item.captureId,
+      'MARK_ACCEPTED_PERSIST_QUEUE_ENTER',
+      usePhotoClock: true,
+    );
+    await _persistDraftSnapshot(snapshot);
+    if (!applyRx) {
+      CamPerf.stage(
+        item.captureId,
+        'MARK_ACCEPTED_RX_DEFERRED',
+        detail: 'diskCommitted pendingUiAssign',
+        usePhotoClock: true,
+      );
+      CamPerf.stage(item.captureId, 'MARK_ACCEPTED_END', usePhotoClock: true);
+      return updated;
+    }
+    CamPerf.stage(
+      item.captureId,
+      'MARK_ACCEPTED_RX_ASSIGN_START',
+      detail: 'afterDiskCommit',
+      usePhotoClock: true,
+    );
+    mediaItems[index] = updated;
+    CamPerf.stage(
+      item.captureId,
+      'MARK_ACCEPTED_RX_ASSIGN_END',
+      usePhotoClock: true,
+    );
+    CamPerf.stage(item.captureId, 'MARK_ACCEPTED_END', usePhotoClock: true);
+    return updated;
+  }
+
+  /// Apply an already-persisted accepted item to the in-memory Draft list.
+  void applyAcceptedMediaItem(VisitMediaItem item) {
+    CamPerf.stage(
+      item.captureId,
+      'MARK_ACCEPTED_RX_ASSIGN_START',
+      detail: 'afterReviewPop',
+      usePhotoClock: true,
+    );
+    final index = _indexForCapture(captureId: item.captureId, path: item.path);
+    if (index < 0) {
+      mediaItems.add(item);
+    } else {
+      mediaItems[index] = item;
+    }
+    CamPerf.stage(
+      item.captureId,
+      'MARK_ACCEPTED_RX_ASSIGN_END',
+      usePhotoClock: true,
+    );
+  }
+
+  void removeGhostPreviewPath({
+    required String captureId,
+    required String previewPath,
+    required String keepPath,
+  }) {
+    _removeGhostPaths(
+      keepCaptureId: captureId,
+      removePath: previewPath,
+      keepPath: keepPath,
+    );
+  }
+
+  /// Fast Use Photo path when warm durable import already finished.
+  Future<VisitMediaItem?> acceptWarmCapture({
+    required String captureId,
+    required String previewPath,
+    VisitMediaGeo? geo,
+    bool assumeFileReady = false,
+    bool applyRx = true,
+  }) async {
+    CamPerf.stage(
+      captureId,
+      'ACCEPT_WARM_FAST_PATH_START',
+      usePhotoClock: true,
+    );
+    final existing = findByCaptureId(captureId) ?? findByPath(previewPath);
+    if (existing == null) {
+      CamPerf.stage(
+        captureId,
+        'ACCEPT_WARM_FAST_PATH_FALLBACK',
+        detail: 'noExisting',
+        usePhotoClock: true,
+      );
+      return null;
+    }
+    if (!_store.isManagedPath(existing.path)) {
+      CamPerf.stage(
+        captureId,
+        'ACCEPT_WARM_FAST_PATH_FALLBACK',
+        detail: 'notManaged path=${existing.path}',
+        usePhotoClock: true,
+      );
+      return null;
+    }
+    if (!assumeFileReady) {
+      CamPerf.stage(
+        captureId,
+        'ACCEPT_WARM_FILE_READY_START',
+        usePhotoClock: true,
+      );
+      final ready = await _fileReady(existing.path);
+      CamPerf.stage(
+        captureId,
+        'ACCEPT_WARM_FILE_READY_END',
+        detail: 'ready=$ready',
+        usePhotoClock: true,
+      );
+      if (!ready) return null;
+    } else {
+      CamPerf.stage(
+        captureId,
+        'ACCEPT_WARM_FILE_READY_SKIPPED',
+        detail: 'trustedWarmPersist',
+        usePhotoClock: true,
+      );
+    }
+    final accepted = await _markAccepted(existing, geo: geo, applyRx: applyRx);
+    if (accepted != null && previewPath != accepted.path && applyRx) {
+      _removeGhostPaths(
+        keepCaptureId: accepted.captureId,
+        removePath: previewPath,
+        keepPath: accepted.path,
+      );
+    }
+    return accepted;
+  }
+
   Future<void> updateCaptureGeo({
     required String mediaPath,
     required VisitMediaGeo geo,
+    String? captureId,
   }) async {
-    final index = mediaItems.indexWhere((e) => e.path == mediaPath);
+    final index = _indexForCapture(captureId: captureId, path: mediaPath);
     if (index < 0) return;
     mediaItems[index] = mediaItems[index].copyWith(
       capturedAt: geo.capturedAt,
@@ -838,6 +1229,111 @@ class VisitVideoFlowController extends GetxController {
       if (item.path == path) return item;
     }
     return null;
+  }
+
+  VisitMediaItem? findByCaptureId(String captureId) {
+    final id = captureId.trim();
+    if (id.isEmpty) return null;
+    for (final item in mediaItems) {
+      if (item.captureId == id) return item;
+    }
+    return null;
+  }
+
+  /// Rollback a pending capture transaction (Close / Retake).
+  Future<void> rollbackCaptureDraft({
+    required String captureId,
+    String? previewPath,
+    String? durablePath,
+  }) async {
+    final id = captureId.trim();
+    _txnLog('CANCEL_ROLLBACK id=$id');
+    _finalizeInFlight.remove(id);
+    if (previewPath != null) _finalizeInFlight.remove(previewPath);
+
+    final pathsToDelete = <String>{};
+    if (previewPath != null && previewPath.trim().isNotEmpty) {
+      pathsToDelete.add(previewPath);
+    }
+    if (durablePath != null && durablePath.trim().isNotEmpty) {
+      pathsToDelete.add(durablePath);
+    }
+
+    // Remove every row for this captureId (guards against prior duplicates).
+    for (var i = mediaItems.length - 1; i >= 0; i--) {
+      final item = mediaItems[i];
+      final matchId = id.isNotEmpty && item.captureId == id;
+      final matchPath = pathsToDelete.contains(item.path);
+      if (!matchId && !matchPath) continue;
+      pathsToDelete.add(item.path);
+      if (item.voiceNotePath != null) {
+        await _store.deleteQuietly(item.voiceNotePath);
+      }
+      _thumbnailFutures.remove(item.path);
+      mediaItems.removeAt(i);
+    }
+
+    for (final path in pathsToDelete) {
+      _txnLog('TEMP_DELETE id=$id path=$path');
+      await _store.deleteQuietly(path);
+      _thumbnailFutures.remove(path);
+    }
+
+    if (mediaItems.isEmpty) {
+      _startedAt = null;
+    }
+    await _persistDraft();
+  }
+
+  void _upsertMediaItem(VisitMediaItem item) {
+    final index = _indexForCapture(captureId: item.captureId, path: item.path);
+    if (index >= 0) {
+      mediaItems[index] = item;
+    } else {
+      mediaItems.add(item);
+    }
+  }
+
+  int _indexForCapture({String? captureId, required String path}) {
+    final id = captureId?.trim();
+    if (id != null && id.isNotEmpty) {
+      final byId = mediaItems.indexWhere((e) => e.captureId == id);
+      if (byId >= 0) return byId;
+    }
+    return mediaItems.indexWhere((e) => e.path == path);
+  }
+
+  void _removeGhostPaths({
+    String? keepCaptureId,
+    required String removePath,
+    required String keepPath,
+  }) {
+    if (removePath == keepPath) return;
+    for (var i = mediaItems.length - 1; i >= 0; i--) {
+      final item = mediaItems[i];
+      if (item.path != removePath) continue;
+      // Orphan row still pointing at the temp preview path.
+      mediaItems.removeAt(i);
+      _txnLog(
+        'GHOST_REMOVED path=$removePath keep=$keepPath id=$keepCaptureId',
+      );
+    }
+  }
+
+  Future<bool> _fileReady(String path) async {
+    try {
+      final file = File(path);
+      if (!await file.exists()) return false;
+      return await file.length() > 0;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void _txnLog(String message) {
+    if (kDebugMode) {
+      debugPrint('[CaptureTxn] $message');
+    }
   }
 
   Future<Uint8List?> videoThumbnail(String videoPath) {
