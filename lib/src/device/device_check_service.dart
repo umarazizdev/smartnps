@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
-/// Apple DeviceCheck token generation (iOS only).
 class DeviceCheckService {
   DeviceCheckService._();
 
@@ -40,14 +39,12 @@ class DeviceCheckService {
     }
   }
 
-  /// Fields merged into auth requests that support DeviceCheck validation.
   static Future<Map<String, dynamic>> authPayloadExtras() async {
     final token = await generateToken();
     if (token == null) return const {};
     return {'device_check_token': token};
   }
 
-  /// Back-compat alias for login payloads.
   static Future<Map<String, dynamic>> loginPayloadExtras() =>
       authPayloadExtras();
 }

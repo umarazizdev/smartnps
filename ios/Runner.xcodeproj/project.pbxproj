@@ -23,6 +23,7 @@
 		A1B2C3D92EC4000600F1A201 /* NativeCameraSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D92EC4000600F1A200 /* NativeCameraSession.swift */; };
 		A1B2C3DA2EC4000700F1A201 /* NativeCameraOrientation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3DA2EC4000700F1A200 /* NativeCameraOrientation.swift */; };
 		A1B2C3DC2EC4000900F1A201 /* CamPerf.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3DC2EC4000900F1A200 /* CamPerf.swift */; };
+		A1B2C3DD2EC4000A00F1A201 /* NativeCameraOnboardingOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3DD2EC4000A00F1A200 /* NativeCameraOnboardingOverlay.swift */; };
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
@@ -77,6 +78,7 @@
 		A1B2C3D92EC4000600F1A200 /* NativeCameraSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCameraSession.swift; sourceTree = "<group>"; };
 		A1B2C3DA2EC4000700F1A200 /* NativeCameraOrientation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCameraOrientation.swift; sourceTree = "<group>"; };
 		A1B2C3DC2EC4000900F1A200 /* CamPerf.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CamPerf.swift; sourceTree = "<group>"; };
+		A1B2C3DD2EC4000A00F1A200 /* NativeCameraOnboardingOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCameraOnboardingOverlay.swift; sourceTree = "<group>"; };
 		79A43A0F3B2B4D9EB3AF7AE1 /* Profile.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Profile.xcconfig; path = Flutter/Profile.xcconfig; sourceTree = "<group>"; };
 		7AFA3C8E1D35360C0083082E /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Release.xcconfig; path = Flutter/Release.xcconfig; sourceTree = "<group>"; };
 		7C0692456B17B8FD4B00EB48 /* Pods_Runner.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Runner.framework; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -208,6 +210,7 @@
 				A1B2C3D92EC4000600F1A200 /* NativeCameraSession.swift */,
 				A1B2C3DA2EC4000700F1A200 /* NativeCameraOrientation.swift */,
 				A1B2C3DC2EC4000900F1A200 /* CamPerf.swift */,
+				A1B2C3DD2EC4000A00F1A200 /* NativeCameraOnboardingOverlay.swift */,
 			);
 			path = NativeCamera;
 			sourceTree = "<group>";
@@ -248,6 +251,7 @@
 				C6466617BDD8B755C2F523D3 /* [CP] Embed Pods Frameworks */,
 				E4F1A2B31E4D100500A1B2C3 /* [Flutter] Generate objective_c dSYM */,
 				E2877EEAC59665E99F1EFE3E /* [CP] Copy Pods Resources */,
+				A7C4D5E61F2A3B4C5D6E7F80 /* [Firebase] Crashlytics Upload Symbols */,
 			);
 			buildRules = (
 			);
@@ -449,6 +453,27 @@
 			shellScript = "/bin/sh \"${SRCROOT}/scripts/generate_objective_c_dsym.sh\"\n";
 			showEnvVarsInLog = 0;
 		};
+		A7C4D5E61F2A3B4C5D6E7F80 /* [Firebase] Crashlytics Upload Symbols */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}",
+				"${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Resources/DWARF/${PRODUCT_NAME}",
+				"${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Info.plist",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/GoogleService-Info.plist",
+				"$(TARGET_BUILD_DIR)/$(EXECUTABLE_PATH)",
+			);
+			name = "[Firebase] Crashlytics Upload Symbols";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [ -z \"${PODS_ROOT}\" ] || [ ! -f \"${PODS_ROOT}/FirebaseCrashlytics/run\" ]; then\n  echo \"warning: Firebase Crashlytics run script not found; skipping dSYM upload\"\n  exit 0\nfi\n\"${PODS_ROOT}/FirebaseCrashlytics/run\"\n";
+			showEnvVarsInLog = 0;
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -475,6 +500,7 @@
 				A1B2C3D92EC4000600F1A201 /* NativeCameraSession.swift in Sources */,
 				A1B2C3DA2EC4000700F1A201 /* NativeCameraOrientation.swift in Sources */,
 				A1B2C3DC2EC4000900F1A201 /* CamPerf.swift in Sources */,
+				A1B2C3DD2EC4000A00F1A201 /* NativeCameraOnboardingOverlay.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

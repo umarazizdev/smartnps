@@ -24,6 +24,8 @@ class OnDutyPermissionsPromptService {
 
   static const Duration remindInterval = Duration(minutes: 15);
 
+  static const Duration _reshowCooldown = Duration(seconds: 3);
+
   static Uri? Function()? currentUriChecker;
 
   DateTime? _lastDismissedAt;
@@ -73,6 +75,7 @@ class OnDutyPermissionsPromptService {
 
     final existing = _activeMaybeShow;
     if (existing != null) {
+
       await existing;
       return;
     }
@@ -103,7 +106,10 @@ class OnDutyPermissionsPromptService {
       if (_blockedByOtherUi || _checkInFlight) return;
       await Future<void>.delayed(const Duration(milliseconds: 900));
       if (_blockedByOtherUi || _checkInFlight) return;
-      await _attempt(fromResume: true);
+      await _attempt(
+        fromResume: true,
+        forceImmediate: forceImmediate,
+      );
     }
   }
 
@@ -163,18 +169,25 @@ class OnDutyPermissionsPromptService {
       final justBecameMissing = _permissionsWereReady;
       _permissionsWereReady = false;
 
+      final lastDismissed = _lastDismissedAt;
+      if (lastDismissed != null &&
+          DateTime.now().difference(lastDismissed) < _reshowCooldown) {
+        return _PromptAttemptResult.notNeeded;
+      }
+
       if (!fromResume && !forceImmediate) {
         if (!justBecameMissing) {
-          final last = _lastDismissedAt;
-          if (last == null ||
-              DateTime.now().difference(last) < remindInterval) {
+          if (lastDismissed == null ||
+              DateTime.now().difference(lastDismissed) < remindInterval) {
             return _PromptAttemptResult.notNeeded;
           }
         }
       }
 
       await OverlayPromptGuard.waitUntilReady();
-      if (_blockedByOtherUi) return _PromptAttemptResult.blocked;
+      if (_blockedByOtherUi || OnDutyPermissionsDialog.isVisible) {
+        return _PromptAttemptResult.blocked;
+      }
 
       if (kDebugMode) {
         debugPrint(

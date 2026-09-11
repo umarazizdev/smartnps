@@ -16,8 +16,11 @@ object NativeCameraContract {
   const val EXTRA_REAR_CAMERA_ONLY = "rearCameraOnly"
   const val EXTRA_QUALITY = "quality"
   const val EXTRA_PREFER_HEIC = "preferHeic"
+  const val EXTRA_SHOW_ONBOARDING = "showOnboarding"
+  const val EXTRA_ONBOARDING_STEPS = "onboardingSteps"
 
   const val RESULT_PATH = "path"
+  const val RESULT_ONBOARDING_COMPLETED = "onboardingCompleted"
   const val RESULT_TYPE = "type"
   const val RESULT_CAPTURED_AT_MS = "capturedAtMs"
   const val RESULT_WIDTH = "width"

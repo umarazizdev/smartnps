@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -27,7 +28,8 @@ Future<void> main() async {
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.dark);
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  if (!kIsWeb && Platform.isAndroid) {
+  await _initCrashlytics();
+  if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
     await DebugEnvConfig.instance.init();
   }
   await AppVersionInfo.init();
@@ -36,6 +38,37 @@ Future<void> main() async {
   unawaited(AuthRepository.instance.warmAccessTokenCache());
   unawaited(_initPostUiServices());
   runApp(const SmartNpsApp());
+}
+
+Future<void> _initCrashlytics() async {
+  try {
+    FlutterError.onError = (errorDetails) {
+      FirebaseCrashlytics.instance.recordFlutterFatalError(errorDetails);
+
+      if (kDebugMode) {
+        FlutterError.presentError(errorDetails);
+      }
+    };
+
+    PlatformDispatcher.instance.onError = (error, stack) {
+      FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
+
+      return !kDebugMode;
+    };
+
+    if (kDebugMode) {
+
+      await FirebaseCrashlytics.instance.setCrashlyticsCollectionEnabled(true);
+      await FirebaseCrashlytics.instance.sendUnsentReports();
+      await FirebaseCrashlytics.instance.setCrashlyticsCollectionEnabled(false);
+    } else {
+      await FirebaseCrashlytics.instance.setCrashlyticsCollectionEnabled(true);
+    }
+  } catch (e, st) {
+    if (kDebugMode) {
+      debugPrint('[SmartNPS360] Crashlytics init failed: $e\n$st');
+    }
+  }
 }
 
 Future<void> _initPostUiServices() async {

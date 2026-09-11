@@ -4,7 +4,6 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:video_player/video_player.dart';
 
-/// Display-oriented size of a captured photo or video.
 class VisitMediaSize {
   const VisitMediaSize({required this.width, required this.height});
 
@@ -19,7 +18,6 @@ class VisitMediaSize {
 class VisitMediaOrientation {
   VisitMediaOrientation._();
 
-  /// Returns display size after codec / player rotation metadata is applied.
   static Future<VisitMediaSize?> readSize({
     required String path,
     required bool isPhoto,
@@ -34,7 +32,7 @@ class VisitMediaOrientation {
     required bool isPhoto,
   }) async {
     final size = await readSize(path: path, isPhoto: isPhoto);
-    // FAIL CLOSED: unverifiable orientation must be rejected for evidence.
+
     if (size == null) return false;
     return size.isLandscape;
   }

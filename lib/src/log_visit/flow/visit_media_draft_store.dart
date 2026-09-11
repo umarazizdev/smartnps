@@ -65,6 +65,7 @@ class VisitMediaDraftSnapshot {
     this.savedAt,
     this.batchNote = const VisitBatchNote(),
     this.generalNote = const VisitBatchNote(),
+    this.lastUploadIssue,
   });
 
   final List<VisitMediaItem> items;
@@ -75,6 +76,7 @@ class VisitMediaDraftSnapshot {
   final DateTime? savedAt;
   final VisitBatchNote batchNote;
   final VisitBatchNote generalNote;
+  final VisitDraftLastUploadIssue? lastUploadIssue;
 
   bool get hasItems => items.isNotEmpty;
 
@@ -96,6 +98,54 @@ class VisitMediaDraftSnapshot {
   int get videoCount => items.where((e) => e.isVideo).length;
 }
 
+class VisitDraftLastUploadIssue {
+  const VisitDraftLastUploadIssue({
+    required this.title,
+    required this.summary,
+    this.isGeofence = false,
+    this.occurredAt,
+  });
+
+  final String title;
+  final String summary;
+  final bool isGeofence;
+  final DateTime? occurredAt;
+
+  String get shortLabel {
+    final t = title.trim();
+    final s = summary.trim();
+    if (t.isEmpty) return s;
+    if (s.isEmpty || s.toLowerCase() == t.toLowerCase()) return t;
+    return '$t — $s';
+  }
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+    'title': title,
+    'summary': summary,
+    'isGeofence': isGeofence,
+    if (occurredAt != null) 'occurredAt': occurredAt!.toIso8601String(),
+  };
+
+  static VisitDraftLastUploadIssue? tryParse(dynamic raw) {
+    if (raw is! Map) return null;
+    final map = Map<String, dynamic>.from(raw);
+    final title = (map['title'] as String?)?.trim() ?? '';
+    final summary = (map['summary'] as String?)?.trim() ?? '';
+    if (title.isEmpty && summary.isEmpty) return null;
+    DateTime? occurredAt;
+    final occurredRaw = map['occurredAt'];
+    if (occurredRaw is String && occurredRaw.isNotEmpty) {
+      occurredAt = DateTime.tryParse(occurredRaw);
+    }
+    return VisitDraftLastUploadIssue(
+      title: title.isEmpty ? 'Upload failed' : title,
+      summary: summary,
+      isGeofence: map['isGeofence'] == true,
+      occurredAt: occurredAt,
+    );
+  }
+}
+
 class VisitMediaDraftStore {
   VisitMediaDraftStore._();
 
@@ -112,7 +162,6 @@ class VisitMediaDraftStore {
 
   VisitDraftKey get activeKey => _activeKey;
 
-  /// Clears cached root/key so tests with a new PathProvider stay isolated.
   @visibleForTesting
   void debugResetForTest() {
     _root = null;
@@ -120,8 +169,6 @@ class VisitMediaDraftStore {
     _migrateLegacyFuture = null;
   }
 
-  /// Pre-create draft root + media subdirectory while the camera preview is open.
-  /// Does not create media rows or touch capture files.
   Future<void> prewarmCaptureContext({
     required VisitDraftKey key,
     required VisitMediaType type,
@@ -241,8 +288,6 @@ class VisitMediaDraftStore {
   }
 
   Future<void> setActiveKey(VisitDraftKey key, {bool force = false}) async {
-    // Warm finalize + Use Photo both call saveDraft; skipping an unchanged
-    // active-key flush removes a redundant disk sync on the Done critical path.
     if (!force && _activeKey == key) {
       CamPerf.stage(
         null,
@@ -377,7 +422,6 @@ class VisitMediaDraftStore {
       return sourcePath;
     }
 
-    // Idempotent: if a prior import already committed this captureId, reuse it.
     final existing = File(finalPath);
     if (await existing.exists() && await existing.length() > 0) {
       CamPerf.stage(
@@ -422,7 +466,6 @@ class VisitMediaDraftStore {
         CamPerf.stage(id, 'DURABLE_FILE_VALIDATION_END', usePhotoClock: true);
       }
 
-      // Atomic replace into the durable name.
       if (await existing.exists()) {
         await existing.delete();
       }
@@ -462,7 +505,6 @@ class VisitMediaDraftStore {
     }
   }
 
-  /// Lightweight JPEG SOI check — does not decode pixels / mutate bytes.
   Future<void> _assertJpegHeader(File file) async {
     final lower = file.path.toLowerCase();
     if (!lower.endsWith('.jpg') && !lower.endsWith('.jpeg')) return;
@@ -524,6 +566,7 @@ class VisitMediaDraftStore {
     VisitDraftKey? key,
     VisitBatchNote batchNote = const VisitBatchNote(),
     VisitBatchNote generalNote = const VisitBatchNote(),
+    VisitDraftLastUploadIssue? lastUploadIssue,
   }) async {
     final draftKey = key ?? VisitDraftKey.fromContext(context);
 
@@ -552,7 +595,7 @@ class VisitMediaDraftStore {
         ? context!.siteName
         : siteName;
     final payload = <String, dynamic>{
-      'version': 7,
+      'version': 8,
       'draftKey': draftKey.folderName,
       'savedAt': DateTime.now().toIso8601String(),
       'startedAt': effectiveStartedAt?.toIso8601String(),
@@ -560,6 +603,7 @@ class VisitMediaDraftStore {
       'context': context?.toJson(),
       'attentionNeeded': batchNote.toJson(),
       'generalNote': generalNote.toJson(),
+      if (lastUploadIssue != null) 'lastUploadIssue': lastUploadIssue.toJson(),
       'items': items.map(_itemToJson).toList(),
     };
     final encoded = jsonEncode(payload);
@@ -631,40 +675,15 @@ class VisitMediaDraftStore {
         if (item == null) continue;
         final file = File(item.path);
         if (!await file.exists()) {
-          if (kDebugMode) {
-            debugPrint(
-              '[CaptureTxn] DRAFT_LOAD missing path=${item.path} '
-              'captureId=${item.captureId}',
-            );
-          }
           continue;
         }
         final bytes = await file.length();
         if (bytes <= 0) {
-          if (kDebugMode) {
-            debugPrint(
-              '[CaptureTxn] DRAFT_LOAD empty path=${item.path} '
-              'captureId=${item.captureId}',
-            );
-          }
           continue;
         }
-        // Incomplete CaptureReview sessions must not resurface as Draft media.
         if (item.isPendingCapture) {
-          if (kDebugMode) {
-            debugPrint(
-              '[CaptureTxn] DRAFT_LOAD drop pending path=${item.path} '
-              'captureId=${item.captureId}',
-            );
-          }
           await deleteQuietly(item.path);
           continue;
-        }
-        if (kDebugMode) {
-          debugPrint(
-            '[CaptureTxn] DRAFT_LOAD mediaId=${item.path} '
-            'captureId=${item.captureId} exists=true bytes=$bytes',
-          );
         }
         final voice = item.voiceNotePath;
         if (voice != null && voice.isNotEmpty && !await File(voice).exists()) {
@@ -752,6 +771,9 @@ class VisitMediaDraftStore {
         context: context,
         batchNote: batch,
         generalNote: general,
+        lastUploadIssue: VisitDraftLastUploadIssue.tryParse(
+          map['lastUploadIssue'],
+        ),
       );
     } catch (_) {
       return VisitMediaDraftSnapshot(

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -31,13 +33,24 @@ Color _cpPrimaryColor(bool isDark) {
 }
 
 class VisitCheckpointScreen extends StatefulWidget {
-  const VisitCheckpointScreen({super.key, required this.checkpointId});
+  const VisitCheckpointScreen({
+    super.key,
+    required this.checkpointId,
+    this.openCaptureOnStart = false,
+  });
 
   final int checkpointId;
+  final bool openCaptureOnStart;
 
-  static Future<T?> open<T>({required int checkpointId}) {
+  static Future<T?> open<T>({
+    required int checkpointId,
+    bool openCaptureOnStart = false,
+  }) {
     return Get.to<T>(
-          () => VisitCheckpointScreen(checkpointId: checkpointId),
+          () => VisitCheckpointScreen(
+            checkpointId: checkpointId,
+            openCaptureOnStart: openCaptureOnStart,
+          ),
           routeName: AppRoutes.visitCheckpoint,
         ) ??
         Future<T?>.value();
@@ -59,6 +72,12 @@ class _VisitCheckpointScreenState extends State<VisitCheckpointScreen> {
   void initState() {
     super.initState();
     flow.beginCheckpointCapture(widget.checkpointId);
+    if (widget.openCaptureOnStart) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _openCapture();
+      });
+    }
   }
 
   @override
@@ -76,6 +95,11 @@ class _VisitCheckpointScreenState extends State<VisitCheckpointScreen> {
     flow.beginCheckpointCapture(widget.checkpointId);
     await VisitNativeCaptureLauncher.open();
     flow.beginCheckpointCapture(widget.checkpointId);
+  }
+
+  void _returnToDraft() {
+    flow.endCheckpointCapture();
+    Get.back();
   }
 
   Future<void> _confirmDelete(VisitMediaItem item) async {
@@ -181,163 +205,178 @@ class _VisitCheckpointScreenState extends State<VisitCheckpointScreen> {
                 final media = flow.mediaForCheckpoint(checkpoint.id);
                 final completed = flow.isCheckpointCompleted(checkpoint.id);
 
-                return Column(
-                  children: [
-                    _CheckpointHeader(
-                      isDark: isDark,
-                      isLandscape: isLandscape,
-                      onBack: () {
-                        flow.endCheckpointCapture();
-                        Get.back();
-                      },
-                    ),
-                    Expanded(
-                      child: media.isEmpty
-                          ? Padding(
-                              padding: EdgeInsets.fromLTRB(
-                                isLandscape ? 18 : 16,
-                                4,
-                                isLandscape ? 18 : 16,
-                                isLandscape ? 8 : 12,
+                final content = media.isEmpty
+                    ? Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          isLandscape ? 18 : 16,
+                          4,
+                          isLandscape ? 12 : 16,
+                          isLandscape ? 8 : 12,
+                        ),
+                        child: Column(
+                          children: [
+                            _CheckpointPlaceHeader(
+                              isDark: isDark,
+                              checkpoint: checkpoint,
+                              completed: completed,
+                            ),
+                            if ((checkpoint.description?.trim().isNotEmpty ??
+                                false)) ...[
+                              SizedBox(height: isLandscape ? 8 : 10),
+                              _CheckpointTaskCard(
+                                isDark: isDark,
+                                text: checkpoint.description!.trim(),
                               ),
-                              child: Column(
-                                children: [
-                                  _CheckpointPlaceHeader(
-                                    isDark: isDark,
-                                    checkpoint: checkpoint,
-                                    completed: completed,
-                                  ),
-                                  if ((checkpoint.description
-                                          ?.trim()
-                                          .isNotEmpty ??
-                                      false)) ...[
-                                    SizedBox(height: isLandscape ? 8 : 10),
-                                    _CheckpointTaskCard(
-                                      isDark: isDark,
-                                      text: checkpoint.description!.trim(),
-                                    ),
-                                  ],
-                                  SizedBox(height: isLandscape ? 10 : 14),
-                                  Expanded(
-                                    child: LayoutBuilder(
-                                      builder: (context, constraints) {
-                                        return SingleChildScrollView(
-                                          physics:
-                                              const ClampingScrollPhysics(),
-                                          child: ConstrainedBox(
-                                            constraints: BoxConstraints(
-                                              minHeight: constraints.maxHeight,
-                                            ),
-                                            child: Center(
-                                              child: _CheckpointEmptyCapture(
-                                                isDark: isDark,
-                                                isLandscape: isLandscape,
-                                                onCapture: _openCapture,
-                                              ),
-                                            ),
-                                          ),
-                                        );
-                                      },
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            )
-                          : ListView(
-                              padding: EdgeInsets.fromLTRB(
-                                isLandscape ? 18 : 16,
-                                4,
-                                isLandscape ? 18 : 16,
-                                isLandscape ? 12 : 18,
-                              ),
-                              children: [
-                                _CheckpointPlaceHeader(
-                                  isDark: isDark,
-                                  checkpoint: checkpoint,
-                                  completed: completed,
-                                ),
-                                if ((checkpoint.description
-                                        ?.trim()
-                                        .isNotEmpty ??
-                                    false)) ...[
-                                  SizedBox(height: isLandscape ? 8 : 10),
-                                  _CheckpointTaskCard(
-                                    isDark: isDark,
-                                    text: checkpoint.description!.trim(),
-                                  ),
-                                ],
-                                SizedBox(height: isLandscape ? 12 : 16),
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: Text(
-                                        'Captured (${media.length})',
-                                        style: TextStyle(
-                                          color: _cpTitleColor(isDark),
-                                          fontSize: isLandscape ? 13 : 14,
-                                          fontWeight: FontWeight.w800,
+                            ],
+                            SizedBox(height: isLandscape ? 10 : 14),
+                            Expanded(
+                              child: LayoutBuilder(
+                                builder: (context, constraints) {
+                                  return SingleChildScrollView(
+                                    physics: const ClampingScrollPhysics(),
+                                    child: ConstrainedBox(
+                                      constraints: BoxConstraints(
+                                        minHeight: constraints.maxHeight,
+                                      ),
+                                      child: Center(
+                                        child: _CheckpointEmptyCapture(
+                                          isDark: isDark,
+                                          isLandscape: isLandscape,
+                                          onCapture: _openCapture,
                                         ),
                                       ),
-                                    ),
-                                    if (completed)
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 10,
-                                          vertical: 5,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFF059669)
-                                              .withValues(
-                                                alpha: isDark ? 0.22 : 0.12,
-                                              ),
-                                          borderRadius: BorderRadius.circular(
-                                            999,
-                                          ),
-                                        ),
-                                        child: Text(
-                                          'Completed',
-                                          style: TextStyle(
-                                            color: isDark
-                                                ? const Color(0xFF6EE7B7)
-                                                : const Color(0xFF047857),
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.w700,
-                                          ),
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                                SizedBox(height: isLandscape ? 8 : 10),
-                                ...List.generate(media.length, (index) {
-                                  final item = media[index];
-                                  return Padding(
-                                    padding: EdgeInsets.only(
-                                      bottom: index == media.length - 1 ? 0 : 8,
-                                    ),
-                                    child: VisitMediaPreviewCard(
-                                      item: item,
-                                      index: index,
-                                      isDark: isDark,
-                                      compact: isLandscape,
-                                      thumbnailFuture: item.isVideo
-                                          ? flow.videoThumbnail(item.path)
-                                          : null,
-                                      onPreview: () => _openMediaPreview(item),
-                                      onDelete: () => _confirmDelete(item),
                                     ),
                                   );
-                                }),
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
+                    : ListView(
+                        padding: EdgeInsets.fromLTRB(
+                          isLandscape ? 18 : 16,
+                          4,
+                          isLandscape ? 12 : 16,
+                          isLandscape ? 12 : 18,
+                        ),
+                        children: [
+                          _CheckpointPlaceHeader(
+                            isDark: isDark,
+                            checkpoint: checkpoint,
+                            completed: completed,
+                          ),
+                          if ((checkpoint.description?.trim().isNotEmpty ??
+                              false)) ...[
+                            SizedBox(height: isLandscape ? 8 : 10),
+                            _CheckpointTaskCard(
+                              isDark: isDark,
+                              text: checkpoint.description!.trim(),
+                            ),
+                          ],
+                          SizedBox(height: isLandscape ? 12 : 16),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  'Captured (${media.length})',
+                                  style: TextStyle(
+                                    color: _cpTitleColor(isDark),
+                                    fontSize: isLandscape ? 13 : 14,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                              if (completed)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 5,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF059669).withValues(
+                                      alpha: isDark ? 0.22 : 0.12,
+                                    ),
+                                    borderRadius: BorderRadius.circular(999),
+                                  ),
+                                  child: Text(
+                                    'Completed',
+                                    style: TextStyle(
+                                      color: isDark
+                                          ? const Color(0xFF6EE7B7)
+                                          : const Color(0xFF047857),
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                          SizedBox(height: isLandscape ? 8 : 10),
+                          ...List.generate(media.length, (index) {
+                            final item = media[index];
+                            return Padding(
+                              padding: EdgeInsets.only(
+                                bottom: index == media.length - 1 ? 0 : 8,
+                              ),
+                              child: VisitMediaPreviewCard(
+                                item: item,
+                                index: index,
+                                isDark: isDark,
+                                compact: isLandscape,
+                                thumbnailFuture: item.isVideo
+                                    ? flow.videoThumbnail(item.path)
+                                    : null,
+                                onPreview: () => _openMediaPreview(item),
+                                onDelete: () => _confirmDelete(item),
+                              ),
+                            );
+                          }),
+                        ],
+                      );
+
+                return isLandscape
+                    ? Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(
+                            child: Column(
+                              children: [
+                                _CheckpointHeader(
+                                  isDark: isDark,
+                                  isLandscape: isLandscape,
+                                  onBack: _returnToDraft,
+                                ),
+                                Expanded(child: content),
                               ],
                             ),
-                    ),
-                    _CheckpointBottomBar(
-                      isDark: isDark,
-                      isLandscape: isLandscape,
-                      hasMedia: media.isNotEmpty,
-                      onCapture: _openCapture,
-                    ),
-                  ],
-                );
+                          ),
+                          _CheckpointLandscapeSidebar(
+                            isDark: isDark,
+                            hasMedia: media.isNotEmpty,
+                            canComplete: completed,
+                            onCapture: _openCapture,
+                            onComplete: _returnToDraft,
+                          ),
+                        ],
+                      )
+                    : Column(
+                        children: [
+                          _CheckpointHeader(
+                            isDark: isDark,
+                            isLandscape: isLandscape,
+                            onBack: _returnToDraft,
+                          ),
+                          Expanded(child: content),
+                          _CheckpointBottomBar(
+                            isDark: isDark,
+                            hasMedia: media.isNotEmpty,
+                            canComplete: completed,
+                            onCapture: _openCapture,
+                            onComplete: _returnToDraft,
+                          ),
+                        ],
+                      );
               }),
             ],
           ),
@@ -379,13 +418,13 @@ class _CheckpointHeader extends StatelessWidget {
             child: InkWell(
               onTap: onBack,
               child: SizedBox(
-                width: 42,
-                height: 42,
+                width: isLandscape ? 38 : 42,
+                height: isLandscape ? 38 : 42,
                 child: Center(
                   child: Icon(
                     Icons.arrow_back_ios_new_rounded,
                     color: _cpTitleColor(isDark),
-                    size: 20,
+                    size: isLandscape ? 18 : 20,
                   ),
                 ),
               ),
@@ -399,7 +438,7 @@ class _CheckpointHeader extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 color: _cpTitleColor(isDark),
-                fontSize: isLandscape ? 17 : 20,
+                fontSize: isLandscape ? 16 : 20,
                 fontWeight: FontWeight.w800,
               ),
             ),
@@ -574,12 +613,10 @@ class _CheckpointTaskCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final accent = _cpPrimaryColor(isDark);
-    // Match place-header card radius on all sides (incl. left).
+
     const radius = BorderRadius.all(Radius.circular(18));
     final outline = accent.withValues(alpha: isDark ? 0.36 : 0.22);
 
-    // Uniform Border.all + separate accent strip (non-uniform Border +
-    // borderRadius asserts and breaks layout).
     return Container(
       width: double.infinity,
       clipBehavior: Clip.antiAlias,
@@ -605,7 +642,14 @@ class _CheckpointTaskCard extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Icon(Icons.checklist_rounded, size: 15, color: accent),
+                    Image.asset(
+                      'assets/images/task_checklist_icon.png',
+                      width: 18,
+                      height: 18,
+                      fit: BoxFit.contain,
+                      filterQuality: FilterQuality.high,
+                      semanticLabel: 'Task checklist',
+                    ),
                     const SizedBox(width: 6),
                     Text(
                       'YOUR TASK',
@@ -881,29 +925,216 @@ class _CheckpointEmptyCapture extends StatelessWidget {
   }
 }
 
-class _CheckpointBottomBar extends StatelessWidget {
-  const _CheckpointBottomBar({
+class _CheckpointLandscapeSidebar extends StatelessWidget {
+  const _CheckpointLandscapeSidebar({
     required this.isDark,
     required this.hasMedia,
+    required this.canComplete,
     required this.onCapture,
-    this.isLandscape = false,
+    required this.onComplete,
   });
 
   final bool isDark;
   final bool hasMedia;
+  final bool canComplete;
   final VoidCallback onCapture;
-  final bool isLandscape;
+  final VoidCallback onComplete;
 
   @override
   Widget build(BuildContext context) {
     final primary = _cpPrimaryColor(isDark);
-    return Container(
-      padding: EdgeInsets.fromLTRB(
-        isLandscape ? 16 : 18,
-        isLandscape ? 6 : 10,
-        isLandscape ? 16 : 18,
-        isLandscape ? 8 : 14,
+    final rightPad = Platform.isAndroid ? 14.0 : 10.0;
+    final panelBg = isDark
+        ? const Color(0xFF151E2F)
+        : const Color(0xFFE7EEF7);
+    final panelBorder = isDark
+        ? Colors.white.withValues(alpha: 0.08)
+        : const Color(0xFFD0DBE8);
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: panelBg,
+        border: Border(left: BorderSide(color: panelBorder)),
       ),
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(10, 10, rightPad, 10),
+        child: SizedBox(
+          width: 152,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              SizedBox(
+                height: 118,
+                child: _CheckpointLandscapeRailButton(
+                  isDark: isDark,
+                  filled: false,
+                  accent: primary,
+                  icon: Icons.add_a_photo_outlined,
+                  label: hasMedia ? 'Take more photos' : 'Take photos',
+                  onPressed: onCapture,
+                ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                height: 118,
+                child: _CheckpointLandscapeRailButton(
+                  isDark: isDark,
+                  filled: true,
+                  accent: primary,
+                  icon: Icons.check_rounded,
+                  label: 'Report completed',
+                  onPressed: canComplete ? onComplete : null,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CheckpointLandscapeRailButton extends StatelessWidget {
+  const _CheckpointLandscapeRailButton({
+    required this.isDark,
+    required this.filled,
+    required this.accent,
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+  });
+
+  final bool isDark;
+  final bool filled;
+  final Color accent;
+  final IconData icon;
+  final String label;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onPressed != null;
+
+    final bg = filled
+        ? (enabled
+              ? accent
+              : (isDark
+                    ? const Color(0xFF2A3548)
+                    : const Color(0xFFC5D0E3)))
+        : (isDark ? const Color(0xFF1B2638) : Colors.white);
+    final border = filled
+        ? (enabled
+              ? Colors.transparent
+              : (isDark
+                    ? Colors.white.withValues(alpha: 0.14)
+                    : const Color(0xFF8FA3BD)))
+        : (isDark
+              ? Colors.white.withValues(alpha: 0.16)
+              : const Color(0xFFD5DEEA));
+    final labelColor = filled
+        ? (enabled
+              ? Colors.white
+              : (isDark
+                    ? Colors.white.withValues(alpha: 0.55)
+                    : const Color(0xFF3F516A)))
+        : (enabled
+              ? (isDark ? cDarkTextPrimary : const Color(0xFF1F2A44))
+              : (isDark
+                    ? Colors.white.withValues(alpha: 0.45)
+                    : const Color(0xFF98A2B3)));
+    final iconFg = filled
+        ? (enabled ? Colors.white : labelColor)
+        : (enabled ? accent : labelColor);
+    final iconBg = filled
+        ? (enabled
+              ? Colors.white.withValues(alpha: isDark ? 0.22 : 0.2)
+              : (isDark
+                    ? Colors.white.withValues(alpha: 0.08)
+                    : const Color(0xFFAEBDD2)))
+        : accent.withValues(
+            alpha: enabled
+                ? (isDark ? 0.2 : 0.1)
+                : (isDark ? 0.1 : 0.06),
+          );
+
+    return Material(
+      color: bg,
+      elevation: filled && enabled ? 2 : 0,
+      shadowColor: accent.withValues(alpha: isDark ? 0.35 : 0.22),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+        side: BorderSide(color: border, width: 1.2),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onPressed,
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: iconBg,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    icon,
+                    color: iconFg,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: labelColor,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    height: 1.2,
+                    letterSpacing: -0.15,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CheckpointBottomBar extends StatelessWidget {
+  const _CheckpointBottomBar({
+    required this.isDark,
+    required this.hasMedia,
+    required this.canComplete,
+    required this.onCapture,
+    required this.onComplete,
+  });
+
+  final bool isDark;
+  final bool hasMedia;
+  final bool canComplete;
+  final VoidCallback onCapture;
+  final VoidCallback onComplete;
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = _cpPrimaryColor(isDark);
+    final captureLabel = hasMedia ? 'Capture More' : 'Capture';
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(18, 10, 18, 14),
       decoration: BoxDecoration(
         color: isDark
             ? const Color(0xFF101827).withValues(alpha: 0.90)
@@ -923,38 +1154,86 @@ class _CheckpointBottomBar extends StatelessWidget {
           ),
         ],
       ),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(18),
-          boxShadow: [
-            BoxShadow(
-              color: primary.withValues(alpha: 0.24),
-              blurRadius: 12,
-              offset: const Offset(0, 5),
+      child: Row(
+        children: [
+          Expanded(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(18),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: isDark ? 0.14 : 0.04),
+                    blurRadius: 12,
+                    offset: const Offset(0, 5),
+                  ),
+                ],
+              ),
+              child: ElevatedButton.icon(
+                onPressed: onCapture,
+                icon: const Icon(Icons.camera_alt_rounded, size: 18),
+                label: Text(
+                  captureLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: isDark
+                      ? const Color(0xFF1B2638)
+                      : Colors.white,
+                  foregroundColor: isDark ? cDarkTextPrimary : cPrimary,
+                  minimumSize: const Size.fromHeight(48),
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(17),
+                    side: BorderSide(color: _cpBorderColor(isDark)),
+                  ),
+                ),
+              ),
             ),
-          ],
-        ),
-        child: ElevatedButton.icon(
-          onPressed: onCapture,
-          icon: const Icon(Icons.camera_alt_rounded, size: 18),
-          label: Text(
-            hasMedia ? 'Capture More' : 'Capture',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
           ),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: primary,
-            foregroundColor: Colors.white,
-            minimumSize: Size.fromHeight(isLandscape ? 42 : 48),
-            elevation: 2,
-            shadowColor: primary.withValues(alpha: 0.24),
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(17),
+          const SizedBox(width: 10),
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: canComplete ? onComplete : null,
+              icon: const Icon(Icons.check_circle_rounded, size: 18),
+              label: const Text(
+                'Completed',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: primary,
+                disabledBackgroundColor: isDark
+                    ? const Color(0xFF2A3548)
+                    : const Color(0xFFC5D0E3),
+                foregroundColor: Colors.white,
+                disabledForegroundColor: isDark
+                    ? Colors.white.withValues(alpha: 0.55)
+                    : const Color(0xFF3F516A),
+                minimumSize: const Size.fromHeight(48),
+                elevation: canComplete ? 2 : 0,
+                shadowColor: primary.withValues(alpha: 0.24),
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(17),
+                  side: canComplete
+                      ? BorderSide.none
+                      : BorderSide(
+                          color: isDark
+                              ? Colors.white.withValues(alpha: 0.14)
+                              : const Color(0xFF8FA3BD),
+                        ),
+                ),
+              ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }

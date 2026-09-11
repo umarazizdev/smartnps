@@ -48,10 +48,6 @@ class VisitGpsSession {
     return _isUsable(position, maxAge: maxAcceptAge);
   }
 
-  /// Whether [position] is acceptable relative to the shutter/capture moment.
-  ///
-  /// Uses the same [maxAcceptAge] window as [isUsableAcceptable], measured
-  /// against [captureTime] instead of wall-clock "now".
   static bool isAcceptableForCapture(
     Position position,
     DateTime captureTime, {
@@ -62,7 +58,6 @@ class VisitGpsSession {
     return age <= maxAge;
   }
 
-  /// True when location permission is already granted (never prompts).
   static Future<bool> hasGrantedPermission() async {
     try {
       final permission = await Geolocator.checkPermission();
@@ -73,7 +68,6 @@ class VisitGpsSession {
     }
   }
 
-  /// Best fix for a capture timestamp using existing age/accuracy rules.
   Position? selectFixForCapture(DateTime captureTime) {
     final candidates = <Position?>[
       _latest,

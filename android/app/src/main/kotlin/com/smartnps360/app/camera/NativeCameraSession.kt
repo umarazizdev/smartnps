@@ -75,6 +75,7 @@ class NativeCameraSession(
       minExposure: Int,
       maxExposure: Int,
       exposureIndex: Int,
+      exposureStep: Float,
     )
 
     fun onSessionError(code: String, message: String)
@@ -100,8 +101,17 @@ class NativeCameraSession(
 
   private var mode: Mode = Mode.PHOTO
   private var facingBack: Boolean = true
-  private var flashCycle: FlashCycle = FlashCycle.OFF
-  private var torchOn: Boolean = false
+  private val cameraPreferences = context.getSharedPreferences(
+    CAMERA_PREFERENCES_NAME,
+    Context.MODE_PRIVATE,
+  )
+  private var flashCycle: FlashCycle = runCatching {
+    FlashCycle.valueOf(
+      cameraPreferences.getString(PREFERENCE_PHOTO_FLASH, FlashCycle.AUTO.name)
+        ?: FlashCycle.AUTO.name,
+    )
+  }.getOrDefault(FlashCycle.AUTO)
+  private var torchOn: Boolean = cameraPreferences.getBoolean(PREFERENCE_VIDEO_TORCH, false)
   private var activeExtensionMode: Int = ExtensionMode.NONE
   private var activeExtensionLabel: String? = null
 
@@ -132,6 +142,7 @@ class NativeCameraSession(
   private var minExposureIndex = 0
   private var maxExposureIndex = 0
   private var exposureIndex = 0
+  private var exposureStep = 1f
 
   /** Survives rebinds so EV is restored after an extension switch. */
   private var desiredExposureIndex = 0
@@ -215,7 +226,6 @@ class NativeCameraSession(
     mode = newMode
     if (newMode == Mode.PHOTO) {
       facingBack = true
-      torchOn = false
     }
     requestRebind("switchMode=$newMode")
   }
@@ -234,6 +244,15 @@ class NativeCameraSession(
       FlashCycle.AUTO -> FlashCycle.ON
       FlashCycle.ON -> FlashCycle.OFF
     }
+    cameraPreferences.edit().putString(PREFERENCE_PHOTO_FLASH, flashCycle.name).apply()
+    applyFlash()
+    return flashCycle
+  }
+
+  fun setFlashMode(value: FlashCycle): FlashCycle {
+    if (!hasFlashUnit || mode != Mode.PHOTO) return flashCycle
+    flashCycle = value
+    cameraPreferences.edit().putString(PREFERENCE_PHOTO_FLASH, flashCycle.name).apply()
     applyFlash()
     return flashCycle
   }
@@ -241,9 +260,14 @@ class NativeCameraSession(
   fun toggleTorch(): Boolean {
     if (!hasFlashUnit || mode != Mode.VIDEO) return torchOn
     torchOn = !torchOn
+    cameraPreferences.edit().putBoolean(PREFERENCE_VIDEO_TORCH, torchOn).apply()
     camera?.cameraControl?.enableTorch(torchOn)
     return torchOn
   }
+
+  fun currentFlashCycle(): FlashCycle = flashCycle
+
+  fun isTorchEnabledPreference(): Boolean = torchOn
 
   fun setZoomRatio(ratio: Float) {
     val clamped = ratio.coerceIn(minZoom, maxZoom)
@@ -252,6 +276,9 @@ class NativeCameraSession(
     val cam = camera ?: return
     cam.cameraControl.setZoomRatio(clamped)
   }
+
+  /** Zoom limits for gesture-driven controls in the camera chrome. */
+  fun zoomRange(): Pair<Float, Float> = minZoom to maxZoom
 
   /**
    * Keep Preview / ImageCapture / VideoCapture aligned with the current
@@ -279,7 +306,7 @@ class NativeCameraSession(
    * rotation in place. Do NOT tear down Preview/ImageCapture — a full rebind
    * after FIRST_PREVIEW_FRAME is a major shutter/ready regression.
    *
-   * ViewPort was sized at bind; FILL_CENTER PreviewView + setTargetRotation is
+   * ViewPort was sized at bind; FIT_CENTER PreviewView + setTargetRotation is
    * sufficient for orientation while the Activity handles configChanges.
    */
   fun refreshForDisplayChange() {
@@ -389,7 +416,6 @@ class NativeCameraSession(
   fun isRebinding(): Boolean = isRebinding.get()
 
   fun takePicture(onResult: (Result<CaptureOutput>) -> Unit) {
-    // CaptureId assigned early so all [CAM_PERF] lines share one id.
     val captureId = java.util.UUID.randomUUID().toString()
     CamPerf.stage(captureId, "TAKE_PICTURE_ENTER", "thread=${Thread.currentThread().name}")
 
@@ -480,26 +506,6 @@ class NativeCameraSession(
         "ev=$exposureIndex flash=$flashCycle " +
         "targetRotation=${capture.targetRotation} " +
         "thread=${Thread.currentThread().name}",
-    )
-    CamPerf.log(
-      captureId,
-      "NOTE",
-      "No FocusMeteringAction on shutter; tap-to-focus is user-driven only. " +
-        "CameraX MAXIMIZE_QUALITY may still run AF/AE precapture (AfTask/AePreCaptureTask) " +
-        "internally before OnImageSaved — that window is B_invoke_to_callback.",
-    )
-    CamPerf.log(
-      captureId,
-      "NOTE",
-      "ZSL: captureMode=MAXIMIZE_QUALITY does not use CameraX ZERO_SHUTTER_LAG path; " +
-        "Camera2 zslDisabled=false is capability metadata only. Keeping MAXIMIZE_QUALITY " +
-        "for evidence quality (ZSL would be a future STANDARD-mode device opt-in).",
-    )
-    CamPerf.log(
-      captureId,
-      "NOTE",
-      "CameraX OnImageSavedCallback has no public OEM processing stage; " +
-        "B=TAKE_PICTURE_INVOKE→IMAGE_FILE_CALLBACK is the sensor/OEM/write window",
     )
 
     val options = ImageCapture.OutputFileOptions.Builder(file).build()
@@ -872,6 +878,44 @@ class NativeCameraSession(
     cam.cameraControl.startFocusAndMetering(action)
   }
 
+  /**
+   * Clear any stale AF/AE regions after a bind. CameraX then resumes its
+   * repeating continuous autofocus/auto-exposure strategy at frame center.
+   * Tap-to-focus remains a temporary three-second override.
+   */
+  private fun restoreContinuousAutoFocus(cam: Camera, reason: String) {
+    val availableModes = try {
+      Camera2CameraInfo.from(cam.cameraInfo).getCameraCharacteristic(
+        CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES,
+      )?.toSet().orEmpty()
+    } catch (_: Exception) {
+      emptySet()
+    }
+    val continuousSupported =
+      CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE in availableModes ||
+        CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO in availableModes
+
+    val reset = cam.cameraControl.cancelFocusAndMetering()
+    reset.addListener(
+      {
+        try {
+          reset.get()
+          Log.d(
+            NativeCameraContract.LOG_TAG,
+            "continuous autofocus restored reason=$reason supported=$continuousSupported",
+          )
+        } catch (error: Exception) {
+          // Fixed-focus devices legitimately cannot run AF; capture remains usable.
+          Log.d(
+            NativeCameraContract.LOG_TAG,
+            "autofocus restore unavailable reason=$reason: ${error.message}",
+          )
+        }
+      },
+      mainExecutor,
+    )
+  }
+
   fun release() {
     if (!released.compareAndSet(false, true)) return
     pendingRebind = false
@@ -1179,8 +1223,8 @@ class NativeCameraSession(
       activeVideoStabilization = attempt.videoStabilization
     }
 
-    // ViewPort matches PreviewView fill so framing matches the OS camera
-    // full-screen viewfinder (what you see ≈ what you capture).
+    // ViewPort follows PreviewView FIT_CENTER: full sensor FOV (letterbox), no
+    // fill-crop. Same FOV for Preview + ImageCapture (WYSIWYG ≈ stock Camera).
     val viewPort = previewView.getViewPort(rotation)
     camera = if (viewPort != null) {
       val groupBuilder = UseCaseGroup.Builder().setViewPort(viewPort)
@@ -1283,7 +1327,6 @@ class NativeCameraSession(
         // Leave resolution selection to CameraX defaults.
       }
       BindProfile.STANDARD_MAX_QUALITY -> {
-        // Fast preview (~720p-class) while ImageCapture stays max quality.
         builder.setResolutionSelector(efficientPreviewSelector())
       }
     }
@@ -1311,7 +1354,6 @@ class NativeCameraSession(
           .setResolutionSelector(resolutionSelector16x9())
       }
       BindProfile.MINIMAL -> {
-        // Still max quality; only the resolution selector is dropped.
         builder
           .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
           .setJpegQuality(100)
@@ -1342,7 +1384,6 @@ class NativeCameraSession(
   }
 
   /** Stock photo is typically 4:3; video is 16:9. */
-  /** Preview-only: prefer ~720p for fast first frame; capture quality is separate. */
   private fun efficientPreviewSelector(): ResolutionSelector {
     return ResolutionSelector.Builder()
       .setResolutionStrategy(
@@ -1373,6 +1414,7 @@ class NativeCameraSession(
   private fun onBoundSuccessfully(profile: BindProfile) {
     val cam = camera ?: return
     hasFlashUnit = cam.cameraInfo.hasFlashUnit()
+    restoreContinuousAutoFocus(cam, "bind_${mode.name.lowercase()}")
     applyFlash()
     if (mode == Mode.VIDEO && torchOn && hasFlashUnit) {
       cam.cameraControl.enableTorch(true)
@@ -1450,6 +1492,7 @@ class NativeCameraSession(
     val readyMinEv = minExposureIndex
     val readyMaxEv = maxExposureIndex
     val readyEv = exposureIndex
+    val readyEvStep = exposureStep
     mainExecutor.execute {
       if (released.get()) return@execute
       // A queued rebind publishes its own state; drop the stale notification.
@@ -1464,6 +1507,7 @@ class NativeCameraSession(
         minExposure = readyMinEv,
         maxExposure = readyMaxEv,
         exposureIndex = readyEv,
+        exposureStep = readyEvStep,
       )
     }
   }
@@ -1496,12 +1540,14 @@ class NativeCameraSession(
         minExposureIndex = 0
         maxExposureIndex = 0
         exposureIndex = 0
+        exposureStep = 1f
         return
       }
       val range = state.exposureCompensationRange
       minExposureIndex = range.lower
       maxExposureIndex = range.upper
       exposureIndex = state.exposureCompensationIndex
+      exposureStep = state.exposureCompensationStep.toFloat().coerceAtLeast(0.01f)
       val restore = desiredExposureIndex.coerceIn(minExposureIndex, maxExposureIndex)
       if (restore != exposureIndex) {
         setExposureCompensationIndex(restore)
@@ -1514,6 +1560,7 @@ class NativeCameraSession(
       minExposureIndex = 0
       maxExposureIndex = 0
       exposureIndex = 0
+      exposureStep = 1f
     }
   }
 
@@ -1647,6 +1694,10 @@ class NativeCameraSession(
   }
 
   companion object {
+    private const val CAMERA_PREFERENCES_NAME = "native_camera_preferences"
+    private const val PREFERENCE_PHOTO_FLASH = "photo_flash_mode"
+    private const val PREFERENCE_VIDEO_TORCH = "video_torch_on"
+
     /** Process-scoped extension availability; not an active camera resource. */
     @Volatile
     var processExtensionCache: List<String>? = null
@@ -1672,9 +1723,12 @@ class NativeCameraSession(
   private fun applyFlash() {
     val capture = imageCapture ?: return
     if (mode != Mode.PHOTO) return
+    // "On" is a continuous light so the officer can compose and focus before
+    // capture. Auto remains a capture-time flash decision by the camera stack.
+    val continuousLight = hasFlashUnit && flashCycle == FlashCycle.ON
+    camera?.cameraControl?.enableTorch(continuousLight)
     capture.flashMode = when {
       !hasFlashUnit -> ImageCapture.FLASH_MODE_OFF
-      flashCycle == FlashCycle.ON -> ImageCapture.FLASH_MODE_ON
       flashCycle == FlashCycle.AUTO -> ImageCapture.FLASH_MODE_AUTO
       else -> ImageCapture.FLASH_MODE_OFF
     }

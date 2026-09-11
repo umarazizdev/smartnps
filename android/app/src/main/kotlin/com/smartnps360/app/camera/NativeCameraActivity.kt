@@ -13,13 +13,19 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.animation.PathInterpolator
+import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.SeekBar
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
@@ -28,17 +34,27 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.smartnps360.app.R
 import kotlin.math.abs
+import kotlin.math.pow
+import kotlin.math.roundToInt
 
 /**
  * Landscape-locked fullscreen CameraX capture UI.
- * Chrome matches the previous Flutter VisitVideoRecorderScreen landscape layout.
+ * Chrome matches iOS NativeCameraViewController (flash leading, zoom on
+ * preview, black trailing shutter rail with flip / shutter / close).
  */
 class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
   private lateinit var previewView: PreviewView
   private lateinit var focusReticle: View
+  private lateinit var focusExposureControl: View
+  private lateinit var focusExposureSun: TextView
   private lateinit var extensionLabel: TextView
   private lateinit var btnClose: ImageButton
   private lateinit var btnFlash: ImageButton
+  private lateinit var flashLabel: TextView
+  private lateinit var flashModeTray: LinearLayout
+  private lateinit var flashModeOff: TextView
+  private lateinit var flashModeOn: TextView
+  private lateinit var flashModeAuto: TextView
   private lateinit var btnFlip: ImageButton
   private lateinit var btnShutter: ImageButton
   private lateinit var btnStop: ImageButton
@@ -48,8 +64,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
   private lateinit var zoomLabel: TextView
   private lateinit var extensionRow: LinearLayout
   private lateinit var exposureRow: LinearLayout
-  private lateinit var btnExposureDown: TextView
-  private lateinit var btnExposureUp: TextView
+  private lateinit var exposureSlider: SeekBar
   private lateinit var exposureValue: TextView
   private lateinit var recordingTimer: LinearLayout
   private lateinit var recordingTimerText: TextView
@@ -60,19 +75,29 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
   private lateinit var portraitBlockOverlay: View
   private lateinit var portraitBlockIcon: ImageView
   private lateinit var rightChrome: View
+  private lateinit var topBar: FrameLayout
+  private lateinit var onboardingOverlay: NativeCameraOnboardingOverlay
+  private lateinit var onboardingSpot: View
 
   private var rotateHintAnimator: ObjectAnimator? = null
   private var session: NativeCameraSession? = null
   private var allowModeSwitch = true
   private var rearCameraOnly = true
   private var landscapeOnly = true
+  private var deviceHasFlash = false
   private var quality = NativeCameraContract.QUALITY_MAXIMUM
   private var requestedExtension: String? = null
+  private var showOnboarding = false
+  private var onboardingSteps: List<NativeCameraOnboardingOverlay.Step> = emptyList()
+  private var onboardingCompleted = false
+  private var onboardingStarted = false
+  private var onboardingFocusDemo = false
   private var exposureMin = 0
   private var exposureMax = 0
   private var exposureCurrent = 0
+  private var exposureStep = 1f
   private var mode = NativeCameraSession.Mode.PHOTO
-  private var flashCycle = NativeCameraSession.FlashCycle.OFF
+  private var flashCycle = NativeCameraSession.FlashCycle.AUTO
   private var torchOn = false
   private var finishingWithResult = false
   private var sessionReady = false
@@ -99,6 +124,28 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
   private var gestureDownX = 0f
   private var gestureDownY = 0f
   private var gestureMoved = false
+  private var verticalExposureStart = 0
+  private var verticalExposureActive = false
+  private var verticalExposureRejected = false
+  private var shutterTouchDownY = 0f
+  private var shutterZoomStart = 1f
+  private var shutterDragActive = false
+  private var shutterTouchActive = false
+  private var shutterGestureBlocked = false
+  private var shutterPointerId = MotionEvent.INVALID_POINTER_ID
+  private var zoomPointerId = MotionEvent.INVALID_POINTER_ID
+  private var zoomPointerDownY = 0f
+  private var zoomPointerStart = 1f
+  private var zoomPointerMoved = false
+  private var zoomPointerChip: TextView? = null
+  private var lastZoomHapticIndex = -1
+  private val gestureTouchSlop by lazy { ViewConfiguration.get(this).scaledTouchSlop.toFloat() }
+  private val shutterLongPressRunnable = Runnable {
+    if (!shutterTouchActive || shutterDragActive || shutterGestureBlocked) return@Runnable
+    if (isCaptureBlocked() || isRecordingUi) return@Runnable
+    shutterLongPressActive = true
+    onLongPressStartVideo()
+  }
   private var pendingVideoResult: ((Result<NativeCameraSession.CaptureOutput>) -> Unit)? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -112,21 +159,29 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     Log.d(NativeCameraContract.LOG_TAG, "NATIVE_SCREEN_CREATED")
 
     previewView = findViewById(R.id.preview_view)
-    // Compatible mode respects targetRotation when the activity handles
-    // orientation configChanges without recreating.
     previewView.implementationMode = PreviewView.ImplementationMode.PERFORMANCE
-    previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
+    // Fit (not fill): never crop sensor FOV to the screen. Letterboxing matches
+    // stock Camera Photo framing so 0.5x is as wide as the OS camera.
+    previewView.scaleType = PreviewView.ScaleType.FIT_CENTER
     previewView.previewStreamState.observe(this) { state ->
       if (state == PreviewView.StreamState.STREAMING) {
         Log.d(NativeCameraContract.LOG_TAG, "FIRST_PREVIEW_FRAME / PREVIEW_SURFACE_READY")
         Log.d(NativeCameraContract.LOG_TAG, "CAMERA_READY")
         CamPerf.markFirstPreviewFrame()
+        maybeStartOnboarding()
       }
     }
     focusReticle = findViewById(R.id.focus_reticle)
+    focusExposureControl = findViewById(R.id.focus_exposure_control)
+    focusExposureSun = findViewById(R.id.focus_exposure_sun)
     extensionLabel = findViewById(R.id.extension_label)
     btnClose = findViewById(R.id.btn_close)
     btnFlash = findViewById(R.id.btn_flash)
+    flashLabel = findViewById(R.id.flash_label)
+    flashModeTray = findViewById(R.id.flash_mode_tray)
+    flashModeOff = findViewById(R.id.flash_mode_off)
+    flashModeOn = findViewById(R.id.flash_mode_on)
+    flashModeAuto = findViewById(R.id.flash_mode_auto)
     btnFlip = findViewById(R.id.btn_flip)
     btnShutter = findViewById(R.id.btn_shutter)
     btnStop = findViewById(R.id.btn_stop)
@@ -136,8 +191,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     zoomLabel = findViewById(R.id.zoom_label)
     extensionRow = findViewById(R.id.extension_row)
     exposureRow = findViewById(R.id.exposure_row)
-    btnExposureDown = findViewById(R.id.btn_exposure_down)
-    btnExposureUp = findViewById(R.id.btn_exposure_up)
+    exposureSlider = findViewById(R.id.exposure_slider)
     exposureValue = findViewById(R.id.exposure_value)
     recordingTimer = findViewById(R.id.recording_timer)
     recordingTimerText = findViewById(R.id.recording_timer_text)
@@ -148,6 +202,34 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     portraitBlockOverlay = findViewById(R.id.portrait_block_overlay)
     portraitBlockIcon = findViewById(R.id.portrait_block_icon)
     rightChrome = findViewById(R.id.right_chrome)
+    topBar = findViewById(R.id.top_bar)
+
+    val root = findViewById<FrameLayout>(R.id.native_camera_root)
+    val spotSize = (100 * resources.displayMetrics.density).toInt()
+    onboardingSpot = View(this).apply {
+      alpha = 0f
+      importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
+    root.addView(
+      onboardingSpot,
+      android.widget.FrameLayout.LayoutParams(spotSize, spotSize).apply {
+        gravity = android.view.Gravity.CENTER
+      },
+    )
+    onboardingOverlay = NativeCameraOnboardingOverlay(this).apply {
+      visibility = View.GONE
+      onCompleted = { onboardingCompleted = true }
+      onFinishedUi = { clearOnboardingFocusDemo() }
+    }
+    root.addView(
+      onboardingOverlay,
+      android.widget.FrameLayout.LayoutParams(
+        android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+        android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+      ),
+    )
+    // Tip tour must sit above elevated chrome (zoom pills, shutter rail, flash).
+    onboardingOverlay.bringToFront()
 
     allowModeSwitch = intent.getBooleanExtra(
       NativeCameraContract.EXTRA_ALLOW_MODE_SWITCH,
@@ -168,6 +250,13 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
       ?.trim()
       ?.lowercase()
       ?.takeIf { it.isNotEmpty() }
+    showOnboarding = intent.getBooleanExtra(
+      NativeCameraContract.EXTRA_SHOW_ONBOARDING,
+      false,
+    )
+    onboardingSteps = NativeCameraOnboardingOverlay.parseSteps(
+      intent.getStringExtra(NativeCameraContract.EXTRA_ONBOARDING_STEPS),
+    )
     val type = intent.getStringExtra(NativeCameraContract.EXTRA_TYPE)
       ?: NativeCameraContract.TYPE_PHOTO
     mode = if (type == NativeCameraContract.TYPE_VIDEO) {
@@ -184,6 +273,12 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
       this,
       object : OnBackPressedCallback(true) {
         override fun handleOnBackPressed() {
+          if (onboardingOverlay.isActive()) {
+            // Dismiss for this session only; do not persist completion.
+            clearOnboardingFocusDemo()
+            onboardingOverlay.visibility = View.GONE
+            return
+          }
           cancelAndFinish()
         }
       },
@@ -196,6 +291,9 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     } else {
       startSession()
     }
+
+    // Show the guide as soon as Capture opens (do not wait for shutter use).
+    btnShutter.post { maybeStartOnboarding() }
   }
 
   override fun onStop() {
@@ -287,12 +385,17 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     minExposure: Int,
     maxExposure: Int,
     exposureIndex: Int,
+    exposureStep: Float,
   ) {
     sessionReady = true
+    session?.let { active ->
+      flashCycle = active.currentFlashCycle()
+      torchOn = active.isTorchEnabledPreference()
+    }
     updateFlashButtonVisibility(hasFlash)
     updateExtensionLabel(extensionMode)
     rebuildExtensionChips(availableExtensions)
-    updateExposureControls(minExposure, maxExposure, exposureIndex)
+    updateExposureControls(minExposure, maxExposure, exposureIndex, exposureStep)
     rebuildZoomChips(usefulZooms)
     updateFlipVisibility()
     updateCaptureChrome()
@@ -310,7 +413,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     super.onConfigurationChanged(newConfig)
     syncPortraitBlock()
     // Activity handles configChanges — refresh rotation + ViewPort so portrait
-    // and landscape both show an upright, full-screen preview like the OS camera.
+    // and landscape both stay upright. FIT_CENTER ViewPort keeps full FOV.
     syncCameraTargetRotation(rebindViewport = true)
   }
 
@@ -326,6 +429,9 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
       isPortraitBlocked = false
       portraitBlockOverlay.visibility = View.GONE
       rightChrome.visibility = View.VISIBLE
+      syncZoomRowOrientationVisibility(portrait = false)
+      updateFlashButtonVisibility(deviceHasFlash)
+      updateCloseChromePosition(portrait = false)
       updateAuxChromeVisibility()
       stopRotateHintAnimation()
       return
@@ -336,15 +442,91 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     portraitBlockOverlay.visibility = if (portrait) View.VISIBLE else View.GONE
     // Keep the live camera preview visible under the dialog; only hide capture chrome.
     rightChrome.visibility = if (portrait) View.INVISIBLE else View.VISIBLE
+    syncZoomRowOrientationVisibility(portrait)
+    if (portrait) flashModeTray.visibility = View.GONE
+    updateFlashButtonVisibility(deviceHasFlash)
+    // Landscape: close on shutter rail. Portrait: top-leading (outside hidden rail).
+    updateCloseChromePosition(portrait)
     updateAuxChromeVisibility()
-    // Top chrome close stays available; preview remains full-bleed underneath.
     if (portrait) {
       startRotateHintAnimation()
+      pauseOnboardingForPortrait()
     } else {
       stopRotateHintAnimation()
+      // Tour is landscape-only; start once the officer rotates.
+      maybeStartOnboarding()
     }
     if (portrait && isRecordingUi) {
       session?.abortRecording()
+    }
+  }
+
+  /** Landscape: Close on black shutter chrome (top). Portrait: top-leading. */
+  private fun updateCloseChromePosition(portrait: Boolean) {
+    if (!::btnClose.isInitialized || !::topBar.isInitialized || !::rightChrome.isInitialized) {
+      return
+    }
+    val density = resources.displayMetrics.density
+    val parent: ViewGroup = if (portrait) topBar else (rightChrome as ViewGroup)
+    if (btnClose.parent !== parent) {
+      (btnClose.parent as? ViewGroup)?.removeView(btnClose)
+      parent.addView(btnClose)
+    }
+    val size = (44 * density).toInt()
+    val lp = FrameLayout.LayoutParams(size, size)
+    if (portrait) {
+      lp.gravity = Gravity.START or Gravity.CENTER_VERTICAL
+      lp.marginStart = 0
+      lp.topMargin = 0
+    } else {
+      lp.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+      lp.topMargin = (16 * density).toInt()
+    }
+    btnClose.layoutParams = lp
+    btnClose.visibility = View.VISIBLE
+    btnClose.alpha = 1f
+    btnClose.isEnabled = true
+    updateFlashLeadingPadding(portrait)
+  }
+
+  private fun updateFlashLeadingPadding(portrait: Boolean) {
+    if (!::btnFlash.isInitialized) return
+    val density = resources.displayMetrics.density
+    val leading = ((if (portrait) 18 else 28) * density).toInt()
+    val trayLeading = leading + (42 * density).toInt() + (8 * density).toInt()
+    (btnFlash.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
+      lp.marginStart = leading
+      btnFlash.layoutParams = lp
+    }
+    (flashLabel.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
+      lp.marginStart = leading
+      flashLabel.layoutParams = lp
+    }
+    (flashModeTray.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
+      lp.marginStart = trayLeading
+      flashModeTray.layoutParams = lp
+    }
+  }
+
+  private fun syncZoomRowOrientationVisibility(portrait: Boolean) {
+    if (!::zoomRow.isInitialized) return
+    zoomRow.visibility = when {
+      portrait -> View.INVISIBLE
+      zoomRow.childCount > 1 -> View.VISIBLE
+      else -> View.GONE
+    }
+  }
+
+  private fun pauseOnboardingForPortrait() {
+    if (!::onboardingOverlay.isInitialized) return
+    if (!onboardingOverlay.isActive() && onboardingOverlay.visibility != View.VISIBLE) {
+      return
+    }
+    clearOnboardingFocusDemo()
+    onboardingOverlay.visibility = View.GONE
+    // Let the tour start again after rotate, unless they already finished/skipped.
+    if (!onboardingCompleted) {
+      onboardingStarted = false
     }
   }
 
@@ -440,9 +622,27 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
 
   private fun wireControls() {
     btnClose.setOnClickListener { cancelAndFinish() }
-    btnExposureDown.setOnClickListener { nudgeExposure(-1) }
-    btnExposureUp.setOnClickListener { nudgeExposure(1) }
+    exposureSlider.setOnSeekBarChangeListener(
+      object : SeekBar.OnSeekBarChangeListener {
+        override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+          if (fromUser) setExposureFromSlider(progress)
+        }
+
+        override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+
+        override fun onStopTrackingTouch(seekBar: SeekBar) = Unit
+      },
+    )
     btnFlash.setOnClickListener { onFlashClicked() }
+    flashModeOff.setOnClickListener {
+      selectFlashMode(NativeCameraSession.FlashCycle.OFF)
+    }
+    flashModeOn.setOnClickListener {
+      selectFlashMode(NativeCameraSession.FlashCycle.ON)
+    }
+    flashModeAuto.setOnClickListener {
+      selectFlashMode(NativeCameraSession.FlashCycle.AUTO)
+    }
     btnFlip.setOnClickListener {
       session?.toggleFacing()
       updateFlipVisibility()
@@ -461,22 +661,85 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
       }
       onTakePhoto()
     }
-    btnShutter.setOnLongClickListener {
-      if (isCaptureBlocked() || isRecordingUi) return@setOnLongClickListener true
-      shutterLongPressActive = true
-      onLongPressStartVideo()
-      true
-    }
     btnShutter.setOnTouchListener { _, event ->
       when (event.actionMasked) {
-        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-          if (shutterLongPressActive) {
-            shutterLongPressActive = false
-            onLongPressEndVideo()
+        MotionEvent.ACTION_DOWN -> {
+          shutterPointerId = event.getPointerId(event.actionIndex)
+          shutterTouchActive = true
+          shutterGestureBlocked = isCaptureBlocked() || isRecordingUi
+          shutterTouchDownY = pointerScreenY(event, event.actionIndex)
+          shutterZoomStart = session?.currentZoomRatio() ?: 1f
+          shutterDragActive = false
+          shutterLongPressActive = false
+          mainHandler.postDelayed(shutterLongPressRunnable, SHUTTER_LONG_PRESS_MS)
+        }
+        MotionEvent.ACTION_POINTER_DOWN -> {
+          val index = event.actionIndex
+          val pointerId = event.getPointerId(index)
+          if (pointerId != shutterPointerId && zoomPointerId == MotionEvent.INVALID_POINTER_ID) {
+            val screenX = pointerScreenX(event, index)
+            val screenY = pointerScreenY(event, index)
+            val chip = findZoomChipAt(screenX, screenY)
+            if (chip != null && !busyVisible && sessionReady) {
+              zoomPointerId = pointerId
+              zoomPointerDownY = screenY
+              zoomPointerStart = session?.currentZoomRatio() ?: 1f
+              zoomPointerMoved = false
+              zoomPointerChip = chip
+              lastZoomHapticIndex = nearestZoomChipIndex(zoomPointerStart)
+              chip.isPressed = true
+            }
           }
         }
+        MotionEvent.ACTION_MOVE -> {
+          val shutterIndex = event.findPointerIndex(shutterPointerId)
+          if (shutterIndex >= 0 && !shutterGestureBlocked) {
+            val dragY = pointerScreenY(event, shutterIndex) - shutterTouchDownY
+            if (!shutterDragActive && abs(dragY) > gestureTouchSlop) {
+              shutterDragActive = true
+              if (!shutterLongPressActive) {
+                mainHandler.removeCallbacks(shutterLongPressRunnable)
+              }
+            }
+            if (shutterDragActive) {
+              applyVerticalZoom(shutterZoomStart, dragY)
+            }
+          }
+
+          val zoomIndex = event.findPointerIndex(zoomPointerId)
+          if (zoomIndex >= 0) {
+            val dragY = pointerScreenY(event, zoomIndex) - zoomPointerDownY
+            if (!zoomPointerMoved && abs(dragY) > gestureTouchSlop) {
+              zoomPointerMoved = true
+              zoomPointerChip?.isPressed = false
+            }
+            if (zoomPointerMoved) {
+              applyVerticalZoom(zoomPointerStart, dragY)
+              dispatchZoomStopHaptic()
+            }
+          }
+        }
+        MotionEvent.ACTION_POINTER_UP -> {
+          val pointerId = event.getPointerId(event.actionIndex)
+          when (pointerId) {
+            zoomPointerId -> finishZoomPointer(cancelled = false)
+            shutterPointerId -> finishShutterPointer(cancelled = false)
+          }
+        }
+        MotionEvent.ACTION_UP -> {
+          val pointerId = event.getPointerId(event.actionIndex)
+          if (pointerId == zoomPointerId) {
+            finishZoomPointer(cancelled = false)
+          } else if (pointerId == shutterPointerId) {
+            finishShutterPointer(cancelled = false)
+          }
+        }
+        MotionEvent.ACTION_CANCEL -> {
+          finishZoomPointer(cancelled = true)
+          finishShutterPointer(cancelled = true)
+        }
       }
-      false
+      true
     }
 
     previewView.setOnTouchListener { _, event ->
@@ -486,23 +749,197 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
           gestureDownX = event.x
           gestureDownY = event.y
           gestureMoved = false
+          verticalExposureStart = exposureCurrent
+          verticalExposureActive = false
+          verticalExposureRejected = false
+        }
+        MotionEvent.ACTION_POINTER_DOWN -> {
+          // A second finger belongs to pinch-to-zoom, never EV adjustment.
+          gestureMoved = true
+          verticalExposureActive = false
+          verticalExposureRejected = true
         }
         MotionEvent.ACTION_MOVE -> {
-          if (abs(event.x - gestureDownX) > 24f ||
-            abs(event.y - gestureDownY) > 24f
-          ) {
+          val dx = event.x - gestureDownX
+          val dy = event.y - gestureDownY
+          if (abs(dx) > gestureTouchSlop || abs(dy) > gestureTouchSlop) {
             gestureMoved = true
+          }
+          if (event.pointerCount == 1 && !pinch && !verticalExposureRejected &&
+            focusExposureControl.visibility == View.VISIBLE &&
+            exposureMax > exposureMin && sessionReady
+          ) {
+            if (!verticalExposureActive && abs(dy) > gestureTouchSlop) {
+              if (abs(dy) > abs(dx) * 1.15f) {
+                verticalExposureActive = true
+              } else if (abs(dx) > abs(dy)) {
+                verticalExposureRejected = true
+              }
+            }
+            if (verticalExposureActive) {
+              mainHandler.removeCallbacks(hideReticleRunnable)
+              applyVerticalExposure(verticalExposureStart, dy)
+            }
           }
         }
         MotionEvent.ACTION_UP -> {
-          if (!pinch && !gestureMoved) {
+          val adjustedExposure = verticalExposureActive
+          if (!pinch && !gestureMoved && !verticalExposureActive &&
+            !isTouchOnFocusBlockingChrome(event.rawX, event.rawY)
+          ) {
             showFocusReticle(event.x, event.y)
             session?.focusAt(event.x, event.y)
+          }
+          verticalExposureActive = false
+          verticalExposureRejected = false
+          if (adjustedExposure && focusExposureControl.visibility == View.VISIBLE) {
+            mainHandler.removeCallbacks(hideReticleRunnable)
+            mainHandler.postDelayed(hideReticleRunnable, FOCUS_CONTROL_DISMISS_MS)
+          }
+        }
+        MotionEvent.ACTION_CANCEL -> {
+          val adjustedExposure = verticalExposureActive
+          verticalExposureActive = false
+          verticalExposureRejected = false
+          if (adjustedExposure && focusExposureControl.visibility == View.VISIBLE) {
+            mainHandler.removeCallbacks(hideReticleRunnable)
+            mainHandler.postDelayed(hideReticleRunnable, FOCUS_CONTROL_DISMISS_MS)
           }
         }
       }
       true
     }
+  }
+
+  private fun pointerScreenX(event: MotionEvent, pointerIndex: Int): Float {
+    val location = IntArray(2)
+    btnShutter.getLocationOnScreen(location)
+    return location[0] + event.getX(pointerIndex)
+  }
+
+  private fun pointerScreenY(event: MotionEvent, pointerIndex: Int): Float {
+    val location = IntArray(2)
+    btnShutter.getLocationOnScreen(location)
+    return location[1] + event.getY(pointerIndex)
+  }
+
+  private fun findZoomChipAt(screenX: Float, screenY: Float): TextView? {
+    val location = IntArray(2)
+    for (index in 0 until zoomRow.childCount) {
+      val chip = zoomRow.getChildAt(index) as? TextView ?: continue
+      if (chip.visibility != View.VISIBLE) continue
+      chip.getLocationOnScreen(location)
+      if (screenX >= location[0] && screenX <= location[0] + chip.width &&
+        screenY >= location[1] && screenY <= location[1] + chip.height
+      ) {
+        return chip
+      }
+    }
+    return null
+  }
+
+  /**
+   * Same idea as iOS focus-ignore chrome: never run tap-to-focus when the
+   * touch landed on flash / zoom / shutter / close controls.
+   */
+  private fun isTouchOnFocusBlockingChrome(rawX: Float, rawY: Float): Boolean {
+    if (isPointInsideVisibleView(rawX, rawY, btnFlash)) return true
+    if (isPointInsideVisibleView(rawX, rawY, flashLabel)) return true
+    if (isPointInsideVisibleView(rawX, rawY, flashModeTray)) return true
+    if (isPointInsideVisibleView(rawX, rawY, zoomRow)) return true
+    if (isPointInsideVisibleView(rawX, rawY, rightChrome)) return true
+    if (isPointInsideVisibleView(rawX, rawY, btnClose)) return true
+    return false
+  }
+
+  private fun isPointInsideVisibleView(rawX: Float, rawY: Float, target: View): Boolean {
+    if (target.visibility != View.VISIBLE || target.alpha < 0.01f) return false
+    if (target.width <= 0 || target.height <= 0) return false
+    val location = IntArray(2)
+    target.getLocationOnScreen(location)
+    return rawX >= location[0] && rawX <= location[0] + target.width &&
+      rawY >= location[1] && rawY <= location[1] + target.height
+  }
+
+  private fun finishShutterPointer(cancelled: Boolean) {
+    if (shutterPointerId == MotionEvent.INVALID_POINTER_ID) return
+    mainHandler.removeCallbacks(shutterLongPressRunnable)
+    if (shutterLongPressActive) {
+      shutterLongPressActive = false
+      onLongPressEndVideo()
+    } else if (!cancelled && !shutterDragActive && !shutterGestureBlocked) {
+      btnShutter.performClick()
+    }
+    shutterPointerId = MotionEvent.INVALID_POINTER_ID
+    shutterTouchActive = false
+    shutterDragActive = false
+    shutterGestureBlocked = false
+  }
+
+  private fun finishZoomPointer(cancelled: Boolean) {
+    if (zoomPointerId == MotionEvent.INVALID_POINTER_ID) return
+    val chip = zoomPointerChip
+    chip?.isPressed = false
+    if (!cancelled && !zoomPointerMoved && !busyVisible && sessionReady) {
+      val level = chip?.tag as? Double
+      if (level != null) {
+        session?.setZoomRatio(level.toFloat())
+        zoomRow.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+      }
+    }
+    zoomPointerId = MotionEvent.INVALID_POINTER_ID
+    zoomPointerMoved = false
+    zoomPointerChip = null
+    lastZoomHapticIndex = -1
+  }
+
+  private fun nearestZoomChipIndex(zoomRatio: Float): Int {
+    var bestIndex = -1
+    var bestDelta = Double.MAX_VALUE
+    for (index in 0 until zoomRow.childCount) {
+      val level = (zoomRow.getChildAt(index).tag as? Double) ?: continue
+      val delta = abs(level - zoomRatio)
+      if (delta < bestDelta) {
+        bestDelta = delta
+        bestIndex = index
+      }
+    }
+    return bestIndex
+  }
+
+  private fun dispatchZoomStopHaptic() {
+    val current = session?.currentZoomRatio() ?: return
+    val nearest = nearestZoomChipIndex(current)
+    if (nearest >= 0 && nearest != lastZoomHapticIndex) {
+      lastZoomHapticIndex = nearest
+      zoomRow.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+    }
+  }
+
+  /** Swipe up to zoom in and down to zoom out across the camera's real range. */
+  private fun applyVerticalZoom(startZoom: Float, dragY: Float) {
+    val active = session ?: return
+    val (minZoom, maxZoom) = active.zoomRange()
+    if (maxZoom <= minZoom || previewView.height <= 0) return
+    val usableHeight = (previewView.height * 0.65f).coerceAtLeast(1f)
+    val multiplier = (maxZoom / minZoom).toDouble()
+      .pow((-dragY / usableHeight).toDouble())
+      .toFloat()
+    active.setZoomRatio(startZoom * multiplier)
+  }
+
+  /** Player-style vertical brightness gesture, applied as camera EV. */
+  private fun applyVerticalExposure(startIndex: Int, dragY: Float) {
+    val range = exposureMax - exposureMin
+    if (range <= 0 || previewView.height <= 0) return
+    val usableHeight = (previewView.height * 0.65f).coerceAtLeast(1f)
+    val target = (startIndex - (dragY / usableHeight) * range)
+      .roundToInt()
+      .coerceIn(exposureMin, exposureMax)
+    if (target == exposureCurrent) return
+    val active = session ?: return
+    val applied = active.setExposureCompensationIndex(target)
+    updateExposureControls(exposureMin, exposureMax, applied)
   }
 
   private fun startSession() {
@@ -581,7 +1018,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
       pendingStartRecording = true
       sessionReady = false
       mode = NativeCameraSession.Mode.VIDEO
-      torchOn = false
+      torchOn = active.isTorchEnabledPreference()
       showBusy(R.string.native_camera_busy_starting)
       updateCaptureChrome()
       active.switchMode(NativeCameraSession.Mode.VIDEO)
@@ -669,15 +1106,55 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
   }
 
   private fun onFlashClicked() {
+    session ?: return
+    if (busyVisible || isRecordingUi) return
+    val show = flashModeTray.visibility != View.VISIBLE
+    updateFlashTraySelection()
+    flashModeTray.visibility = if (show) View.VISIBLE else View.GONE
+    if (show) {
+      flashModeTray.alpha = 0f
+      // Tray opens to the trailing side of leading-gutter flash.
+      flashModeTray.translationX = -12f * resources.displayMetrics.density
+      flashModeTray.animate().alpha(1f).translationX(0f).setDuration(180L).start()
+    }
+  }
+
+  private fun selectFlashMode(selected: NativeCameraSession.FlashCycle) {
     val active = session ?: return
     if (busyVisible || isRecordingUi) return
     if (mode == NativeCameraSession.Mode.PHOTO) {
-      flashCycle = active.cycleFlash()
-      updateFlashIcon()
+      flashCycle = active.setFlashMode(selected)
     } else {
-      torchOn = active.toggleTorch()
-      updateFlashIcon()
+      val shouldEnable = selected == NativeCameraSession.FlashCycle.ON
+      if (torchOn != shouldEnable) torchOn = active.toggleTorch()
     }
+    updateFlashIcon()
+    flashModeTray.visibility = View.GONE
+  }
+
+  private fun updateFlashTraySelection() {
+    val selected = if (mode == NativeCameraSession.Mode.PHOTO) {
+      flashCycle
+    } else if (torchOn) {
+      NativeCameraSession.FlashCycle.ON
+    } else {
+      NativeCameraSession.FlashCycle.OFF
+    }
+    val choices = listOf(
+      flashModeOff to NativeCameraSession.FlashCycle.OFF,
+      flashModeOn to NativeCameraSession.FlashCycle.ON,
+      flashModeAuto to NativeCameraSession.FlashCycle.AUTO,
+    )
+    choices.forEach { (view, value) ->
+      val active = value == selected
+      view.setBackgroundResource(
+        if (active) R.drawable.native_camera_zoom_chip_selected else android.R.color.transparent,
+      )
+      view.setTextColor(if (active) COLOR_FLASH_YELLOW else COLOR_WHITE)
+      view.isSelected = active
+    }
+    // CameraX exposes a binary live torch for video; Auto remains a photo option.
+    flashModeAuto.visibility = if (mode == NativeCameraSession.Mode.PHOTO) View.VISIBLE else View.GONE
   }
 
   private fun updateCaptureChrome() {
@@ -700,6 +1177,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
       recordingTimer.visibility = View.GONE
     }
 
+    flashModeTray.visibility = View.GONE
     updateFlashIcon()
     updateFlipVisibility()
     updateZoomChipEnabledState()
@@ -707,7 +1185,15 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
   }
 
   private fun updateFlashButtonVisibility(hasFlash: Boolean) {
-    btnFlash.visibility = if (hasFlash) View.VISIBLE else View.GONE
+    deviceHasFlash = hasFlash
+    val visibility = when {
+      !hasFlash -> View.GONE
+      isPortraitBlocked -> View.INVISIBLE
+      else -> View.VISIBLE
+    }
+    btnFlash.visibility = visibility
+    flashLabel.visibility = visibility
+    if (!hasFlash || isPortraitBlocked) flashModeTray.visibility = View.GONE
     updateFlashIcon()
   }
 
@@ -724,21 +1210,30 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
       }
       btnFlash.setImageResource(icon)
       btnFlash.contentDescription = desc
+      flashLabel.text = desc
       btnFlash.imageTintList = ColorStateList.valueOf(tint)
+      flashLabel.setTextColor(tint)
       btnFlash.alpha = 1f
     } else {
       btnFlash.setImageResource(R.drawable.native_camera_ic_torch)
-      btnFlash.contentDescription = if (torchOn) "Torch on" else "Torch off"
+      val desc = if (torchOn) "Torch on" else "Torch off"
+      btnFlash.contentDescription = desc
+      flashLabel.text = desc
       btnFlash.imageTintList = ColorStateList.valueOf(
         if (torchOn) COLOR_FLASH_YELLOW else COLOR_WHITE,
       )
+      flashLabel.setTextColor(if (torchOn) COLOR_FLASH_YELLOW else COLOR_WHITE)
       btnFlash.alpha = 1f
     }
   }
 
   private fun updateFlipVisibility() {
-    // Flip control is hidden in the landscape chrome layout.
-    btnFlip.visibility = View.GONE
+    // Match iOS: flip on the shutter rail in video mode when front camera is allowed.
+    val show = !rearCameraOnly &&
+      mode == NativeCameraSession.Mode.VIDEO &&
+      !isRecordingUi &&
+      !isPortraitBlocked
+    btnFlip.visibility = if (show) View.VISIBLE else View.GONE
   }
 
   private fun updateExtensionLabel(extensionMode: String?) {
@@ -861,27 +1356,36 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     }
   }
 
-  private fun updateExposureControls(min: Int, max: Int, index: Int) {
+  private fun updateExposureControls(min: Int, max: Int, index: Int, step: Float = exposureStep) {
     exposureMin = min
     exposureMax = max
     exposureCurrent = index.coerceIn(min, maxOf(min, max))
-    exposureValue.text = getString(
-      R.string.native_camera_exposure_value,
-      exposureCurrent,
-    )
+    exposureStep = step.coerceAtLeast(0.01f)
+    val ev = exposureCurrent * exposureStep
+    exposureValue.text = if (abs(ev) < 0.005f) {
+      getString(R.string.native_camera_exposure_zero)
+    } else {
+      getString(R.string.native_camera_exposure_value, ev)
+    }
+    exposureSlider.max = (exposureMax - exposureMin).coerceAtLeast(0)
+    exposureSlider.progress = (exposureCurrent - exposureMin).coerceAtLeast(0)
     val enabled = !isRecordingUi && !busyVisible
-    btnExposureDown.isEnabled = enabled && exposureCurrent > exposureMin
-    btnExposureUp.isEnabled = enabled && exposureCurrent < exposureMax
-    btnExposureDown.alpha = if (btnExposureDown.isEnabled) 1f else 0.4f
-    btnExposureUp.alpha = if (btnExposureUp.isEnabled) 1f else 0.4f
+    exposureSlider.isEnabled = enabled
+    exposureSlider.alpha = if (enabled) 1f else 0.45f
+    exposureSlider.contentDescription = getString(
+      R.string.native_camera_exposure_accessibility,
+      exposureValue.text,
+    )
+    updateFocusExposureIndicator()
     updateAuxChromeVisibility()
   }
 
-  private fun nudgeExposure(delta: Int) {
+  private fun setExposureFromSlider(progress: Int) {
     if (isPortraitBlocked || busyVisible || isRecordingUi) return
     val active = session ?: return
     if (!sessionReady || exposureMax <= exposureMin) return
-    val applied = active.setExposureCompensationIndex(exposureCurrent + delta)
+    val requested = exposureMin + progress.coerceIn(0, exposureMax - exposureMin)
+    val applied = active.setExposureCompensationIndex(requested)
     updateExposureControls(exposureMin, exposureMax, applied)
   }
 
@@ -894,11 +1398,8 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
         View.VISIBLE
       else -> View.GONE
     }
-    exposureRow.visibility = when {
-      isPortraitBlocked -> View.INVISIBLE
-      exposureMax > exposureMin -> View.VISIBLE
-      else -> View.GONE
-    }
+    // Exposure follows the tap-to-focus reticle, like the native camera apps.
+    exposureRow.visibility = View.GONE
   }
 
   private fun rebuildZoomChips(levels: List<Double>) {
@@ -907,7 +1408,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
       zoomRow.visibility = View.GONE
       return
     }
-    zoomRow.visibility = View.VISIBLE
+    zoomRow.visibility = if (isPortraitBlocked) View.INVISIBLE else View.VISIBLE
     val density = resources.displayMetrics.density
     val sizeUnselected = (34 * density).toInt()
     levels.forEachIndexed { index, level ->
@@ -919,7 +1420,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
         setBackgroundResource(R.drawable.native_camera_zoom_chip)
         includeFontPadding = false
         setOnClickListener {
-          if (isRecordingUi || busyVisible) return@setOnClickListener
+          if (busyVisible) return@setOnClickListener
           session?.setZoomRatio(level.toFloat())
         }
         tag = level
@@ -937,10 +1438,21 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     val density = resources.displayMetrics.density
     val sizeUnselected = (34 * density).toInt()
     val sizeSelected = (40 * density).toInt()
+    var closestIndex = -1
+    var closestDelta = Double.MAX_VALUE
+    for (i in 0 until zoomRow.childCount) {
+      val level = (zoomRow.getChildAt(i).tag as? Double) ?: continue
+      val delta = abs(level - zoomRatio)
+      if (delta < closestDelta) {
+        closestDelta = delta
+        closestIndex = i
+      }
+    }
     for (i in 0 until zoomRow.childCount) {
       val child = zoomRow.getChildAt(i) as? TextView ?: continue
       val level = (child.tag as? Double) ?: continue
-      val selected = abs(level - zoomRatio) < 0.08
+      val selected = i == closestIndex
+      child.text = if (selected) formatZoom(zoomRatio) else formatZoomChip(level)
       val lp = child.layoutParams as LinearLayout.LayoutParams
       val size = if (selected) sizeSelected else sizeUnselected
       lp.width = size
@@ -959,20 +1471,19 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
   }
 
   private fun updateZoomChipEnabledState() {
-    val enabled = !isRecordingUi && !busyVisible
+    val zoomEnabled = !busyVisible
     for (i in 0 until zoomRow.childCount) {
-      zoomRow.getChildAt(i).isEnabled = enabled
-      zoomRow.getChildAt(i).alpha = if (enabled) 1f else 0.45f
+      zoomRow.getChildAt(i).isEnabled = zoomEnabled
+      zoomRow.getChildAt(i).alpha = if (zoomEnabled) 1f else 0.45f
     }
     if (!::extensionRow.isInitialized) return
+    val auxiliaryEnabled = !isRecordingUi && !busyVisible
     for (i in 0 until extensionRow.childCount) {
-      extensionRow.getChildAt(i).isEnabled = enabled
+      extensionRow.getChildAt(i).isEnabled = auxiliaryEnabled
     }
-    extensionRow.alpha = if (enabled) 1f else 0.45f
-    btnExposureDown.isEnabled = enabled && exposureCurrent > exposureMin
-    btnExposureUp.isEnabled = enabled && exposureCurrent < exposureMax
-    btnExposureDown.alpha = if (btnExposureDown.isEnabled) 1f else 0.4f
-    btnExposureUp.alpha = if (btnExposureUp.isEnabled) 1f else 0.4f
+    extensionRow.alpha = if (auxiliaryEnabled) 1f else 0.45f
+    exposureSlider.isEnabled = auxiliaryEnabled
+    exposureSlider.alpha = if (auxiliaryEnabled) 1f else 0.45f
   }
 
   private fun showBusy(labelRes: Int) {
@@ -1009,8 +1520,42 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
       .scaleY(1f)
       .setDuration(120L)
       .start()
+    positionFocusExposureControl(x, y)
+    focusExposureControl.animate().cancel()
+    focusExposureControl.visibility = if (exposureMax > exposureMin) {
+      View.VISIBLE
+    } else {
+      View.GONE
+    }
+    focusExposureControl.alpha = 1f
+    updateFocusExposureIndicator()
     mainHandler.removeCallbacks(hideReticleRunnable)
-    mainHandler.postDelayed(hideReticleRunnable, 900L)
+    mainHandler.postDelayed(hideReticleRunnable, FOCUS_CONTROL_VISIBLE_MS)
+  }
+
+  private fun positionFocusExposureControl(focusX: Float, focusY: Float) {
+    val density = resources.displayMetrics.density
+    val controlWidth = 40f * density
+    val controlHeight = 132f * density
+    val reticleHalf = 32f * density
+    val gap = 8f * density
+    val candidateRight = focusX + reticleHalf + gap
+    focusExposureControl.x = if (candidateRight + controlWidth <= previewView.width) {
+      candidateRight
+    } else {
+      (focusX - reticleHalf - gap - controlWidth).coerceAtLeast(0f)
+    }
+    focusExposureControl.y = (focusY - controlHeight / 2f)
+      .coerceIn(0f, (previewView.height - controlHeight).coerceAtLeast(0f))
+  }
+
+  private fun updateFocusExposureIndicator() {
+    if (!::focusExposureSun.isInitialized || exposureMax <= exposureMin) return
+    val density = resources.displayMetrics.density
+    val travel = 104f * density
+    val fraction = (exposureMax - exposureCurrent).toFloat() /
+      (exposureMax - exposureMin).toFloat()
+    focusExposureSun.translationY = (fraction.coerceIn(0f, 1f) * travel)
   }
 
   private val hideReticleRunnable = Runnable {
@@ -1020,6 +1565,14 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
       .withEndAction {
         focusReticle.visibility = View.GONE
         focusReticle.alpha = 1f
+      }
+      .start()
+    focusExposureControl.animate()
+      .alpha(0f)
+      .setDuration(200L)
+      .withEndAction {
+        focusExposureControl.visibility = View.GONE
+        focusExposureControl.alpha = 1f
       }
       .start()
   }
@@ -1049,7 +1602,9 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
       session?.abortRecording()
     }
     finishingWithResult = true
-    val data = Intent().putExtra(NativeCameraContract.RESULT_CANCELED, true)
+    val data = Intent()
+      .putExtra(NativeCameraContract.RESULT_CANCELED, true)
+      .putExtra(NativeCameraContract.RESULT_ONBOARDING_COMPLETED, onboardingCompleted)
     setResult(RESULT_CANCELED, data)
     finish()
   }
@@ -1104,6 +1659,10 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
       }
     }
     CamPerf.markNativeResultFinish(output.captureId)
+    data.putExtra(
+      NativeCameraContract.RESULT_ONBOARDING_COMPLETED,
+      onboardingCompleted,
+    )
     setResult(RESULT_OK, data)
     finish()
   }
@@ -1116,8 +1675,93 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     val data = Intent()
       .putExtra(NativeCameraContract.RESULT_ERROR_CODE, code)
       .putExtra(NativeCameraContract.RESULT_ERROR_MESSAGE, safe)
+      .putExtra(NativeCameraContract.RESULT_ONBOARDING_COMPLETED, onboardingCompleted)
     setResult(RESULT_CANCELED, data)
     finish()
+  }
+
+  private fun maybeStartOnboarding() {
+    if (!showOnboarding || onboardingStarted || onboardingSteps.isEmpty()) return
+    // Landscape only — wait until the officer rotates the phone.
+    if (isPortraitBlocked) return
+    if (!::btnShutter.isInitialized || btnShutter.width <= 0) {
+      btnShutter.post { maybeStartOnboarding() }
+      return
+    }
+    onboardingStarted = true
+    // Short delay only so landscape chrome settles; do not wait for a capture.
+    mainHandler.postDelayed({
+      if (isFinishing || finishingWithResult) return@postDelayed
+      if (isPortraitBlocked) {
+        onboardingStarted = false
+        return@postDelayed
+      }
+      onboardingOverlay.bringToFront()
+      onboardingOverlay.start(
+        onboardingSteps,
+        resolver = { id -> resolveOnboardingTarget(id) },
+        preparer = { id -> prepareOnboardingStep(id) },
+      )
+    }, 250L)
+  }
+
+  private fun prepareOnboardingStep(id: String) {
+    when (id.lowercase()) {
+      "focus", "brightness", "pinch" -> showOnboardingFocusDemo()
+      else -> if (onboardingFocusDemo) {
+        // Keep demo visible only for focus-related tips.
+        clearOnboardingFocusDemo()
+      }
+    }
+  }
+
+  private fun showOnboardingFocusDemo() {
+    val w = previewView.width
+    val h = previewView.height
+    if (w <= 0 || h <= 0) return
+    onboardingFocusDemo = true
+    mainHandler.removeCallbacks(hideReticleRunnable)
+    showFocusReticle(w / 2f, h / 2f)
+    mainHandler.removeCallbacks(hideReticleRunnable)
+    if (exposureMax > exposureMin) {
+      focusExposureControl.visibility = View.VISIBLE
+      focusExposureControl.alpha = 1f
+    }
+  }
+
+  private fun clearOnboardingFocusDemo() {
+    if (!onboardingFocusDemo) return
+    onboardingFocusDemo = false
+    mainHandler.removeCallbacks(hideReticleRunnable)
+    focusReticle.animate().cancel()
+    focusExposureControl.animate().cancel()
+    focusReticle.visibility = View.GONE
+    focusExposureControl.visibility = View.GONE
+  }
+
+  private fun resolveOnboardingTarget(id: String): View? {
+    return when (id.lowercase()) {
+      "shutter" -> btnShutter
+      "flash" -> if (btnFlash.visibility == View.VISIBLE) btnFlash else null
+      "zoom" -> if (zoomRow.childCount > 0) zoomRow else null
+      "close" -> btnClose
+      "hint" -> captureHint
+      "extensions" -> if (extensionRow.visibility == View.VISIBLE &&
+        extensionRow.childCount > 0
+      ) {
+        extensionRow
+      } else {
+        null
+      }
+      "focus" -> if (focusReticle.visibility == View.VISIBLE) focusReticle else onboardingSpot
+      "brightness" -> if (focusExposureControl.visibility == View.VISIBLE) {
+        focusExposureControl
+      } else {
+        onboardingSpot
+      }
+      "pinch" -> onboardingSpot
+      else -> null
+    }
   }
 
   private fun sanitizeMessage(message: String?, fallback: String): String {
@@ -1177,8 +1821,10 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
 
   private fun formatZoomChip(level: Double): String {
     return when {
-      abs(level - 0.5) < 0.05 -> ".5"
-      level < 1.0 -> String.format("%.1f", level).removePrefix("0")
+      // Hardware UW min is often exactly 0.5; allow tiny OEM drift and still
+      // label Camera-style "0.5x".
+      abs(level - 0.5) < 0.08 -> "0.5x"
+      level < 1.0 -> String.format("%.1fx", level)
       abs(level - level.toInt()) < 0.05 -> "${level.toInt()}x"
       else -> String.format("%.1fx", level)
     }
@@ -1186,6 +1832,9 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
 
   companion object {
     private const val REQ_PERMISSIONS = 0x4E50
+    private const val SHUTTER_LONG_PRESS_MS = 350L
+    private const val FOCUS_CONTROL_VISIBLE_MS = 3000L
+    private const val FOCUS_CONTROL_DISMISS_MS = 1400L
     private const val COLOR_PRIMARY = 0xFF022A67.toInt()
     private const val COLOR_ORANGE = 0xFFE48E15.toInt()
     private const val COLOR_FLASH_YELLOW = 0xFFFFD60A.toInt()

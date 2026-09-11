@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
@@ -14,7 +16,10 @@ import '../checkpoint/visit_checkpoint_screen.dart';
 import '../flow/cam_perf.dart';
 import '../flow/visit_checkpoint.dart';
 import '../flow/visit_gps_session.dart';
+import '../flow/visit_media_draft_store.dart';
 import '../flow/visit_media_geo.dart';
+import '../flow/visit_upload_failure.dart';
+import '../flow/visit_upload_queue.dart';
 import '../flow/visit_video_flow_controller.dart';
 import '../log_visit_theme.dart';
 import '../notes/visit_batch_notes_panel.dart';
@@ -57,16 +62,21 @@ enum _VisitMediaFilter { all, photos, videos }
 
 class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
   static final Rx<_VisitMediaFilter> _mediaFilter = _VisitMediaFilter.all.obs;
+  static final RxBool _draftAutosaveNoticeDismissed = false.obs;
 
   const VisitVideoPreviewScreen({
     super.key,
     this.onBack,
     this.onUploadSuccess,
+    this.onUploadStarted,
+    this.onFailureOpenDraft,
     this.bottomBarClearance = 0,
   });
 
   final VoidCallback? onBack;
   final VoidCallback? onUploadSuccess;
+  final VoidCallback? onUploadStarted;
+  final VoidCallback? onFailureOpenDraft;
   final double bottomBarClearance;
 
   @override
@@ -175,6 +185,8 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     await VisitVideoPreviewScreen.uploadCurrentDraft(
       context: context,
       onSuccess: onUploadSuccess ?? onBack,
+      onUploadStarted: onUploadStarted,
+      onFailureOpenDraft: onFailureOpenDraft,
     );
   }
 
@@ -190,6 +202,8 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
   static Future<void> uploadCurrentDraft({
     BuildContext? context,
     VoidCallback? onSuccess,
+    VoidCallback? onUploadStarted,
+    VoidCallback? onFailureOpenDraft,
     bool skipCompletionConfirm = false,
   }) async {
     final flow = Get.isRegistered<VisitVideoFlowController>()
@@ -230,17 +244,65 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
 
     if (flow.hasIncompleteCheckpoints) return;
 
+    final locationLabel = flow.locationSubtitle?.trim() ?? '';
+    final movedToDashboard = onUploadStarted != null;
+
+    void beginLeaveDraftUi({required bool showProgress}) {
+      if (showProgress) {
+        flow.isUploading.value = true;
+        flow.isQueueUploading.value = false;
+        flow.uploadProgressCurrent.value = 0;
+        flow.uploadProgressTotal.value = items.length;
+        flow.uploadLocationLabel.value = locationLabel;
+      } else {
+        flow.isUploading.value = false;
+        flow.isQueueUploading.value = false;
+        flow.uploadProgressCurrent.value = 0;
+        flow.uploadProgressTotal.value = 0;
+        flow.uploadLocationLabel.value = '';
+      }
+      onUploadStarted?.call();
+    }
+
     if (!skipCompletionConfirm) {
+
+      var leaveStarted = false;
       final confirmed = await _confirmPatrolUploadCompletion(
         flow: flow,
         isDark: isDark,
         context: context,
+        onYesPressed: () {
+          leaveStarted = true;
+          beginLeaveDraftUi(showProgress: false);
+        },
       );
       if (!confirmed) return;
+      if (!leaveStarted) {
+        beginLeaveDraftUi(showProgress: false);
+      }
+    } else {
+      beginLeaveDraftUi(showProgress: false);
     }
 
+    await flow.persistCurrentDraft();
+    final draftKey =
+        flow.activeDraftKey.value ??
+        VisitDraftKey.fromContext(flow.patrolContext.value);
+
+    final online = await _hasNetworkInterface();
+    if (!online) {
+      await _enqueueForSilentRetry(flow: flow, draftKey: draftKey);
+      return;
+    }
+
+    await flow.clearLastUploadIssue();
+    await VisitUploadQueue.instance.markInFlight(draftKey);
+
     flow.isUploading.value = true;
-    _showUploadingSnack(itemCount: items.length, isDark: isDark);
+    flow.isQueueUploading.value = false;
+    flow.uploadProgressCurrent.value = 0;
+    flow.uploadProgressTotal.value = items.length;
+    flow.uploadLocationLabel.value = locationLabel;
 
     try {
       final meta = flow.buildUploadMeta();
@@ -253,6 +315,10 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
         items: items,
         batchVoicePath: flow.batchNote.value.voiceNotePath,
         generalVoicePath: flow.generalNote.value.voiceNotePath,
+        onProgress: (current, total) {
+          flow.uploadProgressCurrent.value = current;
+          flow.uploadProgressTotal.value = total;
+        },
       );
 
       if (Get.isSnackbarOpen) {
@@ -267,33 +333,45 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
             'itemsSaved=${result.itemsSaved} message=${result.displayMessage}',
           );
         }
+        _clearUploadProgress(flow);
+        await VisitUploadQueue.instance.remove(draftKey);
         await flow.clearAll();
         unawaited(VisitGpsSession.instance.stop());
-        if (context != null && !context.mounted) return;
-        await _showUploadSuccessDialog(
-          message: result.displayMessage,
-          isDark: isDark,
-          context: context,
-        );
-        onSuccess?.call();
+        await _showUploadSuccessFeedback(isDark: isDark);
+        if (!movedToDashboard) {
+          onSuccess?.call();
+        }
         return;
       }
 
-      final errorDetail = result.errors == null || result.errors!.isEmpty
-          ? result.displayMessage
-          : '${result.displayMessage}\n${result.errors}';
       if (kDebugMode) {
         debugPrint(
           '[VisitUpload] FAIL status=${result.statusCode} '
+          'network=${result.isNetworkFailure} '
           'message=${result.displayMessage} errors=${result.errors}',
         );
       }
-      _showTopSnack(
-        title: 'Upload failed',
-        message: errorDetail,
+
+      if (result.isNetworkFailure) {
+        await _enqueueForSilentRetry(flow: flow, draftKey: draftKey);
+        return;
+      }
+
+      _clearUploadProgress(flow);
+      await VisitUploadQueue.instance.remove(draftKey);
+      final presentation = VisitUploadFailure.present(
+        result: result,
+        mediaItems: flow.mediaItems.toList(growable: false),
+        checkpoints: flow.checkpoints,
+      );
+      await flow.recordLastUploadIssue(presentation.toDraftIssue());
+      await _showUploadFailureDialog(
+        flow: flow,
+        presentation: presentation,
+        locationLabel: locationLabel,
         isDark: isDark,
-        isError: true,
-        duration: const Duration(seconds: 5),
+        context: context,
+        onOpenDraft: onFailureOpenDraft,
       );
     } catch (error, stack) {
       if (Get.isSnackbarOpen) {
@@ -301,34 +379,123 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       }
       if (kDebugMode) {
         debugPrint('[VisitUpload] FAIL unexpected=$error');
-        if (kDebugMode) {
-          debugPrint('[VisitUpload] stack=$stack');
-        }
+        debugPrint('[VisitUpload] stack=$stack');
       }
-      _showTopSnack(
-        title: 'Upload failed',
-        message: error.toString(),
+      if (_isNetworkError(error)) {
+        await _enqueueForSilentRetry(flow: flow, draftKey: draftKey);
+        return;
+      }
+      _clearUploadProgress(flow);
+      await VisitUploadQueue.instance.remove(draftKey);
+      final presentation = VisitUploadFailure.presentUnexpected(error);
+      await flow.recordLastUploadIssue(presentation.toDraftIssue());
+      await _showUploadFailureDialog(
+        flow: flow,
+        presentation: presentation,
+        locationLabel: locationLabel,
         isDark: isDark,
-        isError: true,
-        duration: const Duration(seconds: 5),
+        context: context,
+        onOpenDraft: onFailureOpenDraft,
       );
-    } finally {
-      flow.isUploading.value = false;
     }
+  }
+
+  static void _clearUploadProgress(VisitVideoFlowController flow) {
+    flow.isUploading.value = false;
+    flow.isQueueUploading.value = false;
+    flow.uploadProgressCurrent.value = 0;
+    flow.uploadProgressTotal.value = 0;
+    flow.uploadLocationLabel.value = '';
+  }
+
+  static Future<void> _enqueueForSilentRetry({
+    required VisitVideoFlowController flow,
+    required VisitDraftKey draftKey,
+  }) async {
+    _clearUploadProgress(flow);
+    await flow.clearLastUploadIssue();
+    await flow.persistCurrentDraft();
+    await VisitUploadQueue.instance.enqueue(draftKey);
+    unawaited(VisitGpsSession.instance.stop());
+    if (kDebugMode) {
+      debugPrint(
+        '[VisitUpload] queued for silent retry draft=${draftKey.folderName}',
+      );
+    }
+  }
+
+  static Future<bool> _hasNetworkInterface() async {
+    try {
+      final results = await Connectivity().checkConnectivity();
+      if (results.isEmpty) return false;
+      return results.any((r) => r != ConnectivityResult.none);
+    } catch (_) {
+      return true;
+    }
+  }
+
+  static bool _isNetworkError(Object error) {
+    if (error is SocketException || error is HttpException) return true;
+    if (error is DioException) {
+      return VisitUploadResult.isNetworkDioException(error);
+    }
+    return false;
+  }
+
+  static Future<void> presentQueuedUploadFailure({
+    required VisitDraftKey draftKey,
+    required VisitUploadFailurePresentation presentation,
+    required VisitMediaDraftSnapshot snapshot,
+    VoidCallback? onOpenDraft,
+  }) async {
+    final flow = Get.isRegistered<VisitVideoFlowController>()
+        ? Get.find<VisitVideoFlowController>()
+        : Get.put(VisitVideoFlowController(), permanent: true);
+    await flow.activateDraft(draftKey);
+    await flow.persistCurrentDraft();
+
+    final dialogContext = await _waitForDialogContext();
+    final isDark = dialogContext != null
+        ? Theme.of(dialogContext).brightness == Brightness.dark
+        : (Get.context != null &&
+              Theme.of(Get.context!).brightness == Brightness.dark);
+    final locationLabel =
+        snapshot.locationLabel?.trim() ?? flow.locationSubtitle?.trim() ?? '';
+
+    await _showUploadFailureDialog(
+      flow: flow,
+      presentation: presentation,
+      locationLabel: locationLabel,
+      isDark: isDark,
+      context: dialogContext,
+      onOpenDraft: onOpenDraft,
+    );
+  }
+
+  static Future<BuildContext?> _waitForDialogContext() async {
+    for (var i = 0; i < 20; i++) {
+      final ctx = AppNavigator.key.currentContext ?? Get.context;
+      if (ctx != null && ctx.mounted) return ctx;
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    return AppNavigator.key.currentContext ?? Get.context;
   }
 
   static Future<bool> _confirmPatrolUploadCompletion({
     required VisitVideoFlowController flow,
     required bool isDark,
     BuildContext? context,
+    VoidCallback? onYesPressed,
   }) async {
     final dialogContext = (context != null && context.mounted)
         ? context
         : AppNavigator.key.currentContext ?? Get.context;
     if (dialogContext == null || !dialogContext.mounted) return false;
 
-    final siteName = _resolvePatrolSiteName(flow);
+    final place = _resolvePatrolLocationLabel(flow);
     final accent = isDark ? const Color(0xFF93C5FD) : const Color(0xFF4F46E5);
+    final viewport = MediaQuery.sizeOf(dialogContext);
+    final isLandscape = viewport.width > viewport.height;
 
     final result = await GlassActionDialog.showWithActions<bool>(
       context: dialogContext,
@@ -340,14 +507,18 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       showCloseButton: true,
       useRootNavigator: true,
       messageMaxHeightFactor: 0.58,
+      maxWidth: isLandscape ? 680 : null,
+      insetPadding: isLandscape
+          ? const EdgeInsets.symmetric(horizontal: 24, vertical: 12)
+          : const EdgeInsets.symmetric(horizontal: 28),
       content: _PatrolCompleteDialogBody(
-        message: 'Have you done your patrol round at $siteName',
+        message: 'Have you done your patrol round at $place',
         flow: flow,
         isDark: isDark,
       ),
-      actions: const [
-        GlassDialogAction(
-          label: 'No, continue report',
+      actions: [
+        const GlassDialogAction(
+          label: 'No, view/continue report',
           value: false,
           tone: GlassDialogActionTone.neutral,
         ),
@@ -355,6 +526,10 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
           label: 'Yes, patrol completed upload report',
           value: true,
           tone: GlassDialogActionTone.primary,
+          beforePop: () {
+            onYesPressed?.call();
+            return true;
+          },
         ),
       ],
     );
@@ -362,99 +537,27 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     return result == true;
   }
 
-  static String _resolvePatrolSiteName(VisitVideoFlowController flow) {
-    final fromContext = flow.patrolContext.value?.siteName?.trim();
+  static String _resolvePatrolLocationLabel(VisitVideoFlowController flow) {
+    final fromContext = flow.patrolContext.value?.locationSubtitle?.trim();
     if (fromContext != null && fromContext.isNotEmpty) return fromContext;
 
-    final fromDraft = flow.draftSiteName.value?.trim();
-    if (fromDraft != null && fromDraft.isNotEmpty) return fromDraft;
+    final site = flow.patrolContext.value?.siteName?.trim() ??
+        flow.draftSiteName.value?.trim();
+    final region = flow.patrolContext.value?.regionName?.trim() ??
+        flow.draftRegionName.value?.trim();
+    if (site != null &&
+        site.isNotEmpty &&
+        region != null &&
+        region.isNotEmpty) {
+      return '$site · $region';
+    }
+    if (site != null && site.isNotEmpty) return site;
+    if (region != null && region.isNotEmpty) return region;
 
     final subtitle = flow.locationSubtitle?.trim();
     if (subtitle != null && subtitle.isNotEmpty) return subtitle;
 
     return 'this site';
-  }
-
-  static void _showUploadingSnack({
-    required int itemCount,
-    required bool isDark,
-  }) {
-    final accent = _visitPrimaryActionColor(isDark);
-    Get.snackbar(
-      '',
-      '',
-      snackPosition: SnackPosition.TOP,
-      backgroundColor: accent,
-      colorText: Colors.white,
-      margin: const EdgeInsets.fromLTRB(14, 12, 14, 0),
-      borderRadius: 16,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      titleText: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          SizedBox(
-            width: 36,
-            height: 36,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.18),
-                shape: BoxShape.circle,
-              ),
-              child: const Center(
-                child: SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2.2,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text(
-                  'Uploading patrol report',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                    height: 1.2,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  'Sending $itemCount item${itemCount == 1 ? '' : 's'} securely…',
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.92),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                    height: 1.25,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-      messageText: const SizedBox.shrink(),
-      shouldIconPulse: false,
-      isDismissible: false,
-      duration: const Duration(minutes: 10),
-      animationDuration: const Duration(milliseconds: 350),
-      boxShadows: [
-        BoxShadow(
-          color: accent.withValues(alpha: 0.35),
-          blurRadius: 18,
-          offset: const Offset(0, 8),
-        ),
-      ],
-    );
   }
 
   static void _showTopSnack({
@@ -502,27 +605,178 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     );
   }
 
-  static Future<void> _showUploadSuccessDialog({
-    required String message,
+  static Future<void> showQueuedUploadSuccessFeedback({required bool isDark}) {
+    return _showUploadSuccessFeedback(isDark: isDark);
+  }
+
+  static Future<void> _showUploadSuccessFeedback({required bool isDark}) async {
+    if (Get.isSnackbarOpen) {
+      Get.closeAllSnackbars();
+    }
+
+    final bg = isDark ? const Color(0xFF059669) : const Color(0xFF047857);
+    const duration = Duration(seconds: 3);
+
+    Get.rawSnackbar(
+      snackPosition: SnackPosition.TOP,
+      backgroundColor: bg,
+      margin: const EdgeInsets.fromLTRB(14, 8, 14, 0),
+      borderRadius: 14,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      duration: duration,
+      animationDuration: const Duration(milliseconds: 250),
+      isDismissible: true,
+      messageText: Row(
+        children: [
+          Container(
+            width: 28,
+            height: 28,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.18),
+              shape: BoxShape.circle,
+            ),
+            alignment: Alignment.center,
+            child: const Icon(
+              Icons.check_rounded,
+              color: Colors.white,
+              size: 18,
+            ),
+          ),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Site Patrol Done',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    height: 1.2,
+                  ),
+                ),
+                SizedBox(height: 2),
+                Text(
+                  'Your report was sent successfully.',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    height: 1.2,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+      boxShadows: [
+        BoxShadow(
+          color: bg.withValues(alpha: 0.45),
+          blurRadius: 14,
+          offset: const Offset(0, 5),
+        ),
+      ],
+    );
+
+    await Future<void>.delayed(duration);
+  }
+
+  static Future<void> _showUploadFailureDialog({
+    required VisitVideoFlowController flow,
+    required VisitUploadFailurePresentation presentation,
     required bool isDark,
     BuildContext? context,
+    String locationLabel = '',
+    VoidCallback? onOpenDraft,
   }) async {
     final dialogContext = (context != null && context.mounted)
         ? context
         : AppNavigator.key.currentContext ?? Get.context;
     if (dialogContext == null || !dialogContext.mounted) return;
 
-    final accent = isDark ? const Color(0xFF34D399) : const Color(0xFF059669);
-    await GlassActionDialog.show(
+    final canFix = presentation.canFixMedia;
+    final placeLabel = presentation.isGeofence ? locationLabel.trim() : '';
+    final action = await GlassActionDialog.showWithActions<String>(
       context: dialogContext,
-      icon: Icons.check_circle_rounded,
-      iconColor: accent,
-      title: 'Upload successful',
-      message: message,
-      primaryLabel: 'OK',
+      icon: presentation.isGeofence
+          ? Icons.location_off_rounded
+          : Icons.error_outline_rounded,
+      iconColor: const Color(0xFFE53935),
+      title: presentation.title,
+      message: '',
+      content: _UploadFailureDialogBody(
+        summary: presentation.summary,
+        locationLabel: placeLabel,
+        affectedLabels: presentation.affectedLabels,
+        guidance: presentation.guidance,
+        isDark: isDark,
+      ),
+      variant: GlassActionDialogVariant.error,
       barrierDismissible: false,
+      showCloseButton: false,
       useRootNavigator: true,
+      messageMaxHeightFactor: 0.55,
+      actions: [
+        if (canFix)
+          const GlassDialogAction(
+            label: 'Delete & Retake',
+            value: 'retake',
+            tone: GlassDialogActionTone.primary,
+          ),
+        const GlassDialogAction(
+          label: 'Okay',
+          value: 'close',
+          tone: GlassDialogActionTone.neutral,
+        ),
+      ],
     );
+
+    onOpenDraft?.call();
+
+    if (action == 'retake') {
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      await _resolveAffectedMedia(
+        flow: flow,
+        presentation: presentation,
+        retake: true,
+      );
+    }
+  }
+
+  static Future<void> _resolveAffectedMedia({
+    required VisitVideoFlowController flow,
+    required VisitUploadFailurePresentation presentation,
+    required bool retake,
+  }) async {
+    final index = presentation.primaryItemIndex;
+    if (index == null || index < 0 || index >= flow.mediaItems.length) {
+      return;
+    }
+
+    final item = flow.mediaItems[index];
+    final checkpointId = item.siteCheckpointId;
+
+    await flow.removeAt(index);
+
+    if (!retake) return;
+
+    if (checkpointId != null) {
+      await VisitCheckpointScreen.open(
+        checkpointId: checkpointId,
+        openCaptureOnStart: true,
+      );
+      return;
+    }
+
+    flow.endCheckpointCapture();
+    await VisitNativeCaptureLauncher.open();
   }
 
   static Future<void> queueUploadFeedback({
@@ -569,66 +823,146 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
               controller.draftRegionName.value;
               final completedCheckpoints = controller.completedCheckpointCount;
 
-              return Column(
-                children: [
-                  _VisitHeader(
-                    isDark: isDark,
-                    isLandscape: isLandscape,
-                    totalCount: additionalMedia.length,
-                    photoCount: photoCount,
-                    videoCount: videoCount,
-                    activeFilter: activeFilter,
-                    onFilterChanged: (filter) => _mediaFilter.value = filter,
-                    locationLabel: locationLabel,
-                    onBack: () => _handleBack(context),
-                    hasCheckpoints: hasCheckpoints,
-                    checkpointCompleted: completedCheckpoints,
-                    checkpointTotal: checkpoints.length,
-                    showMediaFilters:
-                        !hasCheckpoints || additionalMedia.isNotEmpty,
-                  ),
-                  Expanded(
-                    child: hasCheckpoints
-                        ? _buildCheckpointAwareBody(
-                            context,
-                            isDark: isDark,
-                            isLandscape: isLandscape,
-                            checkpoints: checkpoints,
-                            visibleMedia: visibleMedia,
-                            additionalMedia: additionalMedia,
-                            activeFilter: activeFilter,
-                            locationLabel: locationLabel,
-                          )
-                        : hasMedia
-                        ? visibleMedia.isEmpty
-                              ? _buildFilteredEmptyState(
-                                  context,
-                                  isDark,
-                                  activeFilter,
-                                )
-                              : _buildMediaGrid(
-                                  context,
-                                  visibleMedia,
-                                  isDark,
-                                  isLandscape: isLandscape,
-                                )
-                        : _buildEmptyState(
-                            context,
-                            isDark,
-                            locationLabel: locationLabel,
-                            isLandscape: isLandscape,
+              return isLandscape
+                  ? Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Expanded(
+                          child: Column(
+                            children: [
+                              _VisitHeader(
+                                isDark: isDark,
+                                isLandscape: isLandscape,
+                                totalCount: additionalMedia.length,
+                                photoCount: photoCount,
+                                videoCount: videoCount,
+                                activeFilter: activeFilter,
+                                onFilterChanged: (filter) =>
+                                    _mediaFilter.value = filter,
+                                locationLabel: locationLabel,
+                                onBack: () => _handleBack(context),
+                                hasCheckpoints: hasCheckpoints,
+                                checkpointCompleted: completedCheckpoints,
+                                checkpointTotal: checkpoints.length,
+                                showMediaFilters:
+                                    !hasCheckpoints ||
+                                    additionalMedia.isNotEmpty,
+                              ),
+                              Expanded(
+                                child: Column(
+                                  children: [
+                                    Expanded(
+                                      child: hasCheckpoints
+                                          ? _buildCheckpointAwareBody(
+                                              context,
+                                              isDark: isDark,
+                                              isLandscape: isLandscape,
+                                              checkpoints: checkpoints,
+                                              visibleMedia: visibleMedia,
+                                              additionalMedia: additionalMedia,
+                                              activeFilter: activeFilter,
+                                              locationLabel: locationLabel,
+                                            )
+                                          : hasMedia
+                                          ? visibleMedia.isEmpty
+                                                ? _buildFilteredEmptyState(
+                                                    context,
+                                                    isDark,
+                                                    activeFilter,
+                                                  )
+                                                : _buildMediaGrid(
+                                                    context,
+                                                    visibleMedia,
+                                                    isDark,
+                                                    isLandscape: isLandscape,
+                                                  )
+                                          : _buildEmptyState(
+                                              context,
+                                              isDark,
+                                              locationLabel: locationLabel,
+                                              isLandscape: isLandscape,
+                                            ),
+                                    ),
+                                    _DraftAutosaveNotice(
+                                      isDark: isDark,
+                                      compact: true,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
-                  ),
-                  _buildBottomActions(
-                    context,
-                    hasMedia,
-                    isLandscape: isLandscape,
-                    hasCheckpoints: hasCheckpoints,
-                  ),
-                  if (bottomBarClearance > 0)
-                    SizedBox(height: bottomBarClearance),
-                ],
-              );
+                        ),
+                        _DraftLandscapeSidebar(
+                          isDark: isDark,
+                          hasMedia: hasMedia,
+                          hasCheckpoints: hasCheckpoints,
+                          onCapture: _openCaptureScreen,
+                          onComplete: () => _uploadAllMedia(context),
+                        ),
+                      ],
+                    )
+                  : Column(
+                      children: [
+                        _VisitHeader(
+                          isDark: isDark,
+                          isLandscape: isLandscape,
+                          totalCount: additionalMedia.length,
+                          photoCount: photoCount,
+                          videoCount: videoCount,
+                          activeFilter: activeFilter,
+                          onFilterChanged: (filter) =>
+                              _mediaFilter.value = filter,
+                          locationLabel: locationLabel,
+                          onBack: () => _handleBack(context),
+                          hasCheckpoints: hasCheckpoints,
+                          checkpointCompleted: completedCheckpoints,
+                          checkpointTotal: checkpoints.length,
+                          showMediaFilters:
+                              !hasCheckpoints || additionalMedia.isNotEmpty,
+                        ),
+                        Expanded(
+                          child: hasCheckpoints
+                              ? _buildCheckpointAwareBody(
+                                  context,
+                                  isDark: isDark,
+                                  isLandscape: isLandscape,
+                                  checkpoints: checkpoints,
+                                  visibleMedia: visibleMedia,
+                                  additionalMedia: additionalMedia,
+                                  activeFilter: activeFilter,
+                                  locationLabel: locationLabel,
+                                )
+                              : hasMedia
+                              ? visibleMedia.isEmpty
+                                    ? _buildFilteredEmptyState(
+                                        context,
+                                        isDark,
+                                        activeFilter,
+                                      )
+                                    : _buildMediaGrid(
+                                        context,
+                                        visibleMedia,
+                                        isDark,
+                                        isLandscape: isLandscape,
+                                      )
+                              : _buildEmptyState(
+                                  context,
+                                  isDark,
+                                  locationLabel: locationLabel,
+                                  isLandscape: isLandscape,
+                                ),
+                        ),
+                        _DraftAutosaveNotice(isDark: isDark),
+                        _buildBottomActions(
+                          context,
+                          hasMedia,
+                          hasCheckpoints: hasCheckpoints,
+                        ),
+                        if (bottomBarClearance > 0)
+                          SizedBox(height: bottomBarClearance),
+                      ],
+                    );
             }),
           ],
         ),
@@ -1059,25 +1393,32 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                   hasMedia &&
                   !uploading &&
                   !controller.hasIncompleteCheckpoints;
+              final completeAccent = _visitPrimaryActionColor(isDark);
               return ElevatedButton.icon(
                 onPressed: canComplete ? () => _uploadAllMedia(context) : null,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: _visitPrimaryActionColor(isDark),
+                  backgroundColor: completeAccent,
+
                   disabledBackgroundColor: isDark
-                      ? cDarkInputFillColor
-                      : const Color(0xFFE6EAF1),
+                      ? const Color(0xFF2A3548)
+                      : const Color(0xFFC5D0E3),
                   foregroundColor: Colors.white,
                   disabledForegroundColor: isDark
-                      ? cDarkTextSecondary
-                      : const Color(0xFF9AA4B2),
+                      ? Colors.white.withValues(alpha: 0.55)
+                      : const Color(0xFF3F516A),
                   minimumSize: Size.fromHeight(isLandscape ? 42 : 48),
                   elevation: canComplete ? 2 : 0,
-                  shadowColor: _visitPrimaryActionColor(
-                    isDark,
-                  ).withValues(alpha: 0.24),
+                  shadowColor: completeAccent.withValues(alpha: 0.24),
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(17),
+                    side: canComplete
+                        ? BorderSide.none
+                        : BorderSide(
+                            color: isDark
+                                ? Colors.white.withValues(alpha: 0.14)
+                                : const Color(0xFF8FA3BD),
+                          ),
                   ),
                 ),
                 icon: const Icon(Icons.cloud_upload_rounded, size: 18),
@@ -1281,7 +1622,7 @@ class _CheckpointListCard extends StatelessWidget {
     final hasPhoto = photoUrl != null && photoUrl.isNotEmpty;
     final description = checkpoint.description?.trim();
     final hasDescription = description != null && description.isNotEmpty;
-    // Prefer the task line; fall back to status when no description.
+
     final subtitle = hasDescription ? description : statusLabel;
 
     return Material(
@@ -1575,14 +1916,207 @@ class _PatrolCompleteDialogBody extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 14),
-        VisitBatchNotesPanel(flow: flow, isDark: isDark),
-        const SizedBox(height: 8),
         VisitBatchNotesPanel(
           flow: flow,
           isDark: isDark,
           scope: VisitBatchNoteScope.generalNote,
+          titleOverride: 'Additional note',
+          showToggle: false,
+          alwaysShowActions: true,
         ),
       ],
+    );
+  }
+}
+
+class _DraftLandscapeSidebar extends StatelessWidget {
+  const _DraftLandscapeSidebar({
+    required this.isDark,
+    required this.hasMedia,
+    required this.hasCheckpoints,
+    required this.onCapture,
+    required this.onComplete,
+  });
+
+  final bool isDark;
+  final bool hasMedia;
+  final bool hasCheckpoints;
+  final VoidCallback onCapture;
+  final VoidCallback onComplete;
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = Get.find<VisitVideoFlowController>();
+    final primary = _visitPrimaryActionColor(isDark);
+    final rightPad = Platform.isAndroid ? 14.0 : 10.0;
+    final captureLabel = hasCheckpoints
+        ? 'Add more'
+        : (hasMedia ? 'Take more photos' : 'Take photos');
+    final panelBg = isDark ? const Color(0xFF151E2F) : const Color(0xFFE7EEF7);
+    final panelBorder = isDark
+        ? Colors.white.withValues(alpha: 0.08)
+        : const Color(0xFFD0DBE8);
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: panelBg,
+        border: Border(left: BorderSide(color: panelBorder)),
+      ),
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(10, 10, rightPad, 10),
+        child: SizedBox(
+          width: 152,
+          child: Obx(() {
+            final uploading = controller.isUploading.value;
+            controller.mediaItems.length;
+            controller.patrolContext.value;
+            final canComplete =
+                hasMedia && !uploading && !controller.hasIncompleteCheckpoints;
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                SizedBox(
+                  height: 118,
+                  child: _DraftLandscapeRailButton(
+                    isDark: isDark,
+                    filled: false,
+                    accent: primary,
+                    icon: Icons.add_a_photo_outlined,
+                    label: captureLabel,
+                    onPressed: uploading ? null : onCapture,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  height: 118,
+                  child: _DraftLandscapeRailButton(
+                    isDark: isDark,
+                    filled: true,
+                    accent: primary,
+                    icon: Icons.check_rounded,
+                    label: 'Complete report',
+                    onPressed: canComplete ? onComplete : null,
+                  ),
+                ),
+              ],
+            );
+          }),
+        ),
+      ),
+    );
+  }
+}
+
+class _DraftLandscapeRailButton extends StatelessWidget {
+  const _DraftLandscapeRailButton({
+    required this.isDark,
+    required this.filled,
+    required this.accent,
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+  });
+
+  final bool isDark;
+  final bool filled;
+  final Color accent;
+  final IconData icon;
+  final String label;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onPressed != null;
+
+    final bg = filled
+        ? (enabled
+              ? accent
+              : (isDark
+                    ? const Color(0xFF2A3548)
+                    : const Color(0xFFC5D0E3)))
+        : (isDark ? const Color(0xFF1B2638) : Colors.white);
+    final border = filled
+        ? (enabled
+              ? Colors.transparent
+              : (isDark
+                    ? Colors.white.withValues(alpha: 0.14)
+                    : const Color(0xFF8FA3BD)))
+        : (isDark
+              ? Colors.white.withValues(alpha: 0.16)
+              : const Color(0xFFD5DEEA));
+    final labelColor = filled
+        ? (enabled
+              ? Colors.white
+              : (isDark
+                    ? Colors.white.withValues(alpha: 0.55)
+                    : const Color(0xFF3F516A)))
+        : (enabled
+              ? (isDark ? cDarkTextPrimary : const Color(0xFF1F2A44))
+              : (isDark
+                    ? Colors.white.withValues(alpha: 0.45)
+                    : const Color(0xFF98A2B3)));
+    final iconFg = filled
+        ? (enabled ? Colors.white : labelColor)
+        : (enabled ? accent : labelColor);
+    final iconBg = filled
+        ? (enabled
+              ? Colors.white.withValues(alpha: isDark ? 0.22 : 0.2)
+              : (isDark
+                    ? Colors.white.withValues(alpha: 0.08)
+                    : const Color(0xFFAEBDD2)))
+        : accent.withValues(
+            alpha: enabled ? (isDark ? 0.2 : 0.1) : (isDark ? 0.1 : 0.06),
+          );
+
+    return Material(
+      color: bg,
+      elevation: filled && enabled ? 2 : 0,
+      shadowColor: accent.withValues(alpha: isDark ? 0.35 : 0.22),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+        side: BorderSide(color: border, width: 1.2),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onPressed,
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: iconBg,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(icon, color: iconFg, size: 24),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: labelColor,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    height: 1.2,
+                    letterSpacing: -0.15,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1643,16 +2177,47 @@ class _VisitHeader extends StatelessWidget {
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: Text(
-                  'Patrol Draft',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: titleColor,
-                    fontSize: isLandscape ? 17 : 20,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 0,
-                  ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Patrol Draft',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: titleColor,
+                        fontSize: isLandscape ? 17 : 20,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0,
+                      ),
+                    ),
+                    if (isLandscape) ...[
+                      const SizedBox(height: 3),
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.location_on_rounded,
+                            size: 13,
+                            color: _visitPrimaryActionColor(isDark),
+                          ),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              hasLocation ? location : 'No patrol location',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: _visitBodyColor(isDark),
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ],
                 ),
               ),
               if (hasCheckpoints) ...[
@@ -1661,45 +2226,6 @@ class _VisitHeader extends StatelessWidget {
                   isDark: isDark,
                   completed: checkpointCompleted,
                   total: checkpointTotal,
-                ),
-              ],
-              if (isLandscape && hasLocation) ...[
-                const SizedBox(width: 8),
-                Flexible(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: _visitCardColor(isDark),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: _visitBorderColor(isDark)),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.location_on_rounded,
-                          size: 14,
-                          color: _visitPrimaryActionColor(isDark),
-                        ),
-                        const SizedBox(width: 4),
-                        Flexible(
-                          child: Text(
-                            location,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: titleColor,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
                 ),
               ],
             ],
@@ -2242,7 +2768,7 @@ class _InlineNotePanel extends StatelessWidget {
       horizontal: compact ? 8 : 9,
       vertical: compact ? 7 : 8,
     );
-    // Keep note content readable; attention tint is subtle background only.
+
     final accent = _visitAccentColor(isDark);
     final bodyColor = _visitBodyColor(isDark);
     final panelBg = attentionNeeded
@@ -2389,16 +2915,6 @@ class _MediaThumbnail extends StatelessWidget {
           );
         },
         errorBuilder: (context, error, stackTrace) {
-          if (kDebugMode) {
-            final file = File(item.path);
-            final exists = file.existsSync();
-            final bytes = exists ? file.lengthSync() : 0;
-            debugPrint(
-              '[CaptureTxn] BROKEN_LOCAL_MEDIA path=${item.path} '
-              'captureId=${item.captureId} exists=$exists bytes=$bytes '
-              'pending=${item.isPendingCapture} error=$error',
-            );
-          }
           return _fallback(Icons.broken_image_outlined);
         },
       );
@@ -2640,7 +3156,6 @@ class VisitPhotoViewer extends StatelessWidget {
                                     File(imagePath),
                                     fit: BoxFit.contain,
                                     gaplessPlayback: true,
-                                    // Bound decode to screen; original file untouched.
                                     cacheWidth:
                                         (MediaQuery.sizeOf(context).width *
                                                 MediaQuery.devicePixelRatioOf(
@@ -3152,6 +3667,267 @@ class VisitVideoPlayerDialog extends GetView<VisitVideoPlayerController> {
               mainAxisSize: MainAxisSize.min,
               children: [seekSlider, transportRow],
             ),
+    );
+  }
+}
+
+class _DraftAutosaveNotice extends StatelessWidget {
+  const _DraftAutosaveNotice({required this.isDark, this.compact = false});
+
+  final bool isDark;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    return Obx(() {
+      if (VisitVideoPreviewScreen._draftAutosaveNoticeDismissed.value) {
+        return const SizedBox.shrink();
+      }
+
+      final bg = isDark
+          ? const Color(0xFF1B2434).withValues(alpha: 0.95)
+          : const Color(0xFFEFF6FF);
+      final border = isDark
+          ? const Color(0xFF4F8DF7).withValues(alpha: 0.28)
+          : const Color(0xFF93C5FD);
+      final iconColor = isDark
+          ? const Color(0xFF93C5FD)
+          : const Color(0xFF2563EB);
+      final titleColor = isDark ? Colors.white : const Color(0xFF1E3A5F);
+      final bodyColor = isDark
+          ? Colors.white.withValues(alpha: 0.72)
+          : const Color(0xFF475569);
+      final closeColor = isDark
+          ? Colors.white.withValues(alpha: 0.55)
+          : const Color(0xFF64748B);
+
+      return Padding(
+        padding: EdgeInsets.fromLTRB(
+          compact ? 12 : 16,
+          compact ? 4 : 0,
+          compact ? 12 : 16,
+          compact ? 8 : 8,
+        ),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(compact ? 12 : 14),
+            border: Border.all(color: border),
+          ),
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              compact ? 10 : 12,
+              compact ? 8 : 10,
+              compact ? 4 : 6,
+              compact ? 8 : 10,
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: EdgeInsets.only(top: compact ? 1 : 2),
+                  child: Icon(
+                    Icons.cloud_done_outlined,
+                    size: compact ? 16 : 18,
+                    color: iconColor,
+                  ),
+                ),
+                SizedBox(width: compact ? 8 : 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Saved as a draft',
+                        style: TextStyle(
+                          color: titleColor,
+                          fontSize: compact ? 12 : 13,
+                          fontWeight: FontWeight.w700,
+                          height: 1.2,
+                        ),
+                      ),
+                      SizedBox(height: compact ? 2 : 3),
+                      Text(
+                        'You can leave the app anytime. Your report will be saved. '
+                        'Open the app later to finish and upload.',
+                        style: TextStyle(
+                          color: bodyColor,
+                          fontSize: compact ? 11 : 12,
+                          fontWeight: FontWeight.w500,
+                          height: 1.35,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  onPressed: () {
+                    VisitVideoPreviewScreen
+                            ._draftAutosaveNoticeDismissed
+                            .value =
+                        true;
+                  },
+                  tooltip: 'Close',
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  constraints: BoxConstraints(
+                    minWidth: compact ? 28 : 32,
+                    minHeight: compact ? 28 : 32,
+                  ),
+                  icon: Icon(
+                    Icons.close_rounded,
+                    size: compact ? 16 : 18,
+                    color: closeColor,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    });
+  }
+}
+
+class _UploadFailureDialogBody extends StatelessWidget {
+  const _UploadFailureDialogBody({
+    required this.summary,
+    required this.locationLabel,
+    required this.affectedLabels,
+    required this.guidance,
+    required this.isDark,
+  });
+
+  final String summary;
+  final String locationLabel;
+  final List<String> affectedLabels;
+  final String guidance;
+  final bool isDark;
+
+  @override
+  Widget build(BuildContext context) {
+    final bodyColor = isDark
+        ? Colors.white.withValues(alpha: 0.86)
+        : const Color(0xFF475467);
+    final chipBg = isDark
+        ? Colors.white.withValues(alpha: 0.08)
+        : const Color(0xFFF3F5F8);
+    final chipFg = isDark ? const Color(0xFFFECACA) : const Color(0xFF9F1239);
+    final summaryText = summary.trim();
+    final guidanceText = guidance.trim();
+    final place = locationLabel.trim();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (place.isNotEmpty) ...[
+          Text(
+            place,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: isDark ? const Color(0xFF93C5FD) : const Color(0xFF2563EB),
+              fontSize: 13.5,
+              fontWeight: FontWeight.w700,
+              height: 1.25,
+            ),
+          ),
+          const SizedBox(height: 10),
+        ],
+        if (summaryText.isNotEmpty)
+          Text(
+            summaryText,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: bodyColor,
+              fontSize: 14.5,
+              height: 1.4,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        if (guidanceText.isNotEmpty) ...[
+          if (summaryText.isNotEmpty) const SizedBox(height: 12),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: isDark
+                  ? const Color(0xFFE53935).withValues(alpha: 0.12)
+                  : const Color(0xFFFFF1F2),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: const Color(0xFFE53935).withValues(alpha: 0.28),
+              ),
+            ),
+            child: Column(
+              children: [
+                for (final line
+                    in guidanceText
+                        .split('\n')
+                        .map((e) => e.trim())
+                        .where((e) => e.isNotEmpty)) ...[
+                  Text(
+                    line,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: isDark
+                          ? const Color(0xFFFECACA)
+                          : const Color(0xFF9F1239),
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                      height: 1.35,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                ],
+              ],
+            ),
+          ),
+        ],
+        if (affectedLabels.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          Text(
+            'Affected media',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: isDark ? Colors.white : const Color(0xFF20283A),
+              fontWeight: FontWeight.w700,
+              fontSize: 13,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final label in affectedLabels)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: chipBg,
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(
+                      color: const Color(0xFFE53935).withValues(alpha: 0.28),
+                    ),
+                  ),
+                  child: Text(
+                    label,
+                    style: TextStyle(
+                      color: chipFg,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 12.5,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ],
     );
   }
 }

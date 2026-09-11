@@ -140,7 +140,10 @@ class _OffDutyPushPermissionsDialogPanelState
 
     return Dialog(
       backgroundColor: colors.background,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 24),
+      insetPadding: EdgeInsets.symmetric(
+        horizontal: media.orientation == Orientation.landscape ? 40 : 18,
+        vertical: media.orientation == Orientation.landscape ? 16 : 24,
+      ),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
       clipBehavior: Clip.antiAlias,
       child: ConstrainedBox(

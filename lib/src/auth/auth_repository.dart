@@ -8,6 +8,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../api/api_client.dart';
 import '../api/api_urls.dart';
+import '../crashlytics/crashlytics_identity.dart';
 import '../device/device_check_service.dart';
 import '../utilities/app_upgrade_reconciler.dart';
 import 'auth_state.dart';
@@ -83,6 +84,7 @@ class AuthRepository {
     final flagSaved = await setOfficerLoggedIn(true);
 
     await LocationDisclosureAccountSync.onLoginResolved();
+    unawaited(CrashlyticsIdentity.setFromUser(user));
 
     if (userSaved && accessSaved && refreshSaved && flagSaved) {
       if (kDebugMode) {
@@ -151,6 +153,7 @@ class AuthRepository {
     await setOfficerLoggedIn(false);
     AuthState.instance.clearNeedsReauth();
     LocationDisclosureAccountSync.onLoggedOut();
+    unawaited(CrashlyticsIdentity.clear());
     if (kDebugMode) {
       debugPrint('[SmartNPS360][AuthRepo] cleared auth (secure storage)');
     }
@@ -458,6 +461,7 @@ class AuthRepository {
     await getAccessToken();
     await getRefreshToken();
     await isOfficerLoggedIn();
+    unawaited(CrashlyticsIdentity.syncFromStoredSession());
   }
 
   Future<String?> ensureValidAccessToken() async {
@@ -498,10 +502,7 @@ class AuthRepository {
       final deviceCheckExtras = await DeviceCheckService.authPayloadExtras();
       final response = await _authDio.postUri(
         Uri.parse(ApiUrls.refreshTokenUrl),
-        data: {
-          'refresh_token': refreshToken,
-          ...deviceCheckExtras,
-        },
+        data: {'refresh_token': refreshToken, ...deviceCheckExtras},
       );
 
       final statusCode = response.statusCode ?? 0;

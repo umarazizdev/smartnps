@@ -12,7 +12,6 @@ import 'package:path_provider/path_provider.dart';
 import '../../api/api_client.dart';
 import '../../api/api_urls.dart';
 import '../../auth/auth_repository.dart';
-import '../../location/batch_displacement_gate.dart';
 import '../../location/speed_adaptive_gps_policy.dart';
 import '../../motion/motion_activity_fusion_controller.dart';
 import '../../motion/vehicle_session_fusion.dart';
@@ -52,7 +51,6 @@ class BackgroundLocationUploader {
   int _totalBatchPointsUploaded = 0;
   final SpeedAdaptiveGpsPolicyTracker _policyTracker =
       SpeedAdaptiveGpsPolicyTracker();
-  final BatchDisplacementGate _batchDisplacementGate = BatchDisplacementGate();
 
   static const int _maxBatchSize = 20;
 
@@ -347,7 +345,6 @@ class BackgroundLocationUploader {
     _batchTimer?.cancel();
     _batchTimer = null;
     _batchTimerStartedAt = null;
-    _batchDisplacementGate.reset();
 
     await _connectivitySub?.cancel();
     _connectivitySub = null;
@@ -360,7 +357,6 @@ class BackgroundLocationUploader {
     _batchTimer?.cancel();
     _batchTimer = null;
     _batchTimerStartedAt = null;
-    _batchDisplacementGate.reset();
     await _connectivitySub?.cancel();
     _connectivitySub = null;
   }
@@ -380,30 +376,6 @@ class BackgroundLocationUploader {
         await MotionActivityFusionController.instance.evaluatePosition(
           position,
         );
-    if (!policy.shouldQueueForBatch) {
-      if (kDebugMode) {
-        _batchConsoleLog(
-          'skipped batch queue '
-          'band=${policy.band.label} '
-          'motion=${fusion.apiMotionActivity} '
-          'fused=${fusion.fusedState} '
-          'speedKmh=${(policy.smoothedSpeedKmh ?? policy.rawSpeedKmh)?.toStringAsFixed(1)} '
-          '(ping-only)',
-        );
-      }
-      return;
-    }
-    if (!_batchDisplacementGate.shouldQueue(position)) {
-      if (kDebugMode) {
-        _batchConsoleLog(
-          'skipped batch queue '
-          'dist=${_batchDisplacementGate.distanceFromLastQueuedMeters(position).toStringAsFixed(1)}m '
-          'need=${_batchDisplacementGate.requiredMetersFor(position).toStringAsFixed(1)}m '
-          '(not moved)',
-        );
-      }
-      return;
-    }
     await _ensureStorage();
     if (!_acceptingNewPoints) return;
     final recordedAtUtc = position.timestamp.toUtc();
@@ -418,7 +390,6 @@ class BackgroundLocationUploader {
     _assignQueueSeq(point);
     final newPointId = _queueSeqLabel(point);
     _totalBatchPointsQueued++;
-    _batchDisplacementGate.markQueued(position);
     final box = _box;
     if (box != null) {
       await box.add(point);
@@ -514,10 +485,34 @@ class BackgroundLocationUploader {
     SpeedAdaptiveGpsPolicyDecision? policyDecision,
     VehicleSessionSnapshot? motionFusion,
   }) async {
-    if (!_acceptingNewPoints) return;
-    if (!BackgroundLocationAccuracy.isAcceptable(position)) return;
-    if (!await _hasUploadAuth()) return;
-    if (!_acceptingNewPoints) return;
+    if (!_acceptingNewPoints) {
+      locationDebugLog(
+        '[DutyLocation] ping skipped: uploader not accepting points '
+        '(stopped/collecting-only)',
+      );
+      return;
+    }
+    if (!BackgroundLocationAccuracy.isAcceptable(position)) {
+      locationDebugLog(
+        '[DutyLocation] ping skipped: accuracy='
+        '${position.accuracy.toStringAsFixed(1)}m '
+        '(max ${BackgroundLocationAccuracy.maxAllowedMeters}m)',
+      );
+      return;
+    }
+    if (!await _hasUploadAuth()) {
+      locationDebugLog(
+        '[DutyLocation] ping skipped: no upload auth '
+        '(token refresh failed; GPS may still be running)',
+      );
+      return;
+    }
+    if (!_acceptingNewPoints) {
+      locationDebugLog(
+        '[DutyLocation] ping skipped: uploader stopped during auth check',
+      );
+      return;
+    }
     final fusion =
         motionFusion ??
         await MotionActivityFusionController.instance.evaluatePosition(
@@ -528,7 +523,12 @@ class BackgroundLocationUploader {
       policyDecision: policyDecision,
       motionFusion: fusion,
     );
-    if (!_acceptingNewPoints) return;
+    if (!_acceptingNewPoints) {
+      locationDebugLog(
+        '[DutyLocation] ping skipped: uploader stopped while building point',
+      );
+      return;
+    }
 
     final Options options = Options(
       headers: const {'Accept': 'application/json'},
@@ -551,6 +551,8 @@ class BackgroundLocationUploader {
     } on DioException catch (e) {
       if (kDebugMode) {
         final code = e.response?.statusCode ?? '-';
+
+        if (code == 429) return;
         final body = e.response?.data;
         locationDebugLog(
           '[DutyLocation] ping API status=$code '
@@ -724,19 +726,18 @@ class BackgroundLocationUploader {
       }
       return;
     }
-    if (!force) {
-      final nextAllowed = _nextBatchAllowedAt;
-      if (nextAllowed != null && DateTime.now().isBefore(nextAllowed)) {
-        if (kDebugMode && _queuedPointCount() > 0) {
-          final waitSec = nextAllowed.difference(DateTime.now()).inSeconds;
-          _logBatchQueueSnapshot(
-            'flush_skipped',
-            detail:
-                'backoff_retry wait=${waitSec}s (${_pendingQueueReason(force: force)})',
-          );
-        }
-        return;
+
+    final nextAllowed = _nextBatchAllowedAt;
+    if (nextAllowed != null && DateTime.now().isBefore(nextAllowed)) {
+      if (kDebugMode && _queuedPointCount() > 0) {
+        final waitSec = nextAllowed.difference(DateTime.now()).inSeconds;
+        _logBatchQueueSnapshot(
+          'flush_skipped',
+          detail:
+              'backoff_retry wait=${waitSec}s (${_pendingQueueReason(force: force)})',
+        );
       }
+      return;
     }
 
     final box = _box;
@@ -791,8 +792,8 @@ class BackgroundLocationUploader {
     }
 
     try {
-      await _postBatch(batch);
-      await box.deleteAll(keys);
+      final ok = await _postBatch(batch);
+      if (ok) await box.deleteAll(keys);
     } finally {
       _isFlushing = false;
     }
@@ -810,8 +811,8 @@ class BackgroundLocationUploader {
     }
 
     try {
-      await _postBatch(batch);
-      _memoryBatch.removeRange(0, takeCount);
+      final ok = await _postBatch(batch);
+      if (ok) _memoryBatch.removeRange(0, takeCount);
     } finally {
       _isFlushing = false;
     }
@@ -828,14 +829,16 @@ class BackgroundLocationUploader {
     }
 
     try {
-      await _postBatch(batch);
-      await _rewriteFallbackQueue(points.skip(batch.length).toList());
+      final ok = await _postBatch(batch);
+      if (ok) {
+        await _rewriteFallbackQueue(points.skip(batch.length).toList());
+      }
     } finally {
       _isFlushing = false;
     }
   }
 
-  Future<void> _postBatch(List<Map<String, dynamic>> batch) async {
+  Future<bool> _postBatch(List<Map<String, dynamic>> batch) async {
     final apiBatch = batch.map(_apiPoint).toList(growable: false);
     final batchRun = ++_batchRunNumber;
     final uploadingIds = _formatQueueSeqLabels(batch);
@@ -882,15 +885,9 @@ class BackgroundLocationUploader {
           responseBody: response.data,
         );
       }
+      return true;
     } on DioException catch (e) {
-      _consecutiveBatchFailures++;
-      final seconds = 1 << (_consecutiveBatchFailures.clamp(0, 6));
-      var delay = Duration(seconds: seconds);
-      if (delay < const Duration(seconds: 5)) {
-        delay = const Duration(seconds: 5);
-      }
-      if (delay > _maxBackoff) delay = _maxBackoff;
-
+      final delay = _backoffAfterBatchFailure(e);
       if (kDebugMode) {
         batchDebugLog(
           '[DutyLocation] batch API status=${e.response?.statusCode ?? '-'} '
@@ -900,20 +897,15 @@ class BackgroundLocationUploader {
           'upload_failed',
           batchRun: batchRun,
           uploadedIds: uploadingIds,
-          detail: 'still queued after failure; retry in ${delay.inSeconds}s',
+          detail:
+              'still queued after failure; retry in ${delay.inSeconds}s'
+              '${e.response?.statusCode == 429 ? ' (rate limited)' : ''}',
         );
       }
-      _nextBatchAllowedAt = DateTime.now().add(delay);
-      rethrow;
-    } catch (e) {
-      _consecutiveBatchFailures++;
-      final seconds = 1 << (_consecutiveBatchFailures.clamp(0, 6));
-      var delay = Duration(seconds: seconds);
-      if (delay < const Duration(seconds: 5)) {
-        delay = const Duration(seconds: 5);
-      }
-      if (delay > _maxBackoff) delay = _maxBackoff;
 
+      return false;
+    } catch (e) {
+      final delay = _backoffAfterBatchFailure(null);
       if (kDebugMode) {
         batchDebugLog(
           '[DutyLocation] batch API status=- success=false count=${batch.length}',
@@ -925,8 +917,60 @@ class BackgroundLocationUploader {
           detail: 'still queued after failure; retry in ${delay.inSeconds}s',
         );
       }
-      _nextBatchAllowedAt = DateTime.now().add(delay);
-      rethrow;
+      return false;
+    }
+  }
+
+  Duration _backoffAfterBatchFailure(DioException? error) {
+    _consecutiveBatchFailures++;
+    final status = error?.response?.statusCode;
+    var delay = _exponentialBatchBackoff();
+
+    if (status == 429) {
+      final retryAfter = _parseRetryAfter(error?.response);
+      if (retryAfter != null) {
+        delay = retryAfter;
+      } else if (delay < const Duration(seconds: 30)) {
+        delay = const Duration(seconds: 30);
+      }
+      if (delay > _maxBackoff) delay = _maxBackoff;
+    }
+
+    _nextBatchAllowedAt = DateTime.now().add(delay);
+    return delay;
+  }
+
+  Duration _exponentialBatchBackoff() {
+    final seconds = 1 << (_consecutiveBatchFailures.clamp(0, 6));
+    var delay = Duration(seconds: seconds);
+    if (delay < const Duration(seconds: 5)) {
+      delay = const Duration(seconds: 5);
+    }
+    if (delay > _maxBackoff) delay = _maxBackoff;
+    return delay;
+  }
+
+  Duration? _parseRetryAfter(Response<dynamic>? response) {
+    if (response == null) return null;
+    final raw = response.headers.value('retry-after')?.trim();
+    if (raw == null || raw.isEmpty) return null;
+
+    final asSeconds = int.tryParse(raw);
+    if (asSeconds != null) {
+      if (asSeconds <= 0) return null;
+      final capped = asSeconds > _maxBackoff.inSeconds
+          ? _maxBackoff.inSeconds
+          : asSeconds;
+      return Duration(seconds: capped);
+    }
+
+    try {
+      final when = HttpDate.parse(raw);
+      final wait = when.difference(DateTime.now().toUtc());
+      if (wait <= Duration.zero) return null;
+      return wait > _maxBackoff ? _maxBackoff : wait;
+    } catch (_) {
+      return null;
     }
   }
 

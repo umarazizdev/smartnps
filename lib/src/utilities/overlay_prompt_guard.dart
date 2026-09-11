@@ -55,7 +55,7 @@ class OverlayPromptGuard {
   static Future<void> waitUntilReady({Duration timeout = _maxWait}) async {
     final deadline = DateTime.now().add(timeout);
     while (DateTime.now().isBefore(deadline)) {
-      if (canShowOverlay()) return;
+      if (canShowOverlay() && !blocksTopBanner) return;
       await Future<void>.delayed(_pollInterval);
     }
   }

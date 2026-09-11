@@ -7,11 +7,12 @@ import 'package:flutter/services.dart';
 import '../app/app_navigator.dart';
 import '../app/native_theme_controller.dart';
 import '../utilities/app_config.dart';
+import '../widgets/dialogs/glass_action_dialog.dart';
 import 'debug_env_config.dart';
 import 'debug_env_screen.dart';
 
 bool get isDebugEnvSupported =>
-    !kIsWeb && Platform.isAndroid;
+    !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
 Future<void> openDebugEnvFromLogo(BuildContext context) async {
   if (!isDebugEnvSupported) return;
@@ -77,15 +78,26 @@ class _DebugEnvPinDialogState extends State<_DebugEnvPinDialog> {
   Widget build(BuildContext context) {
     final isDark = NativeThemeController.instance.isDark;
     final colors = _DebugPinColors.of(isDark);
+    final isLandscape =
+        MediaQuery.orientationOf(context) == Orientation.landscape;
 
     return Dialog(
       backgroundColor: colors.surface,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+      insetPadding: EdgeInsets.symmetric(
+        horizontal: isLandscape ? 40 : 28,
+        vertical: isLandscape ? 16 : 24,
+      ),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
       elevation: 0,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(22, 24, 22, 18),
-        child: Column(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: isLandscape
+              ? GlassActionDialog.landscapeMaxWidth
+              : double.infinity,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(22, 24, 22, 18),
+          child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -233,6 +245,7 @@ class _DebugEnvPinDialogState extends State<_DebugEnvPinDialog> {
               child: const Text('Cancel'),
             ),
           ],
+        ),
         ),
       ),
     );

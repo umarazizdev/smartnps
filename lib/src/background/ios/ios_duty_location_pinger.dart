@@ -7,7 +7,7 @@ import 'package:geolocator/geolocator.dart';
 
 import '../../auth/auth_repository.dart';
 import '../../location/adaptive_gps_stream_controller.dart';
-import '../../location/location_keep_point_gate.dart';
+import '../../location/duty_location_upload_gate.dart';
 import '../../location/mock_location_detection.dart';
 import '../../location/mock_location_guard.dart';
 import '../../location/speed_adaptive_gps_policy.dart';
@@ -30,7 +30,6 @@ class IosDutyLocationPinger {
   static BackgroundLocationUploader? _uploader;
   static DateTime? _lastUploadAt;
   static Position? _latestAcceptedPosition;
-  static final LocationKeepPointGate _keepPointGate = LocationKeepPointGate();
   static final AdaptiveGpsStreamController _streamController =
       AdaptiveGpsStreamController();
   static DateTime? _lastForcedBatchFlushAttemptAt;
@@ -42,6 +41,10 @@ class IosDutyLocationPinger {
   static Duration? _appliedPollInterval;
   static final SpeedAdaptiveGpsPolicyTracker _policyTracker =
       SpeedAdaptiveGpsPolicyTracker();
+  static final DutyLocationUploadGate _uploadGate = DutyLocationUploadGate();
+  static int _streamQueueCountWindow = 0;
+  static DateTime? _streamQueueWindowStartedAt;
+  static int _streamSkipCountWindow = 0;
 
   static Future<bool> Function()? confirmOnDutyBeforeStart;
 
@@ -119,6 +122,8 @@ class IosDutyLocationPinger {
 
     _streamController.reset();
 
+    _streamController.onSettingsChanged = _syncPollIntervalIfNeeded;
+
     try {
       await _subscribePositionStream();
     } catch (e) {
@@ -143,6 +148,7 @@ class IosDutyLocationPinger {
       locationDebugLog(
         '[DutyLocation] RUNNING (iOS) '
         'lockedFilter=${AdaptiveGpsStreamController.iosLockedDistanceFilterMeters}m '
+        'speedPoll=true '
         'permission=$permission '
         'bgUpdates=${permission == LocationPermission.always}',
       );
@@ -150,6 +156,12 @@ class IosDutyLocationPinger {
         '[IosDutyLocationPinger] started '
         '(lockedFilter=${AdaptiveGpsStreamController.iosLockedDistanceFilterMeters}m '
         'permission=$permission)',
+      );
+      locationDebugLog(
+        '[IosDutyLocationPinger] RATE NOTE: distanceFilter=0 keeps the GPS '
+        'stream live without rebuilds; ping+queue is gated by speed/curve '
+        'captureInterval (stationary ~30s, walking ~10s, curve boost ~1s). '
+        'Near-location filtering stays on backend/admin.',
       );
     }
   }
@@ -164,7 +176,7 @@ class IosDutyLocationPinger {
     await _subscription?.cancel();
     _subscription = Geolocator.getPositionStream(locationSettings: settings)
         .listen(
-          _onPosition,
+          (pos) => unawaited(_onPosition(pos, source: 'flutter_stream')),
           onError: (Object error) {
             locationDebugLog('[IosDutyLocationPinger] stream error: $error');
             unawaited(_onStreamError(error));
@@ -229,7 +241,7 @@ class IosDutyLocationPinger {
     _pingTimer = Timer.periodic(every, (_) {
       unawaited(_pollCurrentPosition(onlyIfQuiet: true));
     });
-    unawaited(_pollCurrentPosition());
+
   }
 
   static void _syncPollIntervalIfNeeded() {
@@ -247,6 +259,10 @@ class IosDutyLocationPinger {
     if (_stopping || !_running || _uploader == null || _precisePollInFlight) {
       return;
     }
+
+    if (_subscription != null) {
+      return;
+    }
     if (onlyIfQuiet) {
       final last = _lastUploadAt;
       final quietFor = _streamController.pollInterval;
@@ -255,10 +271,16 @@ class IosDutyLocationPinger {
       }
     }
     _precisePollInFlight = true;
+    locationDebugLog(
+      '[IosDutyLocationPinger] precise_poll START '
+      'why=flutter_stream_not_subscribed '
+      'pollEvery=${_streamController.pollInterval.inSeconds}s '
+      'onlyIfQuiet=$onlyIfQuiet',
+    );
     try {
       final pos = await _fetchPrecisePosition();
       if (pos != null) {
-        await _onPosition(pos);
+        await _onPosition(pos, source: 'precise_poll');
       }
     } finally {
       _precisePollInFlight = false;
@@ -336,14 +358,22 @@ class IosDutyLocationPinger {
         'polling latest GPS (wake coords not uploaded)',
       );
       if (!isRunning) {
-        unawaited(recoverIfNeeded());
+
+        unawaited(recoverIfNeeded(fromLocationWake: true));
         return;
       }
-      unawaited(_pollCurrentPosition());
+
+      if (_subscription != null) return;
+      unawaited(_pollCurrentPosition(onlyIfQuiet: true));
       return;
     }
 
-    await _onPosition(pos);
+    if (source == 'ios_gps' && isRunning) {
+
+      return;
+    }
+
+    await _onPosition(pos, source: source);
   }
 
   static Future<void> recoverIfNeeded({
@@ -437,12 +467,16 @@ class IosDutyLocationPinger {
     unawaited(_rebuildStreamIfNeeded(reason: 'stream_error'));
   }
 
-  static Future<void> _onPosition(Position pos) async {
+  static Future<void> _onPosition(
+    Position pos, {
+    String source = 'flutter_stream',
+  }) async {
     if (_stopping) return;
 
     if (!BackgroundLocationAccuracy.isAcceptable(pos)) {
       locationDebugLog(
-        '[IosDutyLocationPinger] skipped inaccurate fix acc=${pos.accuracy}m',
+        '[IosDutyLocationPinger] skipped inaccurate fix acc=${pos.accuracy}m '
+        'source=$source',
       );
       return;
     }
@@ -464,16 +498,15 @@ class IosDutyLocationPinger {
     }
 
     final policyDecision = _policyTracker.evaluate(pos);
+    final wasCurveBoosting = _streamController.isCurveBoosting;
     _streamController.observe(pos, policyDecision);
     _syncPollIntervalIfNeeded();
-
-    final keepDecision = _keepPointGate.evaluate(
-      pos,
-      policyDecision,
-      streamInterval: _streamController.interval,
-    );
-    if (!keepDecision.shouldKeep) {
-      return;
+    if (!wasCurveBoosting && _streamController.isCurveBoosting) {
+      locationDebugLog(
+        '[IosDutyLocationPinger] curve boost poll → '
+        '${_streamController.pollInterval.inSeconds}s '
+        '(stream not rebuilt)',
+      );
     }
     if (_stopping) return;
 
@@ -489,20 +522,35 @@ class IosDutyLocationPinger {
       );
     }
 
+    final captureEvery = _streamController.pollInterval;
+    if (!_uploadGate.tryAccept(captureEvery)) {
+      _streamSkipCountWindow++;
+      _noteStreamQueueRate(source, queued: false);
+      return;
+    }
+
+    final why = switch (source) {
+      'flutter_stream' =>
+        'speed_gate_ok(captureEvery=${captureEvery.inSeconds}s)',
+      'precise_poll' => 'quiet_timer_or_wake_gap_fill',
+      'ios_gps' => 'native_keepalive_while_flutter_not_running',
+      _ => 'native_$source',
+    };
+
     locationDebugLog(
-      '[IosDutyLocationPinger] location '
-      'acc=${pos.accuracy} '
-      'speedBand=${policyDecision.band.label} '
+      '[IosDutyLocationPinger] QUEUE '
+      'source=$source '
+      'why=$why '
+      'acc=${pos.accuracy.toStringAsFixed(1)}m '
+      'band=${policyDecision.band.label} '
       'motion=${motionFusion.apiMotionActivity} '
       'fused=${motionFusion.fusedState} '
-      'session=${motionFusion.active} '
-      'reason=${motionFusion.reason} '
-      'streamEvery=${_streamController.interval.inSeconds}s '
+      'captureEvery=${captureEvery.inSeconds}s '
       'distanceFilter=${AdaptiveGpsStreamController.iosLockedDistanceFilterMeters}m '
-      'trigger=${keepDecision.trigger?.name} '
-      'dist=${keepDecision.distanceMeters?.toStringAsFixed(1)}m '
-      'mocked=${mockFlags.isMocked} simulated=${mockFlags.isSimulatedBySoftware}',
+      'curveBoost=${_streamController.isCurveBoosting} '
+      'mocked=${mockFlags.isMocked}',
     );
+    _noteStreamQueueRate(source, queued: true);
 
     final uploader = _uploader;
     if (uploader == null || _stopping) return;
@@ -525,6 +573,33 @@ class IosDutyLocationPinger {
     } catch (e) {
       locationDebugLog('[IosDutyLocationPinger] upload failed: $e');
     }
+  }
+
+  static void _noteStreamQueueRate(String source, {required bool queued}) {
+    if (source != 'flutter_stream') return;
+    final now = DateTime.now();
+    final started = _streamQueueWindowStartedAt;
+    if (started == null) {
+      _streamQueueWindowStartedAt = now;
+      _streamQueueCountWindow = queued ? 1 : 0;
+      _streamSkipCountWindow = queued ? 0 : 1;
+      return;
+    }
+    if (queued) {
+      _streamQueueCountWindow++;
+    }
+    final elapsed = now.difference(started);
+    if (elapsed < const Duration(seconds: 10)) return;
+    locationDebugLog(
+      '[IosDutyLocationPinger] RATE last ${elapsed.inSeconds}s: '
+      'queued=$_streamQueueCountWindow skipped=$_streamSkipCountWindow '
+      'captureEvery=${_streamController.pollInterval.inSeconds}s '
+      'band=${_streamController.band.label} '
+      '(stream still ~1Hz; uploads gated by captureInterval)',
+    );
+    _streamQueueWindowStartedAt = now;
+    _streamQueueCountWindow = 0;
+    _streamSkipCountWindow = 0;
   }
 
   static Future<void> _flushBatchIfDue(
@@ -570,7 +645,9 @@ class IosDutyLocationPinger {
     _pingTimer = null;
     _precisePollInFlight = false;
     _appliedPollInterval = null;
-    _streamController.reset();
+    _streamController
+      ..onSettingsChanged = null
+      ..reset();
     _subscribedAllowBackground = null;
     await IosSignificantLocationChangeService.stop(drainPending: true);
     await _subscription?.cancel();
@@ -580,7 +657,10 @@ class IosDutyLocationPinger {
     _lastUploadAt = null;
     _latestAcceptedPosition = null;
     _lastForcedBatchFlushAttemptAt = null;
-    _keepPointGate.reset();
+    _streamQueueCountWindow = 0;
+    _streamSkipCountWindow = 0;
+    _streamQueueWindowStartedAt = null;
+    _uploadGate.reset();
     await MotionActivityFusionController.instance.release();
 
     try {
@@ -611,7 +691,9 @@ class IosDutyLocationPinger {
     _pingTimer = null;
     _precisePollInFlight = false;
     _appliedPollInterval = null;
-    _streamController.reset();
+    _streamController
+      ..onSettingsChanged = null
+      ..reset();
     _subscribedAllowBackground = null;
     await IosSignificantLocationChangeService.stop();
     await _subscription?.cancel();
@@ -621,7 +703,10 @@ class IosDutyLocationPinger {
     _lastUploadAt = null;
     _latestAcceptedPosition = null;
     _lastForcedBatchFlushAttemptAt = null;
-    _keepPointGate.reset();
+    _streamQueueCountWindow = 0;
+    _streamSkipCountWindow = 0;
+    _streamQueueWindowStartedAt = null;
+    _uploadGate.reset();
     await MotionActivityFusionController.instance.release();
 
     try {

@@ -22,7 +22,6 @@ class MockLocationDetection {
 
   static bool? _isPhysicalDevice;
 
-  /// Simulator / non-physical devices always report software-simulated GPS.
   static bool get ignoreSimulatedSoftwareFlag => _isPhysicalDevice == false;
 
   static Future<void> warmDeviceClass() async {
@@ -64,8 +63,6 @@ class MockLocationDetection {
     final mocked = position.isMocked;
     var simulated = isSimulatedBySoftware(position);
 
-    // iOS Simulator / Xcode GPX always reports simulated software locations.
-    // Only treat that flag as a block on physical devices.
     if (simulated && ignoreSimulatedSoftwareFlag) {
       simulated = false;
     }

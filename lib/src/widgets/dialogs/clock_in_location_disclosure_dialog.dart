@@ -176,7 +176,11 @@ class ClockInLocationDisclosureDialog extends StatelessWidget {
       return false;
     }
 
-    if (Platform.isAndroid && permissionId != 'backgroundLocation') {
+    if (permissionId == 'motionActivity') {
+      if (!Platform.isAndroid) return true;
+    } else if (Platform.isAndroid &&
+        permissionId != 'backgroundLocation' &&
+        permissionId != 'foregroundLocation') {
       return true;
     }
 

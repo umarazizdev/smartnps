@@ -16,8 +16,6 @@ import '../flow/visit_media_orientation.dart';
 import '../flow/visit_orientation.dart';
 import '../flow/visit_video_flow_controller.dart';
 
-/// Opens the device system Camera for photo/video, then continues the
-/// existing visit draft → review → upload pipeline.
 class VisitSystemCaptureController extends GetxController
     with WidgetsBindingObserver {
   final isPortrait = true.obs;
@@ -28,7 +26,6 @@ class VisitSystemCaptureController extends GetxController
   final pendingCapturePath = RxnString();
   final pendingCaptureIsPhoto = false.obs;
 
-  bool _gpsDialogVisible = false;
   String? _pendingDurablePath;
   final ImagePicker _picker = ImagePicker();
 
@@ -113,7 +110,7 @@ class VisitSystemCaptureController extends GetxController
       }
 
       if (isClosed) return;
-      if (file == null) return; // cancel → stay on Photo/Video chooser
+      if (file == null) return;
 
       final path = file.path;
       if (path.isEmpty || !File(path).existsSync()) {
@@ -168,7 +165,37 @@ class VisitSystemCaptureController extends GetxController
   }
 
   Future<bool> _ensurePermissions({required bool isPhoto}) async {
-    final camera = await Permission.camera.request();
+    final permissions = <Permission>[
+      Permission.camera,
+      if (!isPhoto) Permission.microphone,
+    ];
+
+    Map<Permission, PermissionStatus> statuses;
+    try {
+      final pending = <Permission>[];
+      for (final permission in permissions) {
+        final status = await permission.status;
+        if (!status.isGranted) {
+          pending.add(permission);
+        }
+      }
+      if (pending.isEmpty) {
+        return true;
+      }
+      statuses = await pending.request();
+    } on Exception catch (error) {
+      if (error.toString().contains('ALREADY_REQUESTING_PERMISSIONS')) {
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+        statuses = {
+          for (final permission in permissions)
+            permission: await permission.status,
+        };
+      } else {
+        rethrow;
+      }
+    }
+
+    final camera = statuses[Permission.camera] ?? await Permission.camera.status;
     if (!camera.isGranted) {
       cameraError.value =
           'Camera permission is required to capture photos and videos.';
@@ -176,7 +203,8 @@ class VisitSystemCaptureController extends GetxController
     }
 
     if (!isPhoto) {
-      final mic = await Permission.microphone.request();
+      final mic =
+          statuses[Permission.microphone] ?? await Permission.microphone.status;
       if (!mic.isGranted) {
         cameraError.value =
             'Microphone permission is required to record video.';
@@ -213,20 +241,21 @@ class VisitSystemCaptureController extends GetxController
     if (isClosed) return;
 
     final warm = VisitGpsSession.instance.latestUsableFresh;
-    final hasWarmGeo = warm != null;
+    final warmGeo = warm == null
+        ? null
+        : VisitMediaGeo(
+            capturedAt: capturedAt,
+            latitude: warm.latitude,
+            longitude: warm.longitude,
+            accuracyMeters: warm.accuracy,
+          );
+    final hasWarmGeo = warmGeo?.hasUsableGps == true;
     if (!hasWarmGeo) {
       isResolvingCaptureGps.value = true;
     }
 
     final geoFuture = hasWarmGeo
-        ? Future<VisitMediaGeo>.value(
-            VisitMediaGeo(
-              capturedAt: capturedAt,
-              latitude: warm.latitude,
-              longitude: warm.longitude,
-              accuracyMeters: warm.accuracy,
-            ),
-          )
+        ? Future<VisitMediaGeo>.value(warmGeo!)
         : VisitMediaGeo.captureFast();
     final persistFuture = flow.finalizeCaptureDraft(
       previewPath: path,
@@ -291,43 +320,13 @@ class VisitSystemCaptureController extends GetxController
       unawaited(geoFuture);
       await opened;
     } catch (_) {
+
       isResolvingCaptureGps.value = false;
-      final shouldRetry = await _showGpsFailedDialog();
-      if (shouldRetry) {
-        await _finalizePendingCapture();
-      } else {
-        await _discardPendingCaptureAndLeave();
-      }
+      await _discardPendingCaptureAndLeave();
     } finally {
       if (!isClosed) {
         isResolvingCaptureGps.value = false;
       }
-    }
-  }
-
-  Future<bool> _showGpsFailedDialog() async {
-    if (isClosed || _gpsDialogVisible) return false;
-    _gpsDialogVisible = true;
-    try {
-      final failure = await VisitMediaGeo.describeFailure();
-      final context = AppNavigator.key.currentContext ?? Get.context;
-      if (context == null || !context.mounted || isClosed) return false;
-
-      final retry = await GlassActionDialog.show(
-        context: context,
-        icon: Icons.gps_off_rounded,
-        title: 'Failed to get GPS',
-        message: failure,
-        primaryLabel: 'Retry',
-        secondaryLabel: 'Cancel',
-        iconColor: const Color(0xFFE53935),
-        variant: GlassActionDialogVariant.error,
-        barrierDismissible: false,
-        useRootNavigator: true,
-      );
-      return retry == true;
-    } finally {
-      _gpsDialogVisible = false;
     }
   }
 

@@ -67,11 +67,14 @@ final class NativeCameraPlugin: NSObject {
     let qualityRaw = (args["quality"] as? String)?.lowercased() ?? "maximum"
     let quality = NativeCameraCaptureQuality(rawValue: qualityRaw) ?? .maximum
     let preferHeic = args["preferHeic"] as? Bool ?? false
+    let showOnboarding = args["showOnboarding"] as? Bool ?? false
+    let onboardingSteps = args["onboardingSteps"] as? [[String: Any]] ?? []
 
     NSLog(
       "\(Self.logPrefix) CAMERA_OPEN_REQUEST type=\(type) modeSwitch=\(allowModeSwitch) "
         + "landscapeOnly=\(landscapeOnly) rearOnly=\(rearCameraOnly) "
-        + "quality=\(quality.rawValue) preferHeic=\(preferHeic)"
+        + "quality=\(quality.rawValue) preferHeic=\(preferHeic) "
+        + "onboarding=\(showOnboarding) steps=\(onboardingSteps.count)"
     )
 
     ensurePermissions(needsMicrophone: initialIsVideo || allowModeSwitch) { [weak self] permissionError in
@@ -89,7 +92,9 @@ final class NativeCameraPlugin: NSObject {
             landscapeOnly: landscapeOnly,
             rearCameraOnly: rearCameraOnly,
             quality: quality,
-            preferHeic: preferHeic
+            preferHeic: preferHeic,
+            showOnboarding: showOnboarding,
+            onboardingSteps: onboardingSteps
           ),
           result: result
         )
@@ -128,9 +133,12 @@ final class NativeCameraPlugin: NSObject {
             + "fallback=\(mapped["fallbackLevel"] ?? "none")"
         )
         result(mapped)
-      case .canceled:
-        NSLog("\(Self.logPrefix) capture canceled")
-        result(["canceled": true])
+      case .canceled(let onboardingCompleted):
+        NSLog("\(Self.logPrefix) capture canceled onboardingCompleted=\(onboardingCompleted)")
+        result([
+          "canceled": true,
+          "onboardingCompleted": onboardingCompleted,
+        ])
       case .failure(let code, let message):
         NSLog("\(Self.logPrefix) capture failure \(code): \(message)")
         result(FlutterError(code: code, message: message, details: nil))

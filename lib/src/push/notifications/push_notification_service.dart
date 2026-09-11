@@ -355,8 +355,6 @@ class PushNotificationService {
     }
   }
 
-  /// After the privacy notice is closed: always try the OS notification prompt
-  /// if permission is not granted yet (store-safe soft ask).
   Future<void> requestPermissionAfterPrivacyNotice() async {
     await _loadPushEnabledPreference();
     if (!pushNotificationsEnabled) {
@@ -378,8 +376,6 @@ class PushNotificationService {
       return;
     }
 
-    // Allow a fresh OS prompt after privacy UI even if an earlier deferred
-    // attempt marked the flag without showing a dialog.
     _permissionPromptAttempted = false;
 
     await requestPermissionAfterAuth(immediate: true);

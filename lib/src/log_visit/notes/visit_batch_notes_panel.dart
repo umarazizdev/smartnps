@@ -13,11 +13,17 @@ class VisitBatchNotesPanel extends StatelessWidget {
     required this.flow,
     required this.isDark,
     this.scope = VisitBatchNoteScope.attentionNeeded,
+    this.titleOverride,
+    this.showToggle = true,
+    this.alwaysShowActions = false,
   });
 
   final VisitVideoFlowController flow;
   final bool isDark;
   final VisitBatchNoteScope scope;
+  final String? titleOverride;
+  final bool showToggle;
+  final bool alwaysShowActions;
 
   bool get _isAttention => scope == VisitBatchNoteScope.attentionNeeded;
 
@@ -35,15 +41,17 @@ class VisitBatchNotesPanel extends StatelessWidget {
     final bodyColor = isDark
         ? Colors.white.withValues(alpha: 0.82)
         : const Color(0xFF374151);
-    final title = _isAttention ? 'Attention needed' : 'General note';
+    final title =
+        titleOverride ?? (_isAttention ? 'Attention needed' : 'General note');
 
     return Obx(() {
       final note = _isAttention ? flow.batchNote.value : flow.generalNote.value;
       final enabled = note.enabled;
+      final showActions = enabled || alwaysShowActions;
 
       return Container(
         width: double.infinity,
-        padding: EdgeInsets.fromLTRB(10, 4, 6, enabled ? 8 : 4),
+        padding: EdgeInsets.fromLTRB(10, 4, showToggle ? 6 : 10, 8),
         decoration: BoxDecoration(
           color: cardBg,
           borderRadius: BorderRadius.circular(10),
@@ -68,27 +76,28 @@ class VisitBatchNotesPanel extends StatelessWidget {
                       ),
                     ),
                   ),
-                  Transform.scale(
-                    scale: 0.62,
-                    alignment: Alignment.centerRight,
-                    child: Switch.adaptive(
-                      value: enabled,
-                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      activeTrackColor: accentColor.withValues(alpha: 0.45),
-                      activeThumbColor: accentColor,
-                      onChanged: (value) {
-                        unawaited(
-                          _isAttention
-                              ? flow.setBatchNotesEnabled(value)
-                              : flow.setGeneralNotesEnabled(value),
-                        );
-                      },
+                  if (showToggle)
+                    Transform.scale(
+                      scale: 0.62,
+                      alignment: Alignment.centerRight,
+                      child: Switch.adaptive(
+                        value: enabled,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        activeTrackColor: accentColor.withValues(alpha: 0.45),
+                        activeThumbColor: accentColor,
+                        onChanged: (value) {
+                          unawaited(
+                            _isAttention
+                                ? flow.setBatchNotesEnabled(value)
+                                : flow.setGeneralNotesEnabled(value),
+                          );
+                        },
+                      ),
                     ),
-                  ),
                 ],
               ),
             ),
-            if (enabled) ...[
+            if (showActions) ...[
               const SizedBox(height: 6),
               Row(
                 children: [

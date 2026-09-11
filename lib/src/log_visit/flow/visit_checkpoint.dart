@@ -198,7 +198,6 @@ class VisitCheckpoint {
       }
     }
 
-    // Last resort: any absolute image-looking string on the checkpoint.
     for (final entry in json.entries) {
       final value = entry.value;
       if (value is! String) continue;
@@ -257,7 +256,6 @@ class VisitCheckpoint {
     return null;
   }
 
-  /// Builds an absolute image URL from bridge `photo_url` / `photo_path`.
   static String? resolvePhotoUrl({
     String? photoUrl,
     String? photoPath,

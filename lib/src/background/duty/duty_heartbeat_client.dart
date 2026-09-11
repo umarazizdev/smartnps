@@ -64,8 +64,6 @@ class DutyHeartbeatPayload {
       : 30;
 }
 
-/// Heartbeat fetch/parse with no UI or tracking side effects.
-/// Safe to call from the Android FGS isolate after the UI is killed.
 class DutyHeartbeatClient {
   DutyHeartbeatClient._();
 

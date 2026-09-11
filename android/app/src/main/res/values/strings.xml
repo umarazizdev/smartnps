@@ -2,8 +2,9 @@
 <resources>
     <string name="native_camera_close">Close camera</string>
     <string name="native_camera_flash">Flash</string>
+    <string name="native_camera_flash_off">Flash off</string>
     <string name="native_camera_flip">Switch camera</string>
-    <string name="native_camera_shutter">Capture</string>
+    <string name="native_camera_shutter">Tap for photo, hold for video, drag up or down to zoom</string>
     <string name="native_camera_stop">Stop recording</string>
     <string name="native_camera_photo">Photo</string>
     <string name="native_camera_video">Video</string>
@@ -13,13 +14,12 @@
     <string name="native_camera_ext_auto">Auto</string>
     <string name="native_camera_ext_standard">Std</string>
     <string name="native_camera_ext_unsupported">Mode not supported here</string>
-    <string name="native_camera_exposure_up">Increase exposure</string>
-    <string name="native_camera_exposure_down">Decrease exposure</string>
-    <string name="native_camera_exposure_plus">+</string>
-    <string name="native_camera_exposure_minus">\u2212</string>
-    <string name="native_camera_exposure_value">EV %1$d</string>
-    <string name="native_camera_hint_idle">Tap photo\nHold video</string>
-    <string name="native_camera_hint_recording">Slide up/down\nto zoom</string>
+    <string name="native_camera_exposure_zero">EV 0.0</string>
+    <string name="native_camera_exposure_value">EV %1$+.1f</string>
+    <string name="native_camera_exposure_accessibility">Exposure %1$s</string>
+    <string name="native_camera_exposure_sun">☀</string>
+    <string name="native_camera_hint_idle">Tap photo · Hold video\nSlide to zoom</string>
+    <string name="native_camera_hint_recording">Slide shutter\nto zoom</string>
     <string name="native_camera_busy_capturing">Capturing…</string>
     <string name="native_camera_busy_starting">Starting…</string>
     <string name="native_camera_busy_saving">Saving…</string>

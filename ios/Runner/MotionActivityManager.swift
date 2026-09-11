@@ -202,6 +202,19 @@ final class MotionActivityManager: NSObject, FlutterStreamHandler {
           ],
         ]
       }
+      // Do not call startActivityUpdates while notDetermined — that would show
+      // the system prompt outside the permissions dialog Allow / Continue flow.
+      if status == .notDetermined {
+        return [
+          "ok": false,
+          "running": false,
+          "permission": "notDetermined",
+          "error": [
+            "code": "permission_required",
+            "message": "Motion & Fitness permission must be requested first",
+          ],
+        ]
+      }
     }
 
     if isStreaming {
@@ -275,6 +288,14 @@ final class MotionActivityManager: NSObject, FlutterStreamHandler {
       return
     }
 
+    // queryActivityStarting also triggers the Motion prompt when notDetermined.
+    if #available(iOS 11.0, *),
+      CMMotionActivityManager.authorizationStatus() == .notDetermined
+    {
+      result(["ok": true, "update": lastPayload as Any? ?? NSNull()])
+      return
+    }
+
     let now = Date()
     activityManager.queryActivityStarting(
       from: now.addingTimeInterval(-120),
@@ -303,6 +324,11 @@ final class MotionActivityManager: NSObject, FlutterStreamHandler {
   }
 
   private func emitRecentSnapshot() {
+    if #available(iOS 11.0, *),
+      CMMotionActivityManager.authorizationStatus() != .authorized
+    {
+      return
+    }
     let now = Date()
     activityManager.queryActivityStarting(
       from: now.addingTimeInterval(-90),

@@ -152,11 +152,19 @@ protocol NativeCameraSessionDelegate: AnyObject {
 /// Owns AVCaptureSession, photo / movie outputs, zoom, focus, flash, and torch.
 final class NativeCameraSession: NSObject {
   static let logPrefix = "[SmartNPS360Camera]"
+  /// AVFoundation can advertise extreme digital factors (for example 64x).
+  /// Six-times display zoom is the maximum useful evidence-capture range.
+  private static let maximumUserDisplayZoom: CGFloat = 6
 
   let session = AVCaptureSession()
   let previewLayer: AVCaptureVideoPreviewLayer
 
   private let sessionQueue = DispatchQueue(label: "com.smartnps360.app.native_camera.session")
+  /// Encode / disk write for stills — never block AVFoundation's photo callback queue.
+  private let photoProcessingQueue = DispatchQueue(
+    label: "com.smartnps360.app.native_camera.photo_processing",
+    qos: .userInitiated
+  )
   private let photoOutput = AVCapturePhotoOutput()
   private let movieOutput = AVCaptureMovieFileOutput()
 
@@ -170,6 +178,8 @@ final class NativeCameraSession: NSObject {
   private(set) var rearCameraOnly = true
   private(set) var isUsingFrontCamera = false
   private(set) var flashMode: NativeCameraFlashMode = .auto
+  private var photoFlashMode: NativeCameraFlashMode = .auto
+  private var preferredTorchOn = false
   private(set) var zoomChips: [NativeCameraZoomChip] = []
   /// Device zoom that maps to Camera.app "1x".
   private(set) var wideDeviceZoomFactor: CGFloat = 1
@@ -184,6 +194,7 @@ final class NativeCameraSession: NSObject {
 
   private var videoStartDate: Date?
   private var pendingVideoURL: URL?
+  private var focusResetWorkItem: DispatchWorkItem?
   private var videoOrientation: AVCaptureVideoOrientation = .landscapeRight
   /// Ordered tokens describing every quality fallback taken during configure.
   private var fallbackTokens: [String] = []
@@ -194,8 +205,9 @@ final class NativeCameraSession: NSObject {
     isUsingFrontCamera ? "front" : "back"
   }
 
-  /// Wire label for the capture path in use — always the AVFoundation quality
-  /// pipeline (`.quality` prioritization), never a speed / deferred path.
+  /// Wire label for the capture path in use — always `.quality` prioritization.
+  /// Responsive / zero-shutter-lag (iOS 17+) may be enabled for latency only;
+  /// they do not switch to a speed or fast-capture-prioritization path.
   var captureModeWireName: String { "avfoundation_quality" }
 
   /// `nil` when no fallback was needed.
@@ -217,12 +229,21 @@ final class NativeCameraSession: NSObject {
 
   override init() {
     previewLayer = AVCaptureVideoPreviewLayer(session: session)
-    previewLayer.videoGravity = .resizeAspectFill
+    // Fit (not fill): never crop the sensor FOV to the screen. Letterboxing
+    // matches Camera.app Photo framing so 0.5x looks as wide as stock.
+    previewLayer.videoGravity = .resizeAspect
     super.init()
     previewLayer.session = session
+    // A new evidence-camera session always starts from predictable, safe
+    // lighting defaults. Mode switches within this session still preserve the
+    // user's separate photo and video selections.
+    photoFlashMode = .auto
+    preferredTorchOn = false
+    flashMode = photoFlashMode
   }
 
   deinit {
+    focusResetWorkItem?.cancel()
     NotificationCenter.default.removeObserver(self)
   }
 
@@ -236,6 +257,7 @@ final class NativeCameraSession: NSObject {
     completion: ((Bool) -> Void)? = nil
   ) {
     self.isVideoMode = isVideoMode
+    flashMode = isVideoMode ? (preferredTorchOn ? .on : .off) : photoFlashMode
     self.quality = quality
     self.preferHeic = preferHeic
     self.rearCameraOnly = rearCameraOnly
@@ -277,6 +299,8 @@ final class NativeCameraSession: NSObject {
           NSLog("\(Self.logPrefix) PREVIEW_LAYER_READY / FIRST_PREVIEW_FRAME (session running)")
         }
       }
+      let lightOn = self.isVideoMode ? self.preferredTorchOn : self.photoFlashMode == .on
+      self.setTorch(enabled: !self.isUsingFrontCamera && lightOn)
     }
   }
 
@@ -295,25 +319,32 @@ final class NativeCameraSession: NSObject {
   }
 
   func setVideoMode(_ video: Bool) {
-    guard isVideoMode != video else { return }
+    guard isVideoMode != video else {
+      // Already in the requested mode — still notify so pending shutter
+      // actions (photo after mode switch) are not left spinning forever.
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }
+        self.delegate?.sessionDidFinishConfiguration(self)
+      }
+      return
+    }
     isVideoMode = video
     // Photos are always rear-only — snap back to the back camera.
     if !video {
       isUsingFrontCamera = false
-      flashMode = .auto
+      flashMode = photoFlashMode
       setTorch(enabled: false)
-    } else if flashMode == .auto {
-      // Torch has no auto mode.
-      flashMode = .off
+    } else {
+      flashMode = preferredTorchOn ? .on : .off
     }
     sessionQueue.async { [weak self] in
       guard let self else { return }
       do {
-        if !video {
-          try self.configureLocked()
-        } else {
-          try self.reconfigureOutputsLocked()
-        }
+        // Full reconfigure so photo↔video also swaps activeFormat (widest FOV
+        // for photo vs resolution-first for video).
+        try self.configureLocked()
+        let lightOn = video ? self.preferredTorchOn : self.photoFlashMode == .on
+        self.setTorch(enabled: !self.isUsingFrontCamera && lightOn)
         DispatchQueue.main.async {
           self.delegate?.sessionDidFinishConfiguration(self)
         }
@@ -335,9 +366,7 @@ final class NativeCameraSession: NSObject {
     guard !rearCameraOnly, isVideoMode, !movieOutput.isRecording else { return }
     isUsingFrontCamera.toggle()
     setTorch(enabled: false)
-    if isUsingFrontCamera {
-      flashMode = .off
-    }
+    flashMode = isUsingFrontCamera || !preferredTorchOn ? .off : .on
     sessionQueue.async { [weak self] in
       guard let self else { return }
       do {
@@ -415,7 +444,16 @@ final class NativeCameraSession: NSObject {
     sessionQueue.async { [weak self] in
       guard let self else { return }
       CamPerf.stage("CAPTURE_PHOTO_SESSION_QUEUE_ENTER")
-      guard !self.isVideoMode else { return }
+      guard !self.isVideoMode else {
+        DispatchQueue.main.async {
+          self.delegate?.session(
+            self,
+            didFailWithCode: "wrong_mode",
+            message: "Camera is still switching modes. Please try again."
+          )
+        }
+        return
+      }
       guard self.session.isRunning, !self.isInterrupted else {
         DispatchQueue.main.async {
           self.delegate?.session(
@@ -425,6 +463,13 @@ final class NativeCameraSession: NSObject {
           )
         }
         return
+      }
+
+      if #available(iOS 17.0, *) {
+        // Accept captures while briefly not-ready; only hard-block when the
+        // session itself is down. Readiness is logged for Pro Max diagnostics.
+        let readiness = self.photoOutput.captureReadiness
+        NSLog("\(Self.logPrefix) captureReadiness=\(readiness.rawValue)")
       }
 
       let settings: AVCapturePhotoSettings
@@ -443,7 +488,8 @@ final class NativeCameraSession: NSObject {
 
       if let device = self.currentDevice,
          device.hasFlash,
-         self.photoOutput.supportedFlashModes.contains(self.flashMode.avFlashMode)
+         self.photoOutput.supportedFlashModes.contains(self.flashMode.avFlashMode),
+         device.torchMode != .on
       {
         settings.flashMode = self.flashMode.avFlashMode
       } else {
@@ -480,6 +526,12 @@ final class NativeCameraSession: NSObject {
       } else {
         prioritization = "n/a"
       }
+      var responsiveFlags = "responsive=n/a"
+      if #available(iOS 17.0, *) {
+        responsiveFlags =
+          "zsl=\(self.photoOutput.isZeroShutterLagEnabled) "
+          + "responsive=\(self.photoOutput.isResponsiveCaptureEnabled)"
+      }
       CamPerf.log(
         nil,
         "CAPTURE_CONFIG",
@@ -490,7 +542,7 @@ final class NativeCameraSession: NSObject {
           "autoLowLight=\(device?.automaticallyEnablesLowLightBoostWhenAvailable ?? false) " +
           "device=\(device?.localizedName ?? "nil") " +
           "zoom=\(device?.videoZoomFactor ?? 0) ev=\(self.exposureTargetBias) " +
-          "flash=\(self.flashMode.title)"
+          "flash=\(self.flashMode.title) \(responsiveFlags)"
       )
 
       CamPerf.markCapturePhotoInvoke(captureId: nil)
@@ -574,7 +626,11 @@ final class NativeCameraSession: NSObject {
     sessionQueue.async { [weak self] in
       guard let self, let device = self.currentDevice else { return }
       let minZ = device.minAvailableVideoZoomFactor
-      let maxZ = min(device.maxAvailableVideoZoomFactor, device.activeFormat.videoMaxZoomFactor)
+      let hardwareMax = min(
+        device.maxAvailableVideoZoomFactor,
+        device.activeFormat.videoMaxZoomFactor
+      )
+      let maxZ = min(hardwareMax, self.wideDeviceZoomFactor * Self.maximumUserDisplayZoom)
       let clamped = max(minZ, min(maxZ, factor))
       do {
         try device.lockForConfiguration()
@@ -597,20 +653,41 @@ final class NativeCameraSession: NSObject {
     currentDevice?.videoZoomFactor ?? 1
   }
 
+  func zoomFactorRange() -> ClosedRange<CGFloat> {
+    guard let device = currentDevice else { return 1...1 }
+    let minimum = device.minAvailableVideoZoomFactor
+    let hardwareMaximum = min(
+      device.maxAvailableVideoZoomFactor,
+      device.activeFormat.videoMaxZoomFactor
+    )
+    let maximum = min(
+      hardwareMaximum,
+      wideDeviceZoomFactor * Self.maximumUserDisplayZoom
+    )
+    return minimum...max(minimum, maximum)
+  }
+
   func focusAndExpose(at devicePoint: CGPoint) {
     sessionQueue.async { [weak self] in
       guard let self, let device = self.currentDevice else { return }
+      self.focusResetWorkItem?.cancel()
       do {
         try device.lockForConfiguration()
         if device.isFocusPointOfInterestSupported {
           device.focusPointOfInterest = devicePoint
-          if device.isFocusModeSupported(.autoFocus) {
+          if device.isFocusModeSupported(.continuousAutoFocus) {
+            device.focusMode = .continuousAutoFocus
+          } else if device.isFocusModeSupported(.autoFocus) {
             device.focusMode = .autoFocus
           }
         }
         if device.isExposurePointOfInterestSupported {
           device.exposurePointOfInterest = devicePoint
-          if device.isExposureModeSupported(.autoExpose) {
+          // Keep metering the selected area as lighting changes. `.autoExpose`
+          // performs only one adjustment and can leave a night scene too dark.
+          if device.isExposureModeSupported(.continuousAutoExposure) {
+            device.exposureMode = .continuousAutoExposure
+          } else if device.isExposureModeSupported(.autoExpose) {
             device.exposureMode = .autoExpose
           }
         }
@@ -618,9 +695,50 @@ final class NativeCameraSession: NSObject {
           device.isSubjectAreaChangeMonitoringEnabled = true
         }
         device.unlockForConfiguration()
+        self.scheduleContinuousAutoFocusRestore(for: device)
       } catch {
         NSLog("\(Self.logPrefix) focus failed: \(error.localizedDescription)")
       }
+    }
+  }
+
+  /// Tap-to-focus is temporary. Like Camera.app, return to continuous center
+  /// autofocus automatically so the officer never has to manage focus.
+  private func scheduleContinuousAutoFocusRestore(for device: AVCaptureDevice) {
+    let work = DispatchWorkItem { [weak self, weak device] in
+      guard let self, let device, self.currentDevice === device else { return }
+      self.restoreContinuousAutoFocus(on: device, resetPoint: true)
+    }
+    focusResetWorkItem = work
+    sessionQueue.asyncAfter(deadline: .now() + 3, execute: work)
+  }
+
+  private func restoreContinuousAutoFocus(
+    on device: AVCaptureDevice,
+    resetPoint: Bool
+  ) {
+    do {
+      try device.lockForConfiguration()
+      defer { device.unlockForConfiguration() }
+      let center = CGPoint(x: 0.5, y: 0.5)
+      if resetPoint, device.isFocusPointOfInterestSupported {
+        device.focusPointOfInterest = center
+      }
+      if device.isFocusModeSupported(.continuousAutoFocus) {
+        device.focusMode = .continuousAutoFocus
+      } else if device.isFocusModeSupported(.autoFocus) {
+        device.focusMode = .autoFocus
+      }
+      if resetPoint, device.isExposurePointOfInterestSupported {
+        device.exposurePointOfInterest = center
+      }
+      if device.isExposureModeSupported(.continuousAutoExposure) {
+        device.exposureMode = .continuousAutoExposure
+      }
+      device.isSubjectAreaChangeMonitoringEnabled = true
+      NSLog("\(Self.logPrefix) continuous autofocus restored")
+    } catch {
+      NSLog("\(Self.logPrefix) autofocus restore failed: \(error.localizedDescription)")
     }
   }
 
@@ -659,9 +777,32 @@ final class NativeCameraSession: NSObject {
     if isVideoMode {
       // Torch is binary on/off (no auto).
       flashMode = flashMode == .on ? .off : .on
+      preferredTorchOn = flashMode == .on
       setTorch(enabled: flashMode == .on)
     } else {
       flashMode = flashMode.next
+      photoFlashMode = flashMode
+      // "On" illuminates the preview immediately; Auto still lets the camera
+      // decide whether a capture-time flash is needed.
+      setTorch(enabled: flashMode == .on)
+    }
+    return flashMode
+  }
+
+  /// Applies an explicit flash choice from the camera chrome and persists it.
+  /// Photo supports Off / On / Auto; video torch is intentionally binary.
+  @discardableResult
+  func setFlashMode(_ mode: NativeCameraFlashMode) -> NativeCameraFlashMode {
+    guard supportsFlashOrTorch else { return flashMode }
+    if isVideoMode {
+      flashMode = mode == .on ? .on : .off
+      preferredTorchOn = flashMode == .on
+      setTorch(enabled: preferredTorchOn)
+    } else {
+      flashMode = mode
+      photoFlashMode = mode
+      // On lights the preview immediately; Auto remains capture-time flash.
+      setTorch(enabled: mode == .on)
     }
     return flashMode
   }
@@ -701,8 +842,11 @@ final class NativeCameraSession: NSObject {
       || photoOutput.availablePhotoCodecTypes.contains(.hevc)
     caps.minZoom = Double(device.minAvailableVideoZoomFactor / max(wideDeviceZoomFactor, 0.01))
     caps.maxZoom = Double(
-      min(device.maxAvailableVideoZoomFactor, device.activeFormat.videoMaxZoomFactor)
-        / max(wideDeviceZoomFactor, 0.01)
+      min(
+        Self.maximumUserDisplayZoom,
+        min(device.maxAvailableVideoZoomFactor, device.activeFormat.videoMaxZoomFactor)
+          / max(wideDeviceZoomFactor, 0.01)
+      )
     )
     let builtChips = zoomChips.isEmpty ? Self.buildZoomChips(for: device).chips : zoomChips
     caps.usefulZoomLevels = builtChips.map { Double($0.displayFactor) }
@@ -784,8 +928,6 @@ final class NativeCameraSession: NSObject {
     lowLightBoostEnabled = false
     distortionCorrectionEnabled = false
 
-    session.sessionPreset = .inputPriority
-
     for input in session.inputs {
       session.removeInput(input)
     }
@@ -831,7 +973,22 @@ final class NativeCameraSession: NSObject {
       noteFallback("single_lens")
     }
 
-    try applyPreferredFormat(on: device)
+    // Photo: use system `.photo` preset so FOV / crop match Camera.app.
+    // Forcing `activeFormat` under `.inputPriority` often picks a video readout
+    // that is slightly tighter than stock Photo — the main remaining zoom gap.
+    // Video: keep `.inputPriority` + explicit format for 4K/1080 control.
+    if isVideoMode {
+      session.sessionPreset = .inputPriority
+      try applyPreferredFormat(on: device)
+    } else if session.canSetSessionPreset(.photo) {
+      session.sessionPreset = .photo
+      NSLog("\(Self.logPrefix) sessionPreset=photo (Camera.app-matching FOV)")
+    } else {
+      session.sessionPreset = .inputPriority
+      try applyPreferredFormat(on: device)
+      noteFallback("photo_preset_unavailable")
+    }
+
     applyDeviceEnhancements(on: device)
     let built = Self.buildZoomChips(for: device)
     zoomChips = built.chips
@@ -875,12 +1032,21 @@ final class NativeCameraSession: NSObject {
         )
       }
 
+      if device.isFocusPointOfInterestSupported {
+        device.focusPointOfInterest = CGPoint(x: 0.5, y: 0.5)
+      }
       if device.isFocusModeSupported(.continuousAutoFocus) {
         device.focusMode = .continuousAutoFocus
+      } else if device.isFocusModeSupported(.autoFocus) {
+        device.focusMode = .autoFocus
+      }
+      if device.isExposurePointOfInterestSupported {
+        device.exposurePointOfInterest = CGPoint(x: 0.5, y: 0.5)
       }
       if device.isExposureModeSupported(.continuousAutoExposure) {
         device.exposureMode = .continuousAutoExposure
       }
+      device.isSubjectAreaChangeMonitoringEnabled = true
 
       if device.maxExposureTargetBias > device.minExposureTargetBias {
         let clamped = max(
@@ -901,15 +1067,25 @@ final class NativeCameraSession: NSObject {
     let dims = activeMaxPhotoDimensions
     let maxPhoto = dims.map { "\($0.width)x\($0.height)" } ?? "legacy_high_res"
     let heic = photoOutput.availablePhotoCodecTypes.contains(.hevc)
+    let format = device.activeFormat
+    let fov = format.videoFieldOfView
+    let gdcFov = format.geometricDistortionCorrectedVideoFieldOfView
+    var multiplierLog = "n/a"
+    if #available(iOS 18.0, *) {
+      multiplierLog = String(format: "%.4f", Double(device.displayVideoZoomFactorMultiplier))
+    }
     NSLog(
       "\(Self.logPrefix) configured device=\(device.localizedName) "
         + "type=\(device.deviceType.rawValue) position=\(cameraPositionWireName) "
+        + "preset=\(session.sessionPreset.rawValue) "
+        + "fov=\(fov) gdcFov=\(gdcFov) zoomMultiplier=\(multiplierLog) "
         + "lowLightBoost=\(lowLightBoostEnabled) maxPhotoDimensions=\(maxPhoto) "
         + "virtualFusion=\(device.isVirtualDevice) "
         + "switching=\(device.activePrimaryConstituentDeviceSwitchingBehavior.rawValue) "
         + "distortionCorrection=\(distortionCorrectionEnabled) heic=\(heic) "
         + "exposureBias=[\(device.minExposureTargetBias)…\(device.maxExposureTargetBias)]"
         + "@\(exposureTargetBias) wideDevice=\(wideDeviceZoomFactor) "
+        + "minZoom=\(device.minAvailableVideoZoomFactor) "
         + "zoom=\(zoomChips.map { "\($0.label)@\($0.deviceFactor)" }) "
         + "fallback=\(fallbackLevelWireName ?? "none")"
     )
@@ -972,6 +1148,7 @@ final class NativeCameraSession: NSObject {
         photoOutput.maxPhotoQualityPrioritization = .quality
       }
       applyMaxPhotoDimensions()
+      applyResponsiveCaptureIfSupported()
       if #available(iOS 14.1, *) {
         if photoOutput.isContentAwareDistortionCorrectionSupported {
           photoOutput.isContentAwareDistortionCorrectionEnabled = true
@@ -986,35 +1163,44 @@ final class NativeCameraSession: NSObject {
     }
   }
 
+  /// Latency-only path for Pro-class stills. Keeps `.quality` prioritization and
+  /// does **not** enable fast-capture prioritization (which can soften quality).
+  private func applyResponsiveCaptureIfSupported() {
+    guard #available(iOS 17.0, *) else { return }
+    if photoOutput.isZeroShutterLagSupported {
+      photoOutput.isZeroShutterLagEnabled = true
+    }
+    if photoOutput.isResponsiveCaptureSupported {
+      photoOutput.isResponsiveCaptureEnabled = true
+    }
+    if photoOutput.isFastCapturePrioritizationSupported {
+      // Keep full `.quality` stills even under rapid taps.
+      photoOutput.isFastCapturePrioritizationEnabled = false
+    }
+    // Explicitly leave fastCapturePrioritizationEnabled off so
+    // burst softening never trades quality for shot-to-shot speed.
+    NSLog(
+      "\(Self.logPrefix) responsive capture zsl=\(photoOutput.isZeroShutterLagEnabled) "
+        + "responsive=\(photoOutput.isResponsiveCaptureEnabled) "
+        + "fastPrio=\(photoOutput.isFastCapturePrioritizationEnabled) "
+        + "supportedZsl=\(photoOutput.isZeroShutterLagSupported) "
+        + "supportedResponsive=\(photoOutput.isResponsiveCaptureSupported)"
+    )
+  }
+
   private func applyPreferredFormat(on device: AVCaptureDevice) throws {
     let formats = device.formats
-    let prefer4K = quality == .maximum
-    let targetHeight: Int32 = prefer4K ? 2160 : 1080
-    let fallbackHeight: Int32 = 1080
+    guard !formats.isEmpty else { return }
 
-    func rank(_ format: AVCaptureDevice.Format) -> (Int, Int32, Int32) {
-      let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
-      let height = dims.height
-      let width = dims.width
-      let exact = height == targetHeight || (prefer4K && height == 2160)
-      let ok1080 = height == fallbackHeight
-      let tier: Int
-      if exact { tier = 0 }
-      else if ok1080 { tier = 1 }
-      else if height <= targetHeight { tier = 2 }
-      else { tier = 3 }
-      return (tier, -height, -width)
+    let best: AVCaptureDevice.Format
+    if isVideoMode {
+      best = Self.preferredVideoFormat(from: formats, quality: quality)
+    } else {
+      // Photo: widest FOV first so UW 0.5x matches Camera.app (no extra crop
+      // from a video-oriented / lower-FOV activeFormat).
+      best = Self.preferredPhotoFormat(from: formats)
     }
 
-    let sorted = formats.sorted {
-      let l = rank($0)
-      let r = rank($1)
-      if l.0 != r.0 { return l.0 < r.0 }
-      if l.1 != r.1 { return l.1 < r.1 }
-      return l.2 < r.2
-    }
-
-    guard let best = sorted.first else { return }
     try device.lockForConfiguration()
     device.activeFormat = best
     let dims = CMVideoFormatDescriptionGetDimensions(best.formatDescription)
@@ -1027,7 +1213,88 @@ final class NativeCameraSession: NSObject {
       _ = range
     }
     device.unlockForConfiguration()
-    NSLog("\(Self.logPrefix) active format \(dims.width)x\(dims.height)")
+    NSLog(
+      "\(Self.logPrefix) active format \(dims.width)x\(dims.height) "
+        + "fov=\(best.videoFieldOfView) mode=\(isVideoMode ? "video" : "photo")"
+    )
+  }
+
+  /// Video: prefer 4K / 1080p, then wider FOV among equals.
+  private static func preferredVideoFormat(
+    from formats: [AVCaptureDevice.Format],
+    quality: NativeCameraCaptureQuality
+  ) -> AVCaptureDevice.Format {
+    let prefer4K = quality == .maximum
+    let targetHeight: Int32 = prefer4K ? 2160 : 1080
+    let fallbackHeight: Int32 = 1080
+
+    func rank(_ format: AVCaptureDevice.Format) -> (Int, Int32, Int32, Float) {
+      let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+      let height = dims.height
+      let width = dims.width
+      let exact = height == targetHeight || (prefer4K && height == 2160)
+      let ok1080 = height == fallbackHeight
+      let tier: Int
+      if exact { tier = 0 }
+      else if ok1080 { tier = 1 }
+      else if height <= targetHeight { tier = 2 }
+      else { tier = 3 }
+      // Negate FOV so larger FOV sorts earlier within the same tier.
+      return (tier, -height, -width, -format.videoFieldOfView)
+    }
+
+    return formats.sorted {
+      let l = rank($0)
+      let r = rank($1)
+      if l.0 != r.0 { return l.0 < r.0 }
+      if l.1 != r.1 { return l.1 < r.1 }
+      if l.2 != r.2 { return l.2 < r.2 }
+      return l.3 < r.3
+    }.first!
+  }
+
+  /// Photo: maximize *effective* FOV after GDC, then still resolution.
+  /// Ranking by uncorrected FOV can pick a format that GDC crops more tightly.
+  private static func preferredPhotoFormat(
+    from formats: [AVCaptureDevice.Format]
+  ) -> AVCaptureDevice.Format {
+    func maxPhotoPixels(_ format: AVCaptureDevice.Format) -> Int64 {
+      if #available(iOS 16.0, *) {
+        let best = format.supportedMaxPhotoDimensions.max {
+          Int64($0.width) * Int64($0.height) < Int64($1.width) * Int64($1.height)
+        }
+        if let best {
+          return Int64(best.width) * Int64(best.height)
+        }
+      }
+      let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+      return Int64(dims.width) * Int64(dims.height)
+    }
+
+    func effectiveFOV(_ format: AVCaptureDevice.Format) -> Float {
+      // GDC is enabled to match Camera.app; use the corrected FOV for ranking.
+      let gdc = format.geometricDistortionCorrectedVideoFieldOfView
+      return gdc > 0 ? gdc : format.videoFieldOfView
+    }
+
+    func rank(_ format: AVCaptureDevice.Format) -> (Float, Int64, Int32, Int32) {
+      let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+      return (
+        -effectiveFOV(format),
+        -maxPhotoPixels(format),
+        -dims.height,
+        -dims.width
+      )
+    }
+
+    return formats.sorted {
+      let l = rank($0)
+      let r = rank($1)
+      if l.0 != r.0 { return l.0 < r.0 }
+      if l.1 != r.1 { return l.1 < r.1 }
+      if l.2 != r.2 { return l.2 < r.2 }
+      return l.3 < r.3
+    }.first!
   }
 
   private func noteFallback(_ token: String) {
@@ -1042,10 +1309,11 @@ final class NativeCameraSession: NSObject {
   /// (roughly ≤ ~12 MP), while the absolute largest supportedMaxPhotoDimensions
   /// entry can be a specialized full-sensor mode that trades processing for
   /// pixel count. Strategy (public APIs only, no device model hardcoding):
-  /// 1. Prefer the largest supported size whose pixel count is ≤ ~12.5 MP.
-  /// 2. Else prefer the smallest size that is still ≥ ~8 MP (useful evidence).
-  /// 3. Else use the median supported size (conservative middle).
-  /// 4. Else the sole available size.
+  /// 1. Prefer ~4:3 (Camera.app Photo) so we never save a 16:9 center-crop.
+  /// 2. Prefer the largest supported size whose pixel count is ≤ ~12.5 MP.
+  /// 3. Else prefer the smallest size that is still ≥ ~8 MP (useful evidence).
+  /// 4. Else use the median supported size (conservative middle).
+  /// 5. Else the sole available size.
   /// Quality prioritization (.quality) is applied before this negotiation.
   private func applyMaxPhotoDimensions() {
     if #available(iOS 16.0, *) {
@@ -1061,18 +1329,37 @@ final class NativeCameraSession: NSObject {
         Int64(d.width) * Int64(d.height)
       }
 
+      /// Absolute deviation from 4:3 — Camera.app Photo aspect (no wide crop).
+      func fourThreeDelta(_ d: CMVideoDimensions) -> Double {
+        let longSide = Double(max(d.width, d.height))
+        let shortSide = Double(min(d.width, d.height))
+        guard shortSide > 0 else { return .greatestFiniteMagnitude }
+        return abs((longSide / shortSide) - (4.0 / 3.0))
+      }
+
       let sorted = supported.sorted { pixels($0) < pixels($1) }
       let maxProcessed: Int64 = 12_500_000
       let minUseful: Int64 = 8_000_000
+      // Treat near-4:3 as Photo; reject clear 16:9 center-crops when 4:3 exists.
+      let fourThree = sorted.filter { fourThreeDelta($0) <= 0.08 }
 
       let best: CMVideoDimensions
-      if let underCap = sorted.last(where: { pixels($0) <= maxProcessed }) {
+      if let underCap = fourThree.last(where: { pixels($0) <= maxProcessed }) {
         best = underCap
-      } else if let useful = sorted.first(where: { pixels($0) >= minUseful }) {
+      } else if let underCap = sorted.last(where: { pixels($0) <= maxProcessed }) {
+        best = underCap
+        if fourThreeDelta(underCap) > 0.08 {
+          noteFallback("max_photo_dims_non_4_3")
+        }
+      } else if let useful = fourThree.first(where: { pixels($0) >= minUseful })
+                  ?? sorted.first(where: { pixels($0) >= minUseful })
+      {
         best = useful
         noteFallback("max_photo_dims_above_12mp_floor")
       } else {
-        best = sorted[sorted.count / 2]
+        best = (fourThree.isEmpty ? sorted : fourThree)[
+          (fourThree.isEmpty ? sorted : fourThree).count / 2
+        ]
         noteFallback("max_photo_dims_median")
       }
 
@@ -1081,7 +1368,7 @@ final class NativeCameraSession: NSObject {
       NSLog(
         "\(Self.logPrefix) selected maxPhotoDimensions "
           + "\(best.width)x\(best.height) from \(sorted.count) options "
-          + "(prefer ≤12.5MP for computational quality)"
+          + "(prefer 4:3 ≤12.5MP for Camera.app-matching FOV)"
       )
       return
     }
@@ -1184,18 +1471,8 @@ final class NativeCameraSession: NSObject {
   @objc private func subjectAreaDidChange(_ notification: Notification) {
     sessionQueue.async { [weak self] in
       guard let self, let device = self.currentDevice else { return }
-      do {
-        try device.lockForConfiguration()
-        if device.isFocusModeSupported(.continuousAutoFocus) {
-          device.focusMode = .continuousAutoFocus
-        }
-        if device.isExposureModeSupported(.continuousAutoExposure) {
-          device.exposureMode = .continuousAutoExposure
-        }
-        device.unlockForConfiguration()
-      } catch {
-        // Ignore — continuous AF restore is best-effort.
-      }
+      self.focusResetWorkItem?.cancel()
+      self.restoreContinuousAutoFocus(on: device, resetPoint: true)
     }
   }
 
@@ -1264,30 +1541,13 @@ final class NativeCameraSession: NSObject {
       .filter { $0 > minZ + 0.05 && $0 <= maxZ + 0.05 }
       .sorted()
 
-    // Match Camera.app labeling:
-    // Dual-wide / triple: device zoom 1 = UI 0.5x (UW), first switchover = UI 1x.
-    // Dual (wide+tele) / single wide: device zoom 1 = UI 1x.
-    let wideDeviceFactor: CGFloat
-    switch device.deviceType {
-    case .builtInDualWideCamera, .builtInTripleCamera:
-      wideDeviceFactor = switchOvers.first ?? max(minZ, 1)
-    case .builtInDualCamera:
-      wideDeviceFactor = 1
-    default:
-      if minZ < 0.95 {
-        wideDeviceFactor = 1
-      } else if let first = switchOvers.first,
-                first >= 1.8,
-                minZ <= 1.05,
-                device.constituentDevices.contains(where: {
-                  $0.deviceType == .builtInUltraWideCamera
-                })
-      {
-        wideDeviceFactor = first
-      } else {
-        wideDeviceFactor = 1
-      }
-    }
+    // Camera.app display zoom = deviceZoom * displayVideoZoomFactorMultiplier (iOS 18+).
+    // wideDeviceFactor is the device zoom that maps to UI "1x".
+    let wideDeviceFactor = Self.wideDeviceFactor(
+      for: device,
+      minZ: minZ,
+      switchOvers: switchOvers
+    )
 
     var deviceFactors: [CGFloat] = []
     func appendDevice(_ value: CGFloat) {
@@ -1297,15 +1557,23 @@ final class NativeCameraSession: NSObject {
       }
     }
 
-    // Ultra-wide chip only when a real UW FOV exists below the 1x wide factor.
-    if minZ < wideDeviceFactor - 0.15 {
+    let minDisplayZoom = minZ / max(wideDeviceFactor, 0.01)
+    let maxDisplayZoom = maxZ / max(wideDeviceFactor, 0.01)
+
+    // 0.5x = exact hardware minimum zoom (full ultra-wide FOV). Never use a
+    // slightly higher ratio that would digitally crop past Camera.app 0.5x.
+    if minDisplayZoom <= 0.55, maxDisplayZoom >= 0.5 {
       appendDevice(minZ)
     }
-    appendDevice(wideDeviceFactor)
-    for point in switchOvers where abs(point - wideDeviceFactor) > 0.15 {
-      appendDevice(point)
+    for whole in 1...4 {
+      let display = CGFloat(whole)
+      if display >= minDisplayZoom - 0.02, display <= maxDisplayZoom + 0.02 {
+        appendDevice(wideDeviceFactor * display)
+      }
     }
-    // Do not invent digital 2x/5x chips that Camera.app does not show as lenses.
+    if deviceFactors.isEmpty {
+      appendDevice(minZ)
+    }
 
     deviceFactors.sort()
     let chips = deviceFactors.map { deviceFactor -> NativeCameraZoomChip in
@@ -1319,16 +1587,51 @@ final class NativeCameraSession: NSObject {
     return (chips, wideDeviceFactor)
   }
 
+  /// Device zoom factor that Camera.app labels as 1x.
+  private static func wideDeviceFactor(
+    for device: AVCaptureDevice,
+    minZ: CGFloat,
+    switchOvers: [CGFloat]
+  ) -> CGFloat {
+    if #available(iOS 18.0, *) {
+      let multiplier = device.displayVideoZoomFactorMultiplier
+      if multiplier > 0.01 {
+        // displayZoom = deviceZoom * multiplier ⇒ deviceZoom@1x = 1 / multiplier
+        return 1.0 / multiplier
+      }
+    }
+
+    // Pre-iOS 18 fallback: Match Camera.app labeling from virtual switchovers.
+    // Dual-wide / triple: device zoom 1 = UI 0.5x (UW), first switchover = UI 1x.
+    // Dual (wide+tele) / single wide: device zoom 1 = UI 1x.
+    switch device.deviceType {
+    case .builtInDualWideCamera, .builtInTripleCamera:
+      return switchOvers.first ?? max(minZ, 1)
+    case .builtInDualCamera:
+      return 1
+    default:
+      if minZ < 0.95 {
+        return 1
+      }
+      if let first = switchOvers.first,
+         first >= 1.8,
+         minZ <= 1.05,
+         device.constituentDevices.contains(where: {
+           $0.deviceType == .builtInUltraWideCamera
+         })
+      {
+        return first
+      }
+      return 1
+    }
+  }
+
   static func formatDisplayZoomLabel(_ display: CGFloat) -> String {
     if abs(display - 0.5) < 0.06 {
-      return ".5"
+      return "0.5x"
     }
     if display < 1 {
-      let text = String(format: "%.1f", Double(display))
-      if text.hasPrefix("0") {
-        return String(text.dropFirst())
-      }
-      return text
+      return String(format: "%.1fx", Double(display))
     }
     if abs(display - display.rounded()) < 0.06 {
       return "\(Int(display.rounded()))x"
@@ -1429,86 +1732,111 @@ extension NativeCameraSession: AVCapturePhotoCaptureDelegate {
       return
     }
 
-    do {
-      CamPerf.stage("FILE_DATA_REPRESENTATION_START")
-      let data = try encodePhotoData(photo)
-      CamPerf.markFileDataEnd(captureId: nil)
-      let heic = isHeicData(data)
-      let ext = heic ? "heic" : "jpg"
-      let mime = heic ? "image/heic" : "image/jpeg"
-
-      if !hasEnoughStorage(minimumBytes: Int64(data.count) + 5 * 1024 * 1024) {
-        throw Self.error(code: "insufficient_storage", message: "Not enough storage for photo")
-      }
-
-      let captureId = UUID().uuidString
-      CamPerf.stage("FILE_WRITE_START", captureId: captureId, detail: "bytes=\(data.count)")
-      let url = try Self.makeTempMediaURL(extension: ext)
-      try data.write(to: url, options: .atomic)
-      CamPerf.markWriteEnd(captureId: captureId)
-
-      CamPerf.stage("PHOTO_VALIDATION_START", captureId: captureId)
-      let dims = photo.resolvedSettings.photoDimensions
-      let orientation = photo.metadata[String(kCGImagePropertyOrientation)] as? UInt32
-      let cgOrientation =
-        CGImagePropertyOrientation(rawValue: orientation ?? CGImagePropertyOrientation.right.rawValue)
-        ?? .right
-      let degrees = NativeCameraOrientation.degrees(from: cgOrientation)
-      let zoom = currentDevice?.videoZoomFactor ?? 1
-      let lens = currentDevice.map { lensLabel(for: $0, zoom: zoom) } ?? "wide"
-      CamPerf.markValidationEnd(captureId: captureId)
-
-      var metadata: [String: Any] = [
-        "type": "photo",
-        "captureId": captureId,
-        "capturedAtMs": Int64(Date().timeIntervalSince1970 * 1000),
-        "width": Int(dims.width),
-        "height": Int(dims.height),
-        "cameraPosition": self.cameraPositionWireName,
-        "lens": lens,
-        "zoomFactor": Double(zoom),
-        "fileSizeBytes": data.count,
-        "mimeType": mime,
-        "orientationDegrees": degrees,
-        "captureMode": captureModeWireName,
-        "photoDimensions": "\(dims.width)x\(dims.height)",
-      ]
-      if let fallback = fallbackLevelWireName {
-        metadata["fallbackLevel"] = fallback
-      }
-      if #available(iOS 13.0, *) {
-        metadata["extensionMode"] = currentDevice?.isVirtualDevice == true ? "virtualMultiCam" : "single"
-      }
-
-      CamPerf.stage(
-        "PHOTO_FILE_BYTES",
-        captureId: captureId,
-        detail: "bytes=\(data.count) dim=\(dims.width)x\(dims.height)"
-      )
-      CamPerf.markNativeResultFinish(captureId: captureId)
-      DispatchQueue.main.async { [weak self] in
-        guard let self else { return }
-        self.delegate?.session(self, didCapturePhotoAt: url, metadata: metadata)
-      }
-    } catch {
-      let ns = error as NSError
-      let code = ns.domain.contains("_") ? ns.domain : "capture_failed"
+    // Pull bytes on the photo callback (AVCapturePhoto lifetime), then encode /
+    // write off this queue so the capture pipeline can recover quickly on
+    // Pro-class Fusion stills.
+    CamPerf.stage("FILE_DATA_REPRESENTATION_START")
+    guard let rawData = photo.fileDataRepresentation() else {
       DispatchQueue.main.async { [weak self] in
         guard let self else { return }
         self.delegate?.session(
           self,
-          didFailWithCode: code,
-          message: ns.localizedDescription
+          didFailWithCode: "capture_failed",
+          message: "Photo data missing"
         )
+      }
+      return
+    }
+    CamPerf.markFileDataEnd(captureId: nil)
+
+    let dims = photo.resolvedSettings.photoDimensions
+    let orientation = photo.metadata[String(kCGImagePropertyOrientation)] as? UInt32
+    let zoom = currentDevice?.videoZoomFactor ?? 1
+    let lens = currentDevice.map { lensLabel(for: $0, zoom: zoom) } ?? "wide"
+    let cameraPosition = cameraPositionWireName
+    let captureMode = captureModeWireName
+    let fallback = fallbackLevelWireName
+    let preferHeic = self.preferHeic
+    let extensionMode: String?
+    if #available(iOS 13.0, *) {
+      extensionMode = currentDevice?.isVirtualDevice == true ? "virtualMultiCam" : "single"
+    } else {
+      extensionMode = nil
+    }
+
+    photoProcessingQueue.async { [weak self] in
+      guard let self else { return }
+      do {
+        let data = try self.finalizePhotoData(rawData, preferHeic: preferHeic)
+        let heic = self.isHeicData(data)
+        let ext = heic ? "heic" : "jpg"
+        let mime = heic ? "image/heic" : "image/jpeg"
+
+        if !self.hasEnoughStorage(minimumBytes: Int64(data.count) + 5 * 1024 * 1024) {
+          throw Self.error(code: "insufficient_storage", message: "Not enough storage for photo")
+        }
+
+        let captureId = UUID().uuidString
+        CamPerf.stage("FILE_WRITE_START", captureId: captureId, detail: "bytes=\(data.count)")
+        let url = try Self.makeTempMediaURL(extension: ext)
+        try data.write(to: url, options: .atomic)
+        CamPerf.markWriteEnd(captureId: captureId)
+
+        CamPerf.stage("PHOTO_VALIDATION_START", captureId: captureId)
+        let cgOrientation =
+          CGImagePropertyOrientation(rawValue: orientation ?? CGImagePropertyOrientation.right.rawValue)
+          ?? .right
+        let degrees = NativeCameraOrientation.degrees(from: cgOrientation)
+        CamPerf.markValidationEnd(captureId: captureId)
+
+        var metadata: [String: Any] = [
+          "type": "photo",
+          "captureId": captureId,
+          "capturedAtMs": Int64(Date().timeIntervalSince1970 * 1000),
+          "width": Int(dims.width),
+          "height": Int(dims.height),
+          "cameraPosition": cameraPosition,
+          "lens": lens,
+          "zoomFactor": Double(zoom),
+          "fileSizeBytes": data.count,
+          "mimeType": mime,
+          "orientationDegrees": degrees,
+          "captureMode": captureMode,
+          "photoDimensions": "\(dims.width)x\(dims.height)",
+        ]
+        if let fallback {
+          metadata["fallbackLevel"] = fallback
+        }
+        if let extensionMode {
+          metadata["extensionMode"] = extensionMode
+        }
+
+        CamPerf.stage(
+          "PHOTO_FILE_BYTES",
+          captureId: captureId,
+          detail: "bytes=\(data.count) dim=\(dims.width)x\(dims.height)"
+        )
+        CamPerf.markNativeResultFinish(captureId: captureId)
+        DispatchQueue.main.async { [weak self] in
+          guard let self else { return }
+          self.delegate?.session(self, didCapturePhotoAt: url, metadata: metadata)
+        }
+      } catch {
+        let ns = error as NSError
+        let code = ns.domain.contains("_") ? ns.domain : "capture_failed"
+        DispatchQueue.main.async { [weak self] in
+          guard let self else { return }
+          self.delegate?.session(
+            self,
+            didFailWithCode: code,
+            message: ns.localizedDescription
+          )
+        }
       }
     }
   }
 
-  private func encodePhotoData(_ photo: AVCapturePhoto) throws -> Data {
-    guard let data = photo.fileDataRepresentation() else {
-      throw Self.error(code: "capture_failed", message: "Photo data missing")
-    }
-
+  private func finalizePhotoData(_ data: Data, preferHeic: Bool) throws -> Data {
     if preferHeic, isHeicData(data) {
       return data
     }
