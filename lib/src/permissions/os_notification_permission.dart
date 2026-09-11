@@ -40,7 +40,8 @@ class OsNotificationPermission {
       return switch (settings.authorizationStatus) {
         AuthorizationStatus.authorized ||
         AuthorizationStatus.provisional => 'granted',
-        AuthorizationStatus.denied => 'denied',
+        AuthorizationStatus.denied ||
+        AuthorizationStatus.deniedPermanently => 'denied',
         AuthorizationStatus.notDetermined => 'unknown',
       };
     }

@@ -14,11 +14,16 @@ class GlassDialogAction<T> {
     required this.label,
     required this.value,
     this.tone = GlassDialogActionTone.neutral,
+    this.icon,
+    this.beforePop,
   });
 
   final String label;
   final T value;
   final GlassDialogActionTone tone;
+  final IconData? icon;
+
+  final FutureOr<bool> Function()? beforePop;
 }
 
 class GlassActionDialog extends StatelessWidget {
@@ -40,6 +45,7 @@ class GlassActionDialog extends StatelessWidget {
     this.compact = false,
     this.barrierDismissible = false,
     this.showCloseButton = false,
+    this.closeButtonTooltip = 'Close',
     this.onPrimaryPressed,
     this.iconWidget,
     this.titleColor,
@@ -49,6 +55,8 @@ class GlassActionDialog extends StatelessWidget {
   static const double _defaultMessageMaxHeightFactor = 0.38;
   static const Color _darkSurface = Color(0xFF172033);
   static const Color _lightSurface = Color(0xFFF9FBFF);
+
+  static const double landscapeMaxWidth = 520;
 
   final IconData icon;
   final String title;
@@ -69,6 +77,8 @@ class GlassActionDialog extends StatelessWidget {
   final bool barrierDismissible;
   final bool showCloseButton;
 
+  final String closeButtonTooltip;
+
   final Future<bool> Function()? onPrimaryPressed;
 
   final Widget? iconWidget;
@@ -87,6 +97,7 @@ class GlassActionDialog extends StatelessWidget {
     bool destructiveSecondary = false,
     bool barrierDismissible = false,
     bool showCloseButton = false,
+    String closeButtonTooltip = 'Close',
     Future<bool> Function()? onPrimaryPressed,
     double messageMaxHeightFactor = _defaultMessageMaxHeightFactor,
     EdgeInsets insetPadding = const EdgeInsets.symmetric(horizontal: 28),
@@ -119,6 +130,7 @@ class GlassActionDialog extends StatelessWidget {
         compact: compact,
         barrierDismissible: barrierDismissible,
         showCloseButton: showCloseButton,
+        closeButtonTooltip: closeButtonTooltip,
         onPrimaryPressed: onPrimaryPressed,
         iconWidget: iconWidget,
         titleColor: titleColor,
@@ -137,6 +149,7 @@ class GlassActionDialog extends StatelessWidget {
     GlassActionDialogVariant variant = GlassActionDialogVariant.normal,
     bool barrierDismissible = false,
     bool showCloseButton = false,
+    String closeButtonTooltip = 'Close',
     double messageMaxHeightFactor = _defaultMessageMaxHeightFactor,
     EdgeInsets insetPadding = const EdgeInsets.symmetric(horizontal: 28),
     double? maxWidth,
@@ -162,6 +175,8 @@ class GlassActionDialog extends StatelessWidget {
               label: action.label,
               value: action.value,
               tone: action.tone,
+              icon: action.icon,
+              beforePop: action.beforePop,
             ),
         ],
         iconColor: iconColor,
@@ -171,6 +186,7 @@ class GlassActionDialog extends StatelessWidget {
         maxWidth: maxWidth,
         barrierDismissible: barrierDismissible,
         showCloseButton: showCloseButton,
+        closeButtonTooltip: closeButtonTooltip,
         iconWidget: iconWidget,
         titleColor: titleColor,
       ),
@@ -234,14 +250,17 @@ class GlassActionDialog extends StatelessWidget {
 
     final media = MediaQuery.of(context);
     final keyboardInset = media.viewInsets.bottom;
-    final compactChrome = keyboardInset > 0 || compact;
     final visibleHeight = (media.size.height - keyboardInset)
         .clamp(0.0, media.size.height)
         .toDouble();
+    final isLandscape = media.orientation == Orientation.landscape;
+    final shortLandscape = isLandscape && visibleHeight < 600;
+    final compactLayout = compact || shortLandscape;
+    final compactChrome = keyboardInset > 0 || compactLayout;
     final heightFactor =
         (keyboardInset > 0
                 ? 0.95
-                : compact
+                : compactLayout
                 ? 0.92
                 : (0.55 + messageMaxHeightFactor * 0.5).clamp(0.65, 0.92))
             .toDouble();
@@ -266,37 +285,114 @@ class GlassActionDialog extends StatelessWidget {
       return shrunk.clamp(0.0, value).toDouble();
     }
 
+    double compactVerticalInset(double value) {
+
+      if (value <= 0) return 4.0;
+      final half = value * 0.5;
+      if (value < 4.0) return half.clamp(0.0, value).toDouble();
+      return half.clamp(4.0, value).toDouble();
+    }
+
+    final landscapeHorizontal = isLandscape
+        ? (insetPadding.left < 32 ? 32.0 : insetPadding.left)
+        : insetPadding.left;
     final effectiveInset = EdgeInsets.only(
-      left: insetPadding.left,
-      right: insetPadding.right,
-      top: compact ? (insetPadding.top * 0.5).clamp(4.0, insetPadding.top) : keyboardAwareInset(insetPadding.top),
-      bottom: compact
-          ? (insetPadding.bottom * 0.5).clamp(4.0, insetPadding.bottom)
+      left: landscapeHorizontal,
+      right: isLandscape
+          ? (insetPadding.right < 32 ? 32.0 : insetPadding.right)
+          : insetPadding.right,
+      top: compactLayout
+          ? compactVerticalInset(insetPadding.top)
+          : keyboardAwareInset(insetPadding.top),
+      bottom: compactLayout
+          ? compactVerticalInset(insetPadding.bottom)
           : keyboardAwareInset(insetPadding.bottom),
     );
 
-    final boxConstraints = maxWidth == null
+    final double? effectiveMaxWidth;
+    if (isLandscape) {
+      final requested = maxWidth ?? landscapeMaxWidth;
+      effectiveMaxWidth = requested > landscapeMaxWidth
+          ? landscapeMaxWidth
+          : requested;
+    } else {
+      effectiveMaxWidth = maxWidth;
+    }
+
+    final boxConstraints = effectiveMaxWidth == null
         ? BoxConstraints(maxHeight: maxDialogHeight)
         : BoxConstraints(
             maxHeight: maxDialogHeight,
-            maxWidth: maxWidth!,
+            maxWidth: effectiveMaxWidth,
           );
 
     final customActions = actions;
     final actionButtons = customActions != null && customActions.isNotEmpty
-        ? Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              for (var i = 0; i < customActions.length; i++) ...[
-                if (i > 0) const SizedBox(height: 12),
-                _buildToneButton(
-                  context: context,
-                  action: customActions[i],
-                  isDark: isDark,
-                ),
-              ],
-            ],
-          )
+        ? shortLandscape && customActions.length == 2
+              ? Row(
+                  children: [
+                    for (var i = 0; i < customActions.length; i++) ...[
+                      if (i > 0) const SizedBox(width: 10),
+                      Expanded(
+                        child: _buildToneButton(
+                          context: context,
+                          action: customActions[i],
+                          isDark: isDark,
+                          dense: true,
+                        ),
+                      ),
+                    ],
+                  ],
+                )
+              : shortLandscape && customActions.length == 3
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        for (var i = 0; i < 2; i++) ...[
+                          if (i > 0) const SizedBox(width: 10),
+                          Expanded(
+                            child: _buildToneButton(
+                              context: context,
+                              action: customActions[i],
+                              isDark: isDark,
+                              dense: true,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    _buildToneButton(
+                      context: context,
+                      action: customActions[2],
+                      isDark: isDark,
+                      dense: true,
+                    ),
+                  ],
+                )
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (var i = 0; i < customActions.length; i++) ...[
+                      if (i > 0)
+                        SizedBox(
+                          height:
+                              customActions[i].tone ==
+                                  GlassDialogActionTone.destructive
+                              ? 18
+                              : 10,
+                        ),
+                      _buildToneButton(
+                        context: context,
+                        action: customActions[i],
+                        isDark: isDark,
+                        dense: compactLayout,
+                      ),
+                    ],
+                  ],
+                )
         : primaryLabel == null
         ? null
         : LayoutBuilder(
@@ -316,7 +412,7 @@ class GlassActionDialog extends StatelessWidget {
                 foregroundColor: primaryButtonFg,
                 borderColor: primaryButtonBg,
                 backgroundColor: primaryButtonBg,
-                dense: compact,
+                dense: compactLayout,
               );
 
               final secondary = secondaryLabel;
@@ -337,7 +433,7 @@ class GlassActionDialog extends StatelessWidget {
                 foregroundColor: secondaryFg,
                 borderColor: secondaryBorder,
                 backgroundColor: Colors.transparent,
-                dense: compact,
+                dense: compactLayout,
               );
 
               if (stackVertically) {
@@ -397,10 +493,10 @@ class GlassActionDialog extends StatelessWidget {
                           filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
                           child: Container(
                             padding: EdgeInsets.fromLTRB(
-                              compact ? 14 : (compactChrome ? 18 : 24),
-                              compact ? 10 : (compactChrome ? 14 : 24),
-                              compact ? 14 : (compactChrome ? 18 : 24),
-                              compact ? 10 : (compactChrome ? 12 : 18),
+                              compactLayout ? 14 : (compactChrome ? 18 : 24),
+                              compactLayout ? 10 : (compactChrome ? 14 : 24),
+                              compactLayout ? 14 : (compactChrome ? 18 : 24),
+                              compactLayout ? 10 : (compactChrome ? 12 : 18),
                             ),
                             decoration: BoxDecoration(
                               color: surfaceColor,
@@ -434,7 +530,7 @@ class GlassActionDialog extends StatelessWidget {
                                         child: Column(
                                           mainAxisSize: MainAxisSize.min,
                                           children: [
-                                            if (compact)
+                                            if (compactLayout)
                                               _buildCompactHeader(
                                                 effectiveIconColor:
                                                     effectiveIconColor,
@@ -522,7 +618,11 @@ class GlassActionDialog extends StatelessWidget {
                                       ),
                                     ),
                                     if (actionButtons != null) ...[
-                                      SizedBox(height: compact ? 8 : (compactChrome ? 10 : 16)),
+                                      SizedBox(
+                                        height: compactLayout
+                                            ? 8
+                                            : (compactChrome ? 10 : 16),
+                                      ),
                                       actionButtons,
                                     ] else
                                       const SizedBox(height: 6),
@@ -532,39 +632,51 @@ class GlassActionDialog extends StatelessWidget {
                                   Positioned(
                                     top: -4,
                                     right: -4,
-                                    child: Material(
-                                      color: isDark
-                                          ? Colors.white.withValues(alpha: 0.10)
-                                          : Colors.white,
-                                      shape: CircleBorder(
-                                        side: BorderSide(
-                                          color: isDark
-                                              ? Colors.white.withValues(
-                                                  alpha: 0.18,
-                                                )
-                                              : const Color(0xFFCBD5E1),
-                                        ),
+                                    child: Tooltip(
+                                      message: closeButtonTooltip,
+                                      waitDuration: const Duration(
+                                        milliseconds: 350,
                                       ),
-                                      elevation: isDark ? 0 : 3,
-                                      shadowColor: Colors.black.withValues(
-                                        alpha: 0.12,
-                                      ),
-                                      clipBehavior: Clip.antiAlias,
-                                      child: InkWell(
-                                        customBorder: const CircleBorder(),
-                                        onTap: () =>
-                                            Navigator.of(context).maybePop(),
-                                        child: SizedBox(
-                                          width: 34,
-                                          height: 34,
-                                          child: Icon(
-                                            Icons.close_rounded,
-                                            size: 20,
+                                      child: Material(
+                                        color: isDark
+                                            ? Colors.white.withValues(
+                                                alpha: 0.10,
+                                              )
+                                            : Colors.white,
+                                        shape: CircleBorder(
+                                          side: BorderSide(
                                             color: isDark
                                                 ? Colors.white.withValues(
-                                                    alpha: 0.88,
+                                                    alpha: 0.18,
                                                   )
-                                                : const Color(0xFF111827),
+                                                : const Color(0xFFCBD5E1),
+                                          ),
+                                        ),
+                                        elevation: isDark ? 0 : 3,
+                                        shadowColor: Colors.black.withValues(
+                                          alpha: 0.12,
+                                        ),
+                                        clipBehavior: Clip.antiAlias,
+                                        child: InkWell(
+                                          customBorder: const CircleBorder(),
+                                          onTap: () =>
+                                              Navigator.of(context).maybePop(),
+                                          child: Semantics(
+                                            button: true,
+                                            label: closeButtonTooltip,
+                                            child: SizedBox(
+                                              width: 34,
+                                              height: 34,
+                                              child: Icon(
+                                                Icons.close_rounded,
+                                                size: 20,
+                                                color: isDark
+                                                    ? Colors.white.withValues(
+                                                        alpha: 0.88,
+                                                      )
+                                                    : const Color(0xFF111827),
+                                              ),
+                                            ),
                                           ),
                                         ),
                                       ),
@@ -609,8 +721,8 @@ class GlassActionDialog extends StatelessWidget {
               ),
             ),
             child: Center(
-              child: iconWidget ??
-                  Icon(icon, color: effectiveIconColor, size: 17),
+              child:
+                  iconWidget ?? Icon(icon, color: effectiveIconColor, size: 17),
             ),
           ),
           const SizedBox(width: 10),
@@ -632,44 +744,64 @@ class GlassActionDialog extends StatelessWidget {
     );
   }
 
+  Future<void> _handleActionTap({
+    required BuildContext context,
+    required GlassDialogAction<Object?> action,
+  }) async {
+    final guard = action.beforePop;
+    if (guard != null) {
+      final shouldClose = await guard();
+      if (!shouldClose) return;
+      if (!context.mounted) return;
+    }
+    Navigator.of(context).pop(action.value);
+  }
+
   Widget _buildToneButton({
     required BuildContext context,
     required GlassDialogAction<Object?> action,
     required bool isDark,
+    required bool dense,
   }) {
     switch (action.tone) {
       case GlassDialogActionTone.primary:
         final bg = isDark ? const Color(0xFF4F8DF7) : const Color(0xFF2563EB);
         return _ActionButton(
           label: action.label,
-          onPressed: () => Navigator.of(context).pop(action.value),
+          icon: action.icon,
+          onPressed: () => _handleActionTap(context: context, action: action),
           filled: true,
           foregroundColor: Colors.white,
           borderColor: bg,
           backgroundColor: bg,
-          dense: compact,
+          dense: dense,
         );
       case GlassDialogActionTone.destructive:
         return _ActionButton(
           label: action.label,
-          onPressed: () => Navigator.of(context).pop(action.value),
+          icon: action.icon,
+          onPressed: () => _handleActionTap(context: context, action: action),
           filled: false,
           foregroundColor: _errorColor,
           borderColor: _errorColor.withValues(alpha: 0.55),
           backgroundColor: _errorColor.withValues(alpha: isDark ? 0.12 : 0.06),
-          dense: compact,
+          dense: dense,
         );
       case GlassDialogActionTone.neutral:
-        final bg = isDark ? const Color(0xFF303B4E) : const Color(0xFFE8EEF7);
-        final fg = isDark ? Colors.white : const Color(0xFF253047);
+        final bg = isDark ? const Color(0xFF334155) : const Color(0xFFDCE6F3);
+        final fg = isDark ? Colors.white : const Color(0xFF1E293B);
+        final border = isDark
+            ? const Color(0xFF526077)
+            : const Color(0xFFB8C7DA);
         return _ActionButton(
           label: action.label,
-          onPressed: () => Navigator.of(context).pop(action.value),
+          icon: action.icon,
+          onPressed: () => _handleActionTap(context: context, action: action),
           filled: true,
           foregroundColor: fg,
-          borderColor: bg,
+          borderColor: border,
           backgroundColor: bg,
-          dense: compact,
+          dense: dense,
         );
     }
   }
@@ -707,6 +839,7 @@ class _ActionButton extends StatelessWidget {
     required this.foregroundColor,
     required this.borderColor,
     required this.backgroundColor,
+    this.icon,
     this.dense = false,
   });
 
@@ -716,6 +849,7 @@ class _ActionButton extends StatelessWidget {
   final Color foregroundColor;
   final Color borderColor;
   final Color backgroundColor;
+  final IconData? icon;
   final bool dense;
 
   static const _labelStyle = TextStyle(
@@ -729,15 +863,24 @@ class _ActionButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final child = FittedBox(
       fit: BoxFit.scaleDown,
-      child: Text(
-        label,
-        maxLines: 1,
-        softWrap: false,
-        textAlign: TextAlign.center,
-        style: _labelStyle.copyWith(
-          color: foregroundColor,
-          fontSize: dense ? 14.5 : 15.5,
-        ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: dense ? 17 : 19, color: foregroundColor),
+            const SizedBox(width: 9),
+          ],
+          Text(
+            label,
+            maxLines: 1,
+            softWrap: false,
+            textAlign: TextAlign.center,
+            style: _labelStyle.copyWith(
+              color: foregroundColor,
+              fontSize: dense ? 14.5 : 15.5,
+            ),
+          ),
+        ],
       ),
     );
 
@@ -752,6 +895,7 @@ class _ActionButton extends StatelessWidget {
                 shadowColor: backgroundColor.withValues(alpha: 0.30),
                 backgroundColor: backgroundColor,
                 foregroundColor: foregroundColor,
+                side: BorderSide(color: borderColor),
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(16),

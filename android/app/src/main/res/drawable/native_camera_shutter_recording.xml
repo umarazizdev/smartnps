@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Recording shutter: red fill, white ring. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="#FFDC2626" />
+            <stroke
+                android:width="3.5dp"
+                android:color="#FFFFFFFF" />
+            <size
+                android:width="72dp"
+                android:height="72dp" />
+        </shape>
+    </item>
+</layer-list>

@@ -113,14 +113,7 @@ class SpeedAdaptiveGpsPolicyDecision {
   final double? speedAccuracyMetersPerSecond;
   final bool isTrusted;
 
-  bool get shouldQueueForBatch {
-    if (band.motionActivity == 'stationary') return false;
-    final maxKmh = band.maxKmh;
-    if (maxKmh != null && maxKmh <= 2) return false;
-    final speedKmh = smoothedSpeedKmh ?? rawSpeedKmh;
-    if (speedKmh != null && speedKmh < 2) return false;
-    return true;
-  }
+  bool get shouldQueueForBatch => true;
 
   Map<String, dynamic> toJson() {
     return {

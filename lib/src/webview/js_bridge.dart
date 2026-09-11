@@ -4,7 +4,7 @@ import 'dart:io';
 
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -358,11 +358,13 @@ class JsBridge {
 
       requestStopwatch.stop();
 
-      debugPrint(
-        'Flutter GPS current position accepted. '
-        'Accuracy: ${position.accuracy}m, '
-        'receivedAfter: ${requestStopwatch.elapsedMilliseconds}ms',
-      );
+      if (kDebugMode) {
+        debugPrint(
+          'Flutter GPS current position accepted. '
+          'Accuracy: ${position.accuracy}m, '
+          'receivedAfter: ${requestStopwatch.elapsedMilliseconds}ms',
+        );
+      }
 
       if (AppConfig.enableMockLocationDetection &&
           (forClockIn || requiresBackgroundForClockIn)) {
@@ -377,6 +379,10 @@ class JsBridge {
         ClockInGateService.instance.clearGeoUnlock();
       } else if (forClockIn || requiresBackgroundForClockIn) {
         ClockInGateService.instance.clearGeoUnlock();
+      }
+
+      if (forClockIn || requiresBackgroundForClockIn) {
+        ClockInGateService.instance.onClockInGpsDeliveredToWeb();
       }
 
       return _ok({
@@ -397,6 +403,11 @@ class JsBridge {
       if ((Platform.isAndroid || Platform.isIOS) &&
           (forClockIn || requiresBackgroundForClockIn)) {
         ClockInGateService.instance.clearGeoUnlock();
+        unawaited(
+          ClockInGateService.instance.abandonClockInAttempt(
+            reason: 'gps_timeout',
+          ),
+        );
       }
       return _err(
         'fresh_location_unavailable',
@@ -407,6 +418,11 @@ class JsBridge {
       if ((Platform.isAndroid || Platform.isIOS) &&
           (forClockIn || requiresBackgroundForClockIn)) {
         ClockInGateService.instance.clearGeoUnlock();
+        unawaited(
+          ClockInGateService.instance.abandonClockInAttempt(
+            reason: 'gps_error',
+          ),
+        );
       }
       final message = e.toString();
       if (message.contains('TimeoutException') ||

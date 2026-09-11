@@ -15,6 +15,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../utilities/app_config.dart';
+import '../utilities/app_debug_log.dart';
 import '../utilities/app_upgrade_reconciler.dart';
 import '../utilities/app_version_info.dart';
 import 'js_bridge.dart';
@@ -22,6 +23,7 @@ import '../app/offline_screen.dart';
 import '../app/site_reachability.dart';
 import '../widgets/chrome/platform_bottom_bar.dart';
 import '../widgets/dialogs/clock_in_blocked_dialog.dart';
+import '../widgets/dialogs/clock_in_permissions_dialog.dart';
 import '../location/mock_location_detection.dart';
 import '../location/mock_location_guard.dart';
 import '../app/app_routes.dart';
@@ -30,8 +32,11 @@ import '../auth/auth_state.dart';
 import '../auth/auth_repository.dart';
 import '../api/api_client.dart';
 import '../api/api_urls.dart';
+import '../device/device_check_service.dart';
 import '../background/duty/duty_heartbeat_service.dart';
 import '../background/duty/clock_in_gate_service.dart';
+import '../background/duty/on_duty_permissions_prompt_service.dart';
+import '../background/duty/off_duty_push_prompt_service.dart';
 import '../background/location/background_location_controller.dart';
 import '../background/location/background_location_permissions.dart';
 import '../background/duty/location_disclosure_consent.dart';
@@ -46,6 +51,8 @@ import '../permissions/native_permission_status_service.dart';
 import '../log_visit/flow/visit_draft_resume_dialog.dart';
 import '../log_visit/flow/visit_gps_session.dart';
 import '../log_visit/flow/visit_media_draft_store.dart';
+import '../log_visit/flow/visit_upload_queue.dart';
+import '../log_visit/flow/visit_upload_status_banner.dart';
 import '../log_visit/flow/visit_video_flow_controller.dart';
 import '../log_visit/preview/visit_video_preview_screen.dart';
 import '../permissions/required_permissions_gate.dart';
@@ -78,6 +85,8 @@ class _WebViewShellUiController extends GetxController {
   final showLocationNotice = false.obs;
 
   final preserveBottomBarDuringLoad = false.obs;
+
+  final webHidesBottomBar = false.obs;
   final flutterKeyboardInset = 0.0.obs;
 
   void setFlutterKeyboardInset(double inset) {
@@ -147,7 +156,12 @@ class _WebViewShellState extends State<WebViewShell>
   bool _draftResumePrompted = false;
   bool _syncPushAfterLocationNotice = true;
   bool _pendingLocationNoticeAfterLogin = false;
+  Timer? _pendingLocationNoticeActivateTimer;
+  static const Duration _postLoginLocationNoticeSettleDelay = Duration(
+    milliseconds: 700,
+  );
   Uri? _uriBeforeLogVisit;
+  double? _scrollYBeforeLogVisit;
 
   bool _offlineNeedsReload = false;
 
@@ -159,11 +173,18 @@ class _WebViewShellState extends State<WebViewShell>
   static const _firstPaintTimeout = Duration(seconds: 12);
   static const _recoveryTimeout = Duration(seconds: 10);
   static const _resumeHealthDelay = Duration(milliseconds: 450);
+  static const _resumeStuckWatchdogDelay = Duration(seconds: 8);
+  static const _resumeStaleReloadThreshold = Duration(minutes: 30);
   static const _maxSilentRecoveries = 2;
+
+  DateTime? _lastBackgroundedAt;
 
   Timer? _splashReleaseTimer;
   Timer? _loadWatchdog;
   Timer? _recoveryWatchdog;
+  Timer? _resumeStuckWatchdog;
+  Timer? _loginTrackingStopTimer;
+  int _loginTrackingStopGeneration = 0;
   int _webViewEpoch = 0;
   int _silentRecoveryAttempts = 0;
   int _startupTimeoutExtensions = 0;
@@ -197,15 +218,50 @@ class _WebViewShellState extends State<WebViewShell>
     unawaited(VisitGpsSession.instance.stop());
   }
 
+  static const Duration _loginTrackingStopDelay = Duration(seconds: 3);
+
   Future<void> _pauseNativeSessionForLoginScreen() async {
     _suppressResidualKeyboardInsetAfterLogin = false;
+    _cancelPendingLocationNoticeActivateTimer();
     _pendingLocationNoticeAfterLogin = false;
     _ui.showLocationNotice.value = false;
     _ui.setOfficerLoggedIn(false);
     _setNativeAuthSession(false);
+    _clearWebBottomBarHide();
     _draftResumePrompted = false;
     NativePermissionStatusService.instance.stopBatteryMonitoring();
     _releaseUiLocationOnLogout();
+
+    _scheduleLoginTrackingStop();
+  }
+
+  void _cancelPendingLoginTrackingStop() {
+    _loginTrackingStopTimer?.cancel();
+    _loginTrackingStopTimer = null;
+    _loginTrackingStopGeneration++;
+  }
+
+  void _scheduleLoginTrackingStop() {
+    _loginTrackingStopTimer?.cancel();
+    final generation = ++_loginTrackingStopGeneration;
+    _loginTrackingStopTimer = Timer(_loginTrackingStopDelay, () {
+      unawaited(_commitLoginTrackingStop(generation));
+    });
+  }
+
+  Future<void> _commitLoginTrackingStop(int generation) async {
+    if (generation != _loginTrackingStopGeneration) return;
+    if (!mounted) return;
+    if (!AuthSessionManager.isLoginRoute(_ui.currentUri.value)) return;
+
+    if (kDebugMode) {
+      debugPrint(
+        '[SmartNPS360][Auth] login route stable '
+        '(${_loginTrackingStopDelay.inSeconds}s) → stop duty GPS',
+      );
+    }
+    await AuthRepository.instance.setOfficerLoggedIn(false);
+    await _stopDutyHeartbeat(stopBackgroundLocation: true);
   }
 
   Future<bool> _performNativeLogout({
@@ -214,29 +270,37 @@ class _WebViewShellState extends State<WebViewShell>
   }) async {
     if (_nativeLogoutInFlight) return false;
     if (skipIfAlreadyLoggedOut && !await _hasActiveNativeSession()) {
-      debugPrint(
-        '[SmartNPS360][Auth] $reason skipped (session already cleared)',
-      );
+      if (kDebugMode) {
+        debugPrint(
+          '[SmartNPS360][Auth] $reason skipped (session already cleared)',
+        );
+      }
       return false;
     }
 
     if (await DutyHeartbeatService.instance.isOnDutyAccordingToHeartbeat()) {
-      debugPrint(
-        '[SmartNPS360][Auth] logout skipped ($reason): officer on duty per heartbeat',
-      );
+      if (kDebugMode) {
+        debugPrint(
+          '[SmartNPS360][Auth] logout skipped ($reason): officer on duty per heartbeat',
+        );
+      }
       return false;
     }
 
     _nativeLogoutInFlight = true;
     try {
-      debugPrint('[SmartNPS360][Auth] native logout ($reason)');
+      if (kDebugMode) {
+        debugPrint('[SmartNPS360][Auth] native logout ($reason)');
+      }
 
       _suppressResidualKeyboardInsetAfterLogin = false;
+      _cancelPendingLocationNoticeActivateTimer();
       _pendingLocationNoticeAfterLogin = false;
       _ui.showLocationNotice.value = false;
       _ui.setOfficerLoggedIn(false);
       _setNativeAuthSession(false);
       _ui.showingLogVisit.value = false;
+      _clearWebBottomBarHide();
       _releaseUiLocationOnLogout();
       _draftResumePrompted = false;
       unawaited(
@@ -248,35 +312,70 @@ class _WebViewShellState extends State<WebViewShell>
 
       await AuthSessionManager.clearNativeSession(deletePushToken: false);
 
-      debugPrint(
-        '[SmartNPS360][Auth] native logout completed '
-        '(officerLoggedIn=false, session cleared)',
-      );
+      if (kDebugMode) {
+        debugPrint(
+          '[SmartNPS360][Auth] native logout completed '
+          '(officerLoggedIn=false, session cleared)',
+        );
+      }
       return true;
     } finally {
       _nativeLogoutInFlight = false;
     }
   }
 
+  void _cancelPendingLocationNoticeActivateTimer() {
+    _pendingLocationNoticeActivateTimer?.cancel();
+    _pendingLocationNoticeActivateTimer = null;
+  }
+
+  bool _isPostLoginLocationNoticeRoute(Uri? uri) {
+    if (uri == null) return false;
+    if (AppConfig.isAuthEntryRoute(uri)) return false;
+    final path = AppConfig.normalizeWebPath(uri);
+    if (path == null) return false;
+
+    return path == '/officer/dashboard' ||
+        path.endsWith('/officer/dashboard') ||
+        AppConfig.isBottomBarRoute(uri);
+  }
+
   void _showLocationNoticeAfterLogin({bool syncPushAfterDismiss = true}) {
     if (!mounted) return;
     _syncPushAfterLocationNotice = syncPushAfterDismiss;
-    if (AuthSessionManager.isLoginRoute(_ui.currentUri.value)) {
-      _pendingLocationNoticeAfterLogin = true;
-      _ui.showLocationNotice.value = false;
-      return;
-    }
-    _pendingLocationNoticeAfterLogin = false;
-    RequiredPermissionsGate.instance.stop();
-    _ui.showLocationNotice.value = true;
+
+    _pendingLocationNoticeAfterLogin = true;
+    _ui.showLocationNotice.value = false;
+    _schedulePendingLocationNoticeActivation();
+  }
+
+  void _schedulePendingLocationNoticeActivation() {
+    if (!_pendingLocationNoticeAfterLogin || !mounted) return;
+    _cancelPendingLocationNoticeActivateTimer();
+
+    _pendingLocationNoticeActivateTimer = Timer(
+      _postLoginLocationNoticeSettleDelay,
+      () {
+        _pendingLocationNoticeActivateTimer = null;
+        if (!mounted) return;
+        _activatePendingLocationNoticeIfNeeded();
+      },
+    );
   }
 
   void _activatePendingLocationNoticeIfNeeded() {
-    if (!_pendingLocationNoticeAfterLogin) return;
-    if (AuthSessionManager.isLoginRoute(_ui.currentUri.value)) return;
-    _showLocationNoticeAfterLogin(
-      syncPushAfterDismiss: _syncPushAfterLocationNotice,
-    );
+    if (!_pendingLocationNoticeAfterLogin || !mounted) return;
+    if (!_isPostLoginLocationNoticeRoute(_ui.currentUri.value)) return;
+
+    if (_ui.isNavigating.value && _ui.loadProgress.value < 100) {
+      _schedulePendingLocationNoticeActivation();
+      return;
+    }
+
+    _cancelPendingLocationNoticeActivateTimer();
+    _pendingLocationNoticeAfterLogin = false;
+    RequiredPermissionsGate.instance.stop();
+    _ui.showLocationNotice.value = true;
   }
 
   void _dismissLocationNotice() {
@@ -307,19 +406,39 @@ class _WebViewShellState extends State<WebViewShell>
       return;
     }
 
-    await RequiredPermissionsGate.instance
-        .requestPendingAllowPermissionsAutomatically();
-
+    await Future<void>.delayed(const Duration(milliseconds: 450));
     if (!mounted ||
         !_ui.officerLoggedIn.value ||
-        _ui.showLocationNotice.value) {
+        _ui.showLocationNotice.value ||
+        _pendingLocationNoticeAfterLogin) {
       return;
     }
 
-    if (syncPush) {
-      await _syncPushTokenAfterLogin(immediate: true);
+    await PushNotificationService.instance
+        .requestPermissionAfterPrivacyNotice();
+
+    if (syncPush && Platform.isIOS) {
+      await _prepareIosPushAuthFromWeb();
+      await _notifyWebPushTokenReady();
     }
+
+    if (!mounted || !_ui.officerLoggedIn.value) return;
     await _maybeStartDutyHeartbeat();
+
+    await OnDutyPermissionsPromptService.instance.maybeShow(
+      fromResume: false,
+      forceImmediate: true,
+    );
+    await DutyHeartbeatService.instance.recheckOnDutyPrompts();
+    if (_ui.officerLoggedIn.value &&
+        !_ui.showLocationNotice.value &&
+        !AppConfig.isAuthEntryRoute(_ui.currentUri.value)) {
+      await OffDutyPushPromptService.instance.maybeShow(
+        fromResume: false,
+        forceImmediate: true,
+      );
+    }
+    await _maybePromptUnfinishedDraft(force: true);
   }
 
   Future<bool> _hasActiveNativeSession() async {
@@ -332,10 +451,12 @@ class _WebViewShellState extends State<WebViewShell>
   Future<void> _onRefreshSessionExpired() async {
     if (AuthState.instance.needsReauth.value) return;
     AuthState.instance.markNeedsReauth();
-    debugPrint(
-      '[SmartNPS360][Auth] refresh failed → token unavailable snackbar '
-      '(no logout, tokens kept)',
-    );
+    if (kDebugMode) {
+      debugPrint(
+        '[SmartNPS360][Auth] refresh failed → token unavailable snackbar '
+        '(no logout, tokens kept)',
+      );
+    }
     _showTokenUnavailableSnackbar();
   }
 
@@ -364,6 +485,8 @@ class _WebViewShellState extends State<WebViewShell>
       await _pauseNativeSessionForLoginScreen();
       return;
     }
+
+    _cancelPendingLoginTrackingStop();
 
     final loggedIn = await AuthRepository.instance.isOfficerLoggedIn();
     final token = await AuthRepository.instance.getAccessToken();
@@ -415,8 +538,15 @@ class _WebViewShellState extends State<WebViewShell>
     final uriText = uri?.toString();
     if (_ui.currentUri.value?.toString() != uriText) {
       _ui.currentUri.value = uri;
+
+      _ui.webHidesBottomBar.value = false;
     }
     _recheckBottomBarForUri(uri);
+  }
+
+  void _clearWebBottomBarHide() {
+    if (!_ui.webHidesBottomBar.value) return;
+    _ui.webHidesBottomBar.value = false;
   }
 
   void _recheckBottomBarForUri(Uri? uri) {
@@ -449,6 +579,7 @@ class _WebViewShellState extends State<WebViewShell>
     if (isAuth) reasons.add('authRoute');
     if (_ui.showingLogVisit.value) reasons.add('showingLogVisit');
     if (uploadingFromDialog) reasons.add('uploadingFromDialog');
+    if (_ui.webHidesBottomBar.value) reasons.add('webHidesBottomBar');
     if (!isBottomRoute && !preserve) {
       reasons.add('notBottomBarRoute+noPreserve');
     }
@@ -465,6 +596,7 @@ class _WebViewShellState extends State<WebViewShell>
         'authRoute=$isAuth '
         'showingLogVisit=${_ui.showingLogVisit.value} '
         'uploadingFromDialog=$uploadingFromDialog '
+        'webHidesBottomBar=${_ui.webHidesBottomBar.value} '
         'isBottomBarRoute=$isBottomRoute '
         'preserveDuringLoad=$preserve '
         'selectedTab=${_ui.selectedBottomTabIndex.value} '
@@ -476,7 +608,9 @@ class _WebViewShellState extends State<WebViewShell>
 
     if (_lastBottomBarVisibilityLog == signature) return;
     _lastBottomBarVisibilityLog = signature;
-    debugPrint('[SmartNPS360][BottomBar] $signature');
+    if (kDebugMode) {
+      debugPrint('[SmartNPS360][BottomBar] $signature');
+    }
   }
 
   Future<void> _reconcileBottomBarFromWebView(
@@ -492,6 +626,8 @@ class _WebViewShellState extends State<WebViewShell>
   void _onWebViewUrlCommitted(InAppWebViewController controller, Uri? uri) {
     if (_ui.pullToRefreshActive.value || _webReloadInProgress) return;
     _syncCurrentUriFromWebView(uri);
+
+    _schedulePendingLocationNoticeActivation();
     unawaited(_reconcileBottomBarFromWebView(controller));
   }
 
@@ -508,7 +644,7 @@ class _WebViewShellState extends State<WebViewShell>
     if (_ui.preserveBottomBarDuringLoad.value) return;
 
     if (_isAuthRoute(from)) return;
-    if (_isBottomBarRoute(from) || _isBottomBarRoute(to)) {
+    if (_isBottomBarRoute(from) && to != null && _isBottomBarRoute(to)) {
       _ui.preserveBottomBarDuringLoad.value = true;
       return;
     }
@@ -736,6 +872,41 @@ class _WebViewShellState extends State<WebViewShell>
               return window.flutter_inappwebview.callHandler('themeChanged', isDark);
             });
         };
+        window.SmartNPS360.setBottomBarVisible = function (visible) {
+          var next = false;
+          if (typeof visible === 'boolean') {
+            next = visible;
+          } else if (typeof visible === 'number') {
+            next = visible !== 0;
+          } else if (typeof visible === 'string') {
+            var text = visible.toLowerCase();
+            next = text === 'true' || text === '1';
+          } else if (visible && typeof visible === 'object') {
+            if (Object.prototype.hasOwnProperty.call(visible, 'hidden')) {
+              next = !(
+                visible.hidden === true ||
+                visible.hidden === 1 ||
+                visible.hidden === '1' ||
+                visible.hidden === 'true'
+              );
+            } else {
+              var raw =
+                visible.visible != null ? visible.visible : visible.show;
+              next =
+                raw === true ||
+                raw === 1 ||
+                raw === '1' ||
+                raw === 'true';
+            }
+          }
+          return ensureFlutterBridge()
+            .then(function () {
+              return window.flutter_inappwebview.callHandler(
+                'setBottomBarVisible',
+                { visible: next }
+              );
+            });
+        };
         window.SmartNPS360.openLogVisit = function (payload) {
           return ensureFlutterBridge()
             .then(function () {
@@ -743,6 +914,12 @@ class _WebViewShellState extends State<WebViewShell>
                 'openLogVisit',
                 payload == null ? {} : payload
               );
+            });
+        };
+        window.SmartNPS360.getPendingDrafts = function () {
+          return ensureFlutterBridge()
+            .then(function () {
+              return window.flutter_inappwebview.callHandler('getPendingDrafts');
             });
         };
         window.SmartNPS360.isNativeApp = function () {
@@ -1147,6 +1324,16 @@ class _WebViewShellState extends State<WebViewShell>
             .then(function () {
               return window.flutter_inappwebview.callHandler(
                 'clock_in_success',
+                data
+              );
+            });
+        };
+        window.SmartNPS360.notifyClockInCancelled = function (payload) {
+          var data = payload == null ? {} : payload;
+          return ensureFlutterBridge()
+            .then(function () {
+              return window.flutter_inappwebview.callHandler(
+                'clock_in_cancelled',
                 data
               );
             });
@@ -1818,6 +2005,133 @@ class _WebViewShellState extends State<WebViewShell>
     injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
   );
 
+  static final UserScript _iosKeyboardInputFixScript = UserScript(
+    source: r'''
+    (function () {
+      'use strict';
+      if (window.__smartnps_ios_keyboard_fix_installed) return;
+      window.__smartnps_ios_keyboard_fix_installed = true;
+
+      var SKIP_INPUT_TYPES = {
+        password: true,
+        hidden: true,
+        submit: true,
+        button: true,
+        checkbox: true,
+        radio: true,
+        file: true,
+        reset: true,
+        image: true
+      };
+
+      function isEditable(el) {
+        if (!el || el.nodeType !== 1) return false;
+        var tag = el.tagName;
+        if (tag === 'TEXTAREA') return true;
+        if (tag === 'INPUT') {
+          var type = (el.getAttribute('type') || 'text').toLowerCase();
+          return !SKIP_INPUT_TYPES[type];
+        }
+        if (el.isContentEditable) return true;
+        var editable = (el.getAttribute('contenteditable') || '').toLowerCase();
+        return editable === '' || editable === 'true' || editable === 'plaintext-only';
+      }
+
+      function enableSuggestionsOnly(el) {
+        if (!isEditable(el)) return;
+        el.setAttribute('autocorrect', 'on');
+        el.setAttribute('autocapitalize', 'sentences');
+      }
+
+      function scan(root) {
+        if (!root || !root.querySelectorAll) return;
+        var nodes = root.querySelectorAll(
+          'textarea, input, [contenteditable], [contenteditable="true"], [contenteditable="plaintext-only"]'
+        );
+        for (var i = 0; i < nodes.length; i++) {
+          enableSuggestionsOnly(nodes[i]);
+        }
+      }
+
+      function insertSpace(el) {
+        if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+          var start = el.selectionStart;
+          var end = el.selectionEnd;
+          if (start == null || end == null) return;
+          var value = el.value || '';
+          el.value = value.slice(0, start) + ' ' + value.slice(end);
+          var pos = start + 1;
+          el.setSelectionRange(pos, pos);
+          try {
+            el.dispatchEvent(new InputEvent('input', {
+              bubbles: true,
+              inputType: 'insertText',
+              data: ' '
+            }));
+          } catch (_) {
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          return;
+        }
+        if (el.isContentEditable) {
+          try {
+            document.execCommand('insertText', false, ' ');
+          } catch (_) {}
+        }
+      }
+
+      var lastKeyWasSpace = false;
+
+      document.addEventListener('keydown', function (event) {
+        if (!isEditable(event.target)) return;
+        lastKeyWasSpace = event.key === ' ' || event.keyCode === 32;
+      }, true);
+
+      document.addEventListener('beforeinput', function (event) {
+        if (!isEditable(event.target)) return;
+        if (!lastKeyWasSpace) return;
+
+        if (event.inputType === 'insertReplacementText') {
+          event.preventDefault();
+          insertSpace(event.target);
+        }
+
+        lastKeyWasSpace = false;
+      }, true);
+
+      window.__smartnpsIosKeyboardInputFixScan = function () {
+        scan(document);
+      };
+
+      document.addEventListener('focusin', function (event) {
+        enableSuggestionsOnly(event.target);
+      }, true);
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function () { scan(document); });
+      } else {
+        scan(document);
+      }
+
+      if (typeof MutationObserver !== 'undefined' && document.documentElement) {
+        var observer = new MutationObserver(function (mutations) {
+          for (var i = 0; i < mutations.length; i++) {
+            var added = mutations[i].addedNodes;
+            for (var j = 0; j < added.length; j++) {
+              var node = added[j];
+              if (node.nodeType !== 1) continue;
+              enableSuggestionsOnly(node);
+              scan(node);
+            }
+          }
+        });
+        observer.observe(document.documentElement, { childList: true, subtree: true });
+      }
+    })();
+  ''',
+    injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+  );
+
   late final JsBridge _bridge = JsBridge(
     getCurrentUrlHost: () => _ui.currentUri.value?.host,
     onDownloadRequested: _downloadAndReturn,
@@ -1864,11 +2178,18 @@ class _WebViewShellState extends State<WebViewShell>
 
     unawaited(AppUpgradeReconciler.reconcileOsAfterEngineReady());
     RequiredPermissionsGate.privacyNoticeVisibleChecker = () =>
-        _ui.showLocationNotice.value || _pendingLocationNoticeAfterLogin;
+        _ui.showLocationNotice.value ||
+
+        (_pendingLocationNoticeAfterLogin &&
+            AuthSessionManager.isLoginRoute(_ui.currentUri.value));
+    OffDutyPushPromptService.currentUriChecker = () => _ui.currentUri.value;
+    OnDutyPermissionsPromptService.currentUriChecker = () =>
+        _ui.currentUri.value;
     PushNotificationService.instance.setDeferPermissionPromptWhile(
       () =>
           _ui.showLocationNotice.value ||
-          _pendingLocationNoticeAfterLogin ||
+          (_pendingLocationNoticeAfterLogin &&
+              AuthSessionManager.isLoginRoute(_ui.currentUri.value)) ||
           (_isAuthRoute(_ui.currentUri.value) && !_ui.officerLoggedIn.value),
     );
     _ui.webPrefersDark.value = false;
@@ -1897,6 +2218,7 @@ class _WebViewShellState extends State<WebViewShell>
     _connectivitySub = Connectivity().onConnectivityChanged.listen((results) {
       unawaited(_handleConnectivityChanged(results));
     });
+    _wireVisitUploadQueue();
 
     DutyHeartbeatService.instance.backgroundLocationPermissionMissing
         .addListener(_onBackgroundLocationPermissionChanged);
@@ -1961,7 +2283,9 @@ class _WebViewShellState extends State<WebViewShell>
       final result = await controller.evaluateJavascript(source: javascript);
       return OfficerAnnouncementCoordinator.normalizeJavaScriptBoolean(result);
     } catch (e) {
-      debugPrint('[SmartNPS360][Announcement] evaluateJavascript failed: $e');
+      if (kDebugMode) {
+        debugPrint('[SmartNPS360][Announcement] evaluateJavascript failed: $e');
+      }
       return false;
     }
   }
@@ -1973,13 +2297,11 @@ class _WebViewShellState extends State<WebViewShell>
 
     final uri = Uri.tryParse(url);
     if (uri == null || !_isInternalUrl(uri)) {
-      debugPrint('[SmartNPS360][Push] ignored untrusted url=$url');
       _pendingPushUrl = null;
       return;
     }
 
     _pendingPushUrl = null;
-    debugPrint('[SmartNPS360][Push] navigating to $url');
     await controller.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
     await _reconcileBottomBarFromWebView(controller);
   }
@@ -2039,9 +2361,11 @@ class _WebViewShellState extends State<WebViewShell>
       ''',
       );
     } catch (e) {
-      debugPrint(
-        '[SmartNPS360] notify web background location status failed: $e',
-      );
+      if (kDebugMode) {
+        debugPrint(
+          '[SmartNPS360] notify web background location status failed: $e',
+        );
+      }
     }
   }
 
@@ -2076,8 +2400,27 @@ class _WebViewShellState extends State<WebViewShell>
         })();
       ''',
       );
-    } catch (e) {
-      debugPrint('[SmartNPS360][Push] notify web status failed: $e');
+    } catch (e) {}
+  }
+
+  Future<void> _promptAfterWebPushDisabled() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+    if (_ui.showLocationNotice.value) return;
+    if (AuthSessionManager.isLoginRoute(_ui.currentUri.value)) return;
+    if (AppConfig.isAuthEntryRoute(_ui.currentUri.value)) return;
+
+    await RequiredPermissionsGate.instance.refresh(force: true);
+
+    await OnDutyPermissionsPromptService.instance.maybeShow(
+      fromResume: false,
+      forceImmediate: true,
+    );
+
+    if (_ui.officerLoggedIn.value && !_ui.showLocationNotice.value) {
+      await OffDutyPushPromptService.instance.maybeShow(
+        fromResume: false,
+        forceImmediate: true,
+      );
     }
   }
 
@@ -2129,6 +2472,7 @@ class _WebViewShellState extends State<WebViewShell>
         unawaited(BackgroundLocationController.notifyAppBackgrounded());
       } else if (state == AppLifecycleState.paused ||
           state == AppLifecycleState.hidden) {
+        _lastBackgroundedAt = DateTime.now();
         unawaited(BackgroundLocationController.notifyAppBackgrounded());
       } else if (state == AppLifecycleState.resumed) {
         unawaited(BackgroundLocationController.notifyAppForegrounded());
@@ -2136,7 +2480,11 @@ class _WebViewShellState extends State<WebViewShell>
     }
 
     if (state == AppLifecycleState.resumed) {
-      unawaited(_checkWebViewHealthAfterResume());
+      final staleBackground = _isStaleBackgroundResume();
+      if (!staleBackground) {
+        unawaited(_checkWebViewHealthAfterResume());
+        _scheduleResumeStuckRecoveryWatchdog();
+      }
       unawaited(_syncOfflineFromConnectivity());
       if (_ui.officerLoggedIn.value && !_ui.showLocationNotice.value) {
         unawaited(RequiredPermissionsGate.instance.refresh(force: true));
@@ -2166,6 +2514,7 @@ class _WebViewShellState extends State<WebViewShell>
           if (controller != null) {
             await _reconcileBottomBarFromWebView(controller);
           }
+          await _maybeReloadWebViewAfterLongBackground();
           return;
         }
 
@@ -2179,12 +2528,31 @@ class _WebViewShellState extends State<WebViewShell>
           await _reconcileBottomBarFromWebView(controller);
         }
         await _requestNotificationPermissionForRoute(_ui.currentUri.value);
+
+        _activatePendingLocationNoticeIfNeeded();
+        if (_ui.showLocationNotice.value) {
+          if (controller != null) {
+            await _reconcileBottomBarFromWebView(controller);
+          }
+          await _maybeReloadWebViewAfterLongBackground();
+          return;
+        }
         DutyHeartbeatService.instance.beginResumeDutyReconcile();
         try {
           await _maybeStartDutyHeartbeat();
           await DutyHeartbeatService.instance.recheckOnDutyPrompts(
             fromResume: true,
           );
+
+          await OnDutyPermissionsPromptService.instance.maybeShow(
+            fromResume: true,
+            forceImmediate: true,
+          );
+          if (_ui.officerLoggedIn.value &&
+              !_ui.showLocationNotice.value &&
+              !AppConfig.isAuthEntryRoute(_ui.currentUri.value)) {
+            await OffDutyPushPromptService.instance.maybeShow(fromResume: true);
+          }
         } finally {
           DutyHeartbeatService.instance.endResumeDutyReconcile();
         }
@@ -2192,15 +2560,25 @@ class _WebViewShellState extends State<WebViewShell>
           await IosDutyLocationPinger.flushPendingBatchNow();
         }
         await ClockInGateService.instance.recheckAfterAppResume();
-        await _notifyWebBackgroundLocationStatus();
-        await _notifyWebPushNotificationStatus();
+
+        await DutyHeartbeatService.instance.retryOnDutyTrackingIfReady();
+        if (!ClockInGateService.instance.isPrepareInFlight &&
+            !ClockInPermissionsDialog.isVisible) {
+          await _notifyWebBackgroundLocationStatus();
+          await _notifyWebPushNotificationStatus();
+        }
 
         await NativePermissionStatusService.instance
             .ensureLatestPermissionsSynced();
         await OfficerAnnouncementCoordinator.instance.tryDeliverPending(
           source: 'resumed',
         );
+        await _maybeReloadWebViewAfterLongBackground();
+        await _refreshNativeAuthSessionFromStorage();
+        await _maybePromptUnfinishedDraft(force: true);
       }());
+    } else if (state == AppLifecycleState.resumed) {
+      unawaited(_maybeReloadWebViewAfterLongBackground());
     }
   }
 
@@ -2216,6 +2594,8 @@ class _WebViewShellState extends State<WebViewShell>
     }
     RequiredPermissionsGate.instance.stop();
     RequiredPermissionsGate.privacyNoticeVisibleChecker = null;
+    OffDutyPushPromptService.currentUriChecker = null;
+    OnDutyPermissionsPromptService.currentUriChecker = null;
     OfficerAnnouncementCoordinator.instance.detach();
     PushNotificationService.instance.setDeferPermissionPromptWhile(null);
     PushNotificationService.instance.setOnNotificationTap(null);
@@ -2225,6 +2605,8 @@ class _WebViewShellState extends State<WebViewShell>
     }
     _connectivitySub?.cancel();
     _offlineConnectivityDebounce?.cancel();
+    _cancelPendingLoginTrackingStop();
+    _cancelPendingLocationNoticeActivateTimer();
     _cancelWebViewWatchdogs();
     DutyHeartbeatService.instance.backgroundLocationPermissionMissing
         .removeListener(_onBackgroundLocationPermissionChanged);
@@ -2358,6 +2740,8 @@ class _WebViewShellState extends State<WebViewShell>
     _loadWatchdog = null;
     _recoveryWatchdog?.cancel();
     _recoveryWatchdog = null;
+    _resumeStuckWatchdog?.cancel();
+    _resumeStuckWatchdog = null;
   }
 
   void _scheduleStartupWatchdogs() {
@@ -2385,6 +2769,8 @@ class _WebViewShellState extends State<WebViewShell>
     _loadWatchdog = null;
     _recoveryWatchdog?.cancel();
     _recoveryWatchdog = null;
+    _resumeStuckWatchdog?.cancel();
+    _resumeStuckWatchdog = null;
     _silentRecoveryAttempts = 0;
     _recoveryInFlight = false;
     _awaitingRecoveryLoad = false;
@@ -2440,6 +2826,36 @@ class _WebViewShellState extends State<WebViewShell>
     _showOffline(needsReload: true);
   }
 
+  bool _isStaleBackgroundResume() {
+    final lastBackgrounded = _lastBackgroundedAt;
+    if (lastBackgrounded == null) return false;
+    return DateTime.now().difference(lastBackgrounded) >=
+        _resumeStaleReloadThreshold;
+  }
+
+  Future<void> _maybeReloadWebViewAfterLongBackground() async {
+    if (!mounted) return;
+    if (_ui.showOffline.value) return;
+    if (_ui.showingLogVisit.value) return;
+    if (_ui.pullToRefreshActive.value) return;
+    if (!_ui.firstPageLoaded.value) return;
+
+    final lastBackgrounded = _lastBackgroundedAt;
+    _lastBackgroundedAt = null;
+    if (lastBackgrounded == null) return;
+
+    final away = DateTime.now().difference(lastBackgrounded);
+    if (away < _resumeStaleReloadThreshold) return;
+
+    if (kDebugMode) {
+      debugPrint(
+        '[SmartNPS360][WebView] stale background reload after '
+        '${away.inMinutes}m',
+      );
+    }
+    await _recoverWebView(reason: 'resume_stale_background', recreate: true);
+  }
+
   Future<_WebViewHealth> _probeWebViewHealth(
     InAppWebViewController controller,
   ) async {
@@ -2475,24 +2891,83 @@ class _WebViewShellState extends State<WebViewShell>
     }
   }
 
+  void _clearStuckWebViewRecoveryState({bool resetAttempts = false}) {
+    _recoveryWatchdog?.cancel();
+    _recoveryWatchdog = null;
+    _recoveryInFlight = false;
+    _awaitingRecoveryLoad = false;
+    _ui.endNavigation();
+    if (resetAttempts) {
+      _silentRecoveryAttempts = 0;
+    }
+  }
+
+  void _scheduleResumeStuckRecoveryWatchdog() {
+    _resumeStuckWatchdog?.cancel();
+    _resumeStuckWatchdog = Timer(_resumeStuckWatchdogDelay, () {
+      unawaited(_recoverFromResumeStuckIfNeeded());
+    });
+  }
+
+  Future<void> _recoverFromResumeStuckIfNeeded() async {
+    if (!mounted) return;
+    if (_ui.showOffline.value) return;
+    if (_ui.showingLogVisit.value) return;
+    if (_ui.pullToRefreshActive.value) return;
+    if (!_ui.firstPageLoaded.value) return;
+
+    final controller = _controller;
+    final health = controller == null
+        ? _WebViewHealth.blank
+        : await _probeWebViewHealth(controller);
+    if (!mounted) return;
+
+    final stuckRecovery = _recoveryInFlight || _awaitingRecoveryLoad;
+    final stuckNavigation =
+        _ui.isNavigating.value && _ui.loadProgress.value < 100;
+
+    if (health == _WebViewHealth.ok && !stuckRecovery && !stuckNavigation) {
+      return;
+    }
+
+    if (health == _WebViewHealth.ok && (stuckRecovery || stuckNavigation)) {
+      _clearStuckWebViewRecoveryState(resetAttempts: true);
+      return;
+    }
+
+    _clearStuckWebViewRecoveryState(resetAttempts: true);
+    await _recoverWebView(reason: 'resume_stuck_watchdog', recreate: true);
+  }
+
   Future<void> _checkWebViewHealthAfterResume() async {
     await Future<void>.delayed(_resumeHealthDelay);
     if (!mounted) return;
     if (_ui.showOffline.value) return;
     if (_ui.showingLogVisit.value) return;
-    if (_ui.pullToRefreshActive.value || _ui.isNavigating.value) return;
+    if (_ui.pullToRefreshActive.value) return;
     if (!_ui.firstPageLoaded.value) return;
-    if (_recoveryInFlight || _awaitingRecoveryLoad) return;
 
     final controller = _controller;
-    if (controller == null) {
-      await _recoverWebView(reason: 'resume_no_controller', recreate: true);
+    final health = controller == null
+        ? _WebViewHealth.blank
+        : await _probeWebViewHealth(controller);
+    if (!mounted) return;
+
+    final stuckRecovery = _recoveryInFlight || _awaitingRecoveryLoad;
+    final stuckNavigation =
+        _ui.isNavigating.value && _ui.loadProgress.value < 100;
+
+    if (health == _WebViewHealth.ok && !stuckRecovery && !stuckNavigation) {
       return;
     }
 
-    final health = await _probeWebViewHealth(controller);
-    if (!mounted || health == _WebViewHealth.ok) return;
-    await _recoverWebView(reason: 'resume_${health.name}');
+    if (health == _WebViewHealth.ok && (stuckRecovery || stuckNavigation)) {
+      _clearStuckWebViewRecoveryState(resetAttempts: true);
+      return;
+    }
+
+    _clearStuckWebViewRecoveryState(resetAttempts: true);
+    await _recoverWebView(reason: 'resume_${health.name}', recreate: true);
   }
 
   void _armRecoveryWatchdog() {
@@ -2535,15 +3010,22 @@ class _WebViewShellState extends State<WebViewShell>
     if (_recoveryInFlight) return;
     if (_ui.showingLogVisit.value) return;
 
+    final forceRecreate =
+        recreate ||
+        reason.startsWith('resume_') ||
+        reason == 'ios_content_process_terminated';
+
     _recoveryInFlight = true;
     _silentRecoveryAttempts++;
     _releaseSplash();
     _ui.beginNavigation();
-    debugPrint(
-      '[SmartNPS360][WebView] recover '
-      'attempt=$_silentRecoveryAttempts/$_maxSilentRecoveries '
-      'reason=$reason recreate=$recreate',
-    );
+    if (kDebugMode) {
+      debugPrint(
+        '[SmartNPS360][WebView] recover '
+        'attempt=$_silentRecoveryAttempts/$_maxSilentRecoveries '
+        'reason=$reason recreate=$recreate',
+      );
+    }
 
     if (_silentRecoveryAttempts > _maxSilentRecoveries) {
       _recoveryInFlight = false;
@@ -2551,7 +3033,7 @@ class _WebViewShellState extends State<WebViewShell>
       return;
     }
 
-    final shouldRecreate = recreate || _controller == null;
+    final shouldRecreate = forceRecreate || _controller == null;
     if (shouldRecreate) {
       _awaitingRecoveryLoad = true;
       _controller = null;
@@ -2568,7 +3050,11 @@ class _WebViewShellState extends State<WebViewShell>
       await _controller!.loadUrl(urlRequest: URLRequest(url: WebUri(target)));
       _armRecoveryWatchdog();
     } catch (e) {
-      debugPrint('[SmartNPS360][WebView] recover loadUrl failed ($reason): $e');
+      if (kDebugMode) {
+        debugPrint(
+          '[SmartNPS360][WebView] recover loadUrl failed ($reason): $e',
+        );
+      }
       _recoveryInFlight = false;
       _awaitingRecoveryLoad = false;
       await _recoverWebView(reason: '${reason}_recreate', recreate: true);
@@ -2697,44 +3183,210 @@ class _WebViewShellState extends State<WebViewShell>
   }
 
   void _finishLogVisitUploadSuccess() {
+    if (!_ui.showingLogVisit.value) return;
     unawaited(_closeLogVisit(openDashboard: true));
   }
 
-  Future<void> _closeLogVisit({required bool openDashboard}) async {
-    await _persistActivePatrolDraft();
+  void _onPatrolUploadStarted() {
     _ui.showingLogVisit.value = false;
-    unawaited(VisitGpsSession.instance.stop());
+    unawaited(_closeLogVisit(openDashboard: true));
+  }
+
+  void _onPatrolUploadFailureOpenDraft() {
+    _openLogVisitTab();
+  }
+
+  void _wireVisitUploadQueue() {
+    final queue = VisitUploadQueue.instance;
+    queue.onQueueChanged = () {
+      unawaited(_notifyWebPendingDraftsChanged());
+    };
+    queue.onUploadSucceeded = () async {
+      final isDark = _ui.webPrefersDark.value;
+      await VisitVideoPreviewScreen.showQueuedUploadSuccessFeedback(
+        isDark: isDark,
+      );
+      unawaited(_notifyWebPendingDraftsChanged());
+    };
+    queue.onNonNetworkFailure =
+        ({required draftKey, required presentation, required snapshot}) async {
+          await VisitVideoPreviewScreen.presentQueuedUploadFailure(
+            draftKey: draftKey,
+            presentation: presentation,
+            snapshot: snapshot,
+            onOpenDraft: _onPatrolUploadFailureOpenDraft,
+          );
+        };
+    unawaited(queue.ensureStarted());
+  }
+
+  Future<void> _ensureDashboardVisible() async {
+    final dashboard = Uri.parse(_BottomItem.dashboard.url);
+    _ui.selectedBottomTabIndex.value = _BottomItem.dashboard.index;
+    _ui.preserveBottomBarDuringLoad.value = true;
+
+    final current = _ui.currentUri.value;
+    final currentPath = (current?.path ?? '').toLowerCase();
+    final dashboardPath = dashboard.path.toLowerCase();
+    final alreadyOnDashboard =
+        currentPath == dashboardPath ||
+        currentPath.endsWith(dashboardPath) ||
+        currentPath.contains('/officer/dashboard');
+    if (alreadyOnDashboard) return;
+
+    await _navigateWebTo(dashboard);
+  }
+
+  Future<void> _closeLogVisit({required bool openDashboard}) async {
+    _ui.showingLogVisit.value = false;
+
+    await _persistActivePatrolDraft();
+    final resumeUri = _uriBeforeLogVisit;
+    final resumeScrollY = _scrollYBeforeLogVisit;
+    _uriBeforeLogVisit = null;
+    _scrollYBeforeLogVisit = null;
+    final uploading =
+        Get.isRegistered<VisitVideoFlowController>() &&
+        Get.find<VisitVideoFlowController>().isUploading.value;
+    if (!uploading) {
+      unawaited(VisitGpsSession.instance.stop());
+    }
+
+    unawaited(_notifyWebPendingDraftsChanged());
 
     if (openDashboard) {
-      _uriBeforeLogVisit = null;
-      final dashboard = Uri.parse(_BottomItem.dashboard.url);
-      await _navigateWebTo(dashboard);
-      _ui.selectedBottomTabIndex.value = _BottomItem.dashboard.index;
-      _ui.preserveBottomBarDuringLoad.value = true;
+      await _ensureDashboardVisible();
       return;
     }
 
-    final resumeUri = _uriBeforeLogVisit ?? _ui.currentUri.value;
-    _uriBeforeLogVisit = null;
+    await _restoreWebAfterLogVisit(
+      resumeUri: resumeUri,
+      resumeScrollY: resumeScrollY,
+    );
+  }
 
-    if (resumeUri != null) {
-      final current = _ui.currentUri.value;
-      final samePage =
-          current != null && current.toString() == resumeUri.toString();
-      if (!samePage) {
-        await _navigateWebTo(resumeUri);
-      } else {
-        _recheckBottomBarForUri(resumeUri);
-      }
+  Future<void> _restoreWebAfterLogVisit({
+    Uri? resumeUri,
+    double? resumeScrollY,
+  }) async {
+    final controller = _controller;
+    Uri? liveUri;
+    if (controller != null) {
+      try {
+        final live = await controller.getUrl();
+        liveUri = live?.uriValue ?? Uri.tryParse(live?.toString() ?? '');
+      } catch (_) {}
     }
 
-    final tab = _bottomTabIndexFromUri(resumeUri);
+    if (liveUri != null) {
+      _ui.currentUri.value = liveUri;
+    }
+
+    final target = resumeUri ?? liveUri ?? _ui.currentUri.value;
+    final alreadyOnResume =
+        liveUri != null &&
+        target != null &&
+        _normalizePageUrl(liveUri) == _normalizePageUrl(target);
+
+    if (!alreadyOnResume && target != null && controller != null) {
+      final restoredByHistory = await _tryWebHistoryBackTo(controller, target);
+      if (!restoredByHistory) {
+
+        await _navigateWebTo(target);
+      }
+    } else if (target != null) {
+      _recheckBottomBarForUri(target);
+    }
+
+    if (resumeScrollY != null) {
+      await _restoreWebScrollY(resumeScrollY);
+    }
+
+    final tabUri = _ui.currentUri.value ?? target;
+    final tab = _bottomTabIndexFromUri(tabUri);
     if (tab != null) {
       _ui.selectedBottomTabIndex.value = tab;
       _ui.preserveBottomBarDuringLoad.value = true;
     } else {
       _ui.preserveBottomBarDuringLoad.value = false;
     }
+  }
+
+  Future<bool> _tryWebHistoryBackTo(
+    InAppWebViewController controller,
+    Uri target,
+  ) async {
+    try {
+      final canGoBack = await controller.canGoBack();
+      if (!canGoBack) return false;
+      await controller.goBack();
+      await Future<void>.delayed(const Duration(milliseconds: 180));
+      final live = await controller.getUrl();
+      final liveUri = live?.uriValue ?? Uri.tryParse(live?.toString() ?? '');
+      if (liveUri == null) return false;
+      _ui.currentUri.value = liveUri;
+      _recheckBottomBarForUri(liveUri);
+      return _normalizePageUrl(liveUri) == _normalizePageUrl(target);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _captureWebResumePoint() async {
+    final controller = _controller;
+    if (controller != null) {
+      try {
+        final live = await controller.getUrl();
+        final liveUri = live?.uriValue ?? Uri.tryParse(live?.toString() ?? '');
+        if (liveUri != null) {
+          _uriBeforeLogVisit = liveUri;
+          _ui.currentUri.value = liveUri;
+        }
+      } catch (_) {
+        _uriBeforeLogVisit ??= _ui.currentUri.value;
+      }
+      _scrollYBeforeLogVisit = await _readWebScrollY(controller);
+    } else {
+      _uriBeforeLogVisit ??= _ui.currentUri.value;
+      _scrollYBeforeLogVisit = null;
+    }
+  }
+
+  Future<double?> _readWebScrollY(InAppWebViewController controller) async {
+    try {
+      final result = await controller.evaluateJavascript(
+        source: '''
+          (function () {
+            const el = document.scrollingElement || document.documentElement;
+            const y = (el && el.scrollTop) || window.scrollY || 0;
+            return y;
+          })();
+        ''',
+      );
+      if (result is num) return result.toDouble();
+      return double.tryParse(result?.toString() ?? '');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _restoreWebScrollY(double y) async {
+    final controller = _controller;
+    if (controller == null) return;
+    final safeY = y.isFinite ? y : 0.0;
+    try {
+      await controller.evaluateJavascript(
+        source:
+            '''
+          (function () {
+            const y = $safeY;
+            const el = document.scrollingElement || document.documentElement;
+            if (el) el.scrollTop = y;
+            window.scrollTo(0, y);
+          })();
+        ''',
+      );
+    } catch (_) {}
   }
 
   Future<void> _navigateWebTo(Uri uri) async {
@@ -2809,20 +3461,28 @@ class _WebViewShellState extends State<WebViewShell>
       );
 
       if (result?.error != null) {
-        debugPrint('[PolicyDocument] fetch JS error: ${result!.error}');
+        if (kDebugMode) {
+          debugPrint('[PolicyDocument] fetch JS error: ${result!.error}');
+        }
         return null;
       }
 
       final raw = result?.value;
       if (raw is! String || raw.isEmpty) {
-        debugPrint('[PolicyDocument] fetch empty result: $raw');
+        if (kDebugMode) {
+          debugPrint('[PolicyDocument] fetch empty result: $raw');
+        }
         return null;
       }
 
       final decoded = jsonDecode(raw);
       if (decoded is! Map) return null;
       if (decoded['ok'] != true) {
-        debugPrint('[PolicyDocument] fetch not ok status=${decoded['status']}');
+        if (kDebugMode) {
+          debugPrint(
+            '[PolicyDocument] fetch not ok status=${decoded['status']}',
+          );
+        }
         return null;
       }
 
@@ -2831,16 +3491,22 @@ class _WebViewShellState extends State<WebViewShell>
         final base64 = decoded['base64'];
         if (base64 is! String || base64.isEmpty) return null;
         final bytes = base64Decode(base64);
-        debugPrint('[PolicyDocument] fetch pdf bytes=${bytes.length}');
+        if (kDebugMode) {
+          debugPrint('[PolicyDocument] fetch pdf bytes=${bytes.length}');
+        }
         return PolicyDocumentContent.pdf(bytes);
       }
 
       final html = decoded['html'];
       if (html is! String || html.isEmpty) return null;
-      debugPrint('[PolicyDocument] fetch html bytes=${html.length}');
+      if (kDebugMode) {
+        debugPrint('[PolicyDocument] fetch html bytes=${html.length}');
+      }
       return PolicyDocumentContent.html(html);
     } catch (e) {
-      debugPrint('[PolicyDocument] fetch failed: $e');
+      if (kDebugMode) {
+        debugPrint('[PolicyDocument] fetch failed: $e');
+      }
       return null;
     }
   }
@@ -2848,10 +3514,18 @@ class _WebViewShellState extends State<WebViewShell>
   void _openLogVisitTab() {
     VisitDraftResumeDialog.ensureFlowController();
     _uriBeforeLogVisit ??= _ui.currentUri.value;
+    unawaited(_ensureScrollCapturedBeforeLogVisit());
     _ui.showingLogVisit.value = true;
     _ui.bottomTabNavigationActive.value = false;
     _ui.preserveBottomBarDuringLoad.value = true;
     unawaited(VisitGpsSession.instance.start());
+  }
+
+  Future<void> _ensureScrollCapturedBeforeLogVisit() async {
+    if (_scrollYBeforeLogVisit != null) return;
+    final controller = _controller;
+    if (controller == null) return;
+    _scrollYBeforeLogVisit = await _readWebScrollY(controller);
   }
 
   Future<Map<String, dynamic>> _openLogVisitScreen([Map? payload]) async {
@@ -2859,33 +3533,23 @@ class _WebViewShellState extends State<WebViewShell>
     unawaited(VisitGpsSession.instance.start());
     final normalized = _normalizeBridgeMap(payload);
 
-    final controller = _controller;
-    if (controller != null) {
-      try {
-        final live = await controller.getUrl();
-        final liveUri = live?.uriValue ?? Uri.tryParse(live?.toString() ?? '');
-        if (liveUri != null) {
-          _uriBeforeLogVisit = liveUri;
-          _ui.currentUri.value = liveUri;
-        }
-      } catch (_) {
-        _uriBeforeLogVisit ??= _ui.currentUri.value;
-      }
-    } else {
-      _uriBeforeLogVisit ??= _ui.currentUri.value;
-    }
+    await _captureWebResumePoint();
 
     final reopenedPending = await flow.applyBridgePatrolContext(normalized);
     final ctx = flow.patrolContext.value;
 
-    debugPrint(
+    patrolLogDebugLog(
       '[SmartNPS360] patrol draft ready '
       'reopenedPending=$reopenedPending '
       'items=${flow.mediaItems.length} '
+      'checkpoints=${ctx?.checkpoints.length ?? 0} '
       'siteId=${ctx?.siteId} regionId=${ctx?.regionId} '
       'siteName=${ctx?.siteName} regionName=${ctx?.regionName} '
       'clientDraftId=${ctx?.clientDraftId} '
-      'resumeUri=$_uriBeforeLogVisit',
+      'sitePatrolWindowId=${ctx?.sitePatrolWindowId} '
+      'resumeUri=$_uriBeforeLogVisit '
+      'scrollY=$_scrollYBeforeLogVisit '
+      'payload=$normalized',
     );
 
     if (Get.currentRoute == AppRoutes.visitVideoPreview) {
@@ -3003,8 +3667,33 @@ class _WebViewShellState extends State<WebViewShell>
         source: '''
         (function () {
           try {
-            var ctx = window.SmartNPS360 && window.SmartNPS360.patrolDraftContext;
+            var ctx = null;
+            if (window.SmartNPS360) {
+              if (typeof window.SmartNPS360.getPatrolDraftContext === 'function') {
+                try { ctx = window.SmartNPS360.getPatrolDraftContext(); } catch (e) {}
+              }
+              if (!ctx) ctx = window.SmartNPS360.patrolDraftContext || null;
+            }
+            if (!ctx && window.SmartNPSWeb &&
+                typeof window.SmartNPSWeb.getPatrolDraftContext === 'function') {
+              try { ctx = window.SmartNPSWeb.getPatrolDraftContext(); } catch (e) {}
+            }
             if (!ctx) return null;
+
+            var checkpoints = null;
+            if (window.SmartNPS360 &&
+                typeof window.SmartNPS360.getPatrolCheckpoints === 'function') {
+              try { checkpoints = window.SmartNPS360.getPatrolCheckpoints(); } catch (e) {}
+            }
+            if ((!checkpoints || !checkpoints.length) &&
+                window.SmartNPSWeb &&
+                typeof window.SmartNPSWeb.getPatrolCheckpoints === 'function') {
+              try { checkpoints = window.SmartNPSWeb.getPatrolCheckpoints(); } catch (e) {}
+            }
+            if (checkpoints && checkpoints.length &&
+                (!ctx.checkpoints || !ctx.checkpoints.length)) {
+              ctx = Object.assign({}, ctx, { checkpoints: checkpoints });
+            }
             return JSON.stringify(ctx);
           } catch (e) {
             return null;
@@ -3022,29 +3711,261 @@ class _WebViewShellState extends State<WebViewShell>
       }
       return _normalizeBridgeMap(text);
     } catch (e) {
-      print('[SmartNPS360] read patrolDraftContext failed: $e');
+      patrolLogDebugLog('[SmartNPS360] read patrolDraftContext failed: $e');
       return null;
     }
   }
 
-  Future<void> _maybePromptUnfinishedDraft() async {
-    if (_draftResumePrompted) return;
+  Future<List<dynamic>?> _readPatrolCheckpointsFromWeb() async {
+    final controller = _controller;
+    if (controller == null) return null;
+    try {
+      final result = await controller.evaluateJavascript(
+        source: '''
+        (function () {
+          try {
+            var checkpoints = null;
+            if (window.SmartNPS360 &&
+                typeof window.SmartNPS360.getPatrolCheckpoints === 'function') {
+              try { checkpoints = window.SmartNPS360.getPatrolCheckpoints(); } catch (e) {}
+            }
+            if ((!checkpoints || !checkpoints.length) &&
+                window.SmartNPS360 && window.SmartNPS360.patrolDraftContext &&
+                window.SmartNPS360.patrolDraftContext.checkpoints) {
+              checkpoints = window.SmartNPS360.patrolDraftContext.checkpoints;
+            }
+            if ((!checkpoints || !checkpoints.length) &&
+                window.SmartNPSWeb &&
+                typeof window.SmartNPSWeb.getPatrolCheckpoints === 'function') {
+              try { checkpoints = window.SmartNPSWeb.getPatrolCheckpoints(); } catch (e) {}
+            }
+            if (!checkpoints) return null;
+            return JSON.stringify(checkpoints);
+          } catch (e) {
+            return null;
+          }
+        })();
+        ''',
+      );
+      if (result == null) return null;
+      var text = result.toString().trim();
+      if (text.isEmpty || text == 'null') return null;
+      if ((text.startsWith('"') && text.endsWith('"')) ||
+          (text.startsWith("'") && text.endsWith("'"))) {
+        text = text.substring(1, text.length - 1);
+        text = text.replaceAll(r'\"', '"').replaceAll(r'\\', r'\');
+      }
+      final decoded = jsonDecode(text);
+      if (decoded is List) return decoded;
+      return null;
+    } catch (e) {
+      patrolLogDebugLog('[SmartNPS360] read patrol checkpoints failed: $e');
+      return null;
+    }
+  }
+
+  void _logRawCheckpoints(dynamic raw) {
+    if (raw is! List) {
+      patrolLogDebugLog(
+        '[SmartNPS360] checkpoints raw type=${raw.runtimeType} value=$raw',
+      );
+      return;
+    }
+    for (var i = 0; i < raw.length; i++) {
+      final entry = raw[i];
+      if (entry is! Map) {
+        patrolLogDebugLog(
+          '[SmartNPS360] checkpoint[$i] non-map type=${entry.runtimeType} value=$entry',
+        );
+        continue;
+      }
+      final map = Map<String, dynamic>.from(entry);
+      patrolLogDebugLog(
+        '[SmartNPS360] checkpoint[$i] keys=${map.keys.toList()} '
+        'id=${map['id'] ?? map['site_checkpoint_id'] ?? map['checkpoint_id']} '
+        'name=${map['name']} '
+        'photo_url=${map['photo_url'] ?? map['photoUrl']} '
+        'photo_path=${map['photo_path'] ?? map['photoPath']} '
+        'image_url=${map['image_url'] ?? map['imageUrl']} '
+        'image=${map['image']} photo=${map['photo']} '
+        'raw=$map',
+      );
+    }
+  }
+
+  bool _checkpointsMissingPhotos(dynamic raw) {
+    if (raw is! List || raw.isEmpty) return true;
+    for (final entry in raw) {
+      if (entry is! Map) return true;
+      final map = Map<String, dynamic>.from(entry);
+      final hasUrl = _checkpointMapHasPhoto(map);
+      if (!hasUrl) return true;
+    }
+    return false;
+  }
+
+  bool _checkpointMapHasPhoto(Map<String, dynamic> map) {
+    for (final key in const [
+      'photo_url',
+      'photoUrl',
+      'image_url',
+      'imageUrl',
+      'thumbnail_url',
+      'thumbnailUrl',
+      'photo_path',
+      'photoPath',
+      'image_path',
+      'imagePath',
+      'file_url',
+      'fileUrl',
+      'url',
+      'src',
+    ]) {
+      final value = map[key];
+      if (value == null) continue;
+      final text = value.toString().trim();
+      if (text.isNotEmpty && text != 'null') return true;
+    }
+    for (final key in const [
+      'photo',
+      'image',
+      'media',
+      'file',
+      'attachment',
+      'reference_photo',
+      'referencePhoto',
+    ]) {
+      final nested = map[key];
+      if (nested == null) continue;
+      if (nested is String && nested.trim().isNotEmpty) return true;
+      if (nested is Map && nested.isNotEmpty) return true;
+    }
+    return false;
+  }
+
+  List<dynamic> _mergeCheckpointPhotos(
+    dynamic existingRaw,
+    List<dynamic> fromWeb,
+  ) {
+    if (existingRaw is! List) return fromWeb;
+    final byId = <int, Map<String, dynamic>>{};
+    for (final entry in fromWeb) {
+      if (entry is! Map) continue;
+      final map = Map<String, dynamic>.from(entry);
+      final id = _checkpointIdFromMap(map);
+      if (id == null) continue;
+      byId[id] = map;
+    }
+
+    return existingRaw.map((entry) {
+      if (entry is! Map) return entry;
+      final current = Map<String, dynamic>.from(entry);
+      if (_checkpointMapHasPhoto(current)) return current;
+      final id = _checkpointIdFromMap(current);
+      if (id == null) return current;
+      final richer = byId[id];
+      if (richer == null) return current;
+      return <String, dynamic>{...current, ...richer};
+    }).toList();
+  }
+
+  int? _checkpointIdFromMap(Map<String, dynamic> map) {
+    final raw =
+        map['site_checkpoint_id'] ??
+        map['siteCheckpointId'] ??
+        map['checkpoint_id'] ??
+        map['checkpointId'] ??
+        map['id'];
+    if (raw is int) return raw;
+    if (raw is num) return raw.toInt();
+    return int.tryParse(raw?.toString() ?? '');
+  }
+
+  String _checkpointPhotoDebugSummary(dynamic raw) {
+    if (raw is! List || raw.isEmpty) return '[]';
+    final parts = <String>[];
+    for (var i = 0; i < raw.length; i++) {
+      final entry = raw[i];
+      if (entry is! Map) {
+        parts.add('#$i:type=${entry.runtimeType}');
+        continue;
+      }
+      final map = Map<String, dynamic>.from(entry);
+      parts.add(
+        '#$i:{id=${map['id'] ?? map['site_checkpoint_id']},'
+        'keys=${map.keys.toList()},'
+        'photo_url=${map['photo_url'] ?? map['photoUrl']},'
+        'photo_path=${map['photo_path'] ?? map['photoPath']},'
+        'image_url=${map['image_url'] ?? map['imageUrl']},'
+        'image=${map['image']},'
+        'photo=${map['photo']}}',
+      );
+    }
+    return parts.join(' | ');
+  }
+
+  Future<void> _maybePromptUnfinishedDraft({bool force = false}) async {
+    if (!force && _draftResumePrompted) return;
     if (!_ui.officerLoggedIn.value) return;
     if (!_ui.firstPageLoaded.value) return;
     if (_ui.showOffline.value) return;
     if (_ui.showingLogVisit.value) return;
+    if (_ui.showLocationNotice.value) return;
     if (_isAuthRoute(_ui.currentUri.value)) return;
+    if (AppConfig.isAuthEntryRoute(_ui.currentUri.value)) return;
 
-    final pending = await VisitMediaDraftStore.instance.listPendingDrafts();
-    if (pending.isEmpty) return;
+    final pending = await VisitUploadQueue.instance.listEditablePendingDrafts();
+    if (pending.isEmpty) {
+      if (kDebugMode) {
+        debugPrint('[SmartNPS360] draft resume skip: no editable drafts');
+      }
+      return;
+    }
 
+    if (kDebugMode) {
+      debugPrint(
+        '[SmartNPS360] draft resume prompt force=$force '
+        'count=${pending.length}',
+      );
+    }
     _draftResumePrompted = true;
+    await _presentPendingDraftDialogs(drafts: pending);
+  }
+
+  Future<Map<String, dynamic>> _presentPendingDraftDialogs({
+    List<VisitMediaDraftSnapshot>? drafts,
+  }) async {
+    if (_ui.showingLogVisit.value) {
+      return <String, dynamic>{
+        'ok': false,
+        'error': {'code': 'busy', 'message': 'Draft screen already open'},
+      };
+    }
+
+    final pending =
+        drafts ?? await VisitUploadQueue.instance.listEditablePendingDrafts();
+    if (pending.isEmpty) {
+      await VisitDraftResumeDialog.showEmptyState();
+      return <String, dynamic>{
+        'ok': true,
+        'count': 0,
+        'opened': true,
+        'empty': true,
+      };
+    }
 
     final flow = VisitDraftResumeDialog.ensureFlowController();
     await flow.ensureDraftLoaded();
 
     final result = await VisitDraftResumeDialog.showPending(drafts: pending);
-    if (result == null) return;
+    if (result == null) {
+      return <String, dynamic>{
+        'ok': true,
+        'count': pending.length,
+        'opened': true,
+        'dismissed': true,
+      };
+    }
 
     await flow.activateDraft(result.draft.draftKey);
 
@@ -3056,12 +3977,60 @@ class _WebViewShellState extends State<WebViewShell>
         unawaited(
           VisitVideoPreviewScreen.uploadCurrentDraft(
             onSuccess: _finishLogVisitUploadSuccess,
+            onUploadStarted: _onPatrolUploadStarted,
+            onFailureOpenDraft: _onPatrolUploadFailureOpenDraft,
+            skipCompletionConfirm: true,
           ),
         );
         break;
       case VisitDraftResumeAction.discardReport:
         await flow.clearAll();
+        unawaited(_notifyWebPendingDraftsChanged());
         break;
+    }
+
+    final ctx = result.draft.context;
+    return <String, dynamic>{
+      'ok': true,
+      'count': pending.length,
+      'opened': true,
+      'action': result.action.name,
+      'siteId': result.draft.draftKey.siteId ?? ctx?.siteId,
+      'regionId': result.draft.draftKey.regionId ?? ctx?.regionId,
+    };
+  }
+
+  Future<void> _notifyWebPendingDraftsChanged() async {
+    final controller = _controller;
+    if (controller == null) return;
+    try {
+      final pending = await VisitUploadQueue.instance
+          .listEditablePendingDrafts();
+      final payload = <String, dynamic>{'ok': true, 'count': pending.length};
+      final json = jsonEncode(payload);
+      await controller.evaluateJavascript(
+        source:
+            '''
+(function () {
+  try {
+    var payload = $json;
+    window.dispatchEvent(
+      new CustomEvent('smartnps360:pending-drafts', { detail: payload })
+    );
+    if (
+      window.SmartNPS360 &&
+      typeof window.SmartNPS360.onPendingDraftsChanged === 'function'
+    ) {
+      window.SmartNPS360.onPendingDraftsChanged(payload);
+    }
+  } catch (_) {}
+})();
+''',
+      );
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[SmartNPS360] notify pending drafts failed: $e');
+      }
     }
   }
 
@@ -3070,7 +4039,9 @@ class _WebViewShellState extends State<WebViewShell>
       controller.addJavaScriptHandler(
         handlerName: 'iosPopoverFixDebug',
         callback: (args) {
-          debugPrint('[SmartNPS360][iOS PopoverFix] event received');
+          if (kDebugMode) {
+            debugPrint('[SmartNPS360][iOS PopoverFix] event received');
+          }
         },
       );
     }
@@ -3096,12 +4067,14 @@ class _WebViewShellState extends State<WebViewShell>
         final error = result['error'];
         final errorCode = error is Map ? error['code']?.toString() : null;
         final errorMessage = error is Map ? error['message']?.toString() : null;
-        debugPrint(
-          '[SmartNPS360] getCurrentLocation ok=${result['ok'] == true}'
-          '${errorCode != null ? ' error=$errorCode' : ''}'
-          '${errorMessage != null ? ' message=$errorMessage' : ''}'
-          '${result['bestAccuracySeenMeters'] != null ? ' bestAccuracy=${result['bestAccuracySeenMeters']}' : ''}',
-        );
+        if (kDebugMode) {
+          debugPrint(
+            '[SmartNPS360] getCurrentLocation ok=${result['ok'] == true}'
+            '${errorCode != null ? ' error=$errorCode' : ''}'
+            '${errorMessage != null ? ' message=$errorMessage' : ''}'
+            '${result['bestAccuracySeenMeters'] != null ? ' bestAccuracy=${result['bestAccuracySeenMeters']}' : ''}',
+          );
+        }
         MockLocationGuard.maybeShowDialogFromBridgeResult(result);
         return result;
       },
@@ -3251,9 +4224,18 @@ class _WebViewShellState extends State<WebViewShell>
         final result = await _bridge.setPushNotificationsEnabled(
           args.isEmpty ? null : args.first,
         );
-        debugPrint(
-          '[SmartNPS360] setPushNotificationsEnabled ok=${result['ok'] == true}',
-        );
+        if (kDebugMode) {
+          debugPrint(
+            '[SmartNPS360] setPushNotificationsEnabled ok=${result['ok'] == true}',
+          );
+        }
+        final disabled =
+            result['ok'] == true &&
+            result['enabled'] == false &&
+            result['unchanged'] != true;
+        if (disabled) {
+          unawaited(_promptAfterWebPushDisabled());
+        }
         return result;
       },
     );
@@ -3263,15 +4245,17 @@ class _WebViewShellState extends State<WebViewShell>
         final result = await _bridge.getBackgroundLocationStatus(
           args.isEmpty ? null : args.first,
         );
-        debugPrint(
-          '[SmartNPS360] getBackgroundLocationStatus '
-          'ok=${result['ok'] == true} '
-          'canClockIn=${result['canClockIn'] == true} '
-          'backgroundReady=${result['backgroundReady'] == true} '
-          'disclosureAccepted=${result['disclosureAccepted'] == true} '
-          'serviceEnabled=${result['serviceEnabled'] == true}'
-          '${result['deniedReason'] != null ? ' deniedReason=${result['deniedReason']}' : ''}',
-        );
+        if (kDebugMode) {
+          debugPrint(
+            '[SmartNPS360] getBackgroundLocationStatus '
+            'ok=${result['ok'] == true} '
+            'canClockIn=${result['canClockIn'] == true} '
+            'backgroundReady=${result['backgroundReady'] == true} '
+            'disclosureAccepted=${result['disclosureAccepted'] == true} '
+            'serviceEnabled=${result['serviceEnabled'] == true}'
+            '${result['deniedReason'] != null ? ' deniedReason=${result['deniedReason']}' : ''}',
+          );
+        }
         return result;
       },
     );
@@ -3285,15 +4269,19 @@ class _WebViewShellState extends State<WebViewShell>
           final canClockIn = result['canClockIn'] == true;
           final reason = result['reason']?.toString();
           final message = result['message']?.toString();
-          debugPrint(
-            '[SmartNPS360] prepareClockIn ok=${result['ok'] == true} '
-            'canClockIn=$canClockIn'
-            '${reason != null ? ' reason=$reason' : ''}'
-            '${message != null ? ' message=$message' : ''}',
-          );
+          if (kDebugMode) {
+            debugPrint(
+              '[SmartNPS360] prepareClockIn ok=${result['ok'] == true} '
+              'canClockIn=$canClockIn'
+              '${reason != null ? ' reason=$reason' : ''}'
+              '${message != null ? ' message=$message' : ''}',
+            );
+          }
           return result;
         } catch (e, st) {
-          debugPrint('[SmartNPS360] prepareClockIn failed: $e\n$st');
+          if (kDebugMode) {
+            debugPrint('[SmartNPS360] prepareClockIn failed: $e\n$st');
+          }
           rethrow;
         }
       },
@@ -3323,12 +4311,47 @@ class _WebViewShellState extends State<WebViewShell>
       }
 
       if (clockInSuccess == true) {
-        DutyHeartbeatService.instance.pollAfterClockInSuccess();
+        DutyHeartbeatService.instance.onClockInSuccessFromBridge();
+      } else if (clockInSuccess == false) {
+        unawaited(
+          ClockInGateService.instance.abandonClockInAttempt(
+            reason: 'clock_in_success_false',
+          ),
+        );
       }
 
       return {'ok': true, 'clock_in_success': clockInSuccess};
     }
 
+    Future<Map<String, dynamic>> handleClockInCancelled(
+      List<dynamic> args,
+    ) async {
+      final currentHost = _ui.currentUri.value?.host;
+      if (!AppConfig.isAllowedHost(currentHost)) {
+        return {
+          'ok': false,
+          'error': {'code': 'untrusted_origin', 'message': 'Untrusted origin'},
+        };
+      }
+
+      final raw = args.isNotEmpty ? args.first : null;
+      final payload = _normalizeBridgeMap(raw);
+      final reason =
+          _stringFromPayload(payload, const ['reason', 'source', 'action']) ??
+          'webview_cancelled';
+
+      await ClockInGateService.instance.abandonClockInAttempt(reason: reason);
+      return {'ok': true, 'cancelled': true, 'reason': reason};
+    }
+
+    controller.addJavaScriptHandler(
+      handlerName: 'clock_in_cancelled',
+      callback: handleClockInCancelled,
+    );
+    controller.addJavaScriptHandler(
+      handlerName: 'notifyClockInCancelled',
+      callback: handleClockInCancelled,
+    );
     controller.addJavaScriptHandler(
       handlerName: 'clock_in_success',
       callback: handleClockInSuccess,
@@ -3336,6 +4359,36 @@ class _WebViewShellState extends State<WebViewShell>
     controller.addJavaScriptHandler(
       handlerName: 'notifyClockInSuccess',
       callback: handleClockInSuccess,
+    );
+    controller.addJavaScriptHandler(
+      handlerName: 'attendance_status_changed',
+      callback: (args) async {
+        final currentHost = _ui.currentUri.value?.host;
+        if (!AppConfig.isAllowedHost(currentHost)) {
+          return {
+            'ok': false,
+            'error': {
+              'code': 'untrusted_origin',
+              'message': 'Untrusted origin',
+            },
+          };
+        }
+
+        final raw = args.isNotEmpty ? args.first : null;
+        if (kDebugMode) {
+          debugPrint(
+            '[SmartNPS360] attendance_status_changed bridge payload=$raw',
+          );
+        }
+        dutyHeartbeatDebugLog(
+          '[SmartNPS360] attendance_status_changed bridge payload=$raw',
+        );
+
+        await DutyHeartbeatService.instance.onAttendanceStatusChangedFromBridge(
+          raw,
+        );
+        return {'ok': true};
+      },
     );
     controller.addJavaScriptHandler(
       handlerName: 'themeChanged',
@@ -3356,15 +4409,57 @@ class _WebViewShellState extends State<WebViewShell>
       },
     );
     controller.addJavaScriptHandler(
+      handlerName: 'setBottomBarVisible',
+      callback: (args) {
+        final currentHost = _ui.currentUri.value?.host;
+        if (!AppConfig.isAllowedHost(currentHost)) {
+          return {
+            'ok': false,
+            'error': {
+              'code': 'untrusted_origin',
+              'message': 'Untrusted origin',
+            },
+          };
+        }
+
+        final value = args.isNotEmpty ? args.first : null;
+        final visible = _parseBottomBarVisibleArg(value);
+        if (visible == null) {
+          return {
+            'ok': false,
+            'error': {
+              'code': 'invalid_args',
+              'message': 'Expected boolean or {visible/show/hidden}',
+            },
+          };
+        }
+
+        final hide = !visible;
+        if (_ui.webHidesBottomBar.value != hide) {
+          _ui.webHidesBottomBar.value = hide;
+        }
+        if (kDebugMode) {
+          debugPrint(
+            '[SmartNPS360][BottomBar] setBottomBarVisible '
+            'visible=$visible hide=$hide',
+          );
+        }
+        return {'ok': true, 'visible': visible};
+      },
+    );
+    controller.addJavaScriptHandler(
       handlerName: 'openLogVisit',
       callback: (args) async {
-        print(
-          '[SmartNPS360] openLogVisit called argsCount=${args.length} args=$args',
+        patrolLogDebugLog(
+          '[SmartNPS360] openLogVisit called argsCount=${args.length} '
+          'rawArgs=$args',
         );
 
         final currentHost = _ui.currentUri.value?.host;
         if (!AppConfig.isAllowedHost(currentHost)) {
-          print('[SmartNPS360] denied openLogVisit from host=$currentHost');
+          patrolLogDebugLog(
+            '[SmartNPS360] denied openLogVisit from host=$currentHost',
+          );
           return {
             'ok': false,
             'error': {
@@ -3383,10 +4478,45 @@ class _WebViewShellState extends State<WebViewShell>
                     null)) {
           final fromContext = await _readPatrolDraftContextFromWeb();
           if (fromContext != null) {
-            print(
-              '[SmartNPS360] openLogVisit using patrolDraftContext=$fromContext',
+            patrolLogDebugLog(
+              '[SmartNPS360] openLogVisit using patrolDraftContext '
+              'keys=${fromContext.keys.toList()} context=$fromContext',
             );
             payload = {...?payload, ...fromContext};
+          }
+        }
+
+        final existingCheckpoints = payload?['checkpoints'];
+        final hasCheckpoints =
+            existingCheckpoints is List && existingCheckpoints.isNotEmpty;
+        if (!hasCheckpoints) {
+          final fromWeb = await _readPatrolCheckpointsFromWeb();
+          if (fromWeb != null && fromWeb.isNotEmpty) {
+            payload = {...?payload, 'checkpoints': fromWeb};
+            patrolLogDebugLog(
+              '[SmartNPS360] openLogVisit merged checkpoints '
+              'count=${fromWeb.length}',
+            );
+          }
+        } else {
+          _logRawCheckpoints(existingCheckpoints);
+          final needsPhotos = _checkpointsMissingPhotos(existingCheckpoints);
+          if (needsPhotos) {
+            final fromWeb = await _readPatrolCheckpointsFromWeb();
+            if (fromWeb != null && fromWeb.isNotEmpty) {
+              payload = {
+                ...?payload,
+                'checkpoints': _mergeCheckpointPhotos(
+                  existingCheckpoints,
+                  fromWeb,
+                ),
+              };
+              patrolLogDebugLog(
+                '[SmartNPS360] openLogVisit enriched checkpoint photos '
+                'from getPatrolCheckpoints count=${fromWeb.length}',
+              );
+              _logRawCheckpoints(payload!['checkpoints']);
+            }
           }
         }
 
@@ -3405,19 +4535,54 @@ class _WebViewShellState extends State<WebViewShell>
           'region_name',
           'region',
         ]);
+        final checkpointCount = payload?['checkpoints'] is List
+            ? (payload!['checkpoints'] as List).length
+            : 0;
+        final checkpointPhotoDebug = _checkpointPhotoDebugSummary(
+          payload?['checkpoints'],
+        );
 
-        print(
+        patrolLogDebugLog(
           '[SmartNPS360] openLogVisit site/region '
           'siteId=$siteId regionId=$regionId '
           'siteName=$siteName regionName=$regionName '
-          'payload=$payload',
+          'checkpoints=$checkpointCount '
+          'checkpointPhotos=$checkpointPhotoDebug',
         );
 
         final result = await _openLogVisitScreen(payload);
-        print(
+        patrolLogDebugLog(
           '[SmartNPS360] openLogVisit ok=${result['ok']} '
           'reopenedPending=${result['reopenedPending']} '
-          'itemCount=${result['itemCount']}',
+          'itemCount=${result['itemCount']} '
+          'result=$result',
+        );
+        return result;
+      },
+    );
+    controller.addJavaScriptHandler(
+      handlerName: 'getPendingDrafts',
+      callback: (args) async {
+        final currentHost = _ui.currentUri.value?.host;
+        if (!AppConfig.isAllowedHost(currentHost)) {
+          patrolLogDebugLog(
+            '[SmartNPS360] denied getPendingDrafts from host=$currentHost',
+          );
+          return {
+            'ok': false,
+            'error': {
+              'code': 'untrusted_origin',
+              'message': 'Untrusted origin',
+            },
+          };
+        }
+
+        patrolLogDebugLog('[SmartNPS360] getPendingDrafts opening dialogs');
+        final result = await _presentPendingDraftDialogs();
+        patrolLogDebugLog(
+          '[SmartNPS360] getPendingDrafts ok=${result['ok']} '
+          'count=${result['count']} opened=${result['opened']} '
+          'action=${result['action']} dismissed=${result['dismissed']}',
         );
         return result;
       },
@@ -3427,9 +4592,11 @@ class _WebViewShellState extends State<WebViewShell>
       callback: (args) async {
         final currentHost = _ui.currentUri.value?.host;
         if (!AppConfig.isAllowedHost(currentHost)) {
-          debugPrint(
-            '[SmartNPS360][Auth] denied loginWithSanctum from host=$currentHost',
-          );
+          if (kDebugMode) {
+            debugPrint(
+              '[SmartNPS360][Auth] denied loginWithSanctum from host=$currentHost',
+            );
+          }
           return {
             'ok': false,
             'error': {
@@ -3463,9 +4630,11 @@ class _WebViewShellState extends State<WebViewShell>
           };
         }
 
-        debugPrint(
-          '[SmartNPS360][Auth] loginWithSanctum request host=$currentHost',
-        );
+        if (kDebugMode) {
+          debugPrint(
+            '[SmartNPS360][Auth] loginWithSanctum request host=$currentHost',
+          );
+        }
 
         final ok = await _performSanctumLogin(
           username: username,
@@ -3490,9 +4659,11 @@ class _WebViewShellState extends State<WebViewShell>
       callback: (args) async {
         final currentHost = _ui.currentUri.value?.host;
         if (!AppConfig.isAllowedHost(currentHost)) {
-          debugPrint(
-            '[SmartNPS360][Auth] denied authEvent from host=$currentHost',
-          );
+          if (kDebugMode) {
+            debugPrint(
+              '[SmartNPS360][Auth] denied authEvent from host=$currentHost',
+            );
+          }
           return {
             'ok': false,
             'error': {
@@ -3513,10 +4684,12 @@ class _WebViewShellState extends State<WebViewShell>
 
         final action = (payload['action'] ?? payload['type'] ?? '').toString();
         if (action == 'logout') {
-          debugPrint(
-            '[SmartNPS360][Auth] authEvent logout received from web (primary) '
-            '(host=$currentHost path=${_ui.currentUri.value?.path})',
-          );
+          if (kDebugMode) {
+            debugPrint(
+              '[SmartNPS360][Auth] authEvent logout received from web (primary) '
+              '(host=$currentHost path=${_ui.currentUri.value?.path})',
+            );
+          }
           final completed = await _performNativeLogout(
             reason: 'primary: authEvent',
           );
@@ -3627,40 +4800,6 @@ class _WebViewShellState extends State<WebViewShell>
     );
   }
 
-  Future<void> _syncPushTokenAfterLogin({bool immediate = false}) async {
-    if (Platform.isIOS) {
-      await _syncPushTokenAfterLoginIos(immediate: immediate);
-      return;
-    }
-    if (immediate) {
-      await PushNotificationService.instance.requestPermissionAfterAuth(
-        immediate: true,
-      );
-      return;
-    }
-    await PushNotificationService.instance.syncPushTokenAfterLogin();
-  }
-
-  Future<void> _syncPushTokenAfterLoginIos({bool immediate = false}) async {
-    await _prepareIosPushAuthFromWeb();
-    for (var attempt = 0; attempt < 4; attempt++) {
-      final token = await AuthRepository.instance.getAccessToken();
-      if (token != null && token.isNotEmpty) break;
-      if (attempt < 3) {
-        await Future<void>.delayed(Duration(milliseconds: 400 * (attempt + 1)));
-        await _prepareIosPushAuthFromWeb();
-      }
-    }
-    if (immediate) {
-      await PushNotificationService.instance.requestPermissionAfterAuth(
-        immediate: true,
-      );
-    } else {
-      await PushNotificationService.instance.syncPushTokenAfterLogin();
-    }
-    await _notifyWebPushTokenReady();
-  }
-
   Future<bool> _performSanctumLogin({
     required String username,
     required String password,
@@ -3670,12 +4809,14 @@ class _WebViewShellState extends State<WebViewShell>
     ApiClient.instance.ensureAuthInterceptorInstalled();
     final dio = ApiClient.instance.dio;
     try {
+      final deviceCheckExtras = await DeviceCheckService.authPayloadExtras();
       final response = await dio.postUri(
         Uri.parse(ApiUrls.sanctumLoginUrl),
         data: {
           'employee_no': username,
           'password': password,
           'device_name': 'mobile-app',
+          ...deviceCheckExtras,
         },
         options: Options(
           headers: const {'Accept': 'application/json'},
@@ -3687,9 +4828,11 @@ class _WebViewShellState extends State<WebViewShell>
 
       final statusCode = response.statusCode ?? 0;
       if (statusCode < 200 || statusCode >= 300) {
-        debugPrint(
-          '[SmartNPS360][Auth] sanctum login rejected status=$statusCode',
-        );
+        if (kDebugMode) {
+          debugPrint(
+            '[SmartNPS360][Auth] sanctum login rejected status=$statusCode',
+          );
+        }
         return false;
       }
 
@@ -3698,9 +4841,11 @@ class _WebViewShellState extends State<WebViewShell>
           ? Map<String, dynamic>.from(body)
           : null;
       if (map == null || AuthRepository.extractAccessToken(map) == null) {
-        debugPrint(
-          '[SmartNPS360][Auth] sanctum login missing token in response',
-        );
+        if (kDebugMode) {
+          debugPrint(
+            '[SmartNPS360][Auth] sanctum login missing token in response',
+          );
+        }
         return false;
       }
 
@@ -3712,9 +4857,11 @@ class _WebViewShellState extends State<WebViewShell>
 
       final token = await AuthRepository.instance.getAccessToken();
       if (token == null || token.isEmpty) {
-        debugPrint(
-          '[SmartNPS360][Auth] sanctum login missing access token after save',
-        );
+        if (kDebugMode) {
+          debugPrint(
+            '[SmartNPS360][Auth] sanctum login missing access token after save',
+          );
+        }
         return false;
       }
 
@@ -3733,7 +4880,9 @@ class _WebViewShellState extends State<WebViewShell>
       }
       return true;
     } catch (e) {
-      debugPrint('[SmartNPS360][Auth] sanctum login failed: $e');
+      if (kDebugMode) {
+        debugPrint('[SmartNPS360][Auth] sanctum login failed: $e');
+      }
       return false;
     }
   }
@@ -3770,9 +4919,6 @@ class _WebViewShellState extends State<WebViewShell>
       url: WebUri(AppRoutes.webBaseUrl),
     );
     if (cookies.isEmpty) {
-      debugPrint(
-        '[SmartNPS360][Push] ios no bearer token and no web cookies yet',
-      );
       PushNotificationService.instance.setIosSessionAuth();
       return;
     }
@@ -3789,9 +4935,6 @@ class _WebViewShellState extends State<WebViewShell>
     PushNotificationService.instance.setIosSessionAuth(
       cookieHeader: cookieHeader,
       xsrfToken: xsrfToken,
-    );
-    debugPrint(
-      '[SmartNPS360][Push] ios using web session cookies for push upload',
     );
   }
 
@@ -3876,12 +5019,9 @@ class _WebViewShellState extends State<WebViewShell>
         await AuthRepository.instance.setOfficerLoggedIn(true);
         _ui.setOfficerLoggedIn(true);
         _setNativeAuthSession(true);
-        debugPrint('[SmartNPS360][Push] ios harvested web access token');
         return result;
       }
-    } catch (e) {
-      debugPrint('[SmartNPS360][Push] ios harvest token failed: $e');
-    }
+    } catch (e) {}
     return null;
   }
 
@@ -3926,7 +5066,6 @@ class _WebViewShellState extends State<WebViewShell>
         return false;
       }
 
-      debugPrint('[SmartNPS360][Push] ios minting sanctum bearer token');
       return _performSanctumLogin(
         username: username,
         password: password,
@@ -3934,7 +5073,6 @@ class _WebViewShellState extends State<WebViewShell>
         promptLocationNotice: false,
       );
     } catch (e) {
-      debugPrint('[SmartNPS360][Push] ios mint sanctum token failed: $e');
       return false;
     }
   }
@@ -3989,20 +5127,12 @@ class _WebViewShellState extends State<WebViewShell>
       if (result is String) {
         final decoded = jsonDecode(result);
         if (decoded is Map) {
-          final ok = decoded['ok'] == true;
-          final status = decoded['status'];
-          if (ok) {
-            debugPrint('[SmartNPS360][Push] ios web upload ok status=$status');
+          if (decoded['ok'] == true) {
             return true;
           }
-          debugPrint(
-            '[SmartNPS360][Push] ios web upload failed status=$status',
-          );
         }
       }
-    } catch (e) {
-      debugPrint('[SmartNPS360][Push] ios web upload failed: $e');
-    }
+    } catch (e) {}
     return false;
   }
 
@@ -4056,20 +5186,12 @@ class _WebViewShellState extends State<WebViewShell>
       if (result is String) {
         final decoded = jsonDecode(result);
         if (decoded is Map) {
-          final ok = decoded['ok'] == true;
-          final status = decoded['status'];
-          if (ok) {
-            debugPrint('[SmartNPS360][Push] ios web delete ok status=$status');
+          if (decoded['ok'] == true) {
             return true;
           }
-          debugPrint(
-            '[SmartNPS360][Push] ios web delete failed status=$status',
-          );
         }
       }
-    } catch (e) {
-      debugPrint('[SmartNPS360][Push] ios web delete failed: $e');
-    }
+    } catch (e) {}
     return false;
   }
 
@@ -4101,9 +5223,7 @@ class _WebViewShellState extends State<WebViewShell>
         })();
       ''',
       );
-    } catch (e) {
-      debugPrint('[SmartNPS360][Push] ios notify web push token failed: $e');
-    }
+    } catch (e) {}
   }
 
   Future<void> _installThemeListener(InAppWebViewController controller) async {
@@ -4234,8 +5354,28 @@ class _WebViewShellState extends State<WebViewShell>
         injectionTime: _geolocationScript.injectionTime,
       ),
       if (Platform.isIOS) _iosPopoverFixScript,
+      if (Platform.isIOS) _iosKeyboardInputFixScript,
     ];
     return UnmodifiableListView(scripts);
+  }
+
+  Future<void> _runIosKeyboardInputFix(
+    InAppWebViewController controller,
+  ) async {
+    if (!Platform.isIOS) return;
+    try {
+      await controller.evaluateJavascript(
+        source: '''
+        (function () {
+          try {
+            if (typeof window.__smartnpsIosKeyboardInputFixScan === 'function') {
+              window.__smartnpsIosKeyboardInputFixScan();
+            }
+          } catch (_) {}
+        })();
+      ''',
+      );
+    } catch (_) {}
   }
 
   Future<void> _runIosPopoverFix(InAppWebViewController controller) async {
@@ -4276,6 +5416,7 @@ class _WebViewShellState extends State<WebViewShell>
       preferredContentMode: Platform.isIOS
           ? UserPreferredContentMode.MOBILE
           : null,
+      disableInputAccessoryView: Platform.isIOS ? true : null,
       geolocationEnabled: false,
       allowsBackForwardNavigationGestures: true,
       verticalScrollBarEnabled: true,
@@ -4328,357 +5469,460 @@ class _WebViewShellState extends State<WebViewShell>
                       !locationNoticeVisible &&
                       RequiredPermissionsGate.instance.isBlocking.value &&
                       (Platform.isAndroid || Platform.isIOS);
-                  // final showBanner =
-                  //     !showPermissionBlocker &&
-                  //     DutyHeartbeatService
-                  //         .instance
-                  //         .shouldShowBackgroundLocationBanner &&
-                  //     (Platform.isAndroid || Platform.isIOS) &&
-                  //     _ui.officerLoggedIn.value;
+
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      // if (showBanner) const BackgroundLocationRequiredBanner(),
+
                       Expanded(
                         child: Stack(
                           children: [
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 0),
-                              child: InAppWebView(
-                                key: ValueKey('smartnps-webview-$_webViewEpoch'),
-                                initialUrlRequest: URLRequest(
-                                  url: WebUri(_webViewRecoveryTarget()),
-                                ),
-                                initialUserScripts: _initialUserScripts(),
-                                pullToRefreshController:
-                                    _pullToRefreshController,
-                                initialSettings: _createWebViewSettings(),
-                                onWebViewCreated: (controller) {
-                                  _controller = controller;
-                                  _installJsHandlers(controller);
-                                  unawaited(_loadPendingPushUrl());
-                                  if (_ui.showOffline.value) {
-                                    unawaited(() async {
-                                      if (await SiteReachability.canReachSite()) {
-                                        if (!mounted) return;
-                                        await _recoverFromOffline();
-                                      }
-                                    }());
-                                  }
-                                },
-                                shouldOverrideUrlLoading:
-                                    (controller, action) async =>
-                                        _handleNavigation(action),
-                                onLoadStart: (controller, url) {
-                                  if (_awaitingOfflineRecoveryLoad) {
-                                    _awaitingOfflineRecoveryLoad = false;
-                                    _holdOfflineUntilReload = false;
-                                  }
-                                  if (!_ui.pullToRefreshActive.value) {
-                                    final startUri = url?.uriValue;
 
-                                    if (_shouldIgnoreWebViewNavigationEvent(
-                                      startUri,
-                                    )) {
-                                      return;
-                                    }
-
-                                    _armBottomBarPreserveForNavigation(
-                                      from: _ui.currentUri.value,
-                                      to: startUri,
-                                    );
-                                    _uriAtLoadStart =
-                                        _ui.currentUri.value ?? startUri;
-                                    _syncCurrentUriFromWebView(startUri);
-                                    _pendingBottomTabLoadStarted = true;
-                                    _ui.beginNavigation();
-                                    return;
-                                  }
-                                },
-                                onUpdateVisitedHistory:
-                                    (controller, url, isReload) {
-                                      if (_ui.pullToRefreshActive.value ||
-                                          _webReloadInProgress) {
-                                        return;
-                                      }
-                                      if (_shouldIgnoreWebViewNavigationEvent(
-                                        url?.uriValue,
-                                      )) {
-                                        return;
-                                      }
-                                      _onWebViewUrlCommitted(
-                                        controller,
-                                        url?.uriValue,
-                                      );
-                                    },
-                                onPageCommitVisible: (controller, url) {
-                                  if (_isUsableWebViewUri(url?.uriValue)) {
-                                    _releaseSplash();
-                                  }
-                                  if (_shouldIgnoreWebViewNavigationEvent(
-                                    url?.uriValue,
-                                  )) {
-                                    return;
-                                  }
-                                  _onWebViewUrlCommitted(
-                                    controller,
-                                    url?.uriValue,
-                                  );
-                                },
-                                onProgressChanged: (controller, progress) {
-                                  if (_ui.bottomTabNavigationActive.value &&
-                                      !_pendingBottomTabLoadStarted) {
-                                    return;
-                                  }
-                                  if (progress > 0 && progress < 100) {
-                                    _ui.setLoadProgress(progress);
-                                  }
-                                  if (progress == 100) {
-                                    _pullToRefreshController?.endRefreshing();
-                                  }
-                                },
-                                onLoadStop: (controller, url) async {
-                                  _pullToRefreshController?.endRefreshing();
-                                  final nextUri = url?.uriValue;
-                                  final recoveryLoad = _awaitingRecoveryLoad;
-
-                                  final ignoreEvent =
-                                      _shouldIgnoreWebViewNavigationEvent(
-                                        nextUri,
-                                      );
-                                  var isSamePageReload = false;
-                                  Uri? preservedUri;
-                                  var androidBottomTabNavComplete = false;
-
-                                  if (!ignoreEvent || recoveryLoad) {
-                                    if (_isUsableWebViewUri(nextUri)) {
-                                      _markWebViewContentReady();
-                                    }
-                                    final isBottomTabNavigationComplete =
-                                        _ui.bottomTabNavigationActive.value &&
-                                        _bottomTabIndexFromUri(nextUri) ==
-                                            _ui.selectedBottomTabIndex.value;
-                                    androidBottomTabNavComplete =
-                                        Platform.isAndroid &&
-                                        isBottomTabNavigationComplete;
-
-                                    if (isBottomTabNavigationComplete &&
-                                        !Platform.isAndroid) {
-                                      _finishBottomTabNavigation();
-                                    }
-                                    isSamePageReload =
-                                        !isBottomTabNavigationComplete &&
-                                        (_isPullToRefreshReload(nextUri) ||
-                                            _isSamePageReload(
-                                              _uriAtLoadStart,
-                                              nextUri,
-                                            ));
-                                    preservedUri =
-                                        _pullToRefreshSourceUri ??
-                                        _uriAtLoadStart ??
-                                        _ui.currentUri.value;
-                                    try {
-                                      final webThemeIsDark = _hasWebThemeSignal
-                                          ? null
-                                          : await _readWebThemeIsDark(
-                                              controller,
-                                            );
-                                      await _installThemeListener(controller);
-                                      await _runIosPopoverFix(controller);
-                                      if (isSamePageReload) {
-                                        _restoreUriAfterReload(preservedUri);
-                                      } else {
-                                        _syncCurrentUriFromWebView(nextUri);
-                                      }
-                                      unawaited(_maybePromptUnfinishedDraft());
-
-                                      if (!_holdOfflineUntilReload) {
-                                        _offlineNeedsReload = false;
-                                        if (_ui.showOffline.value) {
-                                          _dismissOfflineScreen();
-                                        }
-                                      }
-                                      _setNativeThemeFromWeb(
-                                        webThemeIsDark ??
-                                            _ui.webPrefersDark.value,
-                                      );
-                                      if (AuthSessionManager.isLoginRoute(
-                                            nextUri,
-                                          ) &&
-                                          !isSamePageReload) {
-                                        await _pauseNativeSessionForLoginScreen();
-                                        await _stopDutyHeartbeat();
-                                      } else {
-                                        await _refreshNativeAuthSessionFromStorage();
-                                        _activatePendingLocationNoticeIfNeeded();
-                                        await _requestNotificationPermissionForRoute(
-                                          nextUri,
-                                        );
-                                        await _maybeStartDutyHeartbeat();
-                                        await DutyHeartbeatService.instance
-                                            .recheckOnDutyPrompts(
-                                              pageReload: isSamePageReload,
-                                            );
-                                        await _notifyWebBackgroundLocationStatus();
-                                        await _notifyWebPushNotificationStatus();
-                                        await NativePermissionStatusService
-                                            .instance
-                                            .syncIfChanged();
-                                      }
-                                    } catch (_) {}
-                                  }
-
-                                  _clearPullToRefreshState();
-                                  _webReloadInProgress = false;
-                                  final loadStartUri = _uriAtLoadStart;
-                                  _uriAtLoadStart = null;
-                                  if (!ignoreEvent && isSamePageReload) {
-                                    _restoreUriAfterReload(preservedUri);
-                                  }
-                                  final clearPreserve =
-                                      !ignoreEvent &&
-                                      !_isStalePreviousPageLoadStopDuringPreserve(
-                                        nextUri,
-                                        loadStartUri,
-                                      );
-                                  _endMainFrameNavigationChrome(
-                                    clearPreserve: clearPreserve,
-                                  );
-                                  await _reconcileBottomBarFromWebView(
-                                    controller,
-                                  );
-
-                                  if (Platform.isAndroid &&
-                                      androidBottomTabNavComplete) {
-                                    _finishBottomTabNavigation();
-                                  }
-                                  if (!ignoreEvent) {
-                                    await OfficerAnnouncementCoordinator
-                                        .instance
-                                        .tryDeliverPending(
-                                          source: 'webview-ready',
-                                        );
-                                  }
-                                },
-                                onReceivedError: (controller, request, error) async {
-                                  _pullToRefreshController?.endRefreshing();
-                                  _clearPullToRefreshState();
-                                  _webReloadInProgress = false;
-                                  _finishBottomTabNavigation();
-                                  _endMainFrameNavigationChrome();
-
-                                  if (error.type ==
-                                      WebResourceErrorType.CANCELLED) {
-                                    return;
-                                  }
-                                  if (request.isForMainFrame == false) {
-                                    return;
-                                  }
-
-                                  if (await SiteReachability.canReachSite()) {
-                                    if (!mounted) return;
-                                    if (_recoveryInFlight ||
-                                        _awaitingRecoveryLoad) {
-                                      return;
-                                    }
-                                    unawaited(
-                                      _recoverWebView(
-                                        reason: 'main_frame_error',
-                                      ),
-                                    );
-                                    return;
-                                  }
-                                  if (!mounted) return;
-                                  final wasRetrying = _ui.offlineRetrying.value;
-                                  _cancelOfflineConnectivityDebounce();
-                                  _holdOfflineUntilReload = true;
-                                  _ui.offlineRetrying.value = false;
-                                  if (wasRetrying) {
-                                    _ui.offlineStatusMessage.value =
-                                        'Couldn\'t reconnect. Check your connection and try again.';
-                                  }
-                                  _showOffline(needsReload: true);
-                                },
-                                onGeolocationPermissionsShowPrompt: (controller, origin) async {
-                                  if (_ui.showLocationNotice.value) {
-                                    return GeolocationPermissionShowPromptResponse(
-                                      origin: origin,
-                                      allow: false,
-                                      retain: false,
-                                    );
-                                  }
-
-                                  final uri = Uri.tryParse(origin);
-                                  final allow = uri == null
-                                      ? false
-                                      : AppConfig.isAllowedHost(uri.host);
-                                  if (!allow) {
-                                    return GeolocationPermissionShowPromptResponse(
-                                      origin: origin,
-                                      allow: false,
-                                      retain: false,
-                                    );
-                                  }
-
-                                  final disclosureReady = await DutyHeartbeatService
-                                      .instance
-                                      .ensureDisclosureBeforeWebLocationAccess();
-                                  if (!disclosureReady) {
-                                    return GeolocationPermissionShowPromptResponse(
-                                      origin: origin,
-                                      allow: false,
-                                      retain: false,
-                                    );
-                                  }
-
-                                  if (!await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled()) {
-                                    if (!await BackgroundLocationPermissions.hasForegroundLocationAccess()) {
-                                      await PermissionSettingsHelper.requestForegroundLocationStep();
-                                      await BackgroundLocationPermissions.refreshPermissionStateFromOs();
-                                    }
-                                  }
-
-                                  await BackgroundLocationPermissions.refreshPermissionStateFromOs();
-                                  final granted =
-                                      await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled();
-                                  return GeolocationPermissionShowPromptResponse(
-                                    origin: origin,
-                                    allow: granted,
-                                    retain: granted,
-                                  );
-                                },
-                                onReceivedServerTrustAuthRequest:
-                                    (controller, challenge) async =>
-                                        _handleServerTrustAuthRequest(
-                                          challenge,
+                            Obx(() {
+                              final hideWebViewForLogVisit =
+                                  _ui.showingLogVisit.value;
+                              final placeholderColor = _ui.webPrefersDark.value
+                                  ? const Color(0xFF0F1724)
+                                  : const Color(AppConfig.cSurface);
+                              return Stack(
+                                fit: StackFit.expand,
+                                children: [
+                                  if (hideWebViewForLogVisit)
+                                    ColoredBox(color: placeholderColor),
+                                  Transform.translate(
+                                    offset: hideWebViewForLogVisit
+                                        ? const Offset(0, 8000)
+                                        : Offset.zero,
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(bottom: 0),
+                                      child: InAppWebView(
+                                        key: ValueKey(
+                                          'smartnps-webview-$_webViewEpoch',
                                         ),
-                                onDownloadStartRequest:
-                                    (controller, request) async {
-                                      final uri = request.url.uriValue;
-                                      await launchUrl(
-                                        uri,
-                                        mode: LaunchMode.externalApplication,
-                                      );
-                                    },
-                                onWebContentProcessDidTerminate: (controller) {
-                                  unawaited(
-                                    _reloadWebViewAfterProcessDeath(
-                                      reason: 'ios_content_process_terminated',
-                                      recreate: false,
+                                        initialUrlRequest: URLRequest(
+                                          url: WebUri(_webViewRecoveryTarget()),
+                                        ),
+                                        initialUserScripts:
+                                            _initialUserScripts(),
+                                        pullToRefreshController:
+                                            _pullToRefreshController,
+                                        initialSettings:
+                                            _createWebViewSettings(),
+                                        onWebViewCreated: (controller) {
+                                          _controller = controller;
+                                          _installJsHandlers(controller);
+                                          unawaited(_loadPendingPushUrl());
+                                          if (_ui.showOffline.value) {
+                                            unawaited(() async {
+                                              if (await SiteReachability.canReachSite()) {
+                                                if (!mounted) return;
+                                                await _recoverFromOffline();
+                                              }
+                                            }());
+                                          }
+                                        },
+                                        shouldOverrideUrlLoading:
+                                            (controller, action) async =>
+                                                _handleNavigation(action),
+                                        onLoadStart: (controller, url) {
+                                          if (_awaitingOfflineRecoveryLoad) {
+                                            _awaitingOfflineRecoveryLoad =
+                                                false;
+                                            _holdOfflineUntilReload = false;
+                                          }
+                                          if (!_ui.pullToRefreshActive.value) {
+                                            final startUri = url?.uriValue;
+
+                                            if (_shouldIgnoreWebViewNavigationEvent(
+                                              startUri,
+                                            )) {
+                                              return;
+                                            }
+
+                                            _armBottomBarPreserveForNavigation(
+                                              from: _ui.currentUri.value,
+                                              to: startUri,
+                                            );
+                                            _uriAtLoadStart =
+                                                _ui.currentUri.value ??
+                                                startUri;
+                                            _syncCurrentUriFromWebView(
+                                              startUri,
+                                            );
+                                            _pendingBottomTabLoadStarted = true;
+                                            _ui.beginNavigation();
+                                            return;
+                                          }
+                                        },
+                                        onUpdateVisitedHistory:
+                                            (controller, url, isReload) {
+                                              if (_ui
+                                                      .pullToRefreshActive
+                                                      .value ||
+                                                  _webReloadInProgress) {
+                                                return;
+                                              }
+                                              if (_shouldIgnoreWebViewNavigationEvent(
+                                                url?.uriValue,
+                                              )) {
+                                                return;
+                                              }
+                                              _onWebViewUrlCommitted(
+                                                controller,
+                                                url?.uriValue,
+                                              );
+                                            },
+                                        onPageCommitVisible: (controller, url) {
+                                          if (_isUsableWebViewUri(
+                                            url?.uriValue,
+                                          )) {
+                                            _releaseSplash();
+                                          }
+                                          if (_shouldIgnoreWebViewNavigationEvent(
+                                            url?.uriValue,
+                                          )) {
+                                            return;
+                                          }
+                                          _onWebViewUrlCommitted(
+                                            controller,
+                                            url?.uriValue,
+                                          );
+                                        },
+                                        onProgressChanged: (controller, progress) {
+                                          if (_ui
+                                                  .bottomTabNavigationActive
+                                                  .value &&
+                                              !_pendingBottomTabLoadStarted) {
+                                            return;
+                                          }
+                                          if (progress > 0 && progress < 100) {
+                                            _ui.setLoadProgress(progress);
+                                          }
+                                          if (progress == 100) {
+                                            _pullToRefreshController
+                                                ?.endRefreshing();
+
+                                            _activatePendingLocationNoticeIfNeeded();
+                                          }
+                                        },
+                                        onLoadStop: (controller, url) async {
+                                          _pullToRefreshController
+                                              ?.endRefreshing();
+                                          final nextUri = url?.uriValue;
+                                          final recoveryLoad =
+                                              _awaitingRecoveryLoad;
+
+                                          final ignoreEvent =
+                                              _shouldIgnoreWebViewNavigationEvent(
+                                                nextUri,
+                                              );
+                                          var isSamePageReload = false;
+                                          Uri? preservedUri;
+                                          var androidBottomTabNavComplete =
+                                              false;
+
+                                          if (!ignoreEvent || recoveryLoad) {
+                                            if (_isUsableWebViewUri(nextUri)) {
+                                              _markWebViewContentReady();
+                                            }
+                                            final isBottomTabNavigationComplete =
+                                                _ui
+                                                    .bottomTabNavigationActive
+                                                    .value &&
+                                                _bottomTabIndexFromUri(
+                                                      nextUri,
+                                                    ) ==
+                                                    _ui
+                                                        .selectedBottomTabIndex
+                                                        .value;
+                                            androidBottomTabNavComplete =
+                                                Platform.isAndroid &&
+                                                isBottomTabNavigationComplete;
+
+                                            if (isBottomTabNavigationComplete &&
+                                                !Platform.isAndroid) {
+                                              _finishBottomTabNavigation();
+                                            }
+                                            isSamePageReload =
+                                                !isBottomTabNavigationComplete &&
+                                                (_isPullToRefreshReload(
+                                                      nextUri,
+                                                    ) ||
+                                                    _isSamePageReload(
+                                                      _uriAtLoadStart,
+                                                      nextUri,
+                                                    ));
+                                            preservedUri =
+                                                _pullToRefreshSourceUri ??
+                                                _uriAtLoadStart ??
+                                                _ui.currentUri.value;
+                                            try {
+                                              final webThemeIsDark =
+                                                  _hasWebThemeSignal
+                                                  ? null
+                                                  : await _readWebThemeIsDark(
+                                                      controller,
+                                                    );
+                                              await _installThemeListener(
+                                                controller,
+                                              );
+                                              await _runIosPopoverFix(
+                                                controller,
+                                              );
+                                              await _runIosKeyboardInputFix(
+                                                controller,
+                                              );
+                                              if (isSamePageReload) {
+                                                _restoreUriAfterReload(
+                                                  preservedUri,
+                                                );
+                                              } else {
+                                                _syncCurrentUriFromWebView(
+                                                  nextUri,
+                                                );
+                                              }
+
+                                              if (!_holdOfflineUntilReload) {
+                                                _offlineNeedsReload = false;
+                                                if (_ui.showOffline.value) {
+                                                  _dismissOfflineScreen();
+                                                }
+                                              }
+                                              _setNativeThemeFromWeb(
+                                                webThemeIsDark ??
+                                                    _ui.webPrefersDark.value,
+                                              );
+                                              if (AuthSessionManager.isLoginRoute(
+                                                    nextUri,
+                                                  ) &&
+                                                  !isSamePageReload) {
+                                                await _pauseNativeSessionForLoginScreen();
+                                              } else {
+                                                _cancelPendingLoginTrackingStop();
+                                                await _refreshNativeAuthSessionFromStorage();
+
+                                                if (_ui
+                                                        .showLocationNotice
+                                                        .value ||
+                                                    _pendingLocationNoticeAfterLogin) {
+
+                                                } else {
+                                                  await _requestNotificationPermissionForRoute(
+                                                    nextUri,
+                                                  );
+                                                  await _maybeStartDutyHeartbeat();
+                                                  await DutyHeartbeatService
+                                                      .instance
+                                                      .recheckOnDutyPrompts(
+                                                        pageReload:
+                                                            isSamePageReload,
+                                                      );
+                                                  await OnDutyPermissionsPromptService
+                                                      .instance
+                                                      .maybeShow(
+                                                        fromResume: false,
+                                                      );
+                                                  if (_ui
+                                                          .officerLoggedIn
+                                                          .value &&
+                                                      !_ui
+                                                          .showLocationNotice
+                                                          .value &&
+                                                      !AppConfig.isAuthEntryRoute(
+                                                        nextUri,
+                                                      )) {
+                                                    await OffDutyPushPromptService
+                                                        .instance
+                                                        .maybeShow(
+                                                          fromResume: false,
+                                                        );
+                                                  }
+                                                  await _notifyWebBackgroundLocationStatus();
+                                                  await _notifyWebPushNotificationStatus();
+                                                  await NativePermissionStatusService
+                                                      .instance
+                                                      .syncIfChanged();
+
+                                                  await _maybePromptUnfinishedDraft();
+                                                }
+                                              }
+                                            } catch (_) {}
+                                          }
+
+                                          _clearPullToRefreshState();
+                                          _webReloadInProgress = false;
+                                          final loadStartUri = _uriAtLoadStart;
+                                          _uriAtLoadStart = null;
+                                          if (!ignoreEvent &&
+                                              isSamePageReload) {
+                                            _restoreUriAfterReload(
+                                              preservedUri,
+                                            );
+                                          }
+                                          final clearPreserve =
+                                              !ignoreEvent &&
+                                              !_isStalePreviousPageLoadStopDuringPreserve(
+                                                nextUri,
+                                                loadStartUri,
+                                              );
+                                          _endMainFrameNavigationChrome(
+                                            clearPreserve: clearPreserve,
+                                          );
+
+                                          if (!ignoreEvent || recoveryLoad) {
+                                            _activatePendingLocationNoticeIfNeeded();
+                                          }
+                                          await _reconcileBottomBarFromWebView(
+                                            controller,
+                                          );
+
+                                          if (Platform.isAndroid &&
+                                              androidBottomTabNavComplete) {
+                                            _finishBottomTabNavigation();
+                                          }
+                                          if (!ignoreEvent) {
+                                            await OfficerAnnouncementCoordinator
+                                                .instance
+                                                .tryDeliverPending(
+                                                  source: 'webview-ready',
+                                                );
+                                          }
+                                        },
+                                        onReceivedError:
+                                            (controller, request, error) async {
+                                              _pullToRefreshController
+                                                  ?.endRefreshing();
+                                              _clearPullToRefreshState();
+                                              _webReloadInProgress = false;
+                                              _finishBottomTabNavigation();
+                                              _endMainFrameNavigationChrome();
+
+                                              if (error.type ==
+                                                  WebResourceErrorType
+                                                      .CANCELLED) {
+                                                return;
+                                              }
+                                              if (request.isForMainFrame ==
+                                                  false) {
+                                                return;
+                                              }
+
+                                              if (await SiteReachability.canReachSite()) {
+                                                if (!mounted) return;
+                                                if (_recoveryInFlight ||
+                                                    _awaitingRecoveryLoad) {
+                                                  return;
+                                                }
+                                                unawaited(
+                                                  _recoverWebView(
+                                                    reason: 'main_frame_error',
+                                                  ),
+                                                );
+                                                return;
+                                              }
+                                              if (!mounted) return;
+                                              final wasRetrying =
+                                                  _ui.offlineRetrying.value;
+                                              _cancelOfflineConnectivityDebounce();
+                                              _holdOfflineUntilReload = true;
+                                              _ui.offlineRetrying.value = false;
+                                              if (wasRetrying) {
+                                                _ui.offlineStatusMessage.value =
+                                                    'Couldn\'t reconnect. Check your connection and try again.';
+                                              }
+                                              _showOffline(needsReload: true);
+                                            },
+                                        onGeolocationPermissionsShowPrompt: (controller, origin) async {
+                                          if (_ui.showLocationNotice.value) {
+                                            return GeolocationPermissionShowPromptResponse(
+                                              origin: origin,
+                                              allow: false,
+                                              retain: false,
+                                            );
+                                          }
+
+                                          final uri = Uri.tryParse(origin);
+                                          final allow = uri == null
+                                              ? false
+                                              : AppConfig.isAllowedHost(
+                                                  uri.host,
+                                                );
+                                          if (!allow) {
+                                            return GeolocationPermissionShowPromptResponse(
+                                              origin: origin,
+                                              allow: false,
+                                              retain: false,
+                                            );
+                                          }
+
+                                          final disclosureReady =
+                                              await DutyHeartbeatService
+                                                  .instance
+                                                  .ensureDisclosureBeforeWebLocationAccess();
+                                          if (!disclosureReady) {
+                                            return GeolocationPermissionShowPromptResponse(
+                                              origin: origin,
+                                              allow: false,
+                                              retain: false,
+                                            );
+                                          }
+
+                                          if (!await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled()) {
+                                            if (!await BackgroundLocationPermissions.hasForegroundLocationAccess()) {
+                                              await PermissionSettingsHelper.requestForegroundLocationStep();
+                                              await BackgroundLocationPermissions.refreshPermissionStateFromOs();
+                                            }
+                                          }
+
+                                          await BackgroundLocationPermissions.refreshPermissionStateFromOs();
+                                          final granted =
+                                              await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled();
+                                          return GeolocationPermissionShowPromptResponse(
+                                            origin: origin,
+                                            allow: granted,
+                                            retain: granted,
+                                          );
+                                        },
+                                        onReceivedServerTrustAuthRequest:
+                                            (controller, challenge) async =>
+                                                _handleServerTrustAuthRequest(
+                                                  challenge,
+                                                ),
+                                        onDownloadStartRequest:
+                                            (controller, request) async {
+                                              final uri = request.url.uriValue;
+                                              await launchUrl(
+                                                uri,
+                                                mode: LaunchMode
+                                                    .externalApplication,
+                                              );
+                                            },
+                                        onWebContentProcessDidTerminate:
+                                            (controller) {
+                                              unawaited(
+                                                _reloadWebViewAfterProcessDeath(
+                                                  reason:
+                                                      'ios_content_process_terminated',
+                                                  recreate: true,
+                                                ),
+                                              );
+                                            },
+                                        onRenderProcessGone: (controller, detail) {
+                                          if (!detail.didCrash) return;
+                                          unawaited(
+                                            _reloadWebViewAfterProcessDeath(
+                                              reason:
+                                                  'android_render_process_gone',
+                                              recreate: true,
+                                            ),
+                                          );
+                                        },
+                                      ),
                                     ),
-                                  );
-                                },
-                                onRenderProcessGone: (controller, detail) {
-                                  if (!detail.didCrash) return;
-                                  unawaited(
-                                    _reloadWebViewAfterProcessDeath(
-                                      reason: 'android_render_process_gone',
-                                      recreate: true,
-                                    ),
-                                  );
-                                },
-                              ),
-                            ),
+                                  ),
+                                ],
+                              );
+                            }),
                             if (showPermissionBlocker)
                               const Positioned.fill(
                                 child: RequiredPermissionsBlocker(),
@@ -4737,17 +5981,22 @@ class _WebViewShellState extends State<WebViewShell>
                                 child: VisitVideoPreviewScreen(
                                   onBack: _dismissLogVisit,
                                   onUploadSuccess: _finishLogVisitUploadSuccess,
+                                  onUploadStarted: _onPatrolUploadStarted,
+                                  onFailureOpenDraft:
+                                      _onPatrolUploadFailureOpenDraft,
                                   bottomBarClearance: 0,
                                 ),
                               );
                             }),
                             Obx(() {
-                              final uploadingFromDialog =
-                                  !_ui.showingLogVisit.value &&
-                                  _ui.officerLoggedIn.value &&
-                                  VisitDraftResumeDialog.ensureFlowController()
-                                      .isUploading
-                                      .value;
+                              return Align(
+                                alignment: Alignment.topCenter,
+                                child: VisitUploadStatusBanner(
+                                  isDark: _ui.webPrefersDark.value,
+                                ),
+                              );
+                            }),
+                            Obx(() {
                               final showBottomBar =
                                   !showPermissionBlocker &&
                                   !_ui.showOffline.value &&
@@ -4756,13 +6005,13 @@ class _WebViewShellState extends State<WebViewShell>
                                   !_ui.isKeyboardOpen &&
                                   !_isAuthRoute(_ui.currentUri.value) &&
                                   !_ui.showingLogVisit.value &&
-                                  !uploadingFromDialog &&
+                                  !_ui.webHidesBottomBar.value &&
                                   (_isBottomBarRoute(_ui.currentUri.value) ||
                                       _ui.preserveBottomBarDuringLoad.value);
                               _logBottomBarVisibility(
                                 show: showBottomBar,
                                 showPermissionBlocker: showPermissionBlocker,
-                                uploadingFromDialog: uploadingFromDialog,
+                                uploadingFromDialog: false,
                               );
                               if (!showBottomBar) {
                                 return const SizedBox.shrink();
@@ -4861,6 +6110,32 @@ class _WebViewShellState extends State<WebViewShell>
     return null;
   }
 
+  bool? _parseBottomBarVisibleArg(dynamic value) {
+    if (value is bool) return value;
+    if (value is num) return value != 0;
+    if (value is Map) {
+      if (value.containsKey('hidden')) {
+        final hidden = _parseBottomBarVisibleArg(value['hidden']);
+        return hidden == null ? null : !hidden;
+      }
+      return _parseBottomBarVisibleArg(
+        value['visible'] ?? value['show'] ?? value['value'],
+      );
+    }
+    final normalized = value?.toString().trim().toLowerCase();
+    if (normalized == null || normalized.isEmpty) return null;
+    if (normalized == 'true' || normalized == '1' || normalized == 'show') {
+      return true;
+    }
+    if (normalized == 'false' ||
+        normalized == '0' ||
+        normalized == 'hide' ||
+        normalized == 'hidden') {
+      return false;
+    }
+    return null;
+  }
+
   Future<void> _onBottomTap(_BottomItem item) async {
     final controller = _controller;
     if (controller == null) return;
@@ -4876,11 +6151,15 @@ class _WebViewShellState extends State<WebViewShell>
       unawaited(VisitGpsSession.instance.stop());
     }
     _ui.showingLogVisit.value = false;
+    _clearWebBottomBarHide();
     _ui.bottomTabNavigationActive.value = true;
     _pendingBottomTabLoadStarted = false;
     final nextUri = Uri.tryParse(item.url);
     if (nextUri != null) {
       _ui.currentUri.value = nextUri;
+      if (!_isBottomBarRoute(nextUri)) {
+        _ui.preserveBottomBarDuringLoad.value = false;
+      }
       _recheckBottomBarForUri(nextUri);
     }
     _ui.beginNavigation();
@@ -4962,36 +6241,40 @@ enum _BottomItem {
     'Dashboard',
     'assets/postFilFill.png',
     'assets/postFil.png',
-    AppRoutes.webDashboardUrl,
+    '/officer/dashboard',
   ),
+  shiftLog('Shift Log', '', '', '/officer/shift-log'),
   timesheet(
     'TimeSheet',
     'assets/calendar_outline.png',
     'assets/schedule.png',
-    AppRoutes.webTimesheetUrl,
+    '/officer/timesheet/monthly',
   ),
   profile(
     'Profile',
     'assets/avatar.png',
     'assets/profile.png',
-    AppRoutes.webProfileUrl,
+    '/officer/profile',
   );
 
   const _BottomItem(
     this.label,
     this.iconAsset,
     this.iconAssetSelected,
-    this.url,
+    this.path,
   );
   final String label;
   final String iconAsset;
   final String iconAssetSelected;
-  final String url;
+  final String path;
 
-  String get normalizedPath {
-    final uri = Uri.tryParse(url);
-    return AppConfig.normalizeWebPath(uri) ?? '';
+  String get url {
+    final base = AppRoutes.webBaseUrl;
+    final root = base.endsWith('/') ? base.substring(0, base.length - 1) : base;
+    return '$root$path';
   }
+
+  String get normalizedPath => path;
 }
 
 class _BottomBar extends StatelessWidget {
@@ -5009,6 +6292,7 @@ class _BottomBar extends StatelessWidget {
   Widget build(BuildContext context) {
     const visibleItems = <_BottomItem>[
       _BottomItem.dashboard,
+      _BottomItem.shiftLog,
       _BottomItem.timesheet,
       _BottomItem.profile,
     ];
@@ -5020,8 +6304,17 @@ class _BottomBar extends StatelessWidget {
           index: index,
           iosSymbolName: switch (item) {
             _BottomItem.dashboard => 'house.fill',
+            _BottomItem.shiftLog => 'list.clipboard',
             _BottomItem.timesheet => 'calendar',
             _BottomItem.profile => 'person.crop.circle.fill',
+          },
+          iosSymbolPointSize: switch (item) {
+            _BottomItem.shiftLog => 19,
+            _ => null,
+          },
+          materialIcon: switch (item) {
+            _BottomItem.shiftLog => Icons.assignment_outlined,
+            _ => null,
           },
           activeAssetIcon: item.iconAssetSelected.isEmpty
               ? null

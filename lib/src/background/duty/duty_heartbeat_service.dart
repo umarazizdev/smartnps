@@ -13,27 +13,39 @@ import '../../app/app_navigator.dart';
 import '../../auth/auth_repository.dart';
 import '../../push/notifications/push_notification_service.dart';
 import '../../auth/location_disclosure_account_sync.dart';
+import '../../permissions/os_notification_permission.dart';
 import '../../permissions/required_permissions_gate.dart';
 import '../../utilities/overlay_prompt_guard.dart';
 import '../../utilities/permission_settings_helper.dart';
 import '../../utilities/device_identity.dart';
+import '../../widgets/dialogs/clock_in_permissions_dialog.dart';
 import '../../widgets/dialogs/location_tracking_disclosure_dialog.dart';
+import '../../widgets/dialogs/on_duty_permissions_dialog.dart';
 import '../location/android_duty_location_health.dart';
 import '../location/background_location_controller.dart';
 import '../location/background_location_permissions.dart';
+import '../location/background_location_service.dart';
 import '../location/location_sharing_status_notification.dart';
 import 'clock_in_gate_service.dart';
+import 'duty_heartbeat_client.dart';
 import 'duty_tracking_preferences.dart';
+import 'android_duty_kill_watch.dart';
 import '../ios/ios_duty_location_pinger.dart';
 import '../ios/ios_significant_location_change_service.dart';
 import 'duty_status_snapshot.dart';
 import 'location_disclosure_consent.dart';
+import 'on_duty_permissions_prompt_service.dart';
+import '../../utilities/app_debug_log.dart';
 
 class DutyHeartbeatService {
   DutyHeartbeatService._() {
     BackgroundLocationController.confirmOnDutyBeforeStart = () {
       return confirmOnDutyFromApiForTracking(stopIfNotOnDuty: true);
     };
+    AuthRepository.onSecureTokensChanged = () {
+      unawaited(_mirrorNativeAuthSession());
+    };
+    unawaited(_mirrorNativeAuthSession());
     if (Platform.isIOS) {
       IosDutyLocationPinger.confirmOnDutyBeforeStart = () {
         return confirmOnDutyFromApiForTracking(stopIfNotOnDuty: true);
@@ -41,10 +53,6 @@ class DutyHeartbeatService {
       IosSignificantLocationChangeService.setOnLocationWake(() {
         return recoverAfterIosLocationWakeIfNeeded();
       });
-      AuthRepository.onSecureTokensChanged = () {
-        unawaited(_mirrorNativeAuthSession());
-      };
-      unawaited(_mirrorNativeAuthSession());
     }
   }
 
@@ -63,7 +71,14 @@ class DutyHeartbeatService {
   bool _pollInFlight = false;
   bool _heartbeatActive = false;
   int _clockInBurstGeneration = 0;
+  DateTime? _optimisticClockInTrackingUntil;
+  Future<void>? _clockInImmediateStartFuture;
+  DateTime? _lastHeartbeatSuccessAt;
   String? _lastAppliedStatus;
+  bool _locationPausedForUnpaidBreak = false;
+  String? _lastWorkingStatus;
+  String? _lastBreakType;
+  bool? _lastBreakPaid;
   bool _disclosureAccepted = false;
   bool _disclosureDeferred = false;
   bool _requestPermissionAfterDisclosure = false;
@@ -98,20 +113,31 @@ class DutyHeartbeatService {
       !OverlayPromptGuard.blocksTopBanner;
 
   bool get isOnDutyTrackingActive =>
-      _heartbeatActive && _lastAppliedStatus == onDuty;
+      _heartbeatActive &&
+      _lastAppliedStatus == onDuty &&
+      !_locationPausedForUnpaidBreak;
+
+  bool get isLocationPausedForUnpaidBreak => _locationPausedForUnpaidBreak;
 
   Future<bool> isOnDutyAccordingToHeartbeat() async {
     if (!Platform.isAndroid && !Platform.isIOS) return false;
     if (!await _hasActiveAuthToken()) return false;
 
     try {
-      final status = await _fetchDutyStatus();
-      if (status == onDuty) {
-        await DutyStatusSnapshot.markOnDuty();
+      final payload = await _fetchHeartbeat();
+      if (payload?.isOnDuty == true) {
+        if (payload!.allowsLocationTracking) {
+          await DutyStatusSnapshot.markOnDuty();
+          await _setNativeUnpaidBreak(false);
+        } else {
+          await DutyStatusSnapshot.clear();
+          await _setNativeUnpaidBreak(true);
+        }
         return true;
       }
-      if (status == offDuty) {
+      if (payload?.isOffDuty == true) {
         await DutyStatusSnapshot.clear();
+        await _setNativeUnpaidBreak(false);
         return false;
       }
     } catch (e) {
@@ -149,11 +175,23 @@ class DutyHeartbeatService {
   Future<void> _recoverAfterIosLocationWakeIfNeededImpl() async {
     final ready = await IosSignificantLocationChangeService.ensureNativeReady();
     if (!ready) {
-      if (kDebugMode) {
-        debugPrint(
-          '[DutyHeartbeatService] iOS location wake skipped; SLC channel not ready',
-        );
-      }
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] iOS location wake skipped; SLC channel not ready',
+      );
+      return;
+    }
+
+    final loggedIn = await AuthRepository.instance.isOfficerLoggedIn();
+    final token = await AuthRepository.instance.getAccessToken();
+    final hasToken = token != null && token.isNotEmpty;
+    if (!loggedIn || !hasToken) {
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] iOS location wake stopped; '
+        'not logged in or no auth token',
+      );
+      await DutyStatusSnapshot.clear();
+      await IosSignificantLocationChangeService.setOnDuty(false);
+      await BackgroundLocationController.stop();
       return;
     }
 
@@ -163,11 +201,9 @@ class DutyHeartbeatService {
     final nativeRunning = status['running'] == true;
 
     if (!nativeOnDuty && !nativeRunning) {
-      if (kDebugMode) {
-        debugPrint(
-          '[DutyHeartbeatService] iOS location wake ignored; native duty/slc not armed',
-        );
-      }
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] iOS location wake ignored; native duty/slc not armed',
+      );
       return;
     }
 
@@ -176,16 +212,14 @@ class DutyHeartbeatService {
     }
 
     if (!nativeOnDuty) {
-      if (kDebugMode) {
-        debugPrint(
-          '[DutyHeartbeatService] iOS location wake stopped; native onDuty=false',
-        );
-      }
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] iOS location wake stopped; native onDuty=false',
+      );
       await IosSignificantLocationChangeService.setOnDuty(false);
       return;
     }
 
-    debugPrint(
+    dutyHeartbeatDebugLog(
       launchedForLocation
           ? '[DutyHeartbeatService] iOS location wake; confirming duty before GPS'
           : '[DutyHeartbeatService] iOS on-duty launch; confirming duty before GPS',
@@ -195,9 +229,19 @@ class DutyHeartbeatService {
       stopIfNotOnDuty: true,
     );
     if (!allowed) {
-      debugPrint(
+      dutyHeartbeatDebugLog(
         '[DutyHeartbeatService] iOS location wake stopped; officer is not on_duty',
       );
+      return;
+    }
+
+    if (!await AuthRepository.instance.isOfficerLoggedIn()) {
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] iOS location wake aborted; logged out during confirm',
+      );
+      await DutyStatusSnapshot.clear();
+      await IosSignificantLocationChangeService.setOnDuty(false);
+      await BackgroundLocationController.stop();
       return;
     }
 
@@ -210,11 +254,29 @@ class DutyHeartbeatService {
   }
 
   static Future<void> _mirrorNativeAuthSession() async {
+    if (Platform.isAndroid) {
+      final access = await AuthRepository.instance.getAccessToken();
+      if (access == null || access.isEmpty) {
+        await AndroidDutyKillWatch.disarm();
+        return;
+      }
+      if (await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) {
+        if (await AndroidDutyKillWatch.isKillWatchArmed()) {
+          await AndroidDutyKillWatch.syncTokens();
+        } else {
+          await AndroidDutyKillWatch.arm();
+        }
+      } else {
+        await AndroidDutyKillWatch.syncTokens();
+      }
+      return;
+    }
     if (!Platform.isIOS) return;
     final access = await AuthRepository.instance.getAccessToken();
     final refresh = await AuthRepository.instance.getRefreshToken();
     if (access == null || access.isEmpty) {
       await IosSignificantLocationChangeService.syncNativeAuth(clear: true);
+      await IosSignificantLocationChangeService.setOnDuty(false);
       return;
     }
     await IosSignificantLocationChangeService.syncNativeAuth(
@@ -229,23 +291,33 @@ class DutyHeartbeatService {
   }) async {
     if (!Platform.isAndroid && !Platform.isIOS) return false;
 
+    if (!await AuthRepository.instance.isOfficerLoggedIn()) {
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] tracking denied; officer not logged in',
+      );
+      await DutyStatusSnapshot.clear();
+      if (stopIfNotOnDuty) {
+        await _stopTrackingForFailedDutyConfirm();
+      }
+      return false;
+    }
+
     final onlineAuth = await _hasActiveAuthToken();
     if (!onlineAuth) {
       final cached = await AuthRepository.instance.getAccessToken();
       if (cached != null &&
           cached.isNotEmpty &&
-          await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) {
-        if (kDebugMode) {
-          debugPrint(
-            '[DutyHeartbeatService] offline snapshot allows on_duty '
-            '(cached token, refresh unavailable)',
-          );
-        }
+          await DutyStatusSnapshot.isValidOnDutyForCurrentUser() &&
+          !await _isNativeUnpaidBreak()) {
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] offline snapshot allows on_duty '
+          '(cached token, refresh unavailable)',
+        );
         return true;
       }
-      if (kDebugMode) {
-        debugPrint('[DutyHeartbeatService] tracking denied; no auth token');
-      }
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] tracking denied; no auth token',
+      );
       await DutyStatusSnapshot.clear();
       if (stopIfNotOnDuty) {
         await _stopTrackingForFailedDutyConfirm();
@@ -254,57 +326,74 @@ class DutyHeartbeatService {
     }
 
     try {
-      final status = await _fetchDutyStatus();
-      if (status == onDuty) {
+      final payload = await _fetchHeartbeat();
+      if (payload != null && payload.allowsLocationTracking) {
         await DutyStatusSnapshot.markOnDuty();
-        if (kDebugMode) {
-          debugPrint(
-            '[DutyHeartbeatService] heartbeat confirmed on_duty for tracking',
-          );
-        }
+        await _setNativeUnpaidBreak(false);
+        _locationPausedForUnpaidBreak = false;
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] heartbeat confirmed on_duty for tracking',
+        );
+        _clearOptimisticClockInTracking();
         return true;
       }
 
-      if (status == offDuty) {
-        if (kDebugMode) {
-          debugPrint(
-            '[DutyHeartbeatService] tracking denied; heartbeat status=off_duty',
+      if (payload != null && payload.isUnpaidBreak) {
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] tracking denied; unpaid break active',
+        );
+        await DutyStatusSnapshot.clear();
+        await _setNativeUnpaidBreak(true);
+        if (stopIfNotOnDuty) {
+          await _pauseLocationForUnpaidBreak(
+            payload: payload,
+            notify: !_locationPausedForUnpaidBreak,
+            source: 'confirm',
           );
         }
+        return false;
+      }
+
+      if (payload?.dutyStatus == offDuty) {
+        if (_isOptimisticClockInTrackingActive()) {
+          dutyHeartbeatDebugLog(
+            '[DutyHeartbeatService] tracking denied deferred; '
+            'optimistic clock-in window active',
+          );
+          return true;
+        }
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] tracking denied; heartbeat status=off_duty',
+        );
         await DutyStatusSnapshot.clear();
+        await _setNativeUnpaidBreak(false);
         if (stopIfNotOnDuty) {
           await _applyOffDuty();
         }
         return false;
       }
 
-      if (kDebugMode) {
-        debugPrint(
-          '[DutyHeartbeatService] heartbeat status=$status; trying offline snapshot',
-        );
-      }
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] heartbeat status=${payload?.dutyStatus}; '
+        'trying offline snapshot',
+      );
     } catch (e) {
-      if (kDebugMode) {
-        debugPrint(
-          '[DutyHeartbeatService] heartbeat fetch failed; trying offline snapshot: $e',
-        );
-      }
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] heartbeat fetch failed; trying offline snapshot: $e',
+      );
     }
 
-    if (await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) {
-      if (kDebugMode) {
-        debugPrint(
-          '[DutyHeartbeatService] offline snapshot allows on_duty tracking',
-        );
-      }
+    if (await DutyStatusSnapshot.isValidOnDutyForCurrentUser() &&
+        !await _isNativeUnpaidBreak()) {
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] offline snapshot allows on_duty tracking',
+      );
       return true;
     }
 
-    if (kDebugMode) {
-      debugPrint(
-        '[DutyHeartbeatService] tracking denied; no on_duty API or snapshot',
-      );
-    }
+    dutyHeartbeatDebugLog(
+      '[DutyHeartbeatService] tracking denied; no on_duty API or snapshot',
+    );
     if (stopIfNotOnDuty) {
       await _stopTrackingForFailedDutyConfirm();
     }
@@ -333,9 +422,17 @@ class DutyHeartbeatService {
     final preciseMissing =
         !await BackgroundLocationPermissions.hasPreciseLocationAccess();
     final missing = backgroundMissing || preciseMissing;
-    if (kDebugMode) {}
+    final wasMissing = backgroundLocationPermissionMissing.value;
     if (backgroundLocationPermissionMissing.value != missing) {
       backgroundLocationPermissionMissing.value = missing;
+    }
+
+    if (wasMissing && !missing && _heartbeatActive) {
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] BG permission became ready on duty; '
+        'retrying ensureStarted',
+      );
+      unawaited(retryOnDutyTrackingIfReady());
     }
   }
 
@@ -367,6 +464,19 @@ class DutyHeartbeatService {
 
   void endResumeDutyReconcile() {
     _deferTrackingStart = false;
+
+    unawaited(_retryTrackingAfterResumeIfNeeded());
+  }
+
+  Future<void> _retryTrackingAfterResumeIfNeeded() async {
+    if (!_heartbeatActive) return;
+    final onDutyLikely =
+        _lastAppliedStatus == onDuty ||
+        _locationSharingArmedThisDuty ||
+        _optimisticClockInTrackingUntil != null ||
+        await DutyStatusSnapshot.isValidOnDutyForCurrentUser();
+    if (!onDutyLikely) return;
+    await retryOnDutyTrackingIfReady();
   }
 
   void start() {
@@ -376,7 +486,7 @@ class DutyHeartbeatService {
     _heartbeatActive = true;
     LocationSharingStatusNotification.resetSignedOutGate();
     ApiClient.instance.ensureAuthInterceptorInstalled();
-    debugPrint('[DutyHeartbeatService] starting heartbeat polling');
+    dutyHeartbeatDebugLog('[DutyHeartbeatService] starting heartbeat polling');
 
     unawaited(_hydrateConsentFromStorage());
     unawaited(_pollOnce());
@@ -404,8 +514,126 @@ class DutyHeartbeatService {
     unawaited(_burstPollAfterClockInSuccess());
   }
 
+  void onClockInSuccessFromBridge() {
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+    ClockInGateService.instance.onClockInSucceeded();
+    dutyHeartbeatDebugLog(
+      '[DutyHeartbeatService] clock_in_success from bridge; immediate start queued',
+    );
+    pollAfterClockInSuccess();
+    unawaited(_beginTrackingImmediatelyAfterClockInSuccess());
+  }
+
+  void _clearOptimisticClockInTracking() {
+    _optimisticClockInTrackingUntil = null;
+  }
+
+  bool _isOptimisticClockInTrackingActive() {
+    final until = _optimisticClockInTrackingUntil;
+    return until != null && DateTime.now().isBefore(until);
+  }
+
+  Future<bool> _shouldDeferOffDutyTrackingStop() async {
+    if (_isOptimisticClockInTrackingActive()) return true;
+    if (_clockInImmediateStartFuture != null) return true;
+    if (ClockInGateService.instance.isPrepareInFlight) return true;
+    if (ClockInGateService.instance.isGeoUnlockedForClockIn) return true;
+    if (ClockInGateService.instance.isClockInAttemptActive) return true;
+    return false;
+  }
+
+  Future<void> _beginTrackingImmediatelyAfterClockInSuccess() async {
+    final inFlight = _clockInImmediateStartFuture;
+    if (inFlight != null) {
+      await inFlight;
+      return;
+    }
+
+    final future = _beginTrackingImmediatelyAfterClockInSuccessImpl();
+    _clockInImmediateStartFuture = future;
+    try {
+      await future;
+    } finally {
+      if (identical(_clockInImmediateStartFuture, future)) {
+        _clockInImmediateStartFuture = null;
+      }
+    }
+  }
+
+  Future<void> _beginTrackingImmediatelyAfterClockInSuccessImpl() async {
+    if (_deferTrackingStart) {
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] immediate clock-in start deferred (resume reconcile)',
+      );
+      return;
+    }
+    if (!await _hasActiveAuthTokenForImmediateClockInStart()) return;
+    if (!await _clockInImmediateStartEligible()) {
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] immediate clock-in start skipped: not eligible',
+      );
+      return;
+    }
+
+    _optimisticClockInTrackingUntil = DateTime.now().add(
+      const Duration(seconds: 90),
+    );
+    _heartbeatActive = true;
+    LocationSharingStatusNotification.resetShiftEndedGate();
+    ApiClient.instance.ensureAuthInterceptorInstalled();
+    await DutyStatusSnapshot.markOnDuty();
+
+    if (await BackgroundLocationController.isTrackingHealthy()) {
+      _locationSharingArmedThisDuty = true;
+      _lastAppliedStatus = onDuty;
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] immediate clock-in start: already tracking',
+      );
+      return;
+    }
+
+    if (Platform.isAndroid) {
+      unawaited(BackgroundLocationService.preWarmForClockIn());
+    }
+
+    final clockInFastStart = await _clockInFastStartEligible();
+    dutyHeartbeatDebugLog(
+      '[DutyHeartbeatService] immediate clock-in start: launching tracking'
+      '${clockInFastStart ? ' (fast)' : ''}',
+    );
+
+    final result = await BackgroundLocationController.ensureStarted(
+      clockInFastStart: clockInFastStart,
+    );
+    if (result['ok'] == true) {
+      _locationSharingArmedThisDuty = true;
+      _lastAppliedStatus = onDuty;
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] immediate clock-in start ok=true',
+      );
+    } else {
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] immediate clock-in start failed: '
+        '${result['error']}',
+      );
+    }
+  }
+
+  Future<bool> _clockInImmediateStartEligible() async {
+    if (ClockInGateService.instance.isPrepareInFlight) return false;
+    if (OverlayPromptGuard.blocksTopBanner) return false;
+    if (RequiredPermissionsGate.shouldSuppressCompetingDialogs) return false;
+    if (disclosurePromptVisible.value) return false;
+    if (!await LocationDisclosureConsent.hasAccepted()) return false;
+    if (!await BackgroundLocationPermissions.hasSufficientBackgroundAccess()) {
+      return false;
+    }
+    return await RequiredPermissionsGate.instance.areClockInPermissionsReady();
+  }
+
   void _cancelClockInBurst() {
     _clockInBurstGeneration++;
+    _clearOptimisticClockInTracking();
   }
 
   Future<void> _burstPollAfterClockInSuccess() async {
@@ -445,6 +673,18 @@ class DutyHeartbeatService {
     }
 
     if (generation == _clockInBurstGeneration && _heartbeatActive) {
+      if (_lastAppliedStatus != onDuty &&
+          _isOptimisticClockInTrackingActive()) {
+        _clearOptimisticClockInTracking();
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] clock-in burst ended without on_duty; '
+          'stopping optimistic tracking',
+        );
+        if (Platform.isAndroid) {
+          unawaited(BackgroundLocationService.cancelClockInWarm());
+        }
+        await _applyOffDuty();
+      }
       _scheduleNextPoll();
     }
   }
@@ -476,7 +716,8 @@ class DutyHeartbeatService {
       }
     } else if (!pageReload) {
       await PushNotificationService.instance.waitForPermissionPromptCompleted(
-        promptIfNeeded: true,
+
+        promptIfNeeded: !fromResume,
       );
       await OverlayPromptGuard.waitUntilReady();
     }
@@ -485,26 +726,45 @@ class DutyHeartbeatService {
     await _reconcileBgLocationReadyFlag();
     await _syncPermissionReadyState();
 
-    String? status;
+    DutyHeartbeatPayload? payload;
     try {
-      status = await _fetchDutyStatus();
+      payload = await _fetchHeartbeat();
     } catch (e) {
-      if (kDebugMode) {
-        debugPrint(
-          '[DutyHeartbeatService] recheck heartbeat failed (offline?): $e',
-        );
-      }
-      status = null;
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] recheck heartbeat failed (offline?): $e',
+      );
+      payload = null;
     }
 
+    if (payload != null && payload.isUnpaidBreak) {
+      final shouldNotify = !_locationPausedForUnpaidBreak;
+      await _pauseLocationForUnpaidBreak(
+        payload: payload,
+        notify: shouldNotify,
+        source: 'recheck',
+      );
+      await refreshBackgroundLocationPermissionBannerState();
+      return;
+    }
+
+    final status = payload?.dutyStatus;
+
     if (status == offDuty) {
+      if (_isOptimisticClockInTrackingActive()) {
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] recheck: ignore transient off_duty during clock-in',
+        );
+        await refreshBackgroundLocationPermissionBannerState();
+        return;
+      }
       await _applyOffDuty();
       await refreshBackgroundLocationPermissionBannerState();
       return;
     }
 
     if (status != onDuty) {
-      if (!await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) {
+      if (!await DutyStatusSnapshot.isValidOnDutyForCurrentUser() ||
+          await _isNativeUnpaidBreak()) {
         if (fromResume) {
           await _ensureOffDutyTrackingStopped();
         }
@@ -514,12 +774,10 @@ class DutyHeartbeatService {
       if (fromResume) {
         final running = await _isLocationTrackingRunning();
         if (!running) {
-          if (kDebugMode) {
-            debugPrint(
-              '[DutyHeartbeatService] resume: no API on_duty and GPS '
-              'not running — not starting',
-            );
-          }
+          dutyHeartbeatDebugLog(
+            '[DutyHeartbeatService] resume: no API on_duty and GPS '
+            'not running — not starting',
+          );
           await refreshBackgroundLocationPermissionBannerState();
           return;
         }
@@ -528,12 +786,12 @@ class DutyHeartbeatService {
         await refreshBackgroundLocationPermissionBannerState();
         return;
       }
-      if (kDebugMode) {
-        debugPrint(
-          '[DutyHeartbeatService] recheck using offline on_duty snapshot',
-        );
-      }
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] recheck using offline on_duty snapshot',
+      );
     } else {
+      await _setNativeUnpaidBreak(false);
+      _locationPausedForUnpaidBreak = false;
       await DutyStatusSnapshot.markOnDuty();
     }
 
@@ -549,8 +807,20 @@ class DutyHeartbeatService {
       return;
     }
 
+    if (pageReload && _isOptimisticClockInTrackingActive()) {
+      final running = await _isLocationTrackingRunning();
+      if (running || _clockInImmediateStartFuture != null) {
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] recheck skipped; immediate clock-in start active',
+        );
+        await refreshBackgroundLocationPermissionBannerState();
+        return;
+      }
+    }
+
     await _ensureTrackingRunningForOnDuty(
-      allowPrompts: !pageReload,
+
+      allowPrompts: !pageReload && !fromResume,
       ignoreDefer: fromResume,
     );
     await refreshBackgroundLocationPermissionBannerState();
@@ -562,11 +832,6 @@ class DutyHeartbeatService {
   }) async {
     if (_lastAppliedStatus != onDuty) return;
     if (_deferTrackingStart && !ignoreDefer) {
-      if (kDebugMode) {
-        debugPrint(
-          '[DutyHeartbeatService] defer GPS start until duty status is known',
-        );
-      }
       return;
     }
 
@@ -593,6 +858,12 @@ class DutyHeartbeatService {
     required bool allowPrompts,
   }) async {
     if (_lastAppliedStatus != onDuty) return;
+    if (_locationPausedForUnpaidBreak || await _isNativeUnpaidBreak()) {
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] skip tracking ensure; unpaid break active',
+      );
+      return;
+    }
 
     final healthy = await BackgroundLocationController.isTrackingHealthy();
     if (healthy) {
@@ -606,11 +877,9 @@ class DutyHeartbeatService {
         _locationSharingArmedThisDuty = true;
         return;
       }
-      if (kDebugMode) {
-        debugPrint(
-          '[DutyHeartbeatService] on_duty Android tracking stale; recovering',
-        );
-      }
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] on_duty Android tracking stale; recovering',
+      );
       final result =
           await BackgroundLocationController.recoverAndroidTrackingIfNeeded();
       if (result['ok'] == true) {
@@ -622,18 +891,16 @@ class DutyHeartbeatService {
     if (!running &&
         Platform.isAndroid &&
         BackgroundLocationController.isUiBackgrounded) {
-      if (kDebugMode) {
-        debugPrint('[DutyHeartbeatService] skip GPS start; UI is backgrounded');
-      }
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] skip GPS start; UI is backgrounded',
+      );
       return;
     }
 
     if (running && Platform.isIOS) {
-      if (kDebugMode) {
-        debugPrint(
-          '[DutyHeartbeatService] on_duty iOS stream live; skipping rebuild',
-        );
-      }
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] on_duty iOS stream live; skipping rebuild',
+      );
       _locationSharingArmedThisDuty = true;
       return;
     }
@@ -643,11 +910,9 @@ class DutyHeartbeatService {
         await BackgroundLocationPermissions.hasSufficientBackgroundAccess();
 
     if (disclosureAccepted && backgroundReady) {
-      if (kDebugMode) {
-        debugPrint(
-          '[DutyHeartbeatService] on_duty but tracking not running; starting',
-        );
-      }
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] on_duty but tracking not running; starting',
+      );
       await retryOnDutyTrackingIfReady();
       return;
     }
@@ -673,7 +938,15 @@ class DutyHeartbeatService {
   }
 
   Future<void> _ensureOffDutyTrackingStopped() async {
+    if (await _shouldDeferOffDutyTrackingStop()) {
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] defer off_duty stop during clock-in flow',
+      );
+      return;
+    }
+
     await DutyStatusSnapshot.clear();
+    await AndroidDutyKillWatch.disarm(forceOff: true);
 
     final running = await _isLocationTrackingRunning();
     if (!running) {
@@ -681,13 +954,11 @@ class DutyHeartbeatService {
       return;
     }
 
-    if (kDebugMode) {
-      debugPrint(
-        '[DutyHeartbeatService] off_duty but tracking still running; stopping',
-      );
-    }
+    dutyHeartbeatDebugLog(
+      '[DutyHeartbeatService] off_duty but tracking still running; stopping',
+    );
     final result = await BackgroundLocationController.stop();
-    debugPrint(
+    dutyHeartbeatDebugLog(
       '[DutyHeartbeatService] off_duty stop retry ok=${result['ok'] == true}',
     );
   }
@@ -708,21 +979,17 @@ class DutyHeartbeatService {
     await _handleIosPermissionChangeIfNeeded();
 
     if (!IosDutyLocationPinger.isRunning) {
-      if (kDebugMode) {
-        debugPrint(
-          '[DutyHeartbeatService] on_duty but location stream not running; recovering',
-        );
-      }
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] on_duty but location stream not running; recovering',
+      );
       await _restartTrackingWithCurrentPermission();
       return;
     }
 
     if (IosDutyLocationPinger.needsRecovery) {
-      if (kDebugMode) {
-        debugPrint(
-          '[DutyHeartbeatService] on_duty location stream dead; recovering',
-        );
-      }
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] on_duty location stream dead; recovering',
+      );
       await IosDutyLocationPinger.recoverIfNeeded();
       return;
     }
@@ -736,7 +1003,7 @@ class DutyHeartbeatService {
     _pollInFlight = false;
     _resetDisclosureState();
     backgroundLocationPermissionMissing.value = false;
-    debugPrint('[DutyHeartbeatService] stopped heartbeat polling');
+    dutyHeartbeatDebugLog('[DutyHeartbeatService] stopped heartbeat polling');
 
     if (stopBackgroundLocation) {
       await _applyOffDuty(allowAnnounce: false);
@@ -757,10 +1024,11 @@ class DutyHeartbeatService {
     _resetDisclosureState();
     backgroundLocationPermissionMissing.value = false;
     PermissionSettingsHelper.clearCooldown('background_location');
-    debugPrint(
+    dutyHeartbeatDebugLog(
       '[DutyHeartbeatService] instant logout (heartbeat + tracking stopped)',
     );
     unawaited(DutyStatusSnapshot.clear());
+    unawaited(AndroidDutyKillWatch.disarm(forceOff: true));
     if (Platform.isIOS) {
       unawaited(IosSignificantLocationChangeService.setOnDuty(false));
     }
@@ -813,74 +1081,41 @@ class DutyHeartbeatService {
         final cached = await AuthRepository.instance.getAccessToken();
         if (cached != null &&
             cached.isNotEmpty &&
-            await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) {
-          if (kDebugMode) {
-            debugPrint(
-              '[DutyHeartbeatService] poll auth refresh failed; '
-              'keeping offline on_duty from snapshot',
-            );
-          }
+            await DutyStatusSnapshot.isValidOnDutyForCurrentUser() &&
+            !await _isNativeUnpaidBreak()) {
+          dutyHeartbeatDebugLog(
+            '[DutyHeartbeatService] poll auth refresh failed; '
+            'keeping offline on_duty from snapshot',
+          );
           _lastAppliedStatus = onDuty;
           await _ensureTrackingRunningForOnDuty(allowPrompts: true);
           return;
         }
-        if (kDebugMode) {
-          debugPrint(
-            '[DutyHeartbeatService] no auth token; stopping heartbeat and location',
-          );
-        }
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] no auth token; stopping heartbeat and location',
+        );
         await stop();
         return;
       }
 
-      final status = await _fetchDutyStatus();
-      if (status == null) {
-        if (await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) {
-          if (kDebugMode) {
-            debugPrint(
-              '[DutyHeartbeatService] poll offline; snapshot on_duty — ensuring tracking',
-            );
-          }
+      final payload = await _fetchHeartbeat();
+      if (payload == null) {
+        if (await DutyStatusSnapshot.isValidOnDutyForCurrentUser() &&
+            !await _isNativeUnpaidBreak()) {
+          dutyHeartbeatDebugLog(
+            '[DutyHeartbeatService] poll offline; snapshot on_duty — ensuring tracking',
+          );
           _lastAppliedStatus = onDuty;
           await _ensureTrackingRunningForOnDuty(allowPrompts: true);
         }
         return;
       }
 
-      if (status == _lastAppliedStatus) {
-        if (status == onDuty) {
-          await DutyStatusSnapshot.markOnDuty();
-          if (Platform.isIOS) {
-            await _ensureIosTrackingHealthy();
-          }
-          await _ensureTrackingRunningForOnDuty(allowPrompts: true);
-          await refreshBackgroundLocationPermissionBannerState();
-        } else if (status == offDuty) {
-          await DutyStatusSnapshot.clear();
-          await _ensureOffDutyTrackingStopped();
-        }
-        return;
-      }
-
-      if (!_heartbeatActive || !await _hasActiveAuthToken()) return;
-
-      debugPrint('[DutyHeartbeatService] duty status=$status');
-      if (status == onDuty) {
-        if (_lastAppliedStatus == offDuty) {
-          _resetOnDutyAutoPromptState();
-          await _hydrateConsentFromStorage();
-        }
-        await _applyOnDuty();
-      } else if (status == offDuty) {
-        await _applyOffDuty();
-      } else if (kDebugMode) {
-        debugPrint('[DutyHeartbeatService] ignored unknown status=$status');
-      }
+      await _applyAttendancePayload(payload, source: 'heartbeat');
     } catch (e) {
-      if (kDebugMode) {
-        debugPrint('[DutyHeartbeatService] poll failed: $e');
-      }
-      if (await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) {
+      dutyHeartbeatDebugLog('[DutyHeartbeatService] poll failed: $e');
+      if (await DutyStatusSnapshot.isValidOnDutyForCurrentUser() &&
+          !await _isNativeUnpaidBreak()) {
         _lastAppliedStatus = onDuty;
         await _ensureTrackingRunningForOnDuty(allowPrompts: true);
       }
@@ -889,7 +1124,199 @@ class DutyHeartbeatService {
     }
   }
 
-  Future<String?> _fetchDutyStatus() async {
+  Future<void> onAttendanceStatusChangedFromBridge(dynamic raw) async {
+    dutyHeartbeatDebugLog(
+      '[DutyHeartbeatService] attendance_status_changed raw=$raw',
+    );
+    final payload = DutyHeartbeatClient.parseAttendanceBridgePayload(raw);
+    if (payload == null) {
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] attendance_status_changed ignored; invalid payload',
+      );
+      return;
+    }
+
+    if (!_heartbeatActive) {
+      _heartbeatActive = true;
+      _scheduleNextPoll();
+    }
+
+    await _applyAttendancePayload(payload, source: 'js_bridge');
+  }
+
+  Future<void> _applyAttendancePayload(
+    DutyHeartbeatPayload payload, {
+    required String source,
+  }) async {
+    dutyHeartbeatDebugLog(
+      '[DutyHeartbeatService] attendance ($source) '
+      'duty=${payload.dutyStatus} working=${payload.workingStatus} '
+      'break=${payload.breakType} paid=${payload.breakPaid} '
+      'minutes=${payload.allowedBreakMinutes} '
+      'unpaid=${payload.isUnpaidBreak} track=${payload.allowsLocationTracking}',
+    );
+
+    final enteredBreak =
+        payload.isOnBreak &&
+        (_lastWorkingStatus != DutyHeartbeatPayload.onBreak ||
+            _lastBreakType != payload.breakType ||
+            _lastBreakPaid != payload.breakPaid);
+
+    _lastWorkingStatus = payload.workingStatus;
+    _lastBreakType = payload.breakType;
+    _lastBreakPaid = payload.breakPaid;
+
+    if (payload.isOffDuty) {
+      if (_isOptimisticClockInTrackingActive()) {
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] ignore transient off_duty during clock-in ($source)',
+        );
+        return;
+      }
+      if (await _shouldDeferOffDutyTrackingStop()) {
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] defer off_duty stop during clock-in ($source)',
+        );
+        return;
+      }
+      _locationPausedForUnpaidBreak = false;
+      await _setNativeUnpaidBreak(false);
+      await _applyOffDuty();
+      return;
+    }
+
+    if (!payload.isOnDuty) return;
+
+    if (enteredBreak) {
+      await LocationSharingStatusNotification.showBreakStarted(
+        unpaid: payload.isUnpaidBreak,
+        minutes: payload.breakMinutesOrDefault,
+      );
+    } else if (!payload.isOnBreak) {
+      LocationSharingStatusNotification.resetBreakStartedGate();
+    }
+
+    if (payload.isUnpaidBreak) {
+      if (_locationPausedForUnpaidBreak) {
+        _lastAppliedStatus = onDuty;
+        await _setNativeUnpaidBreak(true);
+        return;
+      }
+      await _pauseLocationForUnpaidBreak(
+        payload: payload,
+        notify: false,
+        source: source,
+      );
+      return;
+    }
+
+    final wasPaused = _locationPausedForUnpaidBreak;
+    await _setNativeUnpaidBreak(false);
+    _locationPausedForUnpaidBreak = false;
+
+    if (_lastAppliedStatus == offDuty) {
+      _resetOnDutyAutoPromptState();
+      await _hydrateConsentFromStorage();
+    }
+    _clearOptimisticClockInTracking();
+
+    if (wasPaused || _lastAppliedStatus != onDuty) {
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] resuming/applying on_duty tracking ($source)'
+        '${wasPaused ? ' after unpaid break' : ''}',
+      );
+      await _applyOnDuty();
+    } else {
+      await DutyStatusSnapshot.markOnDuty();
+      if (Platform.isIOS) {
+        await _ensureIosTrackingHealthy();
+      }
+      await _ensureTrackingRunningForOnDuty(allowPrompts: true);
+      await refreshBackgroundLocationPermissionBannerState();
+    }
+  }
+
+  Future<void> _pauseLocationForUnpaidBreak({
+    required DutyHeartbeatPayload payload,
+    required bool notify,
+    required String source,
+  }) async {
+    if (_locationPausedForUnpaidBreak) {
+      await _setNativeUnpaidBreak(true);
+      _lastAppliedStatus = onDuty;
+      if (notify) {
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] unpaid break already paused; '
+          'ensuring break notification ($source)',
+        );
+        await LocationSharingStatusNotification.showBreakStarted(
+          unpaid: true,
+          minutes: payload.breakMinutesOrDefault,
+        );
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] unpaid break notification requested '
+          'minutes=${payload.breakMinutesOrDefault} ($source)',
+        );
+      } else {
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] unpaid break already paused; skip stop ($source)',
+        );
+      }
+      return;
+    }
+
+    dutyHeartbeatDebugLog(
+      '[DutyHeartbeatService] unpaid break → pause GPS/FGS/SLC ($source)',
+    );
+
+    _lastAppliedStatus = onDuty;
+    _locationPausedForUnpaidBreak = true;
+
+    await DutyStatusSnapshot.clear();
+    await _setNativeUnpaidBreak(true);
+
+    final result = await BackgroundLocationController.stop();
+    dutyHeartbeatDebugLog(
+      '[DutyHeartbeatService] unpaid break stop ok=${result['ok'] == true}',
+    );
+
+    if (Platform.isIOS) {
+      await IosSignificantLocationChangeService.armForUnpaidBreak();
+    }
+
+    await LocationSharingStatusNotification.dismissSharing();
+
+    if (notify) {
+      await LocationSharingStatusNotification.showBreakStarted(
+        unpaid: true,
+        minutes: payload.breakMinutesOrDefault,
+      );
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] unpaid break notification requested '
+        'minutes=${payload.breakMinutesOrDefault} ($source)',
+      );
+    }
+
+    await refreshBackgroundLocationPermissionBannerState();
+  }
+
+  Future<void> _setNativeUnpaidBreak(bool unpaid) async {
+    if (Platform.isAndroid) {
+      await AndroidDutyKillWatch.setUnpaidBreak(unpaid);
+    }
+    if (Platform.isIOS) {
+      await IosSignificantLocationChangeService.setUnpaidBreak(unpaid);
+    }
+  }
+
+  Future<bool> _isNativeUnpaidBreak() async {
+    if (Platform.isAndroid) {
+      return AndroidDutyKillWatch.isUnpaidBreak();
+    }
+    return _locationPausedForUnpaidBreak;
+  }
+
+  Future<DutyHeartbeatPayload?> _fetchHeartbeat() async {
     final response = await _dio.getUri(
       Uri.parse(ApiUrls.heartbeatUrl),
       options: Options(
@@ -901,6 +1328,9 @@ class DutyHeartbeatService {
     );
 
     final statusCode = response.statusCode ?? 0;
+    dutyHeartbeatDebugLog(
+      '[DutyHeartbeat] response statusCode=$statusCode payload=${response.data}',
+    );
     if (statusCode == 401 || statusCode == 403) {
       return null;
     }
@@ -909,50 +1339,23 @@ class DutyHeartbeatService {
       return null;
     }
 
-    return _parseDutyStatus(response.data);
-  }
-
-  String? _parseDutyStatus(dynamic body) {
-    if (body == null) return null;
-
-    if (body is String) {
-      final normalized = body.trim().toLowerCase();
-      if (normalized == onDuty || normalized == offDuty) return normalized;
-      return null;
+    final payload = DutyHeartbeatClient.parseHeartbeat(response.data);
+    if (payload != null && kDebugMode) {
+      final now = DateTime.now();
+      final gap = _lastHeartbeatSuccessAt == null
+          ? 'first'
+          : '${now.difference(_lastHeartbeatSuccessAt!).inSeconds}s';
+      _lastHeartbeatSuccessAt = now;
+      final hh = now.hour.toString().padLeft(2, '0');
+      final mm = now.minute.toString().padLeft(2, '0');
+      final ss = now.second.toString().padLeft(2, '0');
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeat] ok duty=${payload.dutyStatus} '
+        'working=${payload.workingStatus} break=${payload.breakType} '
+        'unpaid=${payload.isUnpaidBreak} after=$gap @$hh:$mm:$ss',
+      );
     }
-
-    if (body is! Map) return null;
-    final map = Map<String, dynamic>.from(body);
-
-    for (final key in const [
-      'status',
-      'duty_status',
-      'dutyStatus',
-      'duty',
-      'state',
-    ]) {
-      final parsed = _normalizeDutyValue(map[key]);
-      if (parsed != null) return parsed;
-    }
-
-    for (final nestedKey in const ['data', 'payload', 'result']) {
-      final nested = map[nestedKey];
-      if (nested is Map) {
-        final parsed = _parseDutyStatus(nested);
-        if (parsed != null) return parsed;
-      }
-    }
-
-    return null;
-  }
-
-  String? _normalizeDutyValue(dynamic value) {
-    if (value == null) return null;
-    final normalized = value.toString().trim().toLowerCase();
-    if (normalized == onDuty || normalized == offDuty) return normalized;
-    if (normalized == 'onduty' || normalized == 'on-duty') return onDuty;
-    if (normalized == 'offduty' || normalized == 'off-duty') return offDuty;
-    return null;
+    return payload;
   }
 
   Future<void> _applyOnDuty() async {
@@ -976,21 +1379,38 @@ class DutyHeartbeatService {
     return token != null && token.isNotEmpty;
   }
 
+  Future<bool> _hasActiveAuthTokenForImmediateClockInStart() async {
+    if (await _hasActiveAuthToken()) return true;
+
+    final cached = await AuthRepository.instance.getAccessToken();
+    if (cached != null && cached.isNotEmpty) {
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] immediate clock-in start using cached access token',
+      );
+      return true;
+    }
+
+    dutyHeartbeatDebugLog(
+      '[DutyHeartbeatService] immediate clock-in start skipped: no auth token',
+    );
+    return false;
+  }
+
+  Future<bool> _clockInFastStartEligible() async {
+    return _clockInImmediateStartEligible();
+  }
+
   Future<void> _applyOnDutyImpl() async {
     if (_deferTrackingStart) {
-      if (kDebugMode) {
-        debugPrint(
-          '[DutyHeartbeatService] defer on_duty apply until duty resume reconcile',
-        );
-      }
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] defer on_duty apply until duty resume reconcile',
+      );
       return;
     }
     if (!_heartbeatActive || !await _hasActiveAuthToken()) {
-      if (kDebugMode) {
-        debugPrint(
-          '[DutyHeartbeatService] skip on_duty apply (heartbeat inactive or no token)',
-        );
-      }
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] skip on_duty apply (heartbeat inactive or no token)',
+      );
       return;
     }
 
@@ -1003,8 +1423,16 @@ class DutyHeartbeatService {
 
     await _hydrateConsentFromStorage();
 
+    if (isFreshClockIn && Platform.isAndroid) {
+      unawaited(BackgroundLocationService.preWarmForClockIn());
+    }
+
+    final pushPromptIfNeeded =
+        isFreshClockIn && await OsNotificationPermission.isGranted()
+        ? false
+        : true;
     await PushNotificationService.instance.waitForPermissionPromptCompleted(
-      promptIfNeeded: true,
+      promptIfNeeded: pushPromptIfNeeded,
     );
     if (!_heartbeatActive || !await _hasActiveAuthToken()) return;
 
@@ -1021,16 +1449,24 @@ class DutyHeartbeatService {
       final healthy = await BackgroundLocationController.isTrackingHealthy();
       if (!healthy) {
         await _runPostDisclosurePermissionStep();
-        final result = await BackgroundLocationController.ensureStarted();
-        debugPrint(
-          '[DutyHeartbeatService] ensureStarted (disclosure accepted) ok=${result['ok'] == true}',
+        final clockInFastStart =
+            isFreshClockIn && await _clockInFastStartEligible();
+        final result = await BackgroundLocationController.ensureStarted(
+          clockInFastStart: clockInFastStart,
+        );
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] ensureStarted (disclosure accepted) '
+          'ok=${result['ok'] == true}'
+          '${clockInFastStart ? ' clockInFastStart=true' : ''}',
         );
         if (result['ok'] == true) {
-          debugPrint('[DutyLocation] on_duty → location ensureStarted OK');
+          locationDebugLog(
+            '[DutyLocation] on_duty → location ensureStarted OK',
+          );
           _locationSharingArmedThisDuty = true;
           await _syncPermissionReadyState();
         } else {
-          debugPrint(
+          locationDebugLog(
             '[DutyLocation] on_duty → location ensureStarted FAILED '
             '(disclosure-accepted path)',
           );
@@ -1057,7 +1493,9 @@ class DutyHeartbeatService {
 
     if (!await _confirmBackgroundLocationDisclosure()) {
       _lastAppliedStatus = onDuty;
-      debugPrint('[DutyHeartbeatService] on_duty start canceled by user');
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] on_duty start canceled by user',
+      );
       await refreshBackgroundLocationPermissionBannerState();
       return;
     }
@@ -1082,22 +1520,27 @@ class DutyHeartbeatService {
         await BackgroundLocationPermissions.hasSufficientBackgroundAccess();
     final skipSettingsPrompt = backgroundReady;
 
+    final clockInFastStart =
+        isFreshClockIn && await _clockInFastStartEligible();
     final result = alreadyHealthy
         ? <String, dynamic>{'ok': true, 'started': false, 'running': true}
-        : await BackgroundLocationController.ensureStarted();
-    debugPrint(
-      '[DutyHeartbeatService] ensureStarted ok=${result['ok'] == true}',
+        : await BackgroundLocationController.ensureStarted(
+            clockInFastStart: clockInFastStart,
+          );
+    dutyHeartbeatDebugLog(
+      '[DutyHeartbeatService] ensureStarted ok=${result['ok'] == true}'
+      '${clockInFastStart ? ' clockInFastStart=true' : ''}',
     );
 
     if (result['ok'] == true) {
-      debugPrint('[DutyLocation] on_duty → location ensureStarted OK');
+      locationDebugLog('[DutyLocation] on_duty → location ensureStarted OK');
       _locationSharingArmedThisDuty = true;
       await _syncPermissionReadyState();
       await refreshBackgroundLocationPermissionBannerState();
       return;
     }
 
-    debugPrint('[DutyLocation] on_duty → location ensureStarted FAILED');
+    locationDebugLog('[DutyLocation] on_duty → location ensureStarted FAILED');
     if (result['openSettings'] == true &&
         !skipSettingsPrompt &&
         !settingsPrompted) {
@@ -1109,18 +1552,32 @@ class DutyHeartbeatService {
   }
 
   Future<void> _reconcileAfterFailedStart() async {
-    String? status;
+    DutyHeartbeatPayload? payload;
     try {
-      status = await _fetchDutyStatus();
+      payload = await _fetchHeartbeat();
     } catch (_) {
-      status = null;
+      payload = null;
     }
+
+    if (payload != null && payload.isUnpaidBreak) {
+      final shouldNotify = !_locationPausedForUnpaidBreak;
+      await _pauseLocationForUnpaidBreak(
+        payload: payload,
+        notify: shouldNotify,
+        source: 'reconcile_failed_start',
+      );
+      return;
+    }
+
+    final status = payload?.dutyStatus;
 
     if (status == offDuty) {
       await _applyOffDuty();
       return;
     }
     if (status == onDuty) {
+      await _setNativeUnpaidBreak(false);
+      _locationPausedForUnpaidBreak = false;
       await DutyStatusSnapshot.markOnDuty();
       await refreshBackgroundLocationPermissionBannerState();
       _onDutyAutoPromptComplete = true;
@@ -1148,6 +1605,13 @@ class DutyHeartbeatService {
     if (!Platform.isAndroid && !Platform.isIOS) return true;
     if (RequiredPermissionsGate.shouldSuppressCompetingDialogs) return false;
 
+    if (Platform.isAndroid) {
+      if (!await LocationDisclosureConsent.shouldShowLocationDisclosure()) {
+        _disclosureAccepted = true;
+      }
+      return true;
+    }
+
     if (!await LocationDisclosureConsent.shouldShowLocationDisclosure()) {
       _disclosureAccepted = true;
       return true;
@@ -1167,7 +1631,10 @@ class DutyHeartbeatService {
     if (!accepted) return false;
 
     if (_requestPermissionAfterDisclosure) {
-      await PermissionSettingsHelper.requestForegroundLocationStep();
+
+      if (!_permissionsDialogOwnsOsPrompts) {
+        await PermissionSettingsHelper.requestForegroundLocationStep();
+      }
       _requestPermissionAfterDisclosure = false;
     }
 
@@ -1219,6 +1686,8 @@ class DutyHeartbeatService {
   Future<void> _advanceBannerLocationPermissionStep(
     BuildContext context,
   ) async {
+    if (_permissionsDialogOwnsOsPrompts) return;
+
     if (await BackgroundLocationPermissions.hasSufficientBackgroundAccess() &&
         await BackgroundLocationPermissions.hasPreciseLocationAccess()) {
       return;
@@ -1291,9 +1760,16 @@ class DutyHeartbeatService {
     BuildContext context,
   ) async {
     if (RequiredPermissionsGate.shouldSuppressCompetingDialogs) return false;
+    if (_permissionsDialogOwnsOsPrompts) return false;
 
     if (!await LocationDisclosureConsent.shouldShowLocationDisclosure()) {
       _disclosureAccepted = true;
+      return true;
+    }
+
+    if (Platform.isAndroid) {
+      _disclosureDeferred = false;
+      _requestPermissionAfterDisclosure = true;
       return true;
     }
 
@@ -1322,10 +1798,17 @@ class DutyHeartbeatService {
     return accepted;
   }
 
+  bool get _permissionsDialogOwnsOsPrompts =>
+      ClockInPermissionsDialog.isVisible || OnDutyPermissionsDialog.isVisible;
+
   Future<bool> _runPostDisclosurePermissionStep({
     bool userInitiated = false,
   }) async {
     if (await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled()) {
+      return false;
+    }
+
+    if (!userInitiated && _permissionsDialogOwnsOsPrompts) {
       return false;
     }
 
@@ -1380,7 +1863,7 @@ class DutyHeartbeatService {
     }
 
     final result = await BackgroundLocationController.ensureStarted();
-    debugPrint(
+    dutyHeartbeatDebugLog(
       '[DutyHeartbeatService] retry ensureStarted ok=${result['ok'] == true}',
     );
     if (result['ok'] == true) {
@@ -1407,8 +1890,14 @@ class DutyHeartbeatService {
   }
 
   Future<void> _applyOffDuty({bool allowAnnounce = true}) async {
-    debugPrint('[DutyLocation] off_duty → stopping location tracking');
-    debugPrint(
+    _clearOptimisticClockInTracking();
+    _locationPausedForUnpaidBreak = false;
+    _lastWorkingStatus = null;
+    _lastBreakType = null;
+    _lastBreakPaid = null;
+    LocationSharingStatusNotification.resetBreakStartedGate();
+    locationDebugLog('[DutyLocation] off_duty → stopping location tracking');
+    dutyHeartbeatDebugLog(
       '[DutyHeartbeatService] stopping location after flushing pending batches',
     );
 
@@ -1416,12 +1905,16 @@ class DutyHeartbeatService {
     final wasSharing = await _shouldAnnounceLocationStop();
 
     await DutyStatusSnapshot.clear();
+    await _setNativeUnpaidBreak(false);
+    await AndroidDutyKillWatch.disarm(forceOff: true);
 
     if (Platform.isIOS) {
       await IosSignificantLocationChangeService.setOnDuty(false);
     }
     final result = await BackgroundLocationController.stop();
-    debugPrint('[DutyHeartbeatService] stop ok=${result['ok'] == true}');
+    dutyHeartbeatDebugLog(
+      '[DutyHeartbeatService] stop ok=${result['ok'] == true}',
+    );
 
     if (allowAnnounce && wasOnDuty && wasSharing) {
       await LocationSharingStatusNotification.tryAnnounceStopped(
@@ -1436,6 +1929,7 @@ class DutyHeartbeatService {
     _resetDisclosureState();
     PermissionSettingsHelper.clearCooldown('background_location');
     await DutyTrackingPreferences.clearOnOffDuty();
+    OnDutyPermissionsPromptService.instance.stopRemindLoop();
     await refreshBackgroundLocationPermissionBannerState();
   }
 
@@ -1486,12 +1980,10 @@ class DutyHeartbeatService {
         previous != LocationPermission.always;
 
     if (upgradedToAlways) {
-      if (kDebugMode) {
-        debugPrint(
-          '[DutyHeartbeatService] ios permission upgraded to always; '
-          '${BackgroundLocationController.isUiBackgrounded ? "soft-applying (UI backgrounded)" : "restarting tracking"}',
-        );
-      }
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] ios permission upgraded to always; '
+        '${BackgroundLocationController.isUiBackgrounded ? "soft-applying (UI backgrounded)" : "restarting tracking"}',
+      );
       await _restartTrackingWithCurrentPermission();
     }
   }
@@ -1500,13 +1992,11 @@ class DutyHeartbeatService {
     if (!await confirmOnDutyFromApiForTracking()) return;
     _lastAppliedStatus = onDuty;
     final result = await BackgroundLocationController.restart();
-    if (kDebugMode) {
-      debugPrint(
-        '[DutyHeartbeatService] tracking restarted after permission change '
-        'ok=${result['ok'] == true} soft=${result['softRebuilt'] == true} '
-        'deferred=${result['deferredHardRestart'] == true}',
-      );
-    }
+    dutyHeartbeatDebugLog(
+      '[DutyHeartbeatService] tracking restarted after permission change '
+      'ok=${result['ok'] == true} soft=${result['softRebuilt'] == true} '
+      'deferred=${result['deferredHardRestart'] == true}',
+    );
     if (result['ok'] == true) {
       await _syncPermissionReadyState();
       await refreshBackgroundLocationPermissionBannerState();
@@ -1545,11 +2035,9 @@ class DutyHeartbeatService {
     }
 
     if (!forceRetry && _disclosureDeferred) {
-      if (kDebugMode) {
-        debugPrint(
-          '[DutyHeartbeatService] disclosure skipped (deferred this session)',
-        );
-      }
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] disclosure skipped (deferred this session)',
+      );
       return false;
     }
 
@@ -1588,7 +2076,7 @@ class DutyHeartbeatService {
 
       final context = AppNavigator.key.currentContext;
       if (context == null || !context.mounted) {
-        debugPrint(
+        dutyHeartbeatDebugLog(
           '[DutyHeartbeatService] disclosure skipped: navigator context unavailable',
         );
         completer.complete(false);
@@ -1616,9 +2104,9 @@ class DutyHeartbeatService {
         await _promptBackgroundLocationDisclosure(forceRetry: forceRetry),
       );
     } catch (e, st) {
-      if (kDebugMode) {
-        debugPrint('[DutyHeartbeatService] disclosure prompt failed: $e\n$st');
-      }
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] disclosure prompt failed: $e\n$st',
+      );
       if (!completer.isCompleted) {
         completer.complete(false);
       }
@@ -1636,6 +2124,14 @@ class DutyHeartbeatService {
   }) async {
     if (RequiredPermissionsGate.shouldSuppressCompetingDialogs) return false;
     if (!forceRetry && _disclosureDeferred) {
+      return false;
+    }
+
+    if (Platform.isAndroid) {
+      if (await LocationDisclosureConsent.hasAccepted()) {
+        _disclosureAccepted = true;
+        return true;
+      }
       return false;
     }
 
@@ -1674,6 +2170,11 @@ class DutyHeartbeatService {
     BuildContext? context,
   }) async {
     if (_backgroundLocationSettingsDialogVisible) return false;
+
+    if (!userInitiated && _lastAppliedStatus == onDuty) {
+      await refreshBackgroundLocationPermissionBannerState();
+      return false;
+    }
 
     if (!userInitiated && _onDutyAutoPromptComplete) {
       await refreshBackgroundLocationPermissionBannerState();

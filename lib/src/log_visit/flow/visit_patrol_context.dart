@@ -1,5 +1,7 @@
 import 'dart:math';
 
+import 'visit_checkpoint.dart';
+
 class VisitPatrolContext {
   const VisitPatrolContext({
     this.clientDraftId,
@@ -8,7 +10,12 @@ class VisitPatrolContext {
     this.regionName,
     this.siteName,
     this.scheduleId,
+    this.sitePatrolWindowId,
     this.requestId,
+    this.siteLatitude,
+    this.siteLongitude,
+    this.uploadUrl,
+    this.checkpoints = const <VisitCheckpoint>[],
   });
 
   final String? clientDraftId;
@@ -17,9 +24,15 @@ class VisitPatrolContext {
   final String? regionName;
   final String? siteName;
   final int? scheduleId;
+  final int? sitePatrolWindowId;
   final String? requestId;
+  final double? siteLatitude;
+  final double? siteLongitude;
+  final String? uploadUrl;
+  final List<VisitCheckpoint> checkpoints;
 
   bool get hasSiteOrRegionId => regionId != null || siteId != null;
+  bool get hasCheckpoints => checkpoints.isNotEmpty;
 
   String? get displayPlaceName {
     final site = siteName?.trim();
@@ -58,6 +71,13 @@ class VisitPatrolContext {
     return false;
   }
 
+  VisitCheckpoint? checkpointById(int id) {
+    for (final checkpoint in checkpoints) {
+      if (checkpoint.id == id) return checkpoint;
+    }
+    return null;
+  }
+
   VisitPatrolContext copyWith({
     String? clientDraftId,
     int? regionId,
@@ -65,14 +85,23 @@ class VisitPatrolContext {
     String? regionName,
     String? siteName,
     int? scheduleId,
+    int? sitePatrolWindowId,
     String? requestId,
+    double? siteLatitude,
+    double? siteLongitude,
+    String? uploadUrl,
+    List<VisitCheckpoint>? checkpoints,
     bool clearClientDraftId = false,
     bool clearRegionId = false,
     bool clearSiteId = false,
     bool clearRegionName = false,
     bool clearSiteName = false,
     bool clearScheduleId = false,
+    bool clearSitePatrolWindowId = false,
     bool clearRequestId = false,
+    bool clearSiteLatitude = false,
+    bool clearSiteLongitude = false,
+    bool clearUploadUrl = false,
   }) {
     return VisitPatrolContext(
       clientDraftId: clearClientDraftId
@@ -83,7 +112,18 @@ class VisitPatrolContext {
       regionName: clearRegionName ? null : (regionName ?? this.regionName),
       siteName: clearSiteName ? null : (siteName ?? this.siteName),
       scheduleId: clearScheduleId ? null : (scheduleId ?? this.scheduleId),
+      sitePatrolWindowId: clearSitePatrolWindowId
+          ? null
+          : (sitePatrolWindowId ?? this.sitePatrolWindowId),
       requestId: clearRequestId ? null : (requestId ?? this.requestId),
+      siteLatitude: clearSiteLatitude
+          ? null
+          : (siteLatitude ?? this.siteLatitude),
+      siteLongitude: clearSiteLongitude
+          ? null
+          : (siteLongitude ?? this.siteLongitude),
+      uploadUrl: clearUploadUrl ? null : (uploadUrl ?? this.uploadUrl),
+      checkpoints: checkpoints ?? this.checkpoints,
     );
   }
 
@@ -95,7 +135,12 @@ class VisitPatrolContext {
       'regionName': regionName,
       'siteName': siteName,
       'scheduleId': scheduleId,
+      'sitePatrolWindowId': sitePatrolWindowId,
       'requestId': requestId,
+      'siteLatitude': siteLatitude,
+      'siteLongitude': siteLongitude,
+      'uploadUrl': uploadUrl,
+      'checkpoints': checkpoints.map((e) => e.toJson()).toList(),
     };
   }
 
@@ -110,18 +155,76 @@ class VisitPatrolContext {
       if (siteName != null && siteName!.trim().isNotEmpty)
         'site_name': siteName!.trim(),
       if (scheduleId != null) 'schedule_id': scheduleId,
+      if (sitePatrolWindowId != null)
+        'site_patrol_window_id': sitePatrolWindowId,
     };
   }
 
   static VisitPatrolContext? fromJson(Map<String, dynamic>? json) {
     if (json == null) return null;
-    final clientDraftId = _string(json['clientDraftId'] ?? json['client_draft_id']);
-    final regionId = _int(json['regionId'] ?? json['region_id']);
-    final siteId = _int(json['siteId'] ?? json['site_id']);
-    final regionName = _string(json['regionName'] ?? json['region_name']);
-    final siteName = _string(json['siteName'] ?? json['site_name']);
-    final scheduleId = _int(json['scheduleId'] ?? json['schedule_id']);
+
+    final nestedSite = _asMap(json['site']);
+    final nestedRegion = _asMap(json['region']);
+    final nestedPatrol = _asMap(json['patrol']);
+
+    final clientDraftId = _string(
+      json['clientDraftId'] ?? json['client_draft_id'],
+    );
+    final regionId = _int(
+      json['regionId'] ??
+          json['region_id'] ??
+          nestedPatrol?['region_id'] ??
+          nestedRegion?['id'],
+    );
+    final siteId = _int(
+      json['siteId'] ??
+          json['site_id'] ??
+          nestedPatrol?['site_id'] ??
+          nestedSite?['id'],
+    );
+    final regionName = _string(
+      json['regionName'] ??
+          json['region_name'] ??
+          nestedPatrol?['region_name'] ??
+          nestedRegion?['name'],
+    );
+    final siteName = _string(
+      json['siteName'] ??
+          json['site_name'] ??
+          nestedPatrol?['site_name'] ??
+          nestedSite?['name'],
+    );
+    final scheduleId = _int(
+      json['scheduleId'] ??
+          json['schedule_id'] ??
+          nestedPatrol?['schedule_id'],
+    );
+    final sitePatrolWindowId = _int(
+      json['sitePatrolWindowId'] ??
+          json['site_patrol_window_id'] ??
+          nestedPatrol?['site_patrol_window_id'],
+    );
     final requestId = _string(json['requestId'] ?? json['request_id']);
+    final siteLatitude = _double(
+      json['siteLatitude'] ??
+          json['site_latitude'] ??
+          nestedSite?['latitude'],
+    );
+    final siteLongitude = _double(
+      json['siteLongitude'] ??
+          json['site_longitude'] ??
+          nestedSite?['longitude'],
+    );
+    final uploadUrl = _string(
+      json['api_upload_url'] ??
+          json['upload_url'] ??
+          json['uploadUrl'] ??
+          json['apiUploadUrl'],
+    );
+    final checkpoints = VisitCheckpoint.listFromJson(
+      json['checkpoints'],
+      baseUrl: uploadUrl,
+    );
 
     if (clientDraftId == null &&
         regionId == null &&
@@ -129,7 +232,9 @@ class VisitPatrolContext {
         regionName == null &&
         siteName == null &&
         scheduleId == null &&
-        requestId == null) {
+        sitePatrolWindowId == null &&
+        requestId == null &&
+        checkpoints.isEmpty) {
       return null;
     }
 
@@ -140,7 +245,12 @@ class VisitPatrolContext {
       regionName: regionName,
       siteName: siteName,
       scheduleId: scheduleId,
+      sitePatrolWindowId: sitePatrolWindowId,
       requestId: requestId,
+      siteLatitude: siteLatitude,
+      siteLongitude: siteLongitude,
+      uploadUrl: uploadUrl,
+      checkpoints: checkpoints,
     );
   }
 
@@ -162,6 +272,11 @@ class VisitPatrolContext {
         '${h(10)}${h(11)}${h(12)}${h(13)}${h(14)}${h(15)}';
   }
 
+  static Map<String, dynamic>? _asMap(dynamic value) {
+    if (value is Map) return Map<String, dynamic>.from(value);
+    return null;
+  }
+
   static String? _string(dynamic value) {
     if (value == null) return null;
     final text = value.toString().trim();
@@ -174,5 +289,12 @@ class VisitPatrolContext {
     if (value is int) return value;
     if (value is num) return value.toInt();
     return int.tryParse(value.toString().trim());
+  }
+
+  static double? _double(dynamic value) {
+    if (value == null) return null;
+    if (value is double) return value;
+    if (value is num) return value.toDouble();
+    return double.tryParse(value.toString().trim());
   }
 }

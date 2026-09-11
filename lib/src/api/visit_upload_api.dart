@@ -20,6 +20,7 @@ class VisitUploadResult {
     this.message,
     this.statusCode,
     this.errors,
+    this.isNetworkFailure = false,
   });
 
   final bool success;
@@ -30,11 +31,32 @@ class VisitUploadResult {
   final int? statusCode;
   final Map<String, dynamic>? errors;
 
+  final bool isNetworkFailure;
+
   String get displayMessage {
     final text = message?.trim();
     if (text != null && text.isNotEmpty) return text;
     if (success) return 'Patrol round report uploaded successfully';
     return 'Upload failed';
+  }
+
+  static bool isNetworkDioException(DioException error) {
+    switch (error.type) {
+      case DioExceptionType.connectionTimeout:
+      case DioExceptionType.sendTimeout:
+      case DioExceptionType.receiveTimeout:
+      case DioExceptionType.connectionError:
+        return true;
+      case DioExceptionType.unknown:
+        final cause = error.error;
+        return cause is SocketException ||
+            cause is HttpException ||
+            error.response == null;
+      case DioExceptionType.badResponse:
+      case DioExceptionType.cancel:
+      case DioExceptionType.badCertificate:
+        return false;
+    }
   }
 }
 
@@ -47,6 +69,8 @@ class VisitUploadApi {
     required Map<String, dynamic> meta,
     required List<VisitMediaItem> items,
     String? batchVoicePath,
+    String? generalVoicePath,
+    void Function(int current, int total)? onProgress,
   }) async {
     if (items.isEmpty) {
       const result = VisitUploadResult(
@@ -62,6 +86,8 @@ class VisitUploadApi {
     final form = FormData();
     form.fields.add(MapEntry('meta', jsonEncode(meta)));
 
+    final itemByteWeights = List<int>.filled(items.length, 0);
+
     for (var i = 0; i < items.length; i++) {
       final item = items[i];
       final mediaFile = File(item.path);
@@ -73,6 +99,9 @@ class VisitUploadApi {
         _logResult(result);
         return result;
       }
+
+      final mediaBytes = await mediaFile.length();
+      itemByteWeights[i] = mediaBytes;
 
       final mediaName = _mediaFileName(item, i);
       await _logMediaQuality(item: item, index: i, file: mediaFile);
@@ -109,6 +138,7 @@ class VisitUploadApi {
           _logResult(result);
           return result;
         }
+        itemByteWeights[i] += await voiceFile.length();
         form.files.add(
           MapEntry(
             'voice[$i]',
@@ -132,12 +162,24 @@ class VisitUploadApi {
       return batchVoiceResult;
     }
 
+    final generalVoiceResult = await _attachGeneralVoice(
+      form: form,
+      meta: meta,
+      generalVoicePath: generalVoicePath,
+    );
+    if (generalVoiceResult != null) {
+      _logResult(generalVoiceResult);
+      return generalVoiceResult;
+    }
+
     if (kDebugMode) {
       debugPrint(
         '[VisitUploadApi] POST ${ApiUrls.visitsUploadUrl} '
         'items=${items.length} metaKeys=${meta.keys.toList()}',
       );
     }
+
+    onProgress?.call(0, items.length);
 
     try {
       final response = await ApiClient.instance.dio.post<dynamic>(
@@ -150,8 +192,17 @@ class VisitUploadApi {
           receiveTimeout: const Duration(minutes: 3),
           validateStatus: (status) => status != null && status < 600,
         ),
+        onSendProgress: (sent, total) {
+          final current = _itemProgressFromBytes(
+            sent: sent,
+            totalHint: total,
+            itemByteWeights: itemByteWeights,
+          );
+          onProgress?.call(current, items.length);
+        },
       );
 
+      onProgress?.call(items.length, items.length);
       final result = _parseResponse(response);
       _logResult(result, responseBody: response.data);
       return result;
@@ -170,10 +221,11 @@ class VisitUploadApi {
           'body=${error.response?.data}',
         );
       }
+      final network = VisitUploadResult.isNetworkDioException(error);
       final parsed = error.response == null
           ? null
           : _parseResponse(error.response!);
-      if (parsed != null) {
+      if (parsed != null && !network) {
         _logResult(parsed, responseBody: error.response?.data);
         return parsed;
       }
@@ -181,37 +233,75 @@ class VisitUploadApi {
         success: false,
         statusCode: error.response?.statusCode,
         message: error.message ?? 'Network error while uploading visit.',
+        isNetworkFailure: network || error.response == null,
       );
       _logResult(fallback, responseBody: error.response?.data);
       return fallback;
     } catch (error, stack) {
       if (kDebugMode) {
         debugPrint('[VisitUploadApi] ERROR unexpected=$error');
-        debugPrint('[VisitUploadApi] stack=$stack');
+        if (kDebugMode) {
+          debugPrint('[VisitUploadApi] stack=$stack');
+        }
       }
+      final network =
+          error is SocketException || error is HttpException;
       final fallback = VisitUploadResult(
         success: false,
         message: error.toString(),
+        isNetworkFailure: network,
       );
       _logResult(fallback);
       return fallback;
     }
   }
 
+  static int _itemProgressFromBytes({
+    required int sent,
+    required int totalHint,
+    required List<int> itemByteWeights,
+  }) {
+    if (itemByteWeights.isEmpty) return 0;
+    if (sent <= 0) return 0;
+
+    final mediaBytes = itemByteWeights.fold<int>(0, (sum, b) => sum + b);
+    if (mediaBytes <= 0) {
+      if (totalHint > 0) {
+        final ratio = (sent / totalHint).clamp(0.0, 1.0);
+        return (ratio * itemByteWeights.length)
+            .ceil()
+            .clamp(1, itemByteWeights.length);
+      }
+      return 1;
+    }
+
+    final scale = totalHint > mediaBytes ? totalHint / mediaBytes : 1.0;
+    var cumulative = 0.0;
+    for (var i = 0; i < itemByteWeights.length; i++) {
+      cumulative += itemByteWeights[i] * scale;
+      if (sent < cumulative) return i + 1;
+    }
+    return itemByteWeights.length;
+  }
+
   void _logResult(VisitUploadResult result, {dynamic responseBody}) {
     if (!kDebugMode) return;
     if (result.success) {
-      debugPrint(
-        '[VisitUploadApi] SUCCESS status=${result.statusCode} '
-        'visitId=${result.visitId} clientDraftId=${result.clientDraftId} '
-        'itemsSaved=${result.itemsSaved} message=${result.displayMessage}',
-      );
+      if (kDebugMode) {
+        debugPrint(
+          '[VisitUploadApi] SUCCESS status=${result.statusCode} '
+          'visitId=${result.visitId} clientDraftId=${result.clientDraftId} '
+          'itemsSaved=${result.itemsSaved} message=${result.displayMessage}',
+        );
+      }
     } else {
-      debugPrint(
-        '[VisitUploadApi] FAIL status=${result.statusCode} '
-        'message=${result.displayMessage} errors=${result.errors} '
-        'body=$responseBody',
-      );
+      if (kDebugMode) {
+        debugPrint(
+          '[VisitUploadApi] FAIL status=${result.statusCode} '
+          'message=${result.displayMessage} errors=${result.errors} '
+          'body=$responseBody',
+        );
+      }
     }
   }
 
@@ -227,10 +317,12 @@ class VisitUploadApi {
     final name = p.basename(item.path);
 
     if (item.isVideo) {
-      debugPrint(
-        '[VisitUploadApi] media[$index] video '
-        'bytes=$bytes (${kb}KB) file=$name',
-      );
+      if (kDebugMode) {
+        debugPrint(
+          '[VisitUploadApi] media[$index] video '
+          'bytes=$bytes (${kb}KB) file=$name',
+        );
+      }
       return;
     }
 
@@ -239,10 +331,12 @@ class VisitUploadApi {
     final warn = size != null && (size.$1 < 1600 || size.$2 < 900)
         ? ' LOW_RES'
         : '';
-    debugPrint(
-      '[VisitUploadApi] media[$index] photo '
-      'pixels=$pixels bytes=$bytes (${kb}KB) file=$name$warn',
-    );
+    if (kDebugMode) {
+      debugPrint(
+        '[VisitUploadApi] media[$index] photo '
+        'pixels=$pixels bytes=$bytes (${kb}KB) file=$name$warn',
+      );
+    }
   }
 
   Future<(int, int)?> _photoPixelSize(File file) async {
@@ -255,7 +349,9 @@ class VisitUploadApi {
       frame.image.dispose();
       return (width, height);
     } catch (error) {
-      debugPrint('[VisitUploadApi] photo dimension read failed: $error');
+      if (kDebugMode) {
+        debugPrint('[VisitUploadApi] photo dimension read failed: $error');
+      }
       return null;
     }
   }
@@ -300,6 +396,50 @@ class VisitUploadApi {
         await MultipartFile.fromFile(
           path,
           filename: 'attention_voice${_extension(path) ?? '.m4a'}',
+          contentType: _voiceContentType(path),
+        ),
+      ),
+    );
+    return null;
+  }
+
+  Future<VisitUploadResult?> _attachGeneralVoice({
+    required FormData form,
+    required Map<String, dynamic> meta,
+    required String? generalVoicePath,
+  }) async {
+    final generalNote = meta['general_note'];
+    if (generalNote is! Map) return null;
+
+    final enabledRaw = generalNote['enabled']?.toString().trim().toLowerCase();
+    final enabledYes =
+        enabledRaw == 'yes' ||
+        enabledRaw == 'true' ||
+        generalNote['enabled'] == true;
+    final wantsVoice = enabledYes && generalNote['has_voice_note'] == true;
+    if (!wantsVoice) return null;
+
+    final path = generalVoicePath?.trim();
+    if (path == null || path.isEmpty) {
+      return const VisitUploadResult(
+        success: false,
+        message: 'General note voice missing.',
+      );
+    }
+    final voiceFile = File(path);
+    if (!await voiceFile.exists()) {
+      return const VisitUploadResult(
+        success: false,
+        message: 'General note voice file missing.',
+      );
+    }
+
+    form.files.add(
+      MapEntry(
+        'general_voice',
+        await MultipartFile.fromFile(
+          path,
+          filename: 'general_voice${_extension(path) ?? '.m4a'}',
           contentType: _voiceContentType(path),
         ),
       ),

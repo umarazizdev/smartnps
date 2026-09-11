@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../../app/native_theme_controller.dart';
+import '../../debug/debug_env_pin_dialog.dart';
 import '../../permissions/required_permissions_gate.dart';
 import '../../utilities/app_config.dart';
 import '../../utilities/app_version_info.dart';
@@ -25,10 +26,7 @@ class _RequiredPermissionsBlockerState extends State<RequiredPermissionsBlocker>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    unawaited(() async {
-      await _gate.refresh(force: true);
-      await _gate.requestPendingAllowPermissionsAutomatically();
-    }());
+    unawaited(_gate.refresh(force: true));
   }
 
   @override
@@ -87,11 +85,32 @@ class _RequiredPermissionsBlockerState extends State<RequiredPermissionsBlocker>
                                 mainAxisSize: MainAxisSize.min,
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
-                                  Image.asset(
-                                    'assets/npslogo.png',
-                                    height: 88,
-                                    fit: BoxFit.contain,
-                                    filterQuality: FilterQuality.high,
+                                  Center(
+                                    child: Material(
+                                      color: Colors.transparent,
+                                      child: InkWell(
+                                        borderRadius: BorderRadius.circular(16),
+                                        onLongPress: isDebugEnvSupported
+                                            ? () {
+                                                unawaited(
+                                                  openDebugEnvFromLogo(context),
+                                                );
+                                              }
+                                            : null,
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 24,
+                                            vertical: 8,
+                                          ),
+                                          child: Image.asset(
+                                            'assets/npslogo.png',
+                                            height: 88,
+                                            fit: BoxFit.contain,
+                                            filterQuality: FilterQuality.high,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
                                   ),
                                   const SizedBox(height: 14),
                                   Text(
@@ -107,7 +126,9 @@ class _RequiredPermissionsBlockerState extends State<RequiredPermissionsBlocker>
                                   ),
                                   const SizedBox(height: 8),
                                   Text(
-                                    'SmartNPS360 needs these permissions to run properly.\n\n'
+                                    'These permissions help with shift alerts and duty '
+                                    'tracking. You can keep using the app without them; '
+                                    'clock-in still needs location when you start a shift.\n\n'
                                     'Location is used only while you are on duty, and stops '
                                     'when your shift ends.',
                                     style: TextStyle(
@@ -460,7 +481,7 @@ class _PrivacyBanner extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Your privacy and security are our priority.',
+                    'Privacy notice',
                     style: TextStyle(
                       color: colors.privacyTitle,
                       fontSize: 13.5,
@@ -470,7 +491,8 @@ class _PrivacyBanner extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'We only use these permissions for core app features.',
+                    'These permissions are used solely to verify attendance '
+                    'during an active duty period. Collection stops when duty ends.',
                     style: TextStyle(
                       color: colors.privacyBody,
                       fontSize: 12,

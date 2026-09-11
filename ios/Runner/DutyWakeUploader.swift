@@ -60,6 +60,11 @@ final class DutyWakeUploader {
     cancel()
   }
 
+  var hasAccessToken: Bool {
+    guard let token = readKeychain(account: accessTokenAccount) else { return false }
+    return !token.isEmpty
+  }
+
   func cancel() {
     fallbackWorkItem?.cancel()
     fallbackWorkItem = nil
@@ -141,11 +146,16 @@ final class DutyWakeUploader {
         DispatchQueue.main.async {
           self.onConfirmedOffDuty?()
         }
+      case .unpaidBreak:
+        NSLog("[SmartNPS360][WakeUpload] heartbeat unpaid break; pausing GPS")
+        UserDefaults.standard.set(true, forKey: "smartnps360.ios_duty.unpaid_break")
+        self.finish()
       case .onDuty:
         if self.shouldSkipNativeWork() {
           self.finish()
           return
         }
+        UserDefaults.standard.set(false, forKey: "smartnps360.ios_duty.unpaid_break")
         NSLog("[SmartNPS360][WakeUpload] heartbeat on_duty; requesting GPS")
         self.lock.lock()
         self.waitingForGps = true
@@ -202,6 +212,7 @@ final class DutyWakeUploader {
   private enum DutyStatus {
     case onDuty
     case offDuty
+    case unpaidBreak
     case unknown
   }
 
@@ -233,6 +244,7 @@ final class DutyWakeUploader {
       let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
       if normalized == "on_duty" { return .onDuty }
       if normalized == "off_duty" { return .offDuty }
+      NSLog("[SmartNPS360][WakeUpload] heartbeat payload=\(text)")
     }
     guard let json = try? JSONSerialization.jsonObject(with: data) else {
       return .unknown
@@ -245,12 +257,28 @@ final class DutyWakeUploader {
       return normalizeDuty(text)
     }
     guard let map = value as? [String: Any] else { return .unknown }
+
+    var duty: DutyStatus = .unknown
     for key in ["status", "duty_status", "dutyStatus", "duty", "state"] {
       if let nested = map[key] {
         let parsed = parseDutyValue(nested)
-        if parsed != .unknown { return parsed }
+        if parsed != .unknown {
+          duty = parsed
+          break
+        }
       }
     }
+
+    if duty == .onDuty {
+      if isUnpaidBreak(map) {
+        return .unpaidBreak
+      }
+      return .onDuty
+    }
+    if duty == .offDuty {
+      return .offDuty
+    }
+
     for key in ["data", "payload", "result"] {
       if let nested = map[key] {
         let parsed = parseDutyValue(nested)
@@ -258,6 +286,28 @@ final class DutyWakeUploader {
       }
     }
     return .unknown
+  }
+
+  private func isUnpaidBreak(_ map: [String: Any]) -> Bool {
+    let workingRaw = (map["working_status"] ?? map["workingStatus"] ?? "") as? String ?? ""
+    let working = workingRaw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let onBreak = working == "on_break" ||
+      working == "on-break" ||
+      working == "onbreak" ||
+      working == "break"
+    guard onBreak else { return false }
+
+    if let paid = map["break_paid"] as? Bool { return !paid }
+    if let paid = map["breakPaid"] as? Bool { return !paid }
+    if let paidRaw = map["break_paid"] ?? map["breakPaid"] {
+      let text = "\(paidRaw)".trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+      if text == "true" || text == "1" || text == "paid" { return false }
+      if text == "false" || text == "0" || text == "unpaid" { return true }
+    }
+
+    let breakRaw = (map["break_type"] ?? map["breakType"] ?? "") as? String ?? ""
+    let breakType = breakRaw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    return breakType == "unpaid" || breakType == "break_unpaid"
   }
 
   private func normalizeDuty(_ raw: String) -> DutyStatus {

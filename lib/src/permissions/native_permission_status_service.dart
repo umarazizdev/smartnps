@@ -18,6 +18,7 @@ import '../background/location/background_location_permissions.dart';
 import '../motion/motion_activity_service.dart';
 import '../push/notifications/push_notification_preferences.dart';
 import 'os_notification_permission.dart';
+import '../utilities/app_config.dart';
 import '../utilities/app_version_info.dart';
 import '../utilities/device_identity.dart';
 
@@ -75,18 +76,10 @@ class NativePermissionStatusService {
         _legacySecureStorage.delete(key: _kForegroundLocationUserDenied),
       ]);
       await prefs.setBool(_kLegacyKeychainCleared, true);
-      if (kDebugMode) {
-        debugPrint(
-          '[NativePermissionStatus] cleared legacy Keychain location-history',
-        );
-      }
+      _debugLog('cleared legacy Keychain location-history');
     } catch (error) {
       _legacyKeychainCleanupStarted = false;
-      if (kDebugMode) {
-        debugPrint(
-          '[NativePermissionStatus] legacy Keychain cleanup failed: $error',
-        );
-      }
+      _debugLog('legacy Keychain cleanup failed: $error');
     }
   }
 
@@ -125,9 +118,11 @@ class NativePermissionStatusService {
   }
 
   Future<Map<String, dynamic>> buildPayload() async {
+    final deviceName = await DeviceIdentity.getDeviceName();
     return {
       'platform': DeviceIdentity.platformName(),
       'deviceId': await DeviceIdentity.getDeviceId(),
+      if (deviceName != null) 'deviceName': deviceName,
       'appVersion': AppVersionInfo.version,
       'build': AppVersionInfo.buildNumber,
       'battery_percentage': await _batteryPercentage(),
@@ -140,19 +135,11 @@ class NativePermissionStatusService {
   Future<dynamic> _handleSettingsMethodCall(MethodCall call) async {
     switch (call.method) {
       case 'lowPowerModeChanged':
-        if (kDebugMode) {
-          debugPrint(
-            '[NativePermissionStatus] low_power_mode changed ${call.arguments}',
-          );
-        }
+        _debugLog('low_power_mode changed ${call.arguments}');
         unawaited(syncIfChanged());
         return null;
       case 'backgroundAppRefreshChanged':
-        if (kDebugMode) {
-          debugPrint(
-            '[NativePermissionStatus] backgroundAppRefresh changed ${call.arguments}',
-          );
-        }
+        _debugLog('backgroundAppRefresh changed ${call.arguments}');
         unawaited(syncIfChanged());
 
         _onOsPermissionChanged?.call();
@@ -206,8 +193,8 @@ class NativePermissionStatusService {
     await BackgroundLocationPermissions.refreshPermissionStateFromOs();
     if (Platform.isAndroid && kDebugMode) {
       final oneTime = await _isAndroidOneTimeLocationPermission();
-      debugPrint(
-        '[NativePermissionStatus] ensureLatest refresh '
+      _debugLog(
+        'ensureLatest refresh '
         'oneTime=$oneTime foreground will map '
         '${oneTime ? 'denied' : 'from OS'}',
       );
@@ -215,12 +202,10 @@ class NativePermissionStatusService {
 
     if (_pendingAppCycle != null || _appCycleUploadInFlight != null) {
       _deferredSyncAfterAppCycle = true;
-      if (kDebugMode) {
-        debugPrint(
-          '[NativePermissionStatus] ensureLatest coalesced into app_cycle '
-          '(follow-up sync scheduled if still changed)',
-        );
-      }
+      _debugLog(
+        'ensureLatest coalesced into app_cycle '
+        '(follow-up sync scheduled if still changed)',
+      );
       return false;
     }
     return syncIfChanged();
@@ -239,12 +224,10 @@ class NativePermissionStatusService {
         !bypassAppCycleCoalesce &&
         (_pendingAppCycle != null || _appCycleUploadInFlight != null)) {
       _deferredSyncAfterAppCycle = true;
-      if (kDebugMode) {
-        debugPrint(
-          '[NativePermissionStatus] skip syncIfChanged '
-          '(coalesced into app_cycle; follow-up if still changed)',
-        );
-      }
+      _debugLog(
+        'skip syncIfChanged '
+        '(coalesced into app_cycle; follow-up if still changed)',
+      );
       await BackgroundLocationPermissions.refreshPermissionStateFromOs();
       return false;
     }
@@ -281,21 +264,15 @@ class NativePermissionStatusService {
         final payload = await buildPayload();
         final fingerprint = _fingerprint(payload);
         if (!force && fingerprint == _lastPayloadFingerprint) {
-          if (kDebugMode) {
-            debugPrint(
-              '[NativePermissionStatus] skip upload (unchanged permissions)',
-            );
-          }
+          _debugLog('skip upload (unchanged permissions)');
           continue;
         }
 
-        if (kDebugMode) {
-          debugPrint(
-            '[NativePermissionStatus] uploading permissions '
-            '(force=$force changed=${fingerprint != _lastPayloadFingerprint}) '
-            'permissions=${payload['permissions']}',
-          );
-        }
+        _debugLog(
+          'uploading permissions '
+          '(force=$force changed=${fingerprint != _lastPayloadFingerprint}) '
+          'permissions=${payload['permissions']}',
+        );
         final uploaded = await _upload(payload);
         if (uploaded) {
           _lastPayloadFingerprint = fingerprint;
@@ -312,11 +289,7 @@ class NativePermissionStatusService {
     final accessToken = await _accessTokenForLoggedInOfficer();
     if (accessToken == null || accessToken.isEmpty) return false;
 
-    if (kDebugMode) {
-      debugPrint(
-        '[NativePermissionStatus] push state upload push=${enabled ? 'enabled' : 'disabled'}',
-      );
-    }
+    _debugLog('push state upload push=${enabled ? 'enabled' : 'disabled'}');
     return syncIfChanged(force: true);
   }
 
@@ -327,11 +300,7 @@ class NativePermissionStatusService {
     _pendingAppCycle = appCycle;
     final inFlight = _appCycleUploadInFlight;
     if (inFlight != null) {
-      if (kDebugMode) {
-        debugPrint(
-          '[NativePermissionStatus] queued app_cycle upload $appCycle',
-        );
-      }
+      _debugLog('queued app_cycle upload $appCycle');
       return inFlight;
     }
 
@@ -375,7 +344,6 @@ class NativePermissionStatusService {
 
     var uploaded = false;
     await _serialized(() async {
-
       if (Platform.isIOS &&
           appCycle == 'resumed' &&
           (_lastAppCycle == 'paused' || _lastAppCycle == 'hidden')) {
@@ -391,22 +359,18 @@ class NativePermissionStatusService {
       final permissionsChanged = fingerprint != _lastPayloadFingerprint;
 
       if (!cycleChanged && !permissionsChanged) {
-        if (kDebugMode) {
-          debugPrint(
-            '[NativePermissionStatus] skip app_cycle upload '
-            '(unchanged cycle=$appCycle and permissions)',
-          );
-        }
+        _debugLog(
+          'skip app_cycle upload '
+          '(unchanged cycle=$appCycle and permissions)',
+        );
         return;
       }
 
-      if (kDebugMode) {
-        debugPrint(
-          '[NativePermissionStatus] app_cycle upload $appCycle '
-          '(cycleChanged=$cycleChanged permissionsChanged=$permissionsChanged) '
-          'permissions=${payload['permissions']}',
-        );
-      }
+      _debugLog(
+        'app_cycle upload $appCycle '
+        '(cycleChanged=$cycleChanged permissionsChanged=$permissionsChanged) '
+        'permissions=${payload['permissions']}',
+      );
       uploaded = await _upload(payload);
       if (uploaded) {
         _lastAppCycle = appCycle;
@@ -442,11 +406,7 @@ class NativePermissionStatusService {
         final payload = await buildPayload();
         payload['battery_percentage'] = batteryPercentage;
 
-        if (kDebugMode) {
-          debugPrint(
-            '[NativePermissionStatus] battery upload $batteryPercentage%',
-          );
-        }
+        _debugLog('battery upload $batteryPercentage%');
         final uploaded = await _upload(payload);
         if (uploaded) {
           _lastPayloadFingerprint = _fingerprint(payload);
@@ -556,19 +516,13 @@ class NativePermissionStatusService {
     }
     if (await _hasForegroundLocationEverBeenGranted() ||
         await _hasForegroundLocationUserDenied()) {
-      if (kDebugMode) {
-        debugPrint(
-          '[NativePermissionStatus] iOS foregroundLocation=denied '
-          '(Ask Next Time / When I Share or prior deny)',
-        );
-      }
+      _debugLog(
+        'iOS foregroundLocation=denied '
+        '(Ask Next Time / When I Share or prior deny)',
+      );
       return 'denied';
     }
     return 'unknown';
-  }
-
-  Future<bool> _hasIosForegroundLastingConfirmed() {
-    return _readHistoryFlag(_kIosForegroundLastingConfirmed);
   }
 
   Future<void> _setIosForegroundLastingConfirmed(bool value) async {
@@ -578,20 +532,12 @@ class NativePermissionStatusService {
       if (value) {
         if (prefs.getBool(_kIosForegroundLastingConfirmed) == true) return;
         await prefs.setBool(_kIosForegroundLastingConfirmed, true);
-        if (kDebugMode) {
-          debugPrint(
-            '[NativePermissionStatus] stored iOS foreground lasting confirmed',
-          );
-        }
+        _debugLog('stored iOS foreground lasting confirmed');
       } else {
         await prefs.remove(_kIosForegroundLastingConfirmed);
       }
     } catch (error) {
-      if (kDebugMode) {
-        debugPrint(
-          '[NativePermissionStatus] iOS lasting-confirmed flag failed: $error',
-        );
-      }
+      _debugLog('iOS lasting-confirmed flag failed: $error');
     }
   }
 
@@ -602,12 +548,10 @@ class NativePermissionStatusService {
         permission == LocationPermission.whileInUse) {
       await _setIosForegroundLastingConfirmed(true);
       await _clearForegroundLocationUserDenied();
-      if (kDebugMode) {
-        debugPrint(
-          '[NativePermissionStatus] iOS FG lasting confirmed after background '
-          '($permission)',
-        );
-      }
+      _debugLog(
+        'iOS FG lasting confirmed after background '
+        '($permission)',
+      );
       return;
     }
     await _setIosForegroundLastingConfirmed(false);
@@ -621,11 +565,7 @@ class NativePermissionStatusService {
       );
       return oneTime == true;
     } catch (error) {
-      if (kDebugMode) {
-        debugPrint(
-          '[NativePermissionStatus] one-time location check failed: $error',
-        );
-      }
+      _debugLog('one-time location check failed: $error');
       return false;
     }
   }
@@ -635,7 +575,6 @@ class NativePermissionStatusService {
 
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-
       return _resolveBackgroundLocationApiStatus('unknown');
     }
 
@@ -645,12 +584,10 @@ class NativePermissionStatusService {
 
       if (await _androidLocationIsDeniedForApi(foreground)) {
         await _markBackgroundLocationUserDenied();
-        if (kDebugMode) {
-          debugPrint(
-            '[NativePermissionStatus] backgroundLocation=denied '
-            '(app location denied in Settings)',
-          );
-        }
+        _debugLog(
+          'backgroundLocation=denied '
+          '(app location denied in Settings)',
+        );
         return 'denied';
       }
 
@@ -666,11 +603,7 @@ class NativePermissionStatusService {
           );
         }
       } catch (error) {
-        if (kDebugMode) {
-          debugPrint(
-            '[NativePermissionStatus] android background check failed: $error',
-          );
-        }
+        _debugLog('android background check failed: $error');
         liveStatus = await _mapAndroidBackgroundPermissionStatus(
           await Permission.locationAlways.status,
         );
@@ -739,21 +672,15 @@ class NativePermissionStatusService {
     if (lasting) {
       await _markForegroundLocationEverGranted();
       await _clearForegroundLocationUserDenied();
-      if (kDebugMode) {
-        debugPrint(
-          '[NativePermissionStatus] OS FG prompt → whenInUse/Always; API granted',
-        );
-      }
+      _debugLog('OS FG prompt → whenInUse/Always; API granted');
       await syncIfChanged(force: true);
       return;
     }
 
-    if (kDebugMode) {
-      debugPrint(
-        '[NativePermissionStatus] OS FG prompt → not While Using/Always; '
-        'API foreground+precise denied',
-      );
-    }
+    _debugLog(
+      'OS FG prompt → not While Using/Always; '
+      'API foreground+precise denied',
+    );
     await _markForegroundLocationUserDenied();
     await _uploadPermissionMarkOrDefer();
   }
@@ -788,12 +715,10 @@ class NativePermissionStatusService {
   Future<void> _uploadPermissionMarkOrDefer() async {
     if (_pendingAppCycle != null || _appCycleUploadInFlight != null) {
       _deferredSyncAfterAppCycle = true;
-      if (kDebugMode) {
-        debugPrint(
-          '[NativePermissionStatus] defer mark-denied upload '
-          '(app_cycle will POST; follow-up only if still changed)',
-        );
-      }
+      _debugLog(
+        'defer mark-denied upload '
+        '(app_cycle will POST; follow-up only if still changed)',
+      );
       return;
     }
     await syncIfChanged(force: true);
@@ -813,12 +738,10 @@ class NativePermissionStatusService {
 
     if (await _hasBackgroundLocationEverBeenGranted() ||
         await _hasBackgroundLocationUserDenied()) {
-      if (kDebugMode) {
-        debugPrint(
-          '[NativePermissionStatus] backgroundLocation remapped '
-          'unknown→denied (prior grant or user deny)',
-        );
-      }
+      _debugLog(
+        'backgroundLocation remapped '
+        'unknown→denied (prior grant or user deny)',
+      );
       return 'denied';
     }
 
@@ -831,11 +754,7 @@ class NativePermissionStatusService {
       final prefs = await _prefs();
       return prefs.getBool(key) == true;
     } catch (error) {
-      if (kDebugMode) {
-        debugPrint(
-          '[NativePermissionStatus] read history flag $key failed: $error',
-        );
-      }
+      _debugLog('read history flag $key failed: $error');
       return false;
     }
   }
@@ -849,15 +768,9 @@ class NativePermissionStatusService {
       final prefs = await _prefs();
       if (prefs.getBool(key) == true) return;
       await prefs.setBool(key, true);
-      if (kDebugMode) {
-        debugPrint('[NativePermissionStatus] stored $debugLabel');
-      }
+      _debugLog('stored $debugLabel');
     } catch (error) {
-      if (kDebugMode) {
-        debugPrint(
-          '[NativePermissionStatus] write history flag $key failed: $error',
-        );
-      }
+      _debugLog('write history flag $key failed: $error');
     }
   }
 
@@ -867,11 +780,7 @@ class NativePermissionStatusService {
       final prefs = await _prefs();
       await prefs.remove(key);
     } catch (error) {
-      if (kDebugMode) {
-        debugPrint(
-          '[NativePermissionStatus] clear history flag $key failed: $error',
-        );
-      }
+      _debugLog('clear history flag $key failed: $error');
     }
   }
 
@@ -946,11 +855,7 @@ class NativePermissionStatusService {
           );
           return precise == true ? 'granted' : 'denied';
         } catch (error) {
-          if (kDebugMode) {
-            debugPrint(
-              '[NativePermissionStatus] android precise check failed: $error',
-            );
-          }
+          _debugLog('android precise check failed: $error');
           return 'granted';
         }
       }
@@ -976,12 +881,10 @@ class NativePermissionStatusService {
       await _setIosForegroundLastingConfirmed(false);
       if (await _hasForegroundLocationEverBeenGranted() ||
           await _hasForegroundLocationUserDenied()) {
-        if (kDebugMode) {
-          debugPrint(
-            '[NativePermissionStatus] iOS preciseLocation=denied '
-            '(Ask Next Time / When I Share or prior deny)',
-          );
-        }
+        _debugLog(
+          'iOS preciseLocation=denied '
+          '(Ask Next Time / When I Share or prior deny)',
+        );
         return 'denied';
       }
       return 'unknown';
@@ -997,11 +900,7 @@ class NativePermissionStatusService {
           return precise ? 'granted' : 'denied';
         }
       } catch (error) {
-        if (kDebugMode) {
-          debugPrint(
-            '[NativePermissionStatus] ios native precise check failed: $error',
-          );
-        }
+        _debugLog('ios native precise check failed: $error');
       }
       try {
         final accuracy = await Geolocator.getLocationAccuracy();
@@ -1011,11 +910,7 @@ class NativePermissionStatusService {
           LocationAccuracyStatus.unknown => 'unknown',
         };
       } catch (error) {
-        if (kDebugMode) {
-          debugPrint(
-            '[NativePermissionStatus] ios precise check failed: $error',
-          );
-        }
+        _debugLog('ios precise check failed: $error');
         return 'unknown';
       }
     }
@@ -1035,7 +930,6 @@ class NativePermissionStatusService {
       if (!available) return 'unknown';
 
       if (Platform.isAndroid) {
-
         final status = await Permission.activityRecognition.status;
         if (status.isGranted || status.isLimited || status.isProvisional) {
           return 'granted';
@@ -1060,11 +954,7 @@ class NativePermissionStatusService {
           return 'unknown';
       }
     } catch (error) {
-      if (kDebugMode) {
-        debugPrint(
-          '[NativePermissionStatus] motion activity status check failed: $error',
-        );
-      }
+      _debugLog('motion activity status check failed: $error');
       return 'unknown';
     }
   }
@@ -1082,13 +972,8 @@ class NativePermissionStatusService {
       if (status == 'denied') return 'unknown';
       if (status != null) return 'unknown';
     } on MissingPluginException {
-
     } catch (error) {
-      if (kDebugMode) {
-        debugPrint(
-          '[NativePermissionStatus] battery optimization status check failed: $error',
-        );
-      }
+      _debugLog('battery optimization status check failed: $error');
     }
 
     try {
@@ -1099,11 +984,7 @@ class NativePermissionStatusService {
 
       return ignoring ? 'granted' : 'unknown';
     } catch (error) {
-      if (kDebugMode) {
-        debugPrint(
-          '[NativePermissionStatus] battery optimization check failed: $error',
-        );
-      }
+      _debugLog('battery optimization check failed: $error');
       return 'unknown';
     }
   }
@@ -1118,11 +999,7 @@ class NativePermissionStatusService {
       if (status == 'enabled' || status == 'disabled') return status!;
       return 'unknown';
     } catch (error) {
-      if (kDebugMode) {
-        debugPrint(
-          '[NativePermissionStatus] low power mode check failed: $error',
-        );
-      }
+      _debugLog('low power mode check failed: $error');
       return 'unknown';
     }
   }
@@ -1141,11 +1018,7 @@ class NativePermissionStatusService {
       }
       return 'unknown';
     } catch (error) {
-      if (kDebugMode) {
-        debugPrint(
-          '[NativePermissionStatus] backgroundAppRefresh check failed: $error',
-        );
-      }
+      _debugLog('backgroundAppRefresh check failed: $error');
       return 'unknown';
     }
   }
@@ -1157,9 +1030,7 @@ class NativePermissionStatusService {
       if (level < 0 || level > 100) return null;
       return level;
     } catch (error) {
-      if (kDebugMode) {
-        debugPrint('[NativePermissionStatus] battery level failed: $error');
-      }
+      _debugLog('battery level failed: $error');
       return null;
     }
   }
@@ -1188,14 +1059,18 @@ class NativePermissionStatusService {
     };
   }
 
+  void _debugLog(String message) {
+    if (!AppConfig.enablePermissionStatusDebugLog) return;
+    if (!kDebugMode) return;
+    debugPrint('[NativePermissionStatus] $message');
+  }
+
   Future<bool> _upload(Map<String, dynamic> payload) async {
     ApiClient.instance.ensureAuthInterceptorInstalled();
     final uri = Uri.parse(ApiUrls.permissionStatusUrl);
 
     try {
-      if (kDebugMode) {
-        debugPrint('[NativePermissionStatus] POST ${uri.path} body=$payload');
-      }
+      _debugLog('POST ${uri.path} keys=${payload.keys.toList()}');
       final response = await ApiClient.instance.dio.postUri(
         uri,
         data: payload,

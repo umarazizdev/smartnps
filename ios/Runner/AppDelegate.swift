@@ -13,6 +13,7 @@ import flutter_background_service_ios
   private let slcEventChannelName = "com.smartnps360.app/ios_slc_events"
   private let slcEnabledKey = "smartnps360.ios_slc.enabled"
   private let onDutyKey = "smartnps360.ios_duty.on_duty"
+  private let unpaidBreakKey = "smartnps360.ios_duty.unpaid_break"
   private let slcPendingLocationsKey = "smartnps360.ios_slc.pending_locations"
   private let geofenceLatKey = "smartnps360.ios_geofence.lat"
   private let geofenceLonKey = "smartnps360.ios_geofence.lon"
@@ -24,6 +25,8 @@ import flutter_background_service_ios
   private var settingsChannelRegistered = false
   private var slcChannelRegistered = false
   private var motionChannelRegistered = false
+  private var deviceCheckChannelRegistered = false
+  private var nativeCameraChannelRegistered = false
   private var settingsMethodChannel: FlutterMethodChannel?
   private var slcMethodChannel: FlutterMethodChannel?
   private var launchedForLocation = false
@@ -34,11 +37,14 @@ import flutter_background_service_ios
   private var gpsPollInFlight = false
   private var gpsPollTimer: Timer?
   private var lastNativeGpsAt: Date?
-  private let dutyGpsDistanceFilter: CLLocationDistance = 5
+  private let dutyGpsDistanceFilter: CLLocationDistance = kCLDistanceFilterNone
+  /// Quiet-poll backup while native keep-alive stream is silent (matches Flutter stationary band).
   private let gpsPollInterval: TimeInterval = 30
   private var lastGeofenceCoordinate: CLLocationCoordinate2D?
   private var slcEventSink: FlutterEventSink?
   private var motionActivityManager: MotionActivityManager?
+  private var deviceCheckManager: DeviceCheckManager?
+  private var nativeCameraPlugin: NativeCameraPlugin?
 
   override func application(
     _ application: UIApplication,
@@ -87,16 +93,39 @@ import flutter_background_service_ios
     registerSettingsChannelIfNeeded(with: messenger)
     registerSlcChannelIfNeeded(with: messenger)
     registerMotionActivityChannelIfNeeded(with: messenger)
+    registerDeviceCheckChannelIfNeeded(with: messenger)
+    registerNativeCameraChannelIfNeeded(with: messenger)
   }
 
   /// Fallback for engines created before implicit-engine callback wiring.
   func registerPlatformChannelsIfNeeded() {
-    if slcChannelRegistered && settingsChannelRegistered && motionChannelRegistered {
+    if slcChannelRegistered
+      && settingsChannelRegistered
+      && motionChannelRegistered
+      && deviceCheckChannelRegistered
+      && nativeCameraChannelRegistered
+    {
       return
     }
     if let messenger = flutterViewController()?.binaryMessenger {
       registerPlatformChannels(with: messenger)
     }
+  }
+
+  private func registerDeviceCheckChannelIfNeeded(with messenger: FlutterBinaryMessenger) {
+    guard !deviceCheckChannelRegistered else { return }
+    let manager = deviceCheckManager ?? DeviceCheckManager()
+    manager.register(with: messenger)
+    deviceCheckManager = manager
+    deviceCheckChannelRegistered = true
+  }
+
+  private func registerNativeCameraChannelIfNeeded(with messenger: FlutterBinaryMessenger) {
+    guard !nativeCameraChannelRegistered else { return }
+    let plugin = nativeCameraPlugin ?? NativeCameraPlugin()
+    plugin.register(with: messenger)
+    nativeCameraPlugin = plugin
+    nativeCameraChannelRegistered = true
   }
 
   private func registerMotionActivityChannelIfNeeded(with messenger: FlutterBinaryMessenger) {
@@ -266,6 +295,14 @@ import flutter_background_service_ios
           "onDuty": onDuty,
           "running": UserDefaults.standard.bool(forKey: self.slcEnabledKey),
         ])
+      case "setUnpaidBreak":
+        let unpaid = (call.arguments as? [String: Any])?["unpaid"] as? Bool ?? false
+        self.setUnpaidBreak(unpaid)
+        result([
+          "ok": true,
+          "unpaidBreak": unpaid,
+          "onDuty": self.isOnDuty(),
+        ])
       case "isOnDuty":
         result(self.slcStatusMap())
       case "isMonitoring":
@@ -329,11 +366,23 @@ import flutter_background_service_ios
 
     if !launchedForLocation {
       // Tap/open while still flagged on duty: keep SLC + GPS ring so a later
-      // swipe-kill can relaunch. Do not start 5m GPS until duty is confirmed.
-      if wasOnDuty, wasArmed, CLLocationManager.authorizationStatus() == .authorizedAlways {
+      // swipe-kill can relaunch. Do not start duty GPS until duty is confirmed.
+      // Without a stored session token, disarm — e.g. login screen / logged out.
+      if wasOnDuty,
+         wasArmed,
+         CLLocationManager.authorizationStatus() == .authorizedAlways,
+         DutyWakeUploader.shared.hasAccessToken
+      {
         NSLog("[SmartNPS360][SLC] cold launch on duty; keeping SLC/geofence armed")
         restoreSlcAfterLocationWake(startNativePing: false)
         return
+      }
+      if wasOnDuty || wasArmed {
+        NSLog(
+          "[SmartNPS360][SLC] cold launch cleared; "
+            + "wasOnDuty=\(wasOnDuty) wasArmed=\(wasArmed) "
+            + "hasToken=\(DutyWakeUploader.shared.hasAccessToken)"
+        )
       }
       setOnDuty(false)
       return
@@ -341,6 +390,12 @@ import flutter_background_service_ios
 
     guard wasOnDuty, wasArmed else {
       NSLog("[SmartNPS360][SLC] location wake ignored; native duty/slc not armed")
+      setOnDuty(false)
+      return
+    }
+
+    guard DutyWakeUploader.shared.hasAccessToken else {
+      NSLog("[SmartNPS360][SLC] location wake ignored; no auth token")
       setOnDuty(false)
       return
     }
@@ -359,7 +414,7 @@ import flutter_background_service_ios
   }
 
   /// Restores SLC + GPS ring without stopping existing iOS region monitoring.
-  /// 5m GPS stays off until Flutter or native heartbeat confirms on_duty.
+  /// Duty GPS keep-alive stays off until Flutter or native heartbeat confirms on_duty.
   private func restoreSlcAfterLocationWake(startNativePing: Bool) {
     awaitingFlutterDutyConfirm = true
     UserDefaults.standard.set(true, forKey: onDutyKey)
@@ -432,8 +487,24 @@ import flutter_background_service_ios
     UserDefaults.standard.set(onDuty, forKey: onDutyKey)
     if !onDuty {
       awaitingFlutterDutyConfirm = false
+      UserDefaults.standard.set(false, forKey: unpaidBreakKey)
       DutyWakeUploader.shared.cancel()
       stopSlcMonitoring()
+    }
+  }
+
+  private func isUnpaidBreak() -> Bool {
+    return UserDefaults.standard.bool(forKey: unpaidBreakKey)
+  }
+
+  private func setUnpaidBreak(_ unpaid: Bool) {
+    UserDefaults.standard.set(unpaid, forKey: unpaidBreakKey)
+    if unpaid {
+      NSLog("[SmartNPS360][SLC] unpaid break — pausing duty GPS (SLC stays armed if on duty)")
+      stopDutyGpsMonitoring()
+    } else if isOnDuty() && !awaitingFlutterDutyConfirm {
+      NSLog("[SmartNPS360][SLC] unpaid break ended — resuming duty GPS")
+      startDutyGpsMonitoring()
     }
   }
 
@@ -468,14 +539,18 @@ import flutter_background_service_ios
 
     awaitingFlutterDutyConfirm = false
     DutyWakeUploader.shared.claimByFlutter()
-    startDutyGpsMonitoring()
+    if isUnpaidBreak() {
+      stopDutyGpsMonitoring()
+    } else {
+      startDutyGpsMonitoring()
+    }
     startDutyMotionIfAllowed()
 
     let manager = ensureWakeLocationManager()
     if CLLocationManager.significantLocationChangeMonitoringAvailable() {
       manager.startMonitoringSignificantLocationChanges()
     } else {
-      NSLog("[SmartNPS360][SLC] significant-change unavailable; duty GPS 5m keep-alive still running")
+      NSLog("[SmartNPS360][SLC] significant-change unavailable; duty GPS keep-alive still running")
     }
 
     if let saved = savedGeofenceCoordinate() {
@@ -489,10 +564,11 @@ import flutter_background_service_ios
       "ok": true,
       "running": true,
       "onDuty": true,
-      "gpsKeepAlive": true,
+      "unpaidBreak": isUnpaidBreak(),
+      "gpsKeepAlive": !isUnpaidBreak(),
       "launchedForLocation": launchedForLocation,
       "awaitingDutyConfirm": false,
-      "distanceFilterMeters": dutyGpsDistanceFilter,
+      "distanceFilterMeters": 0,
       "geofenceRadiusMeters": dutyGeofenceRadius,
       "geofenceArmed": lastGeofenceCoordinate != nil,
       "geofenceRingCount": dutyGeofenceRingSlots.count,
@@ -503,6 +579,10 @@ import flutter_background_service_ios
 
   private func startDutyGpsMonitoring() {
     guard isOnDuty() else { return }
+    guard !isUnpaidBreak() else {
+      NSLog("[SmartNPS360][DutyGPS] skip start; unpaid break active")
+      return
+    }
     let manager = dutyGpsLocationManager ?? CLLocationManager()
     manager.delegate = self
     manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
@@ -518,6 +598,19 @@ import flutter_background_service_ios
     startGpsPollTimer()
   }
 
+  private func stopDutyGpsMonitoring() {
+    gpsPollTimer?.invalidate()
+    gpsPollTimer = nil
+    gpsPollInFlight = false
+    lastNativeGpsAt = nil
+    dutyPollLocationManager?.stopUpdatingLocation()
+    dutyPollLocationManager?.delegate = nil
+    dutyPollLocationManager = nil
+    dutyGpsLocationManager?.stopUpdatingLocation()
+    dutyGpsLocationManager?.delegate = nil
+    dutyGpsLocationManager = nil
+  }
+
   private func startGpsPollTimer() {
     gpsPollTimer?.invalidate()
     let timer = Timer(timeInterval: gpsPollInterval, repeats: true) { [weak self] _ in
@@ -530,6 +623,7 @@ import flutter_background_service_ios
   /// One-shot current GPS (not last-known). Used while stationary and on SLC wake.
   private func requestFreshGpsPoll(reason: String) {
     guard isOnDuty(), UserDefaults.standard.bool(forKey: slcEnabledKey) else { return }
+    if isUnpaidBreak() { return }
     if awaitingFlutterDutyConfirm { return }
     if let lastGps = lastNativeGpsAt, Date().timeIntervalSince(lastGps) < gpsPollInterval {
       return
@@ -540,6 +634,10 @@ import flutter_background_service_ios
 
   private func requestNativeWakeGps() {
     guard isOnDuty(), UserDefaults.standard.bool(forKey: slcEnabledKey) else { return }
+    if isUnpaidBreak() {
+      NSLog("[SmartNPS360][DutyGPS] skip native wake GPS; unpaid break active")
+      return
+    }
     requestGpsFix(reason: "native_wake")
   }
 

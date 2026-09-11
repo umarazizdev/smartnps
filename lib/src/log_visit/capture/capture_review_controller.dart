@@ -1,33 +1,36 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:get/get.dart';
 import 'package:video_player/video_player.dart';
 
-import '../../app/app_navigator.dart';
-import '../../app/app_routes.dart';
-import '../../widgets/dialogs/glass_action_dialog.dart';
+import '../../native_camera/native_camera.dart';
+import '../flow/cam_perf.dart';
+import '../flow/capture_work_coordinator.dart';
 import '../flow/visit_media_draft_store.dart';
 import '../flow/visit_media_geo.dart';
 import '../flow/visit_orientation.dart';
 import '../flow/visit_video_flow_controller.dart';
-import '../record/visit_video_recorder_controller.dart';
-import '../record/visit_video_recorder_screen.dart';
+import '../record/visit_native_capture_launcher.dart';
 
 class CaptureReviewController extends GetxController {
   CaptureReviewController({
     required this.displayPath,
     required this.mediaType,
+    required this.captureId,
     required VisitMediaGeo initialGeo,
     this.resolveLocationInBackground = false,
+    CaptureWorkCoordinator? coordinator,
   }) : geo = initialGeo.obs,
-       mediaPath = displayPath.obs;
+       mediaPath = displayPath.obs,
+       _coordinator = coordinator ?? CaptureWorkCoordinator.active;
 
   final String displayPath;
   final VisitMediaType mediaType;
+  final String captureId;
   final bool resolveLocationInBackground;
+  final CaptureWorkCoordinator? _coordinator;
 
   final Rx<VisitMediaGeo> geo;
   final RxString mediaPath;
@@ -37,19 +40,17 @@ class CaptureReviewController extends GetxController {
   final videoReady = false.obs;
   final videoError = false.obs;
   final isPlaying = false.obs;
-  final gpsIssueMessage = RxnString();
+  final persistError = RxnString();
 
   VideoPlayerController? videoController;
   String? _durablePath;
-  bool _gpsDialogVisible = false;
+  bool _isClosing = false;
+  bool _accepted = false;
+  bool _firstFrameNotified = false;
+  Future<VisitMediaItem?>? _legacyPersistFuture;
 
   bool get isPhoto => mediaType == VisitMediaType.photo;
   String get filePath => mediaPath.value;
-  bool get requiresGpsForDone => resolveLocationInBackground;
-  bool get isDoneBlockedByMissingGps =>
-      requiresGpsForDone && !geo.value.hasCoordinates;
-  String get doneBlockedMessage =>
-      'Done is disabled until GPS is available. You cannot finish without GPS.';
 
   VisitVideoFlowController get _flow {
     return Get.isRegistered<VisitVideoFlowController>()
@@ -58,113 +59,105 @@ class CaptureReviewController extends GetxController {
   }
 
   VisitMediaItem get mediaItem {
-    return _flow.findByPath(mediaPath.value) ??
+    return _flow.findByCaptureId(captureId) ??
+        _flow.findByPath(mediaPath.value) ??
         _flow.findByPath(displayPath) ??
         VisitMediaItem(
           path: mediaPath.value,
           type: mediaType,
+          captureId: captureId,
           capturedAt: geo.value.capturedAt,
           latitude: geo.value.latitude,
           longitude: geo.value.longitude,
           accuracyMeters: geo.value.accuracyMeters,
+          isPendingCapture: true,
         );
   }
 
   @override
   void onInit() {
     super.onInit();
+    if (resolveLocationInBackground && !geo.value.hasUsableGps) {
+      isResolvingLocation.value = true;
+    }
     SchedulerBinding.instance.addPostFrameCallback((_) {
       if (isClosed) return;
-      if (_flow.findByPath(displayPath) == null &&
-          _flow.findByPath(mediaPath.value) == null) {
+      unawaited(_registerPendingOnly());
+    });
+    if (!isPhoto) {
+      unawaited(_initVideo());
+    }
+  }
+
+  void notifyDisplayFirstFrame() {
+    if (_firstFrameNotified || isClosed || _isClosing) return;
+    _firstFrameNotified = true;
+    final coordinator = _coordinator;
+    if (coordinator != null && !coordinator.isDisposed) {
+      unawaited(
+        coordinator.onReviewFirstFrame(
+          captureId: captureId,
+          displayPath: displayPath,
+          mediaType: mediaType,
+          geo: geo.value,
+          onWarmItem: (item) {
+            if (isClosed || _isClosing || _accepted) return;
+            if (item != null) {
+              _durablePath = item.path;
+              persistError.value = null;
+            }
+          },
+          onWarmError: (error) {
+            if (!isClosed) {
+              persistError.value = 'Could not save media. Please try again.';
+            }
+          },
+          onGeoUpdated: (resolved) {
+            if (isClosed || _isClosing || _accepted) return;
+            geo.value = resolved;
+            isResolvingLocation.value = false;
+            unawaited(
+              _flow.updateCaptureGeo(
+                mediaPath: mediaPath.value,
+                geo: resolved,
+                captureId: captureId,
+              ),
+            );
+          },
+        ),
+      );
+      if (resolveLocationInBackground && !geo.value.hasUsableGps) {
+        isResolvingLocation.value = true;
+        unawaited(_watchCoordinatorGps());
+      }
+      return;
+    }
+    _startLegacyWarmPersist();
+  }
+
+  Future<void> _watchCoordinatorGps() async {
+    final coordinator = _coordinator;
+    if (coordinator == null) return;
+    final fut = coordinator.gpsContinueFuture;
+    if (fut == null) {
+      if (!isClosed) isResolvingLocation.value = false;
+      return;
+    }
+    try {
+      final resolved = await fut;
+      if (isClosed || _isClosing || _accepted) return;
+      if (resolved != null && resolved.hasCoordinates) {
+        geo.value = resolved;
         unawaited(
-          _flow.registerCaptureDraft(
-            VisitMediaItem(
-              path: displayPath,
-              type: mediaType,
-              capturedAt: geo.value.capturedAt,
-              latitude: geo.value.latitude,
-              longitude: geo.value.longitude,
-              accuracyMeters: geo.value.accuracyMeters,
-            ),
+          _flow.updateCaptureGeo(
+            mediaPath: mediaPath.value,
+            geo: resolved,
+            captureId: captureId,
           ),
         );
       }
-      if (resolveLocationInBackground || !_storeHasDurableCopy) {
-        unawaited(_persistAndResolveLocation());
-      }
-    });
-    if (!isPhoto) {
-      _initVideo();
-    }
-  }
-
-  bool get _storeHasDurableCopy {
-    return VisitMediaDraftStore.instance.isManagedPath(displayPath);
-  }
-
-  @override
-  void onClose() {
-    videoController?.removeListener(_onVideoTick);
-    videoController?.dispose();
-    videoController = null;
-    super.onClose();
-  }
-
-  Future<void> _persistAndResolveLocation() async {
-    if (isClosed) return;
-    isResolvingLocation.value = true;
-
-    final shouldResolveGps = resolveLocationInBackground;
-    final geoFuture = shouldResolveGps
-        ? VisitMediaGeo.captureFast()
-        : Future<VisitMediaGeo>.value(geo.value);
-    final persistFuture = _flow.finalizeCaptureDraft(
-      previewPath: displayPath,
-      type: mediaType,
-    );
-
-    try {
-      unawaited(
-        geoFuture.then((resolvedGeo) {
-          if (isClosed || !shouldResolveGps) return;
-          if (resolvedGeo.hasCoordinates) {
-            geo.value = resolvedGeo;
-          }
-        }),
-      );
-
-      final durableItem = await persistFuture;
-      if (isClosed) return;
-      if (durableItem != null) {
-        _durablePath = durableItem.path;
-        mediaPath.value = durableItem.path;
-      }
-
-      final resolvedGeo = await geoFuture;
-      if (isClosed) return;
-
-      if (shouldResolveGps && !resolvedGeo.hasCoordinates) {
-        await _refreshGpsIssueMessage();
-        isResolvingLocation.value = false;
-        await _showGpsFailedDialog();
-        return;
-      }
-
-      if (shouldResolveGps) {
-        geo.value = resolvedGeo;
-      }
-      if (geo.value.hasCoordinates) {
-        gpsIssueMessage.value = null;
-      }
-      await _flow.updateCaptureGeo(mediaPath: mediaPath.value, geo: geo.value);
     } catch (_) {
-      if (shouldResolveGps && !isClosed) {
-        await _refreshGpsIssueMessage();
-        isResolvingLocation.value = false;
-        await _showGpsFailedDialog();
-        return;
-      }
+
     } finally {
       if (!isClosed) {
         isResolvingLocation.value = false;
@@ -172,81 +165,71 @@ class CaptureReviewController extends GetxController {
     }
   }
 
-  Future<void> _retryGps() async {
-    if (isClosed || isBusy.value) return;
+  Future<void> _registerPendingOnly() async {
+    await _flow.registerCaptureDraft(
+      VisitMediaItem(
+        path: displayPath,
+        type: mediaType,
+        captureId: captureId,
+        capturedAt: geo.value.capturedAt,
+        latitude: geo.value.latitude,
+        longitude: geo.value.longitude,
+        accuracyMeters: geo.value.accuracyMeters,
+        isPendingCapture: true,
+      ),
+    );
+  }
+
+  void _startLegacyWarmPersist() {
+    if (_legacyPersistFuture != null) return;
+    _legacyPersistFuture = _flow.finalizeCaptureDraft(
+      previewPath: displayPath,
+      type: mediaType,
+      captureId: captureId,
+      geo: geo.value,
+      markAccepted: false,
+    );
+    unawaited(
+      _legacyPersistFuture!
+          .then((item) {
+            if (isClosed || _isClosing || _accepted) return;
+            if (item != null) {
+              _durablePath = item.path;
+              persistError.value = null;
+            }
+          })
+          .catchError((Object error) {
+            if (!isClosed) {
+              persistError.value = 'Could not save media. Please try again.';
+            }
+          }),
+    );
+    if (resolveLocationInBackground) {
+      unawaited(_resolveLocationOnly());
+    }
+  }
+
+  Future<void> _resolveLocationOnly() async {
+    if (isClosed) return;
     isResolvingLocation.value = true;
     try {
       final resolvedGeo = await VisitMediaGeo.captureFast();
-      if (isClosed) return;
-      if (!resolvedGeo.hasCoordinates) {
-        await _refreshGpsIssueMessage();
-        isResolvingLocation.value = false;
-        await _showGpsFailedDialog();
-        return;
+      if (isClosed || _isClosing) return;
+      if (resolvedGeo.hasCoordinates) {
+        geo.value = resolvedGeo;
+        await _flow.updateCaptureGeo(
+          mediaPath: mediaPath.value,
+          geo: resolvedGeo,
+          captureId: captureId,
+        );
       }
-      geo.value = resolvedGeo;
-      gpsIssueMessage.value = null;
-      await _flow.updateCaptureGeo(
-        mediaPath: mediaPath.value,
-        geo: resolvedGeo,
-      );
     } catch (_) {
-      if (!isClosed) {
-        await _refreshGpsIssueMessage();
-        isResolvingLocation.value = false;
-        await _showGpsFailedDialog();
-        return;
-      }
+
     } finally {
       if (!isClosed) {
         isResolvingLocation.value = false;
       }
     }
-  }
-
-  Future<void> _showGpsFailedDialog() async {
-    if (isClosed || _gpsDialogVisible) return;
-    _gpsDialogVisible = true;
-
-    try {
-      final failure = await _refreshGpsIssueMessage();
-      final readyContext = AppNavigator.key.currentContext ?? Get.context;
-      if (readyContext == null || !readyContext.mounted || isClosed) {
-        await cancel();
-        return;
-      }
-
-      final retry = await GlassActionDialog.show(
-        context: readyContext,
-        icon: Icons.gps_off_rounded,
-        title: 'Failed to get GPS',
-        message: failure,
-        primaryLabel: 'Retry',
-        secondaryLabel: 'Cancel',
-        iconColor: const Color(0xFFE53935),
-        variant: GlassActionDialogVariant.error,
-        barrierDismissible: false,
-        useRootNavigator: true,
-      );
-
-      if (isClosed) return;
-      if (retry == true) {
-        await _retryGps();
-      } else {
-        await cancel();
-      }
-    } finally {
-      _gpsDialogVisible = false;
-    }
-  }
-
-  Future<String> _refreshGpsIssueMessage() async {
-    final failure = await VisitMediaGeo.describeFailure();
-    if (!isClosed) {
-      gpsIssueMessage.value =
-          'GPS is missing, so we cannot stamp this media with your patrol location.\n$failure';
-    }
-    return failure;
   }
 
   Future<void> _initVideo() async {
@@ -264,9 +247,11 @@ class CaptureReviewController extends GetxController {
       videoController = controller;
       isPlaying.value = controller.value.isPlaying;
       videoReady.value = true;
+      notifyDisplayFirstFrame();
     } catch (_) {
       if (!isClosed) {
         videoError.value = true;
+        notifyDisplayFirstFrame();
       }
     }
   }
@@ -289,92 +274,191 @@ class CaptureReviewController extends GetxController {
     }
   }
 
-  Future<void> _cleanupPreviewFiles({required bool keepDurable}) async {
-    final durable = _durablePath ?? mediaPath.value;
-    if (keepDurable) {
-      if (displayPath != durable) {
-        await VisitMediaDraftStore.instance.deleteQuietly(displayPath);
-      }
-      return;
-    }
-
-    await _flow.removeByPath(durable, deleteMediaFile: true);
-    if (displayPath != durable) {
-      await _flow.removeByPath(displayPath, deleteMediaFile: true);
-      await VisitMediaDraftStore.instance.deleteQuietly(displayPath);
-    }
+  Future<void> _detachVideo() async {
+    final video = videoController;
+    videoController = null;
+    videoReady.value = false;
+    isPlaying.value = false;
+    if (video == null) return;
+    try {
+      video.removeListener(_onVideoTick);
+    } catch (_) {}
+    try {
+      await video.pause();
+    } catch (_) {}
+    unawaited(
+      Future<void>(() async {
+        try {
+          await video.dispose();
+        } catch (_) {}
+      }),
+    );
   }
 
   Future<void> cancel() async {
-    if (isBusy.value) return;
+    if (_accepted) return;
+    if (_isClosing) return;
+    _isClosing = true;
     isBusy.value = true;
-    await videoController?.pause();
-    await _cleanupPreviewFiles(keepDurable: false);
-    if (isClosed) return;
-    Get.back();
+    isResolvingLocation.value = false;
+
+    _coordinator?.cancelCapture(reason: 'close');
+    await _detachVideo();
+
+    if (!isClosed) {
+      Get.back();
+    }
+
+    _coordinator?.disposeSession(reason: 'close');
+
+    unawaited(
+      _flow.rollbackCaptureDraft(
+        captureId: captureId,
+        previewPath: displayPath,
+        durablePath: _durablePath ?? _coordinator?.durablePath,
+      ),
+    );
   }
 
   Future<void> retake() async {
+    if (_isClosing || _accepted || isBusy.value) return;
+    _isClosing = true;
+    isBusy.value = true;
+
+    final initialType = isPhoto ? CaptureType.photo : CaptureType.video;
+
+    _coordinator?.prepareRetake();
+    await _detachVideo();
+    await _flow.rollbackCaptureDraft(
+      captureId: captureId,
+      previewPath: displayPath,
+      durablePath: _durablePath ?? _coordinator?.durablePath,
+    );
+    unawaited(VisitOrientation.enableCaptureOrientations());
+    if (!isClosed) {
+      Get.back();
+    }
+    await VisitNativeCaptureLauncher.reopenForRetake(initialType: initialType);
+  }
+
+  Future<void> done() async {
+    if (_isClosing || _accepted) return;
     if (isBusy.value) return;
+    CamPerf.markUsePhoto(captureId);
+    CamPerf.stage(
+      captureId,
+      'ACCEPT_HANDLER_ENTER',
+      detail: 'coordinator=${_coordinator != null}',
+      usePhotoClock: true,
+    );
     isBusy.value = true;
 
     try {
       await videoController?.pause();
     } catch (_) {}
 
-    final video = videoController;
-    videoController = null;
-    videoReady.value = false;
-    if (video != null) {
-      video.removeListener(_onVideoTick);
-      unawaited(video.dispose());
+    try {
+      if (!_firstFrameNotified) {
+        notifyDisplayFirstFrame();
+      }
+
+      VisitMediaItem? durable;
+      var acceptGeo = geo.value;
+
+      final coordinator = _coordinator;
+      if (coordinator != null && !coordinator.isDisposed) {
+
+        final waited = await coordinator.waitForAcceptRequirements(
+          gpsRequired: resolveLocationInBackground,
+          currentGeo: geo.value,
+        );
+        durable = waited.durable;
+        acceptGeo = waited.geo;
+        if (acceptGeo.hasCoordinates &&
+            (!geo.value.hasCoordinates ||
+                acceptGeo.accuracyMeters != geo.value.accuracyMeters)) {
+          geo.value = acceptGeo;
+        }
+      } else {
+        if (_legacyPersistFuture == null) {
+          _startLegacyWarmPersist();
+        }
+        final warm = _legacyPersistFuture;
+        if (warm != null) {
+          CamPerf.stage(
+            captureId,
+            'AWAIT_WARM_PERSIST_START',
+            usePhotoClock: true,
+          );
+          durable = await warm;
+          CamPerf.stage(
+            captureId,
+            'AWAIT_WARM_PERSIST_END',
+            usePhotoClock: true,
+          );
+        }
+      }
+
+      if (durable != null &&
+          VisitMediaDraftStore.instance.isManagedPath(durable.path)) {
+        final accepted = await _flow.acceptWarmCapture(
+          captureId: captureId,
+          previewPath: displayPath,
+          geo: acceptGeo,
+          assumeFileReady: true,
+          applyRx: false,
+        );
+        durable = accepted ?? durable;
+      } else {
+        durable = await _flow.finalizeCaptureDraft(
+          previewPath: displayPath,
+          type: mediaType,
+          captureId: captureId,
+          geo: acceptGeo,
+          markAccepted: true,
+        );
+      }
+      if (durable == null) {
+        persistError.value = 'Could not save media. Please try again.';
+        isBusy.value = false;
+        return;
+      }
+      _durablePath = durable.path;
+      _accepted = true;
+
+      if (isClosed) return;
+      CamPerf.stage(captureId, 'REVIEW_POP_START', usePhotoClock: true);
+      Get.back();
+      CamPerf.stage(captureId, 'REVIEW_POP_END', usePhotoClock: true);
+      _flow.applyAcceptedMediaItem(durable);
+      if (displayPath != durable.path) {
+        _flow.removeGhostPreviewPath(
+          captureId: captureId,
+          previewPath: displayPath,
+          keepPath: durable.path,
+        );
+      }
+      CamPerf.markDraftVisible(captureId);
+      CamPerf.stage(captureId, 'USE_PHOTO_COMPLETE', usePhotoClock: true);
+
+      coordinator?.disposeSession(reason: 'accepted');
+
+      if (displayPath != durable.path) {
+        unawaited(() async {
+          CamPerf.stage(
+            captureId,
+            'POST_POP_CLEANUP_START',
+            usePhotoClock: true,
+          );
+          CamPerf.stage(captureId, 'TEMP_DELETE_START', usePhotoClock: true);
+          await VisitMediaDraftStore.instance.deleteQuietly(displayPath);
+          CamPerf.stage(captureId, 'TEMP_DELETE_END', usePhotoClock: true);
+          CamPerf.stage(captureId, 'POST_POP_CLEANUP_END', usePhotoClock: true);
+        }());
+      }
+    } catch (error) {
+      persistError.value = 'Could not save media. Please try again.';
+      isBusy.value = false;
     }
-
-    final cleanupFuture = _cleanupPreviewFiles(keepDurable: false);
-    unawaited(VisitOrientation.enableCaptureOrientations());
-
-    final navFuture = Get.off(
-      () => const VisitVideoRecorderScreen(),
-      routeName: AppRoutes.visitVideoRecorder,
-      transition: Transition.fadeIn,
-      duration: const Duration(milliseconds: 120),
-      binding: BindingsBuilder(() {
-        Get.put(VisitVideoRecorderController());
-      }),
-    );
-
-    await Future.wait<void>([
-      cleanupFuture,
-      if (navFuture != null) navFuture else Future<void>.value(),
-    ]);
-  }
-
-  Future<void> done() async {
-    if (isBusy.value) return;
-    if (isDoneBlockedByMissingGps) {
-      await _showGpsFailedDialog();
-      return;
-    }
-    if (isBusy.value) return;
-    isBusy.value = true;
-    await videoController?.pause();
-
-    if (_durablePath == null || mediaPath.value == displayPath) {
-      await _flow.finalizeCaptureDraft(
-        previewPath: displayPath,
-        type: mediaType,
-        geo: geo.value,
-      );
-    } else {
-      await _flow.updateCaptureGeo(mediaPath: mediaPath.value, geo: geo.value);
-    }
-
-    final durable = _durablePath ?? mediaPath.value;
-    if (displayPath != durable) {
-      await VisitMediaDraftStore.instance.deleteQuietly(displayPath);
-    }
-
-    if (isClosed) return;
-    Get.back();
   }
 }

@@ -1,0 +1,217 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
+
+import '../../app/app_navigator.dart';
+import '../../auth/auth_repository.dart';
+import '../../auth/auth_session_manager.dart';
+import '../../background/duty/clock_in_gate_service.dart';
+import '../../background/duty/duty_heartbeat_service.dart';
+import '../../background/duty/duty_status_snapshot.dart';
+import '../../permissions/required_permissions_gate.dart';
+import '../../utilities/app_config.dart';
+import '../../utilities/overlay_prompt_guard.dart';
+import '../../widgets/dialogs/clock_in_permissions_dialog.dart';
+import '../../widgets/dialogs/off_duty_push_permissions_dialog.dart';
+import '../../widgets/dialogs/on_duty_permissions_dialog.dart';
+
+class OnDutyPermissionsPromptService {
+  OnDutyPermissionsPromptService._();
+
+  static final OnDutyPermissionsPromptService instance =
+      OnDutyPermissionsPromptService._();
+
+  static const Duration remindInterval = Duration(minutes: 15);
+
+  static const Duration _reshowCooldown = Duration(seconds: 3);
+
+  static Uri? Function()? currentUriChecker;
+
+  DateTime? _lastDismissedAt;
+  bool _permissionsWereReady = true;
+  Timer? _remindTimer;
+  bool _checkInFlight = false;
+  Future<void>? _activeMaybeShow;
+
+  void startRemindLoop() {
+    if (_remindTimer != null) return;
+    _remindTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      unawaited(maybeShow(fromResume: false));
+    });
+  }
+
+  void stopRemindLoop() {
+    _remindTimer?.cancel();
+    _remindTimer = null;
+    _lastDismissedAt = null;
+    _permissionsWereReady = true;
+  }
+
+  void noteDismissed() {
+    _lastDismissedAt = DateTime.now();
+  }
+
+  bool get _blockedByOtherUi =>
+      RequiredPermissionsGate.isPrivacyNoticeVisible ||
+      ClockInPermissionsDialog.isVisible ||
+      OnDutyPermissionsDialog.isVisible ||
+      OffDutyPushPermissionsDialog.isVisible ||
+      ClockInGateService.instance.isPrepareInFlight;
+
+  bool get _onAuthOrPrivacySurface {
+    if (RequiredPermissionsGate.isPrivacyNoticeVisible) return true;
+    final uri = currentUriChecker?.call();
+    if (uri != null && AppConfig.isAuthEntryRoute(uri)) return true;
+    if (AuthSessionManager.isLoginRoute(uri)) return true;
+    return false;
+  }
+
+  Future<void> maybeShow({
+    required bool fromResume,
+    bool forceImmediate = false,
+  }) async {
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+
+    final existing = _activeMaybeShow;
+    if (existing != null) {
+
+      await existing;
+      return;
+    }
+
+    final run = _runMaybeShow(
+      fromResume: fromResume,
+      forceImmediate: forceImmediate,
+    );
+    _activeMaybeShow = run;
+    try {
+      await run;
+    } finally {
+      if (identical(_activeMaybeShow, run)) {
+        _activeMaybeShow = null;
+      }
+    }
+  }
+
+  Future<void> _runMaybeShow({
+    required bool fromResume,
+    bool forceImmediate = false,
+  }) async {
+    final first = await _attempt(
+      fromResume: fromResume,
+      forceImmediate: forceImmediate,
+    );
+    if (fromResume && first == _PromptAttemptResult.blocked) {
+      if (_blockedByOtherUi || _checkInFlight) return;
+      await Future<void>.delayed(const Duration(milliseconds: 900));
+      if (_blockedByOtherUi || _checkInFlight) return;
+      await _attempt(
+        fromResume: true,
+        forceImmediate: forceImmediate,
+      );
+    }
+  }
+
+  Future<_PromptAttemptResult> _attempt({
+    required bool fromResume,
+    bool forceImmediate = false,
+  }) async {
+    if (_checkInFlight) return _PromptAttemptResult.blocked;
+    if (_blockedByOtherUi || _onAuthOrPrivacySurface) {
+      if (_onAuthOrPrivacySurface) stopRemindLoop();
+      return _PromptAttemptResult.blocked;
+    }
+
+    final context = AppNavigator.key.currentContext;
+    if (context == null || !context.mounted) {
+      return _PromptAttemptResult.blocked;
+    }
+
+    _checkInFlight = true;
+    try {
+      if (!await AuthRepository.instance.isOfficerLoggedIn()) {
+        stopRemindLoop();
+        if (kDebugMode) {
+          debugPrint('[OnDutyPermissionsPrompt] skip; not logged in');
+        }
+        return _PromptAttemptResult.notNeeded;
+      }
+
+      final token = await AuthRepository.instance.getAccessToken();
+      if (token == null || token.isEmpty) {
+        stopRemindLoop();
+        return _PromptAttemptResult.notNeeded;
+      }
+
+      final onDuty = await _isOnDuty();
+      if (!onDuty) {
+        stopRemindLoop();
+        if (kDebugMode) {
+          debugPrint('[OnDutyPermissionsPrompt] skip; not on duty');
+        }
+        return _PromptAttemptResult.notNeeded;
+      }
+
+      startRemindLoop();
+
+      final ready =
+          await RequiredPermissionsGate.instance.areOnDutyPermissionsReady();
+      if (ready) {
+        _permissionsWereReady = true;
+        _lastDismissedAt = null;
+        if (kDebugMode) {
+          debugPrint('[OnDutyPermissionsPrompt] skip; permissions ready');
+        }
+        return _PromptAttemptResult.notNeeded;
+      }
+
+      final justBecameMissing = _permissionsWereReady;
+      _permissionsWereReady = false;
+
+      final lastDismissed = _lastDismissedAt;
+      if (lastDismissed != null &&
+          DateTime.now().difference(lastDismissed) < _reshowCooldown) {
+        return _PromptAttemptResult.notNeeded;
+      }
+
+      if (!fromResume && !forceImmediate) {
+        if (!justBecameMissing) {
+          if (lastDismissed == null ||
+              DateTime.now().difference(lastDismissed) < remindInterval) {
+            return _PromptAttemptResult.notNeeded;
+          }
+        }
+      }
+
+      await OverlayPromptGuard.waitUntilReady();
+      if (_blockedByOtherUi || OnDutyPermissionsDialog.isVisible) {
+        return _PromptAttemptResult.blocked;
+      }
+
+      if (kDebugMode) {
+        debugPrint(
+          '[OnDutyPermissionsPrompt] showing dialog '
+          '(fromResume=$fromResume forceImmediate=$forceImmediate)',
+        );
+      }
+
+      final shown = await OnDutyPermissionsDialog.showIfNeeded();
+      if (shown) {
+        noteDismissed();
+        return _PromptAttemptResult.shown;
+      }
+      return _PromptAttemptResult.blocked;
+    } finally {
+      _checkInFlight = false;
+    }
+  }
+
+  Future<bool> _isOnDuty() async {
+    if (await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) return true;
+    if (DutyHeartbeatService.instance.isOnDutyTrackingActive) return true;
+    return DutyHeartbeatService.instance.isOnDutyAccordingToHeartbeat();
+  }
+}
+
+enum _PromptAttemptResult { notNeeded, shown, blocked }

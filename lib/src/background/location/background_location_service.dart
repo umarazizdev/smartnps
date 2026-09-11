@@ -1,28 +1,35 @@
 import 'dart:async';
+import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../../location/adaptive_gps_stream_controller.dart';
-import '../../location/location_keep_point_gate.dart';
+import '../../location/duty_location_upload_gate.dart';
 import '../../location/mock_location_detection.dart';
 import '../../location/speed_adaptive_gps_policy.dart';
 import '../../auth/auth_repository.dart';
 import '../../motion/motion_activity_fusion_controller.dart';
+import '../duty/clock_in_engine_warm_snapshot.dart';
+import '../duty/duty_heartbeat_client.dart';
 import '../duty/duty_status_snapshot.dart';
+import '../duty/android_duty_kill_watch.dart';
 import 'android_duty_location_health.dart';
 import 'background_location_accuracy.dart';
 import 'background_location_uploader.dart';
+import '../../debug/debug_env_config.dart';
+import '../../utilities/app_debug_log.dart';
 
 @pragma('vm:entry-point')
 class BackgroundLocationService {
   static const String _channelId = 'smartnps360_location';
   static const int _notificationId = 9911;
-  static const Duration _forcePollAfter = Duration(seconds: 45);
   static const Duration _rebuildStreamAfter = Duration(minutes: 3);
   static const Duration _androidStreamInterval = Duration(seconds: 5);
   static const Duration _dutyGateEvery = Duration(seconds: 30);
+  static const Duration _warmGateEvery = Duration(seconds: 15);
+  static const String _activateTrackingEvent = 'activate_tracking';
+  static const String _cancelWarmEvent = 'cancel_warm';
 
   static bool _configured = false;
   static Future<void>? _configureFuture;
@@ -45,39 +52,96 @@ class BackgroundLocationService {
     }
   }
 
+  static Future<void> reconcileStaleClockInWarm() async {
+    if (!Platform.isAndroid) return;
+    if (await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) return;
+
+    final warmPending = await ClockInEngineWarmSnapshot.isValidPending();
+    final service = FlutterBackgroundService();
+    final running = await service.isRunning();
+    if (!warmPending && !running) return;
+
+    if (warmPending) {
+      await ClockInEngineWarmSnapshot.clear();
+      locationDebugLog(
+        '[DutyLocation] cleared stale clock-in warm (app relaunch/resume)',
+      );
+    }
+
+    if (running) {
+      locationDebugLog(
+        '[DutyLocation] stopping orphaned warm FGS (not on duty)',
+      );
+      service.invoke(_cancelWarmEvent);
+      service.invoke('stop');
+      AndroidDutyLocationHealth.markStopped();
+    }
+  }
+
   static Future<void> _reconcileLeftoverFgsWithDutySnapshot() async {
     try {
       final service = FlutterBackgroundService();
       if (!await service.isRunning()) return;
 
+      if (await AndroidDutyKillWatch.isForceOff()) {
+        locationDebugLog(
+          '[DutyLocation] cold start: stopping leftover Android FGS (force_off)',
+        );
+        service.invoke('stop');
+        AndroidDutyLocationHealth.markStopped();
+        return;
+      }
+
+      final token = await AuthRepository.instance.getAccessToken();
+      final hasToken = token != null && token.isNotEmpty;
+      if (!hasToken) {
+        locationDebugLog(
+          '[DutyLocation] cold start: stopping leftover Android FGS '
+          '(no auth token)',
+        );
+        await AndroidDutyKillWatch.disarm(forceOff: true);
+        await DutyStatusSnapshot.clear();
+        service.invoke('stop');
+        AndroidDutyLocationHealth.markStopped();
+        return;
+      }
+
       final onDuty = await DutyStatusSnapshot.isValidOnDutyForCurrentUser();
-      if (onDuty) {
+      final nativeOnDuty = await AndroidDutyKillWatch.isNativeApiOnDutyFresh();
+      final killWatchArmed = await AndroidDutyKillWatch.isKillWatchArmed();
+      if (onDuty || nativeOnDuty || killWatchArmed) {
+        if (!onDuty) {
+          await DutyStatusSnapshot.markOnDuty();
+        }
         AndroidDutyLocationHealth.ensureListenerInstalled();
         final now = DateTime.now();
         AndroidDutyLocationHealth.markStarted(at: now);
         unawaited(AndroidDutyLocationHealth.persistStarted(now));
         unawaited(AndroidDutyLocationHealth.hydrateFromPrefs());
-        if (kDebugMode) {
-          debugPrint(
-            '[DutyLocation] cold start: keeping leftover Android FGS '
-            '(valid on_duty snapshot)',
-          );
-        }
+        locationDebugLog(
+          '[DutyLocation] cold start: keeping leftover Android FGS '
+          '(valid on_duty snapshot)',
+        );
         return;
       }
 
-      if (kDebugMode) {
-        debugPrint(
-          '[DutyLocation] cold start: stopping leftover Android FGS '
-          '(no valid on_duty snapshot)',
+      if (await ClockInEngineWarmSnapshot.isValidPending()) {
+        await ClockInEngineWarmSnapshot.clear();
+        locationDebugLog(
+          '[DutyLocation] cold start: cleared stale clock-in warm pending',
         );
       }
+
+      locationDebugLog(
+        '[DutyLocation] cold start: stopping leftover Android FGS '
+        '(no valid on_duty snapshot)',
+      );
       service.invoke('stop');
       AndroidDutyLocationHealth.markStopped();
     } catch (e) {
-      if (kDebugMode) {
-        debugPrint('[DutyLocation] cold start leftover reconcile failed: $e');
-      }
+      locationDebugLog(
+        '[DutyLocation] cold start leftover reconcile failed: $e',
+      );
     }
   }
 
@@ -110,35 +174,180 @@ class BackgroundLocationService {
     await FlutterBackgroundService().startService();
   }
 
-  @pragma('vm:entry-point')
-  static void _onStart(ServiceInstance service) async {
-    if (kDebugMode) {
-      debugPrint(
-        '[DutyLocation] RUNNING (Android background service onStart, '
-        'stable-stream v2)',
+  static Future<void> preWarmForClockIn() async {
+    if (!Platform.isAndroid) return;
+    await ensureConfigured();
+
+    if (await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) return;
+
+    await ClockInEngineWarmSnapshot.markPending();
+
+    final service = FlutterBackgroundService();
+    if (await service.isRunning()) {
+      locationDebugLog(
+        '[DutyLocation] Android FGS warm refresh (engine already running)',
       );
+      return;
     }
 
-    if (!await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) {
-      if (kDebugMode) {
-        debugPrint(
-          '[DutyLocation] Android FGS start aborted; no valid on_duty snapshot',
-        );
-      }
+    locationDebugLog('[DutyLocation] Android FGS engine pre-warm starting…');
+    await service.startService();
+  }
+
+  static Future<void> cancelClockInWarm() async {
+    if (!Platform.isAndroid) return;
+    await ClockInEngineWarmSnapshot.clear();
+
+    if (await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) return;
+
+    final service = FlutterBackgroundService();
+    if (!await service.isRunning()) return;
+
+    locationDebugLog('[DutyLocation] Android FGS warm cancel requested');
+    service.invoke(_cancelWarmEvent);
+  }
+
+  static Future<void> activateFromClockInWarm() async {
+    if (!Platform.isAndroid) return;
+
+    final service = FlutterBackgroundService();
+    if (!await service.isRunning()) {
+      await configureAndStart();
+      return;
+    }
+
+    if (!await ClockInEngineWarmSnapshot.isValidPending()) return;
+
+    locationDebugLog(
+      '[DutyLocation] Android FGS warm → activate_tracking requested',
+    );
+    service.invoke(_activateTrackingEvent);
+  }
+
+  @pragma('vm:entry-point')
+  static void _onStart(ServiceInstance service) async {
+    locationDebugLog(
+      '[DutyLocation] RUNNING (Android background service onStart, '
+      'stable-stream v2)',
+    );
+    await DebugEnvConfig.instance.init();
+
+    if (await AndroidDutyKillWatch.isForceOff()) {
+      locationDebugLog(
+        '[DutyLocation] Android FGS start aborted; native force_off',
+      );
       service.stopSelf();
       return;
     }
 
+    if (await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) {
+      await ClockInEngineWarmSnapshot.clear();
+      await _runDutyTracking(service);
+      return;
+    }
+
+    if (await AndroidDutyKillWatch.isNativeApiOnDutyFresh() ||
+        await AndroidDutyKillWatch.isKillWatchArmed()) {
+      final token = await AuthRepository.instance.getAccessToken();
+      if (token == null || token.isEmpty) {
+        locationDebugLog(
+          '[DutyLocation] Android FGS start aborted; kill-watch armed '
+          'but no auth token',
+        );
+        await AndroidDutyKillWatch.disarm(forceOff: true);
+        await DutyStatusSnapshot.clear();
+        service.stopSelf();
+        return;
+      }
+      await DutyStatusSnapshot.markOnDuty();
+      await ClockInEngineWarmSnapshot.clear();
+      locationDebugLog(
+        '[DutyLocation] Android FGS start from native kill-watch keep-alive',
+      );
+      await _runDutyTracking(service);
+      return;
+    }
+
+    if (await ClockInEngineWarmSnapshot.isValidPending()) {
+      await _runIdleWarm(service);
+      return;
+    }
+
+    locationDebugLog(
+      '[DutyLocation] Android FGS start aborted; '
+      'no valid on_duty snapshot or warm pending',
+    );
+    service.stopSelf();
+  }
+
+  static Future<void> _runIdleWarm(ServiceInstance service) async {
+    locationDebugLog(
+      '[DutyLocation] Android FGS idle warm (engine only, no GPS)',
+    );
+
+    var stopping = false;
+    Timer? warmGateTimer;
+
+    Future<void> stopWarm({required String reason}) async {
+      if (stopping) return;
+      stopping = true;
+      warmGateTimer?.cancel();
+      warmGateTimer = null;
+      await ClockInEngineWarmSnapshot.clear();
+      locationDebugLog(
+        '[DutyLocation] Android FGS idle warm stopped ($reason)',
+      );
+      service.stopSelf();
+    }
+
+    if (service is AndroidServiceInstance) {
+      service.setAsForegroundService();
+    }
+
+    warmGateTimer = Timer.periodic(_warmGateEvery, (_) async {
+      if (stopping) return;
+      if (!await ClockInEngineWarmSnapshot.isValidPending()) {
+        await stopWarm(reason: 'warm_expired');
+      }
+    });
+
+    service.on('stop').listen((event) {
+      unawaited(stopWarm(reason: 'stop'));
+    });
+
+    service.on(_cancelWarmEvent).listen((event) {
+      unawaited(stopWarm(reason: 'cancel_warm'));
+    });
+
+    service.on(_activateTrackingEvent).listen((event) async {
+      if (stopping) return;
+      if (!await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) {
+        locationDebugLog(
+          '[DutyLocation] activate_tracking blocked; no on_duty snapshot',
+        );
+        return;
+      }
+      stopping = true;
+      warmGateTimer?.cancel();
+      warmGateTimer = null;
+      await ClockInEngineWarmSnapshot.clear();
+      locationDebugLog(
+        '[DutyLocation] Android FGS warm → activating GPS tracking',
+      );
+      await _runDutyTracking(service);
+    });
+  }
+
+  static Future<void> _runDutyTracking(ServiceInstance service) async {
     try {
       await AuthRepository.instance.warmAccessTokenCache();
     } catch (e) {
-      if (kDebugMode) {
-        debugPrint('[DutyLocation] Android FGS auth warm failed: $e');
-      }
+      locationDebugLog('[DutyLocation] Android FGS auth warm failed: $e');
     }
 
     unawaited(DutyStatusSnapshot.renewIfStillOnDuty());
 
+    var uiForeground = true;
     final uploader = BackgroundLocationUploader();
     await uploader.init();
     uploader.start();
@@ -161,41 +370,100 @@ class BackgroundLocationService {
     DateTime? lastAnyFixAt;
     final startedAt = DateTime.now();
     final policyTracker = SpeedAdaptiveGpsPolicyTracker();
-    final keepPointGate = LocationKeepPointGate();
     final streamController = AdaptiveGpsStreamController();
+    final uploadGate = DutyLocationUploadGate();
     unawaited(MotionActivityFusionController.instance.acquire());
 
     late final Future<void> Function() stop;
     late final Future<void> Function({required String reason})
-        rebuildStreamIfNeeded;
+    rebuildStreamIfNeeded;
     late final Future<void> Function() subscribePositionStream;
     late final Future<void> Function(Position pos) handlePosition;
     late final Future<void> Function({required String reason}) forcePoll;
     late final Future<void> Function() runDutyGate;
+    late final Future<bool> Function() trackingStillAllowed;
+    late final void Function() syncQuietPollInterval;
 
     Timer? healthTimer;
     Timer? dutyGateTimer;
+    Timer? quietPollTimer;
+    Duration? appliedQuietPollInterval;
+    DateTime? lastUploadAt;
+
+    trackingStillAllowed = () async {
+      if (await AndroidDutyKillWatch.isForceOff()) return false;
+      if (await AndroidDutyKillWatch.isUnpaidBreak()) return false;
+      if (await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) return true;
+
+      if (!uiForeground &&
+          await AndroidDutyKillWatch.isNativeApiOnDutyFresh()) {
+        await DutyStatusSnapshot.markOnDuty();
+        return true;
+      }
+      if (!uiForeground && await AndroidDutyKillWatch.isKillWatchArmed()) {
+        return true;
+      }
+      return false;
+    };
 
     runDutyGate = () async {
       if (stopping || dutyGateInFlight) return;
       dutyGateInFlight = true;
       try {
-        await DutyStatusSnapshot.renewIfStillOnDuty();
-        final stillOnDuty =
-            await DutyStatusSnapshot.isValidOnDutyForCurrentUser();
-        if (!stillOnDuty) {
-          if (kDebugMode) {
-            debugPrint(
-              '[DutyLocation] Android FGS duty gate: snapshot gone → stop',
-            );
-          }
+        if (await AndroidDutyKillWatch.isForceOff()) {
+          locationDebugLog(
+            '[DutyLocation] Android FGS duty gate: native force_off → stop',
+          );
           await stop();
           return;
         }
-      } catch (e) {
-        if (kDebugMode) {
-          debugPrint('[DutyLocation] Android FGS duty gate failed: $e');
+
+        if (await AndroidDutyKillWatch.isUnpaidBreak()) {
+          locationDebugLog(
+            '[DutyLocation] Android FGS duty gate: unpaid break → stop',
+          );
+          await DutyStatusSnapshot.clear();
+          await stop();
+          return;
         }
+
+        if (!uiForeground) {
+          final payload = await DutyHeartbeatClient.fetchHeartbeat();
+          if (payload != null && payload.allowsLocationTracking) {
+            await AndroidDutyKillWatch.setUnpaidBreak(false);
+            await DutyStatusSnapshot.markOnDuty();
+            return;
+          }
+          if (payload != null && payload.isUnpaidBreak) {
+            locationDebugLog(
+              '[DutyLocation] Android FGS duty gate: API unpaid break while '
+              'UI killed/backgrounded → stop',
+            );
+            await DutyStatusSnapshot.clear();
+            await AndroidDutyKillWatch.setUnpaidBreak(true);
+            await stop();
+            return;
+          }
+          if (payload?.dutyStatus == DutyHeartbeatClient.offDuty) {
+            locationDebugLog(
+              '[DutyLocation] Android FGS duty gate: API off_duty while '
+              'UI killed/backgrounded → stop',
+            );
+            await DutyStatusSnapshot.clear();
+            await AndroidDutyKillWatch.disarm(forceOff: true);
+            await stop();
+            return;
+          }
+        }
+
+        if (!await trackingStillAllowed()) {
+          locationDebugLog(
+            '[DutyLocation] Android FGS duty gate: snapshot gone → stop',
+          );
+          await stop();
+        }
+      } catch (e) {
+        locationDebugLog('[DutyLocation] Android FGS duty gate failed: $e');
       } finally {
         dutyGateInFlight = false;
       }
@@ -205,13 +473,10 @@ class BackgroundLocationService {
       if (stopping) return;
       lastAnyFixAt = DateTime.now();
 
-      await DutyStatusSnapshot.renewIfStillOnDuty();
-      if (!await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) {
-        if (kDebugMode) {
-          debugPrint(
-            '[DutyLocation] Android FGS stopping; on_duty snapshot gone',
-          );
-        }
+      if (!await trackingStillAllowed()) {
+        locationDebugLog(
+          '[DutyLocation] Android FGS stopping; on_duty snapshot gone',
+        );
         await stop();
         return;
       }
@@ -226,38 +491,35 @@ class BackgroundLocationService {
       if (token == null || token.isEmpty) {
         final refresh = await AuthRepository.instance.getRefreshToken();
         if (refresh == null || refresh.isEmpty) {
-          if (kDebugMode) {
-            debugPrint(
-              '[DutyLocation] Android FGS stopping; no auth session',
-            );
-          }
+          locationDebugLog(
+            '[DutyLocation] Android FGS stopping; no auth session',
+          );
           await stop();
           return;
         }
-        if (kDebugMode) {
-          debugPrint(
-            '[DutyLocation] Android FGS auth transient fail; '
-            'keeping GPS, skipping upload',
-          );
-        }
+        locationDebugLog(
+          '[DutyLocation] Android FGS auth transient fail; '
+          'keeping GPS, skipping upload',
+        );
         return;
       }
 
       final policyDecision = policyTracker.evaluate(pos);
-      streamController.observe(pos, policyDecision);
 
-      final keepDecision = keepPointGate.evaluate(
-        pos,
-        policyDecision,
-        streamInterval: streamController.interval,
-      );
-      if (!keepDecision.shouldKeep) {
-        return;
+      final wasCurveBoosting = streamController.isCurveBoosting;
+      streamController.observe(pos, policyDecision);
+      syncQuietPollInterval();
+      if (!wasCurveBoosting && streamController.isCurveBoosting) {
+        locationDebugLog(
+          '[DutyLocation] Android curve boost poll → '
+          '${streamController.pollInterval.inSeconds}s '
+          '(stream not rebuilt)',
+        );
       }
       if (stopping) return;
 
-      final motionFusion =
-          await MotionActivityFusionController.instance.evaluatePosition(pos);
+      final motionFusion = await MotionActivityFusionController.instance
+          .evaluatePosition(pos);
       if (stopping) return;
 
       final mockFlags = MockLocationDetection.flagsFor(pos);
@@ -267,6 +529,11 @@ class BackgroundLocationService {
           'isSimulatedBySoftware': mockFlags.isSimulatedBySoftware,
           'timestamp': pos.timestamp.toIso8601String(),
         });
+      }
+
+      final captureEvery = streamController.pollInterval;
+      if (!uploadGate.tryAccept(captureEvery)) {
+        return;
       }
 
       try {
@@ -282,20 +549,20 @@ class BackgroundLocationService {
           policyDecision: policyDecision,
           motionFusion: motionFusion,
         );
+        lastUploadAt = DateTime.now();
         service.invoke(AndroidDutyLocationHealth.uploadEvent, {
           'at': DateTime.now().toIso8601String(),
         });
         unawaited(AndroidDutyLocationHealth.persistUpload(DateTime.now()));
-        if (kDebugMode) {
-          debugPrint(
-            '[DutyLocation] Android upload ok '
-            'acc=${pos.accuracy.toStringAsFixed(1)}m',
-          );
-        }
+        locationDebugLog(
+          '[DutyLocation] Android upload ok '
+          'acc=${pos.accuracy.toStringAsFixed(1)}m '
+          'band=${policyDecision.band.label} '
+          'captureEvery=${captureEvery.inSeconds}s '
+          'curveBoost=${streamController.isCurveBoosting}',
+        );
       } catch (e) {
-        if (kDebugMode) {
-          debugPrint('[DutyLocation] Android upload failed: $e');
-        }
+        locationDebugLog('[DutyLocation] Android upload failed: $e');
       }
     };
 
@@ -303,9 +570,7 @@ class BackgroundLocationService {
       if (stopping || forcePollInFlight) return;
       forcePollInFlight = true;
       try {
-        if (kDebugMode) {
-          debugPrint('[DutyLocation] Android force GPS poll ($reason)');
-        }
+        locationDebugLog('[DutyLocation] Android force GPS poll ($reason)');
         final pos = await Geolocator.getCurrentPosition(
           locationSettings: AndroidSettings(
             accuracy: LocationAccuracy.bestForNavigation,
@@ -316,9 +581,7 @@ class BackgroundLocationService {
         if (stopping) return;
         await handlePosition(pos);
       } catch (e) {
-        if (kDebugMode) {
-          debugPrint('[DutyLocation] Android force poll failed: $e');
-        }
+        locationDebugLog('[DutyLocation] Android force poll failed: $e');
         final lastAny = lastAnyFixAt ?? startedAt;
         if (!stopping &&
             DateTime.now().difference(lastAny) > _rebuildStreamAfter) {
@@ -329,15 +592,30 @@ class BackgroundLocationService {
       }
     };
 
+    syncQuietPollInterval = () {
+      final every = streamController.pollInterval;
+      if (appliedQuietPollInterval == every && quietPollTimer != null) {
+        return;
+      }
+      locationDebugLog(
+        '[DutyLocation] Android quiet poll interval '
+        '${appliedQuietPollInterval?.inSeconds ?? '-'}s → ${every.inSeconds}s '
+        '(speed band, stream not rebuilt)',
+      );
+      appliedQuietPollInterval = every;
+      quietPollTimer?.cancel();
+      quietPollTimer = Timer.periodic(every, (_) {
+        if (stopping) return;
+        final last = lastUploadAt ?? lastAcceptedFixAt ?? startedAt;
+        if (DateTime.now().difference(last) < every) return;
+        unawaited(forcePoll(reason: 'speed_quiet_poll'));
+      });
+    };
+
     healthTimer = Timer.periodic(const Duration(seconds: 20), (_) {
       if (stopping) return;
       final now = DateTime.now();
-      final lastAccepted = lastAcceptedFixAt ?? startedAt;
       final lastAny = lastAnyFixAt ?? startedAt;
-
-      if (now.difference(lastAccepted) > _forcePollAfter) {
-        unawaited(forcePoll(reason: 'stale_accepted_fix'));
-      }
 
       if (now.difference(lastAny) > _rebuildStreamAfter) {
         unawaited(rebuildStreamIfNeeded(reason: 'stream_dead'));
@@ -355,9 +633,12 @@ class BackgroundLocationService {
       healthTimer = null;
       dutyGateTimer?.cancel();
       dutyGateTimer = null;
-      if (kDebugMode) {
-        debugPrint('[DutyLocation] STOPPED (Android background service)');
-      }
+      quietPollTimer?.cancel();
+      quietPollTimer = null;
+      appliedQuietPollInterval = null;
+      lastUploadAt = null;
+      uploadGate.reset();
+      locationDebugLog('[DutyLocation] STOPPED (Android background service)');
       streamController
         ..onSettingsChanged = null
         ..reset();
@@ -378,14 +659,12 @@ class BackgroundLocationService {
       if (stopping || streamRebuildInFlight) return;
       streamRebuildInFlight = true;
       try {
-        if (kDebugMode) {
-          debugPrint('[DutyLocation] rebuilding Android GPS stream ($reason)');
-        }
+        locationDebugLog(
+          '[DutyLocation] rebuilding Android GPS stream ($reason)',
+        );
         await subscribePositionStream();
       } catch (e) {
-        if (kDebugMode) {
-          debugPrint('[DutyLocation] Android stream rebuild failed: $e');
-        }
+        locationDebugLog('[DutyLocation] Android stream rebuild failed: $e');
       } finally {
         streamRebuildInFlight = false;
       }
@@ -405,22 +684,20 @@ class BackgroundLocationService {
           unawaited(handlePosition(pos));
         },
         onError: (Object error) {
-          if (kDebugMode) {
-            debugPrint('[DutyLocation] Android GPS stream error: $error');
-          }
+          locationDebugLog('[DutyLocation] Android GPS stream error: $error');
           unawaited(forcePoll(reason: 'stream_error'));
         },
       );
       streamController.markSettingsApplied();
-      if (kDebugMode) {
-        debugPrint(
-          '[DutyLocation] Android GPS stream subscribed '
-          '(stable ${_androidStreamInterval.inSeconds}s, no policy rebuild)',
-        );
-      }
+      syncQuietPollInterval();
+      locationDebugLog(
+        '[DutyLocation] Android GPS stream subscribed '
+        '(stable ${_androidStreamInterval.inSeconds}s / distanceFilter=0, '
+        'speed quiet-poll only)',
+      );
     };
 
-    streamController.onSettingsChanged = null;
+    streamController.onSettingsChanged = syncQuietPollInterval;
 
     service.on('stop').listen((event) {
       unawaited(stop());
@@ -432,20 +709,18 @@ class BackgroundLocationService {
 
     service.on('app_backgrounded').listen((event) {
       if (stopping) return;
-      if (kDebugMode) {
-        debugPrint(
-          '[DutyLocation] app backgrounded — GPS stream kept, adaptive upload continues',
-        );
-      }
-      unawaited(DutyStatusSnapshot.renewIfStillOnDuty());
+      uiForeground = false;
+      locationDebugLog(
+        '[DutyLocation] app backgrounded — GPS stream kept, '
+        'kill-watch heartbeat enabled',
+      );
       unawaited(runDutyGate());
     });
 
     service.on('app_foregrounded').listen((event) {
       if (stopping) return;
-      if (kDebugMode) {
-        debugPrint('[DutyLocation] app foregrounded');
-      }
+      uiForeground = true;
+      locationDebugLog('[DutyLocation] app foregrounded');
       unawaited(runDutyGate());
     });
 

@@ -1,15 +1,17 @@
+import '../debug/debug_env_config.dart';
+
 class ApiUrls {
   ApiUrls._();
 
-  static const baseUrl = 'https://smartnps360.com/api';
+  static String get baseUrl => DebugEnvConfig.instance.apiBaseUrl;
 
-  static const gpsPingUrl = '$baseUrl/gps/ping';
-  static const gpsBatchUrl = '$baseUrl/gps/batch';
+  static String get gpsPingUrl => '$baseUrl/gps/ping';
+  static String get gpsBatchUrl => '$baseUrl/gps/batch';
 
-  static const sanctumLoginUrl = '$baseUrl/auth/login';
-  static const refreshTokenUrl = '$baseUrl/auth/refresh';
-  static const heartbeatUrl = '$baseUrl/heartbeat';
-  static const pushTokenUrl = '$baseUrl/push-token';
-  static const permissionStatusUrl = '$baseUrl/native-app/permission-status';
-  static const visitsUploadUrl = '$baseUrl/visits';
+  static String get sanctumLoginUrl => '$baseUrl/auth/login';
+  static String get refreshTokenUrl => '$baseUrl/auth/refresh';
+  static String get heartbeatUrl => '$baseUrl/heartbeat';
+  static String get pushTokenUrl => '$baseUrl/push-token';
+  static String get permissionStatusUrl => '$baseUrl/native-app/permission-status';
+  static String get visitsUploadUrl => '$baseUrl/visits';
 }

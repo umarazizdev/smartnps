@@ -3,17 +3,18 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import '../../utilities/app_config.dart';
+import '../../utilities/app_debug_log.dart';
 
-enum LocationSharingStopReason {
-  shiftEnded,
-  signedOut,
-}
+enum LocationSharingStopReason { shiftEnded, signedOut }
 
 class LocationSharingStatusNotification {
   LocationSharingStatusNotification._();
 
   static const int sharingNotificationId = 9911;
   static const int stoppedNotificationId = 9912;
+  static const int bgStartTestNotificationId = 9913;
+  static const int breakStartedNotificationId = 9914;
 
   static const String iosAppTitle = 'SmartNPS360';
   static const String androidSharingTitle = 'On Duty • Location Active';
@@ -36,16 +37,25 @@ class LocationSharingStatusNotification {
 
   static const String title = iosAppTitle;
 
-  static const String _androidStoppedChannelId =
-      'smartnps360_location_status';
+  static const String _androidStoppedChannelId = 'smartnps360_location_status';
   static const String _androidStoppedChannelName = 'Location status';
   static const String _androidStoppedChannelDescription =
       'Quiet updates when location sharing starts or stops';
+  static const String _androidBgStartTestChannelId =
+      'smartnps360_location_test';
+  static const String _androidBgStartTestChannelName = 'Location test alerts';
+  static const String _androidBgStartTestChannelDescription =
+      'Debug alerts when background location FGS starts';
+  static const String _androidBreakChannelId = 'smartnps360_break_status';
+  static const String _androidBreakChannelName = 'Break status';
+  static const String _androidBreakChannelDescription =
+      'Alerts when a paid or unpaid break starts';
 
   static FlutterLocalNotificationsPlugin? _plugin;
   static bool _sharingShown = false;
   static bool _shiftEndedAnnounced = false;
   static bool _signedOutAnnounced = false;
+  static String? _lastBreakNotificationKey;
 
   static bool get isSharingShown => _sharingShown;
 
@@ -134,8 +144,10 @@ class LocationSharingStatusNotification {
     );
 
     if (Platform.isAndroid) {
-      final android = plugin.resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin>();
+      final android = plugin
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >();
       await android?.createNotificationChannel(
         const AndroidNotificationChannel(
           _androidStoppedChannelId,
@@ -147,9 +159,90 @@ class LocationSharingStatusNotification {
           showBadge: false,
         ),
       );
+      await android?.createNotificationChannel(
+        const AndroidNotificationChannel(
+          _androidBgStartTestChannelId,
+          _androidBgStartTestChannelName,
+          description: _androidBgStartTestChannelDescription,
+          importance: Importance.high,
+          playSound: true,
+          enableVibration: true,
+        ),
+      );
+      await android?.createNotificationChannel(
+        const AndroidNotificationChannel(
+          _androidBreakChannelId,
+          _androidBreakChannelName,
+          description: _androidBreakChannelDescription,
+          importance: Importance.high,
+          playSound: true,
+          enableVibration: true,
+        ),
+      );
     }
 
     return plugin;
+  }
+
+  static Future<void> showBreakStarted({
+    required bool unpaid,
+    required int minutes,
+  }) async {
+    if (!Platform.isIOS && !Platform.isAndroid) return;
+
+    final safeMinutes = minutes > 0 ? minutes : 30;
+    final key = '${unpaid ? 'unpaid' : 'paid'}:$safeMinutes';
+    if (_lastBreakNotificationKey == key) return;
+    _lastBreakNotificationKey = key;
+
+    final title = unpaid
+        ? '$safeMinutes-Minute Unpaid Break Started'
+        : '$safeMinutes-Minute Paid Break Started';
+    final body = unpaid
+        ? 'GPS paused. Return onsite and resume duty when your break ends.'
+        : 'Stay onsite. GPS remains active. Approval is required before leaving site.';
+
+    final plugin = await _ensurePlugin();
+    await plugin.show(
+      id: breakStartedNotificationId,
+      title: title,
+      body: body,
+      notificationDetails: NotificationDetails(
+        iOS: const DarwinNotificationDetails(
+          presentAlert: true,
+          presentBanner: true,
+          presentList: true,
+          presentBadge: false,
+          presentSound: true,
+          sound: 'default',
+          threadIdentifier: 'smartnps360_break',
+          interruptionLevel: InterruptionLevel.active,
+        ),
+        android: AndroidNotificationDetails(
+          _androidBreakChannelId,
+          _androidBreakChannelName,
+          channelDescription: _androidBreakChannelDescription,
+          importance: Importance.high,
+          priority: Priority.high,
+          playSound: true,
+          enableVibration: true,
+          autoCancel: true,
+        ),
+      ),
+    );
+
+    locationDebugLog(
+      '[LocationSharingStatusNotification] break started shown '
+      'unpaid=$unpaid minutes=$safeMinutes',
+    );
+    dutyHeartbeatDebugLog(
+      '[LocationSharingStatusNotification] break started shown '
+      'unpaid=$unpaid minutes=$safeMinutes title=$title',
+    );
+  }
+
+  static void resetBreakStartedGate() {
+    _lastBreakNotificationKey = null;
   }
 
   static const NotificationDetails _sharingDetails = NotificationDetails(
@@ -189,6 +282,48 @@ class LocationSharingStatusNotification {
     ),
   );
 
+  static Future<void> showBgLocationStartedTestAlert() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+    if (!kDebugMode || !AppConfig.enableBgLocationStartTestAlert) return;
+
+    final plugin = await _ensurePlugin();
+    final startedAt = DateTime.now().toLocal().toIso8601String();
+    final platformLabel = Platform.isAndroid ? 'Android FGS' : 'iOS bg location';
+
+    await plugin.show(
+      id: bgStartTestNotificationId,
+      title: sharingTitleForPlatform(),
+      body: '$platformLabel started (test) at $startedAt',
+      notificationDetails: NotificationDetails(
+        iOS: const DarwinNotificationDetails(
+          presentAlert: true,
+          presentBanner: true,
+          presentList: true,
+          presentBadge: false,
+          presentSound: true,
+          sound: 'default',
+          threadIdentifier: 'smartnps360_location_test',
+          interruptionLevel: InterruptionLevel.active,
+        ),
+        android: AndroidNotificationDetails(
+          _androidBgStartTestChannelId,
+          _androidBgStartTestChannelName,
+          channelDescription: _androidBgStartTestChannelDescription,
+          importance: Importance.high,
+          priority: Priority.high,
+          playSound: true,
+          enableVibration: true,
+          autoCancel: true,
+        ),
+      ),
+    );
+
+    locationDebugLog(
+      '[LocationSharingStatusNotification] bg start test alert shown '
+      '($platformLabel)',
+    );
+  }
+
   static Future<void> showSharing() async {
     if (!Platform.isIOS || _sharingShown) return;
 
@@ -204,9 +339,7 @@ class LocationSharingStatusNotification {
     );
     _sharingShown = true;
 
-    if (kDebugMode) {
-      debugPrint('[LocationSharingStatusNotification] sharing shown');
-    }
+    locationDebugLog('[LocationSharingStatusNotification] sharing shown');
   }
 
   static Future<void> dismissSharing() async {
@@ -217,9 +350,7 @@ class LocationSharingStatusNotification {
     await plugin.cancel(id: sharingNotificationId);
     _sharingShown = false;
 
-    if (kDebugMode) {
-      debugPrint('[LocationSharingStatusNotification] sharing dismissed');
-    }
+    locationDebugLog('[LocationSharingStatusNotification] sharing dismissed');
   }
 
   static Future<void> showStopped({
@@ -241,11 +372,9 @@ class LocationSharingStatusNotification {
       notificationDetails: _stoppedDetails,
     );
 
-    if (kDebugMode) {
-      debugPrint(
-        '[LocationSharingStatusNotification] stopped shown reason=$reason',
-      );
-    }
+    locationDebugLog(
+      '[LocationSharingStatusNotification] stopped shown reason=$reason',
+    );
   }
 
   static Future<bool> tryAnnounceStopped({
@@ -274,11 +403,9 @@ class LocationSharingStatusNotification {
           _signedOutAnnounced = false;
           break;
       }
-      if (kDebugMode) {
-        debugPrint(
-          '[LocationSharingStatusNotification] tryAnnounceStopped failed: $e',
-        );
-      }
+      locationDebugLog(
+        '[LocationSharingStatusNotification] tryAnnounceStopped failed: $e',
+      );
       return false;
     }
   }
@@ -289,8 +416,6 @@ class LocationSharingStatusNotification {
     final plugin = await _ensurePlugin();
     await plugin.cancel(id: stoppedNotificationId);
 
-    if (kDebugMode) {
-      debugPrint('[LocationSharingStatusNotification] stopped cleared');
-    }
+    locationDebugLog('[LocationSharingStatusNotification] stopped cleared');
   }
 }

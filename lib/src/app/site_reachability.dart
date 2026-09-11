@@ -12,8 +12,6 @@ class SiteReachability {
 
   static Future<bool>? _inFlight;
 
-  /// True when smartnps360.com returns any HTTP status (200, 403, 502, etc.).
-  /// Only waits for response headers — not the heavy WebView page.
   static Future<bool> canReachSite() {
     return _inFlight ??= _probe().whenComplete(() {
       _inFlight = null;
@@ -83,11 +81,13 @@ class SiteReachability {
     Object? error,
   }) {
     if (!kDebugMode) return;
-    debugPrint(
-      '[SmartNPS360][Reachability] reachable=$reachable'
-      '${method != null ? ' $method' : ''}'
-      '${status != null ? ' status=$status' : ''}'
-      '${error != null ? ' error=$error' : ''}',
-    );
+    if (kDebugMode) {
+      debugPrint(
+        '[SmartNPS360][Reachability] reachable=$reachable'
+        '${method != null ? ' $method' : ''}'
+        '${status != null ? ' status=$status' : ''}'
+        '${error != null ? ' error=$error' : ''}',
+      );
+    }
   }
 }

@@ -6,6 +6,7 @@ class DeviceIdentity {
   DeviceIdentity._();
 
   static String? _cachedDeviceId;
+  static String? _cachedDeviceName;
 
   static Future<String> getDeviceId() async {
     final cached = _cachedDeviceId;
@@ -25,6 +26,30 @@ class DeviceIdentity {
 
     _cachedDeviceId = id;
     return id;
+  }
+
+  static Future<String?> getDeviceName() async {
+    final cached = _cachedDeviceName;
+    if (cached != null && cached.isNotEmpty) return cached;
+
+    final info = DeviceInfoPlugin();
+    final String? name;
+    if (Platform.isAndroid) {
+      final android = await info.androidInfo;
+      final brand = android.brand.trim();
+      final model = android.model.trim();
+      name = [brand, model].where((part) => part.isNotEmpty).join(' ');
+    } else if (Platform.isIOS) {
+      final ios = await info.iosInfo;
+      name = ios.name.trim();
+    } else {
+      name = null;
+    }
+
+    if (name != null && name.isNotEmpty) {
+      _cachedDeviceName = name;
+    }
+    return name;
   }
 
   static String platformName() {

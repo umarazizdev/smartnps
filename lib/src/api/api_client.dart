@@ -85,12 +85,6 @@ class ApiClient {
     String error,
   ) {
     if (!kDebugMode) return;
-
-  }
-
-  static String _pathFromUri(Uri uri) {
-    if (uri.hasQuery) return '${uri.path}?${uri.query}';
-    return uri.path;
   }
 
   static String _errorMessage(DioException error) {

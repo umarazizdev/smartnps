@@ -8,6 +8,8 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../api/api_client.dart';
 import '../api/api_urls.dart';
+import '../crashlytics/crashlytics_identity.dart';
+import '../device/device_check_service.dart';
 import '../utilities/app_upgrade_reconciler.dart';
 import 'auth_state.dart';
 import 'location_disclosure_account_sync.dart';
@@ -82,9 +84,12 @@ class AuthRepository {
     final flagSaved = await setOfficerLoggedIn(true);
 
     await LocationDisclosureAccountSync.onLoginResolved();
+    unawaited(CrashlyticsIdentity.setFromUser(user));
 
     if (userSaved && accessSaved && refreshSaved && flagSaved) {
-      debugPrint('[SmartNPS360][AuthRepo] saved login (secure storage)');
+      if (kDebugMode) {
+        debugPrint('[SmartNPS360][AuthRepo] saved login (secure storage)');
+      }
     } else if (kDebugMode) {
       debugPrint(
         '[SmartNPS360][AuthRepo] saved login (memory cache; keychain partial '
@@ -148,7 +153,10 @@ class AuthRepository {
     await setOfficerLoggedIn(false);
     AuthState.instance.clearNeedsReauth();
     LocationDisclosureAccountSync.onLoggedOut();
-    debugPrint('[SmartNPS360][AuthRepo] cleared auth (secure storage)');
+    unawaited(CrashlyticsIdentity.clear());
+    if (kDebugMode) {
+      debugPrint('[SmartNPS360][AuthRepo] cleared auth (secure storage)');
+    }
     onSecureTokensChanged?.call();
   }
 
@@ -166,7 +174,7 @@ class AuthRepository {
         employeeSaved && passwordSaved
             ? '[SmartNPS360][AuthRepo] saved credentials (secure storage)'
             : '[SmartNPS360][AuthRepo] saved credentials partially '
-                '(employee=$employeeSaved password=$passwordSaved)',
+                  '(employee=$employeeSaved password=$passwordSaved)',
       );
     }
   }
@@ -198,11 +206,13 @@ class AuthRepository {
     _cachedAccessToken = token;
     _accessTokenAccessibilityMigrated = true;
     final saved = await _secureWrite(_kAccessToken, token);
-    debugPrint(
-      saved
-          ? '[SmartNPS360][AuthRepo] saved access token (secure storage)'
-          : '[SmartNPS360][AuthRepo] saved access token (memory cache only)',
-    );
+    if (kDebugMode) {
+      debugPrint(
+        saved
+            ? '[SmartNPS360][AuthRepo] saved access token (secure storage)'
+            : '[SmartNPS360][AuthRepo] saved access token (memory cache only)',
+      );
+    }
     onSecureTokensChanged?.call();
   }
 
@@ -210,11 +220,13 @@ class AuthRepository {
     if (token.isEmpty) return;
     _cachedRefreshToken = token;
     final saved = await _secureWrite(_kRefreshToken, token);
-    debugPrint(
-      saved
-          ? '[SmartNPS360][AuthRepo] saved refresh token (secure storage)'
-          : '[SmartNPS360][AuthRepo] saved refresh token (memory cache only)',
-    );
+    if (kDebugMode) {
+      debugPrint(
+        saved
+            ? '[SmartNPS360][AuthRepo] saved refresh token (secure storage)'
+            : '[SmartNPS360][AuthRepo] saved refresh token (memory cache only)',
+      );
+    }
     onSecureTokensChanged?.call();
   }
 
@@ -252,7 +264,9 @@ class AuthRepository {
       }
     } catch (e) {
       if (kDebugMode) {
-        debugPrint('[SmartNPS360][AuthRepo] keychain write failed key=$key: $e');
+        debugPrint(
+          '[SmartNPS360][AuthRepo] keychain write failed key=$key: $e',
+        );
       }
       return false;
     }
@@ -271,7 +285,9 @@ class AuthRepository {
       return false;
     } catch (e) {
       if (kDebugMode) {
-        debugPrint('[SmartNPS360][AuthRepo] keychain delete failed key=$key: $e');
+        debugPrint(
+          '[SmartNPS360][AuthRepo] keychain delete failed key=$key: $e',
+        );
       }
       return false;
     }
@@ -445,6 +461,7 @@ class AuthRepository {
     await getAccessToken();
     await getRefreshToken();
     await isOfficerLoggedIn();
+    unawaited(CrashlyticsIdentity.syncFromStoredSession());
   }
 
   Future<String?> ensureValidAccessToken() async {
@@ -482,13 +499,18 @@ class AuthRepository {
         return null;
       }
 
+      final deviceCheckExtras = await DeviceCheckService.authPayloadExtras();
       final response = await _authDio.postUri(
         Uri.parse(ApiUrls.refreshTokenUrl),
-        data: {'refresh_token': refreshToken},
+        data: {'refresh_token': refreshToken, ...deviceCheckExtras},
       );
 
       final statusCode = response.statusCode ?? 0;
-      ApiClient.logHttpResult('POST', Uri.parse(ApiUrls.refreshTokenUrl), statusCode);
+      ApiClient.logHttpResult(
+        'POST',
+        Uri.parse(ApiUrls.refreshTokenUrl),
+        statusCode,
+      );
       if (statusCode < 200 || statusCode >= 300) {
         if (statusCode == 401 || statusCode == 403) {
           final silent = await _trySilentRelogin();
@@ -566,12 +588,14 @@ class AuthRepository {
         );
       }
 
+      final deviceCheckExtras = await DeviceCheckService.authPayloadExtras();
       final response = await _authDio.postUri(
         Uri.parse(ApiUrls.sanctumLoginUrl),
         data: {
           'employee_no': creds.employeeNo,
           'password': creds.password,
           'device_name': 'mobile-app',
+          ...deviceCheckExtras,
         },
       );
 

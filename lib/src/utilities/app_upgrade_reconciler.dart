@@ -77,10 +77,12 @@ class AppUpgradeReconciler {
     await BackgroundLocationPermissions.refreshPermissionStateFromOs();
     await LocationDisclosureConsent.reconcileFromOsIfBackgroundReady();
     if (!_osReconcileDone && kDebugMode) {
-      debugPrint(
-        '[AppUpgradeReconciler] OS disclose reconcile done '
-        '(${Platform.isAndroid ? 'android' : 'ios'})',
-      );
+      if (kDebugMode) {
+        debugPrint(
+          '[AppUpgradeReconciler] OS disclose reconcile done '
+          '(${Platform.isAndroid ? 'android' : 'ios'})',
+        );
+      }
     }
     _osReconcileDone = true;
   }

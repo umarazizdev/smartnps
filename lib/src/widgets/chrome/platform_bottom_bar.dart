@@ -10,6 +10,7 @@ class PlatformBottomTab {
     required this.label,
     required this.index,
     this.iosSymbolName,
+    this.iosSymbolPointSize,
     this.activeAssetIcon,
     this.inactiveAssetIcon,
     this.materialIcon,
@@ -19,6 +20,7 @@ class PlatformBottomTab {
   final int index;
 
   final String? iosSymbolName;
+  final double? iosSymbolPointSize;
   final String? activeAssetIcon;
   final String? inactiveAssetIcon;
 
@@ -104,7 +106,10 @@ class _CupertinoNativeBottomBar extends StatelessWidget {
             .map(
               (tab) => CNTabBarItem(
                 label: tab.label,
-                icon: CNSymbol(tab.iosSymbolName ?? 'circle'),
+                icon: CNSymbol(
+                  tab.iosSymbolName ?? 'circle',
+                  size: tab.iosSymbolPointSize ?? 24,
+                ),
               ),
             )
             .toList(),
@@ -212,7 +217,7 @@ class _ClassicBottomBar extends StatelessWidget {
                               : Curves.easeOut,
                           height: isAndroid ? 54 : 58,
                           padding: EdgeInsets.symmetric(
-                            horizontal: isAndroid ? 14 : 16,
+                            horizontal: isAndroid ? 4 : 16,
                             vertical: isAndroid ? 2 : 6,
                           ),
                           decoration: BoxDecoration(
@@ -233,19 +238,25 @@ class _ClassicBottomBar extends StatelessWidget {
                                 size: 24,
                               ),
                               SizedBox(height: isAndroid ? 3 : 4),
-                              Text(
-                                tab.label,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  fontSize: 11.5,
-                                  fontWeight: FontWeight.w600,
-                                  height: 1.1,
-                                  letterSpacing: 0.15,
-                                  color: isActive
-                                      ? activeColor
-                                      : inactiveColor,
+                              SizedBox(
+                                width: double.infinity,
+                                child: FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  child: Text(
+                                    tab.label,
+                                    maxLines: 1,
+                                    softWrap: false,
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      fontSize: isAndroid ? 10.5 : 11.5,
+                                      fontWeight: FontWeight.w600,
+                                      height: 1.1,
+                                      letterSpacing: isAndroid ? 0 : 0.15,
+                                      color: isActive
+                                          ? activeColor
+                                          : inactiveColor,
+                                    ),
+                                  ),
                                 ),
                               ),
                             ],

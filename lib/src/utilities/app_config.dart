@@ -1,4 +1,5 @@
 import '../app/app_routes.dart';
+import '../debug/debug_env_config.dart';
 
 class AppConfig {
   AppConfig._();
@@ -19,13 +20,23 @@ class AppConfig {
 
   static const bool enableMockLocationDetection = true;
 
+  static const bool enablePingDebugLog = true;
+  static const bool enableBatchDebugLog = true;
+  static const bool enableDutyHeartbeatDebugLog = false;
+  static const bool enablePermissionStatusDebugLog = false;
+  static const bool enablePatrolLogDebugLog = true;
+
+  static const bool enableBgLocationStartTestAlert = false;
+
   static const double keyboardOpenThreshold = 50.0;
 
   static bool isAllowedHost(String? host) {
     if (host == null) return false;
     final h = host.toLowerCase();
     if (allowedHosts.contains(h)) return true;
-    return h.endsWith('.$allowedHost');
+    if (h.endsWith('.$allowedHost')) return true;
+    if (DebugEnvConfig.instance.overrideHosts.contains(h)) return true;
+    return false;
   }
 
   static bool isTrustedSubresourceHost(String? host) {
@@ -61,6 +72,16 @@ class AppConfig {
         exact == '${AppRoutes.webLoginUrl}/';
   }
 
+  static bool isAuthEntryRoute(Uri? uri) {
+    if (uri == null) return false;
+    if (!isAllowedHost(uri.host)) return false;
+    if (isLoginRoute(uri)) return true;
+
+    final exact = _exactUrl(uri);
+    return exact == AppRoutes.webSignupUrl ||
+        exact == '${AppRoutes.webSignupUrl}/';
+  }
+
   static bool isOfficerApplicationUrl(Uri? uri) {
     if (uri == null) return false;
     if (!isAllowedHost(uri.host)) return false;
@@ -68,6 +89,7 @@ class AppConfig {
 
     final exact = _exactUrl(uri);
     return exact == AppRoutes.webDashboardUrl ||
+        exact == AppRoutes.webShiftLogUrl ||
         exact == AppRoutes.webTimesheetUrl ||
         exact == AppRoutes.webProfileUrl;
   }
@@ -86,13 +108,17 @@ class AppConfig {
   static int? bottomTabIndexForUri(Uri? uri) {
     final path = normalizeWebPath(uri);
     if (path == null) return null;
-    for (var i = 0; i < AppRoutes.bottomBarWebPaths.length; i++) {
-      if (AppRoutes.bottomBarWebPaths[i] == path) return i;
+    for (var i = 0; i < AppRoutes.bottomTabWebPaths.length; i++) {
+      if (AppRoutes.bottomTabWebPaths[i] == path) return i;
     }
     return null;
   }
 
-  static bool isBottomBarRoute(Uri? uri) => bottomTabIndexForUri(uri) != null;
+  static bool isBottomBarRoute(Uri? uri) {
+    final path = normalizeWebPath(uri);
+    if (path == null) return false;
+    return AppRoutes.bottomBarWebPaths.contains(path);
+  }
 
   static String _exactUrl(Uri uri) {
     final text = uri.toString();

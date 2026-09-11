@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -5,11 +6,15 @@ import 'package:get/get.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../app/app_routes.dart';
+import '../flow/cam_perf.dart';
+import '../flow/capture_work_coordinator.dart';
 import '../flow/visit_media_geo.dart';
 import '../flow/visit_video_flow_controller.dart';
 import '../log_visit_theme.dart';
 import '../notes/visit_media_notes_sheet.dart';
 import 'capture_review_controller.dart';
+
+const Color _kReviewAccent = Color(0xFF3B82F6);
 
 class CaptureReviewScreen extends GetView<CaptureReviewController> {
   const CaptureReviewScreen({super.key});
@@ -18,7 +23,9 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
     required String filePath,
     required VisitMediaType mediaType,
     required VisitMediaGeo geo,
+    required String captureId,
     bool resolveLocationInBackground = false,
+    CaptureWorkCoordinator? coordinator,
   }) {
     return Get.off<T>(
       () => const CaptureReviewScreen(),
@@ -30,8 +37,10 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
           CaptureReviewController(
             displayPath: filePath,
             mediaType: mediaType,
+            captureId: captureId,
             initialGeo: geo,
             resolveLocationInBackground: resolveLocationInBackground,
+            coordinator: coordinator,
           ),
         );
       }),
@@ -45,6 +54,7 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
     if (controller.isBusy.value) return;
     final flow = Get.find<VisitVideoFlowController>();
     final item =
+        flow.findByCaptureId(controller.captureId) ??
         flow.findByPath(controller.mediaPath.value) ??
         flow.findByPath(controller.displayPath);
     if (item == null) return;
@@ -54,54 +64,56 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
   Widget _actionBar({
     required BuildContext context,
     required bool isLandscape,
-    required bool topPlacement,
   }) {
     return Obx(() {
       final busy = controller.isBusy.value;
-      final gpsBlocked = controller.isDoneBlockedByMissingGps;
       final flow = Get.find<VisitVideoFlowController>();
-      VisitMediaItem? item;
-      for (final e in flow.mediaItems) {
-        if (e.path == controller.mediaPath.value ||
-            e.path == controller.displayPath) {
-          item = e;
-          break;
-        }
-      }
+      final item =
+          flow.findByCaptureId(controller.captureId) ??
+          flow.findByPath(controller.mediaPath.value) ??
+          flow.findByPath(controller.displayPath);
       final hasTextNote = item?.hasTextNote ?? false;
       final hasVoiceNote = item?.hasVoiceNote ?? false;
+      final attentionNeeded = item?.attentionNeeded ?? false;
+      final mediaPath = item?.path ?? controller.mediaPath.value;
       return _CaptureReviewActionBar(
         isLandscape: isLandscape,
-        topPlacement: topPlacement,
         busy: busy,
-        gpsBlocked: gpsBlocked,
-        gpsBlockedMessage: controller.doneBlockedMessage,
         hasTextNote: hasTextNote,
         hasVoiceNote: hasVoiceNote,
+        attentionNeeded: attentionNeeded,
+        onAttentionChanged: (value) {
+          unawaited(() async {
+            var path = mediaPath;
+            if (flow.findByPath(path) == null) {
+              final registered = await flow.registerCaptureDraft(
+                VisitMediaItem(
+                  path: controller.displayPath,
+                  type: controller.mediaType,
+                  captureId: controller.captureId,
+                  capturedAt: controller.geo.value.capturedAt,
+                  latitude: controller.geo.value.latitude,
+                  longitude: controller.geo.value.longitude,
+                  accuracyMeters: controller.geo.value.accuracyMeters,
+                  attentionNeeded: value,
+                  isPendingCapture: true,
+                ),
+              );
+              if (registered != null) {
+                path = registered.path;
+                if (registered.attentionNeeded == value) return;
+              }
+            }
+            await flow.setMediaAttentionNeeded(
+              mediaPath: path,
+              attentionNeeded: value,
+            );
+          }());
+        },
         onTextNote: () => _openNotes(context, kind: VisitMediaNoteKind.text),
         onVoiceNote: () => _openNotes(context, kind: VisitMediaNoteKind.voice),
         onRetake: controller.retake,
         onDone: controller.done,
-      );
-    });
-  }
-
-  Widget _gpsBanner({required bool isLandscape}) {
-    return Obx(() {
-      final issue = controller.gpsIssueMessage.value?.trim();
-      final showIssue =
-          issue != null &&
-          issue.isNotEmpty &&
-          !controller.geo.value.hasCoordinates;
-      if (!showIssue) return const SizedBox.shrink();
-      return Padding(
-        padding: EdgeInsets.fromLTRB(
-          isLandscape ? 12 : 12,
-          isLandscape ? 6 : 0,
-          isLandscape ? 12 : 12,
-          isLandscape ? 0 : 8,
-        ),
-        child: _GpsIssueBanner(message: issue),
       );
     });
   }
@@ -115,168 +127,109 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
-        if (didPop || controller.isBusy.value) return;
+        if (didPop) return;
         controller.cancel();
       },
       child: Scaffold(
-        backgroundColor: Colors.black,
+        backgroundColor: const Color(0xFF101115),
         body: SafeArea(
-          child: isLandscape
-              ? Column(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(4, 0, 8, 6),
-                      child: Row(
-                        children: [
-                          Obx(
-                            () => TextButton(
-                              onPressed: controller.isBusy.value
-                                  ? null
-                                  : controller.cancel,
-                              style: TextButton.styleFrom(
-                                foregroundColor: Colors.white,
-                                disabledForegroundColor: Colors.white38,
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                ),
-                                minimumSize: const Size(64, 36),
-                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                              ),
-                              child: const Text(
-                                'Cancel',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 14,
-                                ),
-                              ),
-                            ),
-                          ),
-                          Expanded(
-                            child: Text(
-                              title,
-                              textAlign: TextAlign.center,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w700,
-                                fontSize: 15,
-                                letterSpacing: 0.2,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            flex: 3,
-                            child: _actionBar(
-                              context: context,
-                              isLandscape: true,
-                              topPlacement: true,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    _gpsBanner(isLandscape: true),
-                    const Expanded(
-                      child: _PreviewBody(isLandscape: true, edgeToEdge: true),
-                    ),
-                  ],
-                )
-              : Column(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(4, 4, 4, 6),
-                      child: SizedBox(
-                        height: 44,
-                        child: Row(
+          child: Column(
+            children: [
+              _ReviewHeader(title: title, onCancel: controller.cancel),
+              Expanded(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    isLandscape ? 20 : 12,
+                    isLandscape ? 0 : 8,
+                    isLandscape ? (Platform.isAndroid ? 12 : 0) : 12,
+                    12,
+                  ),
+                  child: isLandscape
+                      ? Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            Obx(
-                              () => TextButton(
-                                onPressed: controller.isBusy.value
-                                    ? null
-                                    : controller.cancel,
-                                style: TextButton.styleFrom(
-                                  foregroundColor: Colors.white,
-                                  disabledForegroundColor: Colors.white38,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                  ),
-                                  minimumSize: const Size(64, 40),
-                                  tapTargetSize:
-                                      MaterialTapTargetSize.shrinkWrap,
-                                ),
-                                child: const Text(
-                                  'Cancel',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 15,
-                                  ),
-                                ),
+                            const Expanded(
+                              flex: 5,
+                              child: _PreviewBody(
+                                isLandscape: true,
+                                edgeToEdge: false,
                               ),
                             ),
+                            const SizedBox(width: 16),
                             Expanded(
-                              child: Text(
-                                title,
-                                textAlign: TextAlign.center,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 17,
-                                  letterSpacing: 0.2,
-                                ),
-                              ),
-                            ),
-                            Obx(
-                              () => TextButton(
-                                onPressed:
-                                    (controller.isBusy.value ||
-                                        controller.isDoneBlockedByMissingGps)
-                                    ? null
-                                    : controller.done,
-                                style: TextButton.styleFrom(
-                                  foregroundColor: cPrimary,
-                                  disabledForegroundColor: Colors.white38,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                  ),
-                                  minimumSize: const Size(64, 40),
-                                  tapTargetSize:
-                                      MaterialTapTargetSize.shrinkWrap,
-                                ),
-                                child: const Text(
-                                  'Done',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 15,
-                                  ),
-                                ),
+                              flex: 2,
+                              child: _actionBar(
+                                context: context,
+                                isLandscape: true,
                               ),
                             ),
                           ],
+                        )
+                      : Column(
+                          children: [
+                            const Expanded(
+                              child: _PreviewBody(
+                                isLandscape: false,
+                                edgeToEdge: false,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            _actionBar(context: context, isLandscape: false),
+                          ],
                         ),
-                      ),
-                    ),
-                    const Expanded(
-                      child: _PreviewBody(
-                        isLandscape: false,
-                        edgeToEdge: true,
-                      ),
-                    ),
-                    _gpsBanner(isLandscape: false),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-                      child: _actionBar(
-                        context: context,
-                        isLandscape: false,
-                        topPlacement: false,
-                      ),
-                    ),
-                  ],
                 ),
+              ),
+            ],
+          ),
         ),
+      ),
+    );
+  }
+}
+
+class _ReviewHeader extends StatelessWidget {
+  const _ReviewHeader({required this.title, required this.onCancel});
+
+  final String title;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 48,
+      child: Row(
+        children: [
+          const SizedBox(width: 10),
+          TextButton.icon(
+            onPressed: onCancel,
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              minimumSize: const Size(0, 44),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            icon: const Icon(Icons.close_rounded, size: 30),
+            label: const Text(
+              'Cancel',
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+            ),
+          ),
+          const SizedBox(width: 18),
+          Expanded(
+            child: Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 23,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.3,
+              ),
+            ),
+          ),
+          const SizedBox(width: 20),
+        ],
       ),
     );
   }
@@ -285,12 +238,11 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
 class _CaptureReviewActionBar extends StatelessWidget {
   const _CaptureReviewActionBar({
     required this.isLandscape,
-    required this.topPlacement,
     required this.busy,
-    required this.gpsBlocked,
-    required this.gpsBlockedMessage,
     required this.hasTextNote,
     required this.hasVoiceNote,
+    required this.attentionNeeded,
+    required this.onAttentionChanged,
     required this.onTextNote,
     required this.onVoiceNote,
     required this.onRetake,
@@ -298,12 +250,11 @@ class _CaptureReviewActionBar extends StatelessWidget {
   });
 
   final bool isLandscape;
-  final bool topPlacement;
   final bool busy;
-  final bool gpsBlocked;
-  final String gpsBlockedMessage;
   final bool hasTextNote;
   final bool hasVoiceNote;
+  final bool attentionNeeded;
+  final ValueChanged<bool> onAttentionChanged;
   final VoidCallback onTextNote;
   final VoidCallback onVoiceNote;
   final VoidCallback onRetake;
@@ -311,217 +262,362 @@ class _CaptureReviewActionBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (topPlacement && isLandscape) {
-      return Row(
+    final actions = <Widget>[
+      _ReviewActionTile(
+        iconAsset: 'assets/images/capture_retake_icon.png',
+        label: 'Retake',
+        onPressed: busy ? null : onRetake,
+      ),
+      _ReviewActionTile(
+        iconAsset: 'assets/images/capture_note_icon.png',
+        assetScale: 1.05,
+        label: hasTextNote ? 'Edit note' : 'Add note',
+        onPressed: busy ? null : onTextNote,
+      ),
+      _ReviewActionTile(
+        icon: hasVoiceNote ? Icons.mic_rounded : Icons.mic_none_rounded,
+        label: hasVoiceNote ? 'Edit audio' : 'Add audio',
+        onPressed: busy ? null : onVoiceNote,
+      ),
+      _ReviewAlertTile(
+        isLandscape: isLandscape,
+        enabled: !busy,
+        value: attentionNeeded,
+        onChanged: onAttentionChanged,
+      ),
+    ];
+
+    if (isLandscape) {
+      return Column(
         children: [
-          Expanded(
-            child: _ReviewActionChip(
-              height: 34,
-              icon: hasTextNote
-                  ? Icons.edit_note_rounded
-                  : Icons.sticky_note_2_outlined,
-              label: hasTextNote ? 'Edit' : 'Text',
-              onPressed: busy ? null : onTextNote,
-            ),
-          ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: _ReviewActionChip(
-              height: 34,
-              icon: hasVoiceNote ? Icons.mic_rounded : Icons.mic_none_rounded,
-              label: hasVoiceNote ? 'Edit' : 'Voice',
-              onPressed: busy ? null : onVoiceNote,
-            ),
-          ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: _ReviewSecondaryButton(
-              height: 34,
-              label: 'Retake',
-              onPressed: busy ? null : onRetake,
-            ),
-          ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: _ReviewDoneButton(
-              height: 34,
-              onPressed: (busy || gpsBlocked) ? null : onDone,
-            ),
+          for (var index = 0; index < actions.length; index++) ...[
+            Expanded(flex: index == 3 ? 6 : 5, child: actions[index]),
+            if (index != actions.length - 1) const SizedBox(height: 10),
+          ],
+          const SizedBox(height: 12),
+          _ReviewDoneButton(
+            height: 62,
+            busy: busy,
+            onPressed: busy ? null : onDone,
           ),
         ],
       );
     }
 
-    final notes = Row(
-      children: [
-        Expanded(
-          child: _ReviewActionChip(
-            height: 38,
-            icon: hasTextNote
-                ? Icons.edit_note_rounded
-                : Icons.sticky_note_2_outlined,
-            label: hasTextNote ? 'Edit Text' : 'Text',
-            onPressed: busy ? null : onTextNote,
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _ReviewActionChip(
-            height: 38,
-            icon: hasVoiceNote ? Icons.mic_rounded : Icons.mic_none_rounded,
-            label: hasVoiceNote ? 'Edit Voice' : 'Voice',
-            onPressed: busy ? null : onVoiceNote,
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _ReviewSecondaryButton(
-            height: 38,
-            label: 'Retake',
-            onPressed: busy ? null : onRetake,
-          ),
-        ),
-      ],
-    );
-
-    final blockedMessage = gpsBlocked
-        ? Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Text(
-              gpsBlockedMessage,
-              textAlign: TextAlign.center,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Color(0xFFFFCDD2),
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                height: 1.22,
-              ),
-            ),
-          )
-        : const SizedBox.shrink();
-
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        notes,
-        if (gpsBlocked) ...[
-          const SizedBox(height: 8),
-          blockedMessage,
-        ],
+        Row(
+          children: [
+            Expanded(child: actions[0]),
+            const SizedBox(width: 8),
+            Expanded(child: actions[1]),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(child: actions[2]),
+            const SizedBox(width: 8),
+            Expanded(child: actions[3]),
+          ],
+        ),
+        const SizedBox(height: 10),
+        _ReviewDoneButton(
+          height: 54,
+          busy: busy,
+          onPressed: busy ? null : onDone,
+        ),
       ],
     );
   }
 }
 
-class _ReviewActionChip extends StatelessWidget {
-  const _ReviewActionChip({
-    required this.height,
-    required this.icon,
+class _ReviewActionTile extends StatelessWidget {
+  const _ReviewActionTile({
+    this.icon,
+    this.iconAsset,
+    this.assetScale = 1,
     required this.label,
     required this.onPressed,
-  });
+  }) : assert(icon != null || iconAsset != null);
 
-  final double height;
-  final IconData icon;
+  final IconData? icon;
+  final String? iconAsset;
+  final double assetScale;
   final String label;
   final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      height: height,
-      child: OutlinedButton.icon(
-        onPressed: onPressed,
-        style: OutlinedButton.styleFrom(
-          foregroundColor: Colors.white.withValues(alpha: 0.92),
-          disabledForegroundColor: Colors.white38,
-          backgroundColor: Colors.white.withValues(alpha: 0.055),
-          side: BorderSide(color: Colors.white.withValues(alpha: 0.18)),
-          padding: const EdgeInsets.symmetric(horizontal: 6),
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          visualDensity: VisualDensity.compact,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
+    return Material(
+      color: const Color(0xFF121318),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: Colors.white.withValues(alpha: 0.22)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onPressed,
+        splashColor: _kReviewAccent.withValues(alpha: 0.18),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+          child: Row(
+            children: [
+              if (iconAsset != null)
+                Transform.scale(
+                  scale: assetScale,
+                  child: Image.asset(
+                    iconAsset!,
+                    width: 36,
+                    height: 36,
+                    fit: BoxFit.contain,
+                    filterQuality: FilterQuality.high,
+                    gaplessPlayback: true,
+                  ),
+                )
+              else
+                Icon(icon, color: _kReviewAccent, size: 31),
+              const SizedBox(width: 20),
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: onPressed == null ? Colors.white38 : Colors.white,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
           ),
-        ),
-        icon: Icon(icon, size: 14),
-        label: Text(
-          label,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700),
         ),
       ),
     );
   }
 }
 
-class _ReviewSecondaryButton extends StatelessWidget {
-  const _ReviewSecondaryButton({
-    required this.height,
-    required this.label,
-    required this.onPressed,
+class _ReviewAlertTile extends StatelessWidget {
+  const _ReviewAlertTile({
+    required this.isLandscape,
+    required this.enabled,
+    required this.value,
+    required this.onChanged,
   });
 
-  final double height;
-  final String label;
-  final VoidCallback? onPressed;
+  final bool isLandscape;
+  final bool enabled;
+  final bool value;
+  final ValueChanged<bool> onChanged;
 
   @override
   Widget build(BuildContext context) {
-    return OutlinedButton(
-      onPressed: onPressed,
-      style: OutlinedButton.styleFrom(
-        foregroundColor: Colors.white.withValues(alpha: 0.92),
-        disabledForegroundColor: Colors.white38,
-        side: BorderSide(color: Colors.white.withValues(alpha: 0.28)),
-        minimumSize: Size.fromHeight(height),
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    const alertRed = Color(0xFFEF4444);
+    final accent = value ? alertRed : _kReviewAccent;
+    final horizontalPad = isLandscape ? 14.0 : 10.0;
+    final iconSize = isLandscape ? 30.0 : 26.0;
+    final titleSize = isLandscape ? 17.0 : 16.0;
+    final subtitleSize = isLandscape ? 12.0 : 11.0;
+    final switchScale = isLandscape ? 0.78 : 0.70;
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      decoration: BoxDecoration(
+        color: value
+            ? alertRed.withValues(alpha: 0.14)
+            : const Color(0xFF121318),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: value
+              ? alertRed.withValues(alpha: 0.85)
+              : Colors.white.withValues(alpha: 0.22),
+        ),
       ),
-      child: Text(
-        label,
-        style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700),
+      child: InkWell(
+        onTap: enabled ? () => onChanged(!value) : null,
+        borderRadius: BorderRadius.circular(16),
+        splashColor: accent.withValues(alpha: 0.18),
+        child: Padding(
+          padding: EdgeInsets.symmetric(
+            horizontal: horizontalPad,
+            vertical: isLandscape ? 6 : 4,
+          ),
+          child: Row(
+            children: [
+              Icon(
+                value
+                    ? Icons.notifications_active_rounded
+                    : Icons.notifications_none_rounded,
+                color: accent,
+                size: iconSize,
+              ),
+              SizedBox(width: isLandscape ? 12 : 8),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Alert',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: titleSize,
+                        fontWeight: FontWeight.w700,
+                        height: 1,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'Flag for attention',
+                        maxLines: 1,
+                        softWrap: false,
+                        style: TextStyle(
+                          color: value ? Colors.white70 : Colors.white60,
+                          fontSize: subtitleSize,
+                          fontWeight: FontWeight.w400,
+                          height: 1,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 4),
+              Transform.scale(
+                scale: switchScale,
+                child: Switch.adaptive(
+                  value: value,
+                  onChanged: enabled ? onChanged : null,
+                  activeTrackColor: alertRed.withValues(alpha: 0.55),
+                  activeThumbColor: alertRed,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
 }
 
 class _ReviewDoneButton extends StatelessWidget {
-  const _ReviewDoneButton({required this.height, required this.onPressed});
+  const _ReviewDoneButton({
+    required this.height,
+    required this.onPressed,
+    this.busy = false,
+  });
 
   final double height;
   final VoidCallback? onPressed;
+  final bool busy;
 
   @override
   Widget build(BuildContext context) {
     return FilledButton(
       onPressed: onPressed,
       style: FilledButton.styleFrom(
-        backgroundColor: cPrimary,
+        backgroundColor: _kReviewAccent,
         foregroundColor: Colors.white,
-        disabledBackgroundColor: cPrimary.withValues(alpha: 0.45),
+        disabledBackgroundColor: _kReviewAccent.withValues(alpha: 0.35),
+        disabledForegroundColor: Colors.white70,
         minimumSize: Size.fromHeight(height),
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         padding: const EdgeInsets.symmetric(horizontal: 8),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       ),
-      child: const Text(
-        'Done',
-        style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          if (!busy) ...[
+            const Icon(Icons.check_rounded, size: 28),
+            const SizedBox(width: 10),
+          ],
+          Text(
+            busy ? 'Saving…' : 'Done',
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+          ),
+        ],
       ),
     );
   }
 }
 
+class _ReviewMediaStamp extends StatelessWidget {
+  const _ReviewMediaStamp({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final parts = label.split(' · ');
+    final timestamp = parts.isEmpty ? label : parts.first;
+    final location = parts.length > 1 ? parts.sublist(1).join(' · ') : '';
+
+    return ColoredBox(
+      color: const Color(0xE6121318),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _ReviewStampRow(
+              icon: Icons.calendar_today_outlined,
+              text: timestamp,
+            ),
+            if (location.isNotEmpty) ...[
+              const SizedBox(height: 7),
+              _ReviewStampRow(icon: Icons.location_on_outlined, text: location),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ReviewStampRow extends StatelessWidget {
+  const _ReviewStampRow({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, color: _kReviewAccent, size: 17),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              height: 1,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _PreviewBody extends GetView<CaptureReviewController> {
-  const _PreviewBody({
-    required this.isLandscape,
-    required this.edgeToEdge,
-  });
+  const _PreviewBody({required this.isLandscape, required this.edgeToEdge});
 
   final bool isLandscape;
   final bool edgeToEdge;
@@ -531,11 +627,10 @@ class _PreviewBody extends GetView<CaptureReviewController> {
     return LayoutBuilder(
       builder: (context, constraints) {
         if (constraints.maxWidth < 8 || constraints.maxHeight < 8) {
-          return const ColoredBox(color: Colors.black);
+          return const SizedBox.shrink();
         }
 
-        return ColoredBox(
-          color: Colors.black,
+        return SizedBox.expand(
           child: _MediaContent(
             isLandscape: isLandscape,
             edgeToEdge: edgeToEdge,
@@ -563,8 +658,10 @@ class _MediaContent extends GetView<CaptureReviewController> {
 
   Widget _withStamp(Widget child) {
     return Obx(() {
-      final stamp = controller.geo.value.stampLabel;
       final resolving = controller.isResolvingLocation.value;
+      final stamp = controller.geo.value.reviewStampLabel(
+        resolvingLocation: resolving,
+      );
       return Stack(
         alignment: Alignment.center,
         clipBehavior: Clip.hardEdge,
@@ -575,14 +672,7 @@ class _MediaContent extends GetView<CaptureReviewController> {
               left: 0,
               right: 0,
               bottom: 0,
-              child: VisitMediaStampBar(label: stamp),
-            )
-          else if (resolving)
-            const Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              child: VisitMediaStampBar(label: 'Getting location…'),
+              child: _ReviewMediaStamp(label: stamp),
             ),
         ],
       );
@@ -612,27 +702,35 @@ class _MediaContent extends GetView<CaptureReviewController> {
 
   @override
   Widget build(BuildContext context) {
-    final dpr = MediaQuery.devicePixelRatioOf(context);
-
     if (controller.isPhoto) {
-      return Center(
+      final screen = MediaQuery.sizeOf(context);
+      final dpr = MediaQuery.devicePixelRatioOf(context);
+      final decodeW = (screen.longestSide * dpr).round().clamp(640, 1280);
+      return Align(
+
+        alignment: Alignment.center,
         child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxWidth: maxWidth,
-            maxHeight: maxHeight,
-          ),
+          constraints: BoxConstraints(maxWidth: maxWidth, maxHeight: maxHeight),
           child: _MediaFrame(
             edgeToEdge: edgeToEdge,
             child: _withStamp(
               Image.file(
                 File(controller.displayPath),
-                scale: dpr,
-                fit: BoxFit.scaleDown,
+                fit: BoxFit.contain,
                 alignment: Alignment.center,
                 gaplessPlayback: true,
-                filterQuality: FilterQuality.high,
+                filterQuality: FilterQuality.medium,
+                cacheWidth: decodeW,
                 frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
                   if (wasSynchronouslyLoaded || frame != null) {
+                    CamPerf.firstFrameOnce(
+                      'review:${controller.captureId}',
+                      controller.captureId,
+                      'REVIEW_IMAGE_FIRST_FRAME',
+                    );
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      controller.notifyDisplayFirstFrame();
+                    });
                     return child;
                   }
                   return SizedBox(
@@ -649,8 +747,9 @@ class _MediaContent extends GetView<CaptureReviewController> {
                               height: 28,
                               child: CircularProgressIndicator(
                                 strokeWidth: 2.4,
-                                valueColor:
-                                    AlwaysStoppedAnimation<Color>(cOrange),
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  cOrange,
+                                ),
                               ),
                             ),
                             SizedBox(height: 12),
@@ -695,6 +794,7 @@ class _MediaContent extends GetView<CaptureReviewController> {
       final video = controller.videoController!;
       final size = video.value.size;
       final playing = controller.isPlaying.value;
+      final dpr = MediaQuery.devicePixelRatioOf(context);
       final pixelW = size.width <= 0 ? maxWidth * dpr : size.width;
       final pixelH = size.height <= 0 ? maxHeight * dpr : size.height;
       final display = _actualDisplaySize(
@@ -712,8 +812,10 @@ class _MediaContent extends GetView<CaptureReviewController> {
             child: _MediaFrame(
               edgeToEdge: edgeToEdge,
               child: Obx(() {
-                final stamp = controller.geo.value.stampLabel;
                 final resolving = controller.isResolvingLocation.value;
+                final stamp = controller.geo.value.reviewStampLabel(
+                  resolvingLocation: resolving,
+                );
                 return Stack(
                   fit: StackFit.expand,
                   alignment: Alignment.center,
@@ -728,16 +830,7 @@ class _MediaContent extends GetView<CaptureReviewController> {
                         left: 0,
                         right: 0,
                         bottom: 0,
-                        child: VisitMediaStampBar(label: stamp),
-                      )
-                    else if (resolving)
-                      const Positioned(
-                        left: 0,
-                        right: 0,
-                        bottom: 0,
-                        child: VisitMediaStampBar(
-                          label: 'Getting location…',
-                        ),
+                        child: _ReviewMediaStamp(label: stamp),
                       ),
                   ],
                 );
@@ -751,10 +844,7 @@ class _MediaContent extends GetView<CaptureReviewController> {
 }
 
 class _MediaFrame extends StatelessWidget {
-  const _MediaFrame({
-    required this.child,
-    required this.edgeToEdge,
-  });
+  const _MediaFrame({required this.child, required this.edgeToEdge});
 
   final Widget child;
   final bool edgeToEdge;
@@ -793,51 +883,6 @@ class _PreviewError extends StatelessWidget {
           message,
           textAlign: TextAlign.center,
           style: const TextStyle(color: Colors.white70, fontSize: 14),
-        ),
-      ),
-    );
-  }
-}
-
-class _GpsIssueBanner extends StatelessWidget {
-  const _GpsIssueBanner({required this.message});
-
-  final String message;
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: const Color(0xFF3B1D20),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0x66E53935)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Padding(
-              padding: EdgeInsets.only(top: 2),
-              child: Icon(
-                Icons.gps_off_rounded,
-                size: 16,
-                color: Color(0xFFFF8A80),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                message,
-                style: const TextStyle(
-                  color: Color(0xFFFFCDD2),
-                  fontSize: 12.5,
-                  height: 1.35,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ],
         ),
       ),
     );

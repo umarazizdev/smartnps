@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
+import '../../utilities/app_debug_log.dart';
 
 class IosSignificantLocationChangeService {
   IosSignificantLocationChangeService._();
@@ -29,9 +29,7 @@ class IosSignificantLocationChangeService {
     try {
       await _channel.invokeMethod<dynamic>('claimWakeUpload');
     } on MissingPluginException catch (e) {
-      if (kDebugMode) {
-        debugPrint('[IosSLC] claimWake skipped: $e');
-      }
+      locationDebugLog('[IosSLC] claimWake skipped: $e');
     }
   }
 
@@ -51,9 +49,7 @@ class IosSignificantLocationChangeService {
         'clear': clear,
       });
     } on MissingPluginException catch (e) {
-      if (kDebugMode) {
-        debugPrint('[IosSLC] syncAuthSession skipped: $e');
-      }
+      locationDebugLog('[IosSLC] syncAuthSession skipped: $e');
     }
   }
 
@@ -82,10 +78,45 @@ class IosSignificantLocationChangeService {
     if (!await _ensureNativeChannelsReady()) return;
     try {
       await _channel.invokeMethod<dynamic>('setOnDuty', {'onDuty': onDuty});
-    } on MissingPluginException catch (e) {
-      if (kDebugMode) {
-        debugPrint('[IosSLC] setOnDuty skipped; native channel unavailable: $e');
+      if (!onDuty) {
+        await setUnpaidBreak(false);
       }
+    } on MissingPluginException catch (e) {
+      locationDebugLog(
+        '[IosSLC] setOnDuty skipped; native channel unavailable: $e',
+      );
+    }
+  }
+
+  static Future<void> setUnpaidBreak(bool unpaid) async {
+    if (!Platform.isIOS) return;
+    if (!await _ensureNativeChannelsReady()) return;
+    try {
+      await _channel.invokeMethod<dynamic>('setUnpaidBreak', {
+        'unpaid': unpaid,
+      });
+    } on MissingPluginException catch (e) {
+      locationDebugLog(
+        '[IosSLC] setUnpaidBreak skipped; native channel unavailable: $e',
+      );
+    }
+  }
+
+  static Future<void> armForUnpaidBreak() async {
+    if (!Platform.isIOS) return;
+    if (!await _ensureNativeChannelsReady()) return;
+    await setOnDuty(true);
+    await setUnpaidBreak(true);
+    await _ensureEventSubscription();
+    try {
+      final result = await _invokeMap('startMonitoring');
+      _nativeMonitoring = result['running'] == true;
+      locationDebugLog(
+        '[IosSLC] armForUnpaidBreak running=$_nativeMonitoring '
+        'unpaid=${result['unpaidBreak'] == true}',
+      );
+    } catch (e) {
+      locationDebugLog('[IosSLC] armForUnpaidBreak failed: $e');
     }
   }
 
@@ -125,9 +156,9 @@ class IosSignificantLocationChangeService {
         'drainPendingLocations',
       );
     } on MissingPluginException catch (e) {
-      if (kDebugMode) {
-        debugPrint('[IosSLC] drain skipped; native channel unavailable: $e');
-      }
+      locationDebugLog(
+        '[IosSLC] drain skipped; native channel unavailable: $e',
+      );
       return;
     }
     if (pending == null || pending.isEmpty) return;
@@ -157,9 +188,7 @@ class IosSignificantLocationChangeService {
     try {
       await _channel.invokeMethod<dynamic>('stopMonitoring');
     } catch (e) {
-      if (kDebugMode) {
-        debugPrint('[IosSLC] stop failed: $e');
-      }
+      locationDebugLog('[IosSLC] stop failed: $e');
     }
 
     if (clearOnDuty) {
@@ -194,15 +223,11 @@ class IosSignificantLocationChangeService {
           unawaited(_handlePayload(event));
         },
         onError: (Object error) {
-          if (kDebugMode) {
-            debugPrint('[IosSLC] event stream error: $error');
-          }
+          locationDebugLog('[IosSLC] event stream error: $error');
         },
       );
     } on MissingPluginException catch (e) {
-      if (kDebugMode) {
-        debugPrint('[IosSLC] event stream unavailable: $e');
-      }
+      locationDebugLog('[IosSLC] event stream unavailable: $e');
     }
   }
 
@@ -211,9 +236,9 @@ class IosSignificantLocationChangeService {
     try {
       value = await _channel.invokeMethod<dynamic>(method);
     } on MissingPluginException catch (e) {
-      if (kDebugMode) {
-        debugPrint('[IosSLC] $method skipped; native channel unavailable: $e');
-      }
+      locationDebugLog(
+        '[IosSLC] $method skipped; native channel unavailable: $e',
+      );
       return {
         'ok': false,
         'running': false,
@@ -239,11 +264,7 @@ class IosSignificantLocationChangeService {
     final position = _positionFromMap(map);
     if (position == null) return;
 
-    if (kDebugMode) {
-      debugPrint(
-        '[IosSLC] event source=$source acc=${position.accuracy}',
-      );
-    }
+    locationDebugLog('[IosSLC] event source=$source acc=${position.accuracy}');
 
     await callback(position, source);
   }

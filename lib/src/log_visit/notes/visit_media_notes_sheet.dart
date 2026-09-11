@@ -8,13 +8,15 @@ import '../log_visit_theme.dart';
 import 'visit_media_notes_controller.dart';
 import 'voice/voice_waveform_painter.dart';
 
-export 'visit_media_notes_controller.dart' show VisitMediaNoteKind;
+export 'visit_media_notes_controller.dart'
+    show VisitMediaNoteKind, VisitBatchNoteScope;
 
 Future<void> openVisitMediaNotesSheet({
   required BuildContext context,
   required VisitMediaItem item,
   VisitMediaNoteKind kind = VisitMediaNoteKind.text,
 }) async {
+  final alert = item.attentionNeeded;
   await _openNotesDialog(
     context: context,
     kind: kind,
@@ -24,39 +26,61 @@ Future<void> openVisitMediaNotesSheet({
     hasTextNote: item.hasTextNote,
     hasVoiceNote: item.hasVoiceNote,
     title: kind == VisitMediaNoteKind.text
-        ? (item.isPhoto ? 'Photo Text Note' : 'Video Text Note')
-        : (item.isPhoto ? 'Photo Voice Note' : 'Video Voice Note'),
+        ? (alert
+              ? 'Attention Text Note'
+              : (item.isPhoto ? 'Photo Text Note' : 'Video Text Note'))
+        : (alert
+              ? 'Attention Voice Note'
+              : (item.isPhoto ? 'Photo Voice Note' : 'Video Voice Note')),
     subtitle: kind == VisitMediaNoteKind.text
-        ? 'Add a text note for this ${item.isPhoto ? 'photo' : 'video'}.'
-        : 'Record a voice note for this ${item.isPhoto ? 'photo' : 'video'}.',
-    textHint:
-        'Type your note for this ${item.isPhoto ? 'photo' : 'video'}...',
+        ? (alert
+              ? 'Add a text note for this attention-needed ${item.isPhoto ? 'photo' : 'video'}.'
+              : 'Add a text note for this ${item.isPhoto ? 'photo' : 'video'}.')
+        : (alert
+              ? 'Record a voice note for this attention-needed ${item.isPhoto ? 'photo' : 'video'}.'
+              : 'Record a voice note for this ${item.isPhoto ? 'photo' : 'video'}.'),
+    textHint: alert
+        ? 'Describe what needs attention...'
+        : 'Type your note for this ${item.isPhoto ? 'photo' : 'video'}...',
+    forceAlertAccent: alert,
   );
 }
 
 Future<void> openVisitBatchNotesSheet({
   required BuildContext context,
   VisitMediaNoteKind kind = VisitMediaNoteKind.text,
+  VisitBatchNoteScope scope = VisitBatchNoteScope.attentionNeeded,
 }) async {
   final flow = Get.isRegistered<VisitVideoFlowController>()
       ? Get.find<VisitVideoFlowController>()
       : null;
-  final note = flow?.batchNote.value ?? const VisitBatchNote();
+  final isGeneral = scope == VisitBatchNoteScope.generalNote;
+  final note = isGeneral
+      ? (flow?.generalNote.value ?? const VisitBatchNote())
+      : (flow?.batchNote.value ?? const VisitBatchNote());
+  final label = isGeneral ? 'Additional' : 'Attention Needed';
   await _openNotesDialog(
     context: context,
     kind: kind,
-    tag: 'notes-batch',
+    tag: isGeneral ? 'notes-general' : 'notes-batch',
     item: null,
     batchMode: true,
+    batchScope: scope,
     hasTextNote: note.hasTextNote,
     hasVoiceNote: note.hasVoiceNote,
     title: kind == VisitMediaNoteKind.text
-        ? 'Attention Needed Text Note'
-        : 'Attention Needed Voice Note',
+        ? '$label Text Note'
+        : '$label Voice Note',
     subtitle: kind == VisitMediaNoteKind.text
-        ? 'Add an attention needed text note.'
-        : 'Record an attention needed voice note.',
-    textHint: 'Type your attention needed note...',
+        ? (isGeneral
+              ? 'Add an additional text note.'
+              : 'Add an attention needed text note.')
+        : (isGeneral
+              ? 'Record an additional voice note.'
+              : 'Record an attention needed voice note.'),
+    textHint: isGeneral
+        ? 'Type your additional note...'
+        : 'Type your attention needed note...',
   );
 }
 
@@ -66,20 +90,25 @@ Future<void> _openNotesDialog({
   required String tag,
   required VisitMediaItem? item,
   required bool batchMode,
+  VisitBatchNoteScope batchScope = VisitBatchNoteScope.attentionNeeded,
   required bool hasTextNote,
   required bool hasVoiceNote,
   required String title,
   required String subtitle,
   required String textHint,
+  bool forceAlertAccent = false,
 }) async {
   if (Get.isRegistered<VisitMediaNotesController>(tag: tag)) {
     Get.delete<VisitMediaNotesController>(tag: tag, force: true);
   }
 
   final isDark = Theme.of(context).brightness == Brightness.dark;
-  final accentColor = isDark
-      ? const Color(0xFF93C5FD)
-      : const Color(0xFF4F46E5);
+  final useAlertAccent =
+      forceAlertAccent ||
+      (batchMode && batchScope == VisitBatchNoteScope.attentionNeeded);
+  final accentColor = useAlertAccent
+      ? const Color(0xFFDC2626)
+      : (isDark ? const Color(0xFF93C5FD) : const Color(0xFF4F46E5));
   var didSave = false;
 
   BuildContext safeDialogContext() {
@@ -145,6 +174,7 @@ Future<void> _openNotesDialog({
       kind: kind,
       replacingOther: replacingOther,
       batchMode: batchMode,
+      batchScope: batchScope,
     ),
     tag: tag,
   );
@@ -208,6 +238,7 @@ Future<void> _openNotesDialog({
         kind: kind,
         subtitle: subtitle,
         textHint: textHint,
+        accent: accentColor,
       ),
     );
     if (result == true) {
@@ -239,6 +270,7 @@ class _VisitMediaNotesContent extends StatelessWidget {
     required this.kind,
     required this.subtitle,
     required this.textHint,
+    required this.accent,
   });
 
   final VisitMediaItem? item;
@@ -247,6 +279,7 @@ class _VisitMediaNotesContent extends StatelessWidget {
   final VisitMediaNoteKind kind;
   final String subtitle;
   final String textHint;
+  final Color accent;
 
   @override
   Widget build(BuildContext context) {
@@ -261,7 +294,6 @@ class _VisitMediaNotesContent extends StatelessWidget {
         ? cDarkCardColor.withValues(alpha: 0.78)
         : Colors.white.withValues(alpha: 0.72);
     final textColor = isDark ? cDarkTextPrimary : const Color(0xFF20283A);
-    final accent = isDark ? const Color(0xFF93C5FD) : const Color(0xFF4F46E5);
     final isText = kind == VisitMediaNoteKind.text;
 
     return Column(
@@ -471,8 +503,7 @@ class _VoiceNoteSection extends StatelessWidget {
 
                     return GestureDetector(
                       behavior: HitTestBehavior.opaque,
-                      onTapDown: (details) =>
-                          seekAt(details.localPosition.dx),
+                      onTapDown: (details) => seekAt(details.localPosition.dx),
                       onHorizontalDragStart: (details) =>
                           seekAt(details.localPosition.dx),
                       onHorizontalDragUpdate: (details) =>
@@ -532,9 +563,7 @@ class _VoiceNoteSection extends StatelessWidget {
                       ),
                     ),
                     icon: Icon(
-                      playing
-                          ? Icons.pause_rounded
-                          : Icons.play_arrow_rounded,
+                      playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
                       size: 20,
                     ),
                     label: Text(playing ? 'Pause' : 'Play'),

@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../utilities/app_debug_log.dart';
 
 class AndroidDutyLocationHealth {
   AndroidDutyLocationHealth._();
@@ -43,9 +43,7 @@ class AndroidDutyLocationHealth {
       final at = _parseAt(event) ?? DateTime.now();
       markStarted(at: at);
       unawaited(persistStarted(at));
-      if (kDebugMode) {
-        debugPrint('[DutyLocation] Android FGS started event received');
-      }
+      locationDebugLog('[DutyLocation] Android FGS started event received');
     });
 
     _uploadSub ??= FlutterBackgroundService().on(uploadEvent).listen((event) {
