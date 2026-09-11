@@ -12,8 +12,6 @@ class SiteReachability {
 
   static Future<bool>? _inFlight;
 
-  /// True when smartnps360.com returns any HTTP status (200, 403, 502, etc.).
-  /// Only waits for response headers — not the heavy WebView page.
   static Future<bool> canReachSite() {
     return _inFlight ??= _probe().whenComplete(() {
       _inFlight = null;

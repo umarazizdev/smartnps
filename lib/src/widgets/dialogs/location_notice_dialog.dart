@@ -10,6 +10,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../app/native_theme_controller.dart';
 import '../../app/app_routes.dart';
 import '../../utilities/app_config.dart';
+import 'glass_action_dialog.dart';
 
 class _LocationNoticeColors {
   const _LocationNoticeColors({
@@ -335,13 +336,19 @@ class LocationNoticeDialog extends StatelessWidget {
         NativeThemeController.instance.isDark,
       );
       final media = MediaQuery.of(context);
+      final isLandscape = media.orientation == Orientation.landscape;
       final maxHeight = media.size.height - media.padding.vertical - 20;
-      final maxWidth = media.size.width >= 820 ? 680.0 : media.size.width - 18;
+      final maxWidth = isLandscape
+          ? GlassActionDialog.landscapeMaxWidth
+          : (media.size.width >= 820 ? 680.0 : media.size.width - 18);
 
       return PopScope(
         canPop: false,
         child: Dialog(
-          insetPadding: const EdgeInsets.symmetric(horizontal: 9, vertical: 10),
+          insetPadding: EdgeInsets.symmetric(
+            horizontal: isLandscape ? 40 : 9,
+            vertical: isLandscape ? 12 : 10,
+          ),
           backgroundColor: Colors.transparent,
           elevation: 0,
           child: ConstrainedBox(
@@ -1049,11 +1056,17 @@ class _PolicyDocumentDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final media = MediaQuery.of(context);
-    final maxWidth = media.size.width >= 820 ? 760.0 : media.size.width - 18;
+    final isLandscape = media.orientation == Orientation.landscape;
+    final maxWidth = isLandscape
+        ? 600.0
+        : (media.size.width >= 820 ? 760.0 : media.size.width - 18);
     final maxHeight = media.size.height - media.padding.vertical - 24;
 
     return Dialog(
-      insetPadding: const EdgeInsets.symmetric(horizontal: 9, vertical: 12),
+      insetPadding: EdgeInsets.symmetric(
+        horizontal: isLandscape ? 40 : 9,
+        vertical: isLandscape ? 12 : 12,
+      ),
       backgroundColor: Colors.transparent,
       elevation: 0,
       child: ConstrainedBox(

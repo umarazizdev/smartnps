@@ -180,7 +180,13 @@ class _ClockInPermissionsBlockerScreenState
   Future<bool> _showDisclosureFor(RequiredPermissionItem item) async {
     if (!mounted) return false;
 
-    if (Platform.isAndroid && item.id != 'backgroundLocation') {
+    if (Platform.isAndroid &&
+        item.id != 'backgroundLocation' &&
+        item.id != 'foregroundLocation' &&
+        item.id != 'motionActivity') {
+      return true;
+    }
+    if (Platform.isIOS && item.id == 'motionActivity') {
       return true;
     }
 

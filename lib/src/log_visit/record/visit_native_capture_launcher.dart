@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -12,6 +11,8 @@ import '../../app/app_routes.dart';
 import '../../native_camera/native_camera.dart';
 import '../../widgets/dialogs/glass_action_dialog.dart';
 import '../capture/capture_review_screen.dart';
+import '../capture/onboarding/capture_onboarding_catalog.dart';
+import '../capture/onboarding/capture_onboarding_store.dart';
 import '../flow/cam_perf.dart';
 import '../flow/capture_work_coordinator.dart';
 import '../flow/visit_media_draft_store.dart';
@@ -19,56 +20,58 @@ import '../flow/visit_media_orientation.dart';
 import '../flow/visit_orientation.dart';
 import '../flow/visit_video_flow_controller.dart';
 
-/// Opens the native evidence camera and continues the existing draft → review
-/// → upload pipeline without changing server contracts.
 class VisitNativeCaptureLauncher {
   VisitNativeCaptureLauncher._();
 
   static bool _opening = false;
-  static int? _openStartedMs;
+  static Completer<void>? _openCompletion;
+  static CaptureType _lastCaptureType = CaptureType.photo;
+
+  static Future<void> reopenForRetake({
+    CaptureType initialType = CaptureType.photo,
+  }) async {
+    final activeOpen = _openCompletion;
+    if (activeOpen != null && !activeOpen.isCompleted) {
+      await activeOpen.future;
+    }
+    await open(initialType: initialType);
+  }
 
   static Future<void> open({
-    CaptureType initialType = CaptureType.photo,
+    CaptureType? initialType,
     bool allowModeSwitch = true,
   }) async {
     if (_opening) return;
+    final requestedType = initialType ?? _lastCaptureType;
     _opening = true;
-    _openStartedMs = DateTime.now().millisecondsSinceEpoch;
+    final completion = Completer<void>();
+    _openCompletion = completion;
     _log('CAMERA_REQUEST');
 
-    // Opaque cover so when the native Activity/VC dismisses, the Draft/Checkpoint
-    // stack is never briefly painted before CaptureReview.
     var coverPushed = false;
     try {
       await VisitOrientation.enableCaptureOrientations();
       _log('ORIENTATION_UNLOCKED');
 
       final permitted = await _ensurePermissions(
-        needsMicrophone: allowModeSwitch || initialType == CaptureType.video,
+        needsMicrophone: allowModeSwitch || requestedType == CaptureType.video,
       );
       if (!permitted) return;
       _log('PERMISSIONS_OK');
 
-      final expectedType = initialType == CaptureType.photo
+      final expectedType = requestedType == CaptureType.photo
           ? VisitMediaType.photo
           : VisitMediaType.video;
       final coordinator = CaptureWorkCoordinator.beginSession(
         expectedType: expectedType,
       );
 
-      // Warm capability cache in the background — must NOT block camera open.
-      unawaited(
-        NativeCamera.getCapabilities(type: initialType).then((caps) {
-          if (kDebugMode) {
-            debugPrint(
-              '[VisitNativeCapture] caps (async) '
-              'auto=${caps.autoExtension} hdr=${caps.hdrPhoto} '
-              'night=${caps.nightPhoto} heic=${caps.heic} '
-              'ext=${caps.supportedExtensionModes}',
-            );
-          }
-        }),
-      );
+      unawaited(NativeCamera.getCapabilities(type: requestedType));
+
+      final showOnboarding = await CaptureOnboardingStore.instance.shouldShow();
+      final onboardingSteps = showOnboarding
+          ? CaptureOnboardingCatalog.forCurrentPlatform()
+          : const <CaptureOnboardingStep>[];
 
       coverPushed = await _pushTransitionCover();
       _log('TRANSITION_COVER_${coverPushed ? "SHOWN" : "SKIPPED"}');
@@ -79,15 +82,18 @@ class VisitNativeCaptureLauncher {
         CamPerf.resetCameraOpenFlow();
         CamPerf.log(null, 'FLUTTER_NATIVE_CAMERA_OPEN_START');
         result = await NativeCamera.open(
-          type: initialType,
+          type: requestedType,
           allowModeSwitch: allowModeSwitch,
           landscapeOnly: true,
           rearCameraOnly: true,
           quality: CaptureQuality.maximum,
-          // HEIC remains disabled for visit evidence until backend/storage/viewer
-          // compatibility is verified. Keep JPEG originals for the upload path.
           preferHeic: false,
+          showOnboarding: showOnboarding,
+          onboardingSteps: onboardingSteps,
         );
+        if (NativeCamera.takeLastOnboardingCompleted()) {
+          await CaptureOnboardingStore.instance.markCompleted();
+        }
         _log('NATIVE_RESULT_RECEIVED');
         CamPerf.stage(
           result?.captureId,
@@ -96,12 +102,17 @@ class VisitNativeCaptureLauncher {
               'includes_preview_wait path=${result?.path} bytes=${result?.fileSizeBytes}',
         );
       } on NativeCameraException catch (error) {
+        if (NativeCamera.takeLastOnboardingCompleted()) {
+          await CaptureOnboardingStore.instance.markCompleted();
+        }
         coordinator.disposeSession(reason: 'nativeError');
         await _popTransitionCoverIfNeeded(coverPushed);
         coverPushed = false;
         if (error.isCanceled) return;
         if (error.isPortraitRejected) {
-          await _showPortraitDialog(isPhoto: initialType == CaptureType.photo);
+          await _showPortraitDialog(
+            isPhoto: requestedType == CaptureType.photo,
+          );
           return;
         }
         await _showErrorDialog(_userFacingMessage(error));
@@ -113,6 +124,7 @@ class VisitNativeCaptureLauncher {
         await _popTransitionCoverIfNeeded(coverPushed);
         return;
       }
+      _lastCaptureType = result.type;
       CamPerf.stage(result.captureId, 'FLUTTER_RESULT_VALIDATION_START');
       if (result.path.isEmpty || !File(result.path).existsSync()) {
         coordinator.disposeSession(reason: 'invalidResult');
@@ -131,7 +143,6 @@ class VisitNativeCaptureLauncher {
         return;
       }
 
-      // Prefer native-oriented dimensions (fail-closed if unverifiable).
       final landscape = await _isLandscapeFast(result);
       if (!landscape) {
         coordinator.disposeSession(reason: 'portrait');
@@ -143,27 +154,17 @@ class VisitNativeCaptureLauncher {
       CamPerf.stage(result.captureId, 'FLUTTER_RESULT_VALIDATION_END');
 
       _log('PREVIEW_PUSH_REQUESTED');
-      // Open CaptureReview immediately while the opaque cover is still the
-      // current route. Get.off replaces the cover → Draft never paints.
       final captureId =
           (result.captureId != null && result.captureId!.trim().isNotEmpty)
           ? result.captureId!.trim()
           : _fallbackCaptureId(result.path);
-      if (kDebugMode) {
-        debugPrint(
-          '[CaptureTxn] NATIVE_RESULT id=$captureId path=${result.path} '
-          'exists=${File(result.path).existsSync()} '
-          'bytes=${result.fileSizeBytes}',
-        );
-      }
       final type = result.isPhoto ? VisitMediaType.photo : VisitMediaType.video;
       final geo = coordinator.bindNativeResult(
         captureId: captureId,
         capturedAt: result.capturedAt,
         mediaType: type,
       );
-      // Preserve existing Done GPS gating: require coords when shutter had none.
-      final needsGps = !geo.hasCoordinates;
+      final needsGps = !geo.hasUsableGps;
       CamPerf.markReviewOpen(captureId);
       await CaptureReviewScreen.open(
         filePath: result.path,
@@ -173,7 +174,7 @@ class VisitNativeCaptureLauncher {
         resolveLocationInBackground: needsGps,
         coordinator: coordinator,
       );
-      coverPushed = false; // replaced by Get.off
+      coverPushed = false;
       CamPerf.stage(captureId, 'REVIEW_SCREEN_VISIBLE');
       _log('PREVIEW_VISIBLE');
     } finally {
@@ -181,6 +182,12 @@ class VisitNativeCaptureLauncher {
         await _popTransitionCoverIfNeeded(true);
       }
       _opening = false;
+      if (!completion.isCompleted) {
+        completion.complete();
+      }
+      if (identical(_openCompletion, completion)) {
+        _openCompletion = null;
+      }
     }
   }
 
@@ -200,7 +207,6 @@ class VisitNativeCaptureLauncher {
     final w = result.width;
     final h = result.height;
     if (w != null && h != null && w > 0 && h > 0) {
-      // Native layers already apply EXIF / track transform before reporting size.
       return w > h;
     }
     return VisitMediaOrientation.isLandscape(
@@ -209,7 +215,6 @@ class VisitNativeCaptureLauncher {
     );
   }
 
-  /// Full-screen black route that hides Draft/Checkpoint until Preview replaces it.
   static Future<bool> _pushTransitionCover() async {
     final nav = Get.key.currentState;
     if (nav == null) return false;
@@ -223,7 +228,6 @@ class VisitNativeCaptureLauncher {
         popGesture: false,
       ),
     );
-    // Let the cover paint before the native Activity/VC appears.
     await WidgetsBinding.instance.endOfFrame;
     return true;
   }
@@ -238,14 +242,7 @@ class VisitNativeCaptureLauncher {
     }
   }
 
-  static void _log(String marker) {
-    if (!kDebugMode) return;
-    final start = _openStartedMs;
-    final elapsed = start == null
-        ? 0
-        : DateTime.now().millisecondsSinceEpoch - start;
-    debugPrint('[VisitNativeCapture] $marker +${elapsed}ms');
-  }
+  static void _log(String marker) {}
 
   static String _userFacingMessage(NativeCameraException error) {
     final technical = error.message.trim();
@@ -277,7 +274,39 @@ class VisitNativeCaptureLauncher {
   static Future<bool> _ensurePermissions({
     required bool needsMicrophone,
   }) async {
-    final camera = await Permission.camera.request();
+    final permissions = <Permission>[
+      Permission.camera,
+      if (needsMicrophone) Permission.microphone,
+    ];
+
+    Map<Permission, PermissionStatus> statuses;
+    try {
+      final pending = <Permission>[];
+      for (final permission in permissions) {
+        final status = await permission.status;
+        if (!status.isGranted) {
+          pending.add(permission);
+        }
+      }
+      if (pending.isEmpty) {
+        return true;
+      }
+      statuses = await pending.request();
+    } on Exception catch (error) {
+      final message = error.toString();
+      if (message.contains('ALREADY_REQUESTING_PERMISSIONS')) {
+
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+        statuses = {
+          for (final permission in permissions)
+            permission: await permission.status,
+        };
+      } else {
+        rethrow;
+      }
+    }
+
+    final camera = statuses[Permission.camera] ?? await Permission.camera.status;
     if (!camera.isGranted) {
       await _showErrorDialog(
         camera.isPermanentlyDenied
@@ -288,7 +317,8 @@ class VisitNativeCaptureLauncher {
     }
 
     if (needsMicrophone) {
-      final mic = await Permission.microphone.request();
+      final mic =
+          statuses[Permission.microphone] ?? await Permission.microphone.status;
       if (!mic.isGranted) {
         await _showErrorDialog(
           'Microphone permission is required to record video.',
@@ -333,7 +363,6 @@ class VisitNativeCaptureLauncher {
   }
 }
 
-/// Opaque black placeholder that masks Draft/Checkpoint during native camera.
 class _CaptureTransitionCover extends StatelessWidget {
   const _CaptureTransitionCover();
 
@@ -341,7 +370,17 @@ class _CaptureTransitionCover extends StatelessWidget {
   Widget build(BuildContext context) {
     return const Scaffold(
       backgroundColor: Colors.black,
-      body: SizedBox.expand(child: ColoredBox(color: Colors.black)),
+      body: SizedBox.expand(
+        child: ColoredBox(
+          color: Colors.black,
+          child: Center(
+            child: CircularProgressIndicator(
+              color: Colors.white70,
+              strokeWidth: 2.5,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

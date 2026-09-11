@@ -11,6 +11,8 @@ class VisitMediaGeo {
     this.accuracyMeters,
   });
 
+  static const double maxUsableAccuracyMeters = 50;
+
   final DateTime capturedAt;
   final double? latitude;
   final double? longitude;
@@ -18,10 +20,19 @@ class VisitMediaGeo {
 
   bool get hasCoordinates => latitude != null && longitude != null;
 
+  bool get hasUsableGps {
+    if (!hasCoordinates) return false;
+    final accuracy = accuracyMeters;
+    if (accuracy == null || !accuracy.isFinite || accuracy < 0) return true;
+    return accuracy <= maxUsableAccuracyMeters;
+  }
+
+  bool get isGpsMissed => !hasUsableGps;
+
   String get stampLabel {
     final buffer = StringBuffer(_formatTimestamp(capturedAt));
-    if (hasCoordinates) {
-      buffer.write(' · ');
+    buffer.write(' · ');
+    if (hasUsableGps) {
       buffer.write(latitude!.toStringAsFixed(6));
       buffer.write(', ');
       buffer.write(longitude!.toStringAsFixed(6));
@@ -29,8 +40,17 @@ class VisitMediaGeo {
       if (accuracy != null && accuracy.isFinite && accuracy >= 0) {
         buffer.write(' ±${accuracy.round()}m');
       }
+    } else {
+      buffer.write('GPS not received');
     }
     return buffer.toString();
+  }
+
+  String reviewStampLabel({required bool resolvingLocation}) {
+    if (hasUsableGps) return stampLabel;
+    final time = _formatTimestamp(capturedAt);
+    if (resolvingLocation) return '$time · Getting location…';
+    return '$time · GPS not received';
   }
 
   static Future<VisitMediaGeo> captureNow() => captureFast();

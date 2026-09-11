@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 import 'package:geolocator/geolocator.dart';
@@ -12,7 +11,6 @@ import 'visit_media_draft_store.dart';
 import 'visit_media_geo.dart';
 import 'visit_video_flow_controller.dart';
 
-/// Result of [CaptureWorkCoordinator.waitForAcceptRequirements].
 class CaptureAcceptWaitResult {
   const CaptureAcceptWaitResult({
     required this.durable,
@@ -27,11 +25,6 @@ class CaptureAcceptWaitResult {
   final bool gpsWasReady;
 }
 
-/// Owns async preparation for one native camera session / capture.
-///
-/// Session-scoped: GPS prefetch + draft context prewarm while preview is open.
-/// Capture-scoped: warm durable import + GPS continuation for the current
-/// [captureId]. Retake bumps generation and drops capture-scoped futures.
 class CaptureWorkCoordinator {
   CaptureWorkCoordinator._({
     required this.sessionId,
@@ -40,7 +33,6 @@ class CaptureWorkCoordinator {
 
   static CaptureWorkCoordinator? _active;
 
-  /// The coordinator for the current camera-open session, if any.
   static CaptureWorkCoordinator? get active => _active;
 
   final String sessionId;
@@ -75,7 +67,6 @@ class CaptureWorkCoordinator {
 
   bool get isWarmPersistCompleted => _warmPersistCompleted;
 
-  /// Test / manual attachment of an in-flight warm import future.
   void attachWarmPersist(Future<VisitMediaItem?> future) {
     warmPersistFuture = future.then(
       (item) {
@@ -91,7 +82,6 @@ class CaptureWorkCoordinator {
     );
   }
 
-  /// Starts a new camera-open session. Disposes any previous active session.
   static CaptureWorkCoordinator beginSession({
     required VisitMediaType expectedType,
   }) {
@@ -150,7 +140,6 @@ class CaptureWorkCoordinator {
         return;
       }
 
-      // Do not block camera — ensure warm stream / seed only.
       unawaited(VisitGpsSession.instance.start());
 
       final existing = VisitGpsSession.instance.latestUsableFresh;
@@ -159,7 +148,6 @@ class CaptureWorkCoordinator {
         return;
       }
 
-      // Best-effort one-shot while user aims; ignore failures.
       final position = await VisitGpsSession.instance.acquireForCapture();
       if (position != null) {
         final ok = VisitGpsSession.isUsableAcceptable(position);
@@ -172,16 +160,13 @@ class CaptureWorkCoordinator {
           useGpsClock: true,
         );
       }
-    } catch (error) {
+    } catch (_) {
       CamPerf.stage(
         null,
         'GPS_PREFETCH_END',
         detail: 'error',
         useGpsClock: true,
       );
-      if (kDebugMode) {
-        debugPrint('[CaptureWork] GPS prefetch error: $error');
-      }
     }
   }
 
@@ -242,7 +227,6 @@ class CaptureWorkCoordinator {
     return Get.find<VisitVideoFlowController>();
   }
 
-  /// Bind native capture result. Does not await GPS / IO.
   VisitMediaGeo bindNativeResult({
     required String captureId,
     required DateTime capturedAt,
@@ -276,23 +260,29 @@ class CaptureWorkCoordinator {
     );
 
     if (fix != null) {
-      _latestGeo = VisitMediaGeo(
+      final shutterGeo = VisitMediaGeo(
         capturedAt: capturedAt,
         latitude: fix.latitude,
         longitude: fix.longitude,
         accuracyMeters: fix.accuracy,
       );
-      _completeGpsReady(_latestGeo);
-      CamPerf.stage(
-        captureId,
-        'GPS_READY_FOR_ACCEPT',
-        detail: 'fromShutterSnapshot',
-        useGpsClock: true,
-      );
-      return _latestGeo!;
+      if (shutterGeo.hasUsableGps) {
+        _latestGeo = shutterGeo;
+        _completeGpsReady(_latestGeo);
+        CamPerf.stage(
+          captureId,
+          'GPS_READY_FOR_ACCEPT',
+          detail: 'fromShutterSnapshot',
+          useGpsClock: true,
+        );
+        return _latestGeo!;
+      }
+
+      _latestGeo = shutterGeo;
+    } else {
+      _latestGeo = VisitMediaGeo(capturedAt: capturedAt);
     }
 
-    _latestGeo = VisitMediaGeo(capturedAt: capturedAt);
     CamPerf.stage(captureId, 'GPS_CONTINUE_AFTER_SHUTTER', useGpsClock: true);
     gpsContinueFuture = _continueGps(capturedAt, _generation);
     return _latestGeo!;
@@ -306,8 +296,8 @@ class CaptureWorkCoordinator {
       }
       if (position == null ||
           !VisitGpsSession.isAcceptableForCapture(position, capturedAt)) {
-        _completeGpsReady(null);
-        return null;
+        _completeGpsReady(_latestGeo);
+        return _latestGeo;
       }
       _logFixReceived(position, acceptable: true);
       final geo = VisitMediaGeo(
@@ -316,6 +306,12 @@ class CaptureWorkCoordinator {
         longitude: position.longitude,
         accuracyMeters: position.accuracy,
       );
+      if (!geo.hasUsableGps) {
+
+        _latestGeo ??= geo;
+        _completeGpsReady(_latestGeo);
+        return _latestGeo;
+      }
       _latestGeo = geo;
       _completeGpsReady(geo);
       CamPerf.stage(
@@ -326,8 +322,8 @@ class CaptureWorkCoordinator {
       );
       return geo;
     } catch (_) {
-      if (gen == _generation) _completeGpsReady(null);
-      return null;
+      if (gen == _generation) _completeGpsReady(_latestGeo);
+      return _latestGeo;
     }
   }
 
@@ -338,7 +334,6 @@ class CaptureWorkCoordinator {
     }
   }
 
-  /// Called when Review has painted a useful first frame (photo or video).
   Future<void> onReviewFirstFrame({
     required String captureId,
     required String displayPath,
@@ -369,7 +364,6 @@ class CaptureWorkCoordinator {
     final flow = _flowOrNull();
     if (flow == null) return;
 
-    // Parallel: durable import + GPS continuation (if still needed).
     CamPerf.stage(captureId, 'PARALLEL_DURABLE_START', useReviewClock: true);
     CamPerf.stage(captureId, 'PARALLEL_METADATA_START', useReviewClock: true);
 
@@ -413,7 +407,6 @@ class CaptureWorkCoordinator {
 
     unawaited(warmPersistFuture!.catchError((_) => null));
 
-    // Metadata after draft context prewarm (already started) — mark complete.
     unawaited(
       (draftContextPrewarmFuture ?? Future<void>.value()).whenComplete(() {
         CamPerf.stage(captureId, 'PARALLEL_METADATA_END', useReviewClock: true);
@@ -436,7 +429,6 @@ class CaptureWorkCoordinator {
     }
   }
 
-  /// Use Photo: await only unfinished required work.
   Future<CaptureAcceptWaitResult> waitForAcceptRequirements({
     required bool gpsRequired,
     required VisitMediaGeo currentGeo,
@@ -444,7 +436,7 @@ class CaptureWorkCoordinator {
     final id = captureId;
     final durableReady = isWarmPersistCompleted && _warmError == null;
     final gpsReady =
-        currentGeo.hasCoordinates || (_latestGeo?.hasCoordinates ?? false);
+        currentGeo.hasUsableGps || (_latestGeo?.hasUsableGps ?? false);
 
     CamPerf.stage(id, 'USE_PHOTO_REQUIRED_WAIT_START', usePhotoClock: true);
     CamPerf.stage(
@@ -466,27 +458,39 @@ class CaptureWorkCoordinator {
       throw _warmError!;
     }
 
-    var geo = currentGeo.hasCoordinates
+    var geo = currentGeo.hasUsableGps
         ? currentGeo
-        : (_latestGeo ?? currentGeo);
+        : (_latestGeo?.hasUsableGps == true
+              ? _latestGeo!
+              : (currentGeo.hasCoordinates
+                    ? currentGeo
+                    : (_latestGeo ?? currentGeo)));
 
-    if (gpsRequired && !geo.hasCoordinates) {
+    if (gpsRequired && !geo.hasUsableGps) {
       final cont = gpsContinueFuture;
       if (cont != null) {
         final resolved = await cont;
-        if (resolved != null && resolved.hasCoordinates) {
-          geo = resolved;
+        if (resolved != null) {
+          if (resolved.hasUsableGps) {
+            geo = resolved;
+          } else if (!geo.hasCoordinates && resolved.hasCoordinates) {
+            geo = resolved;
+          }
         }
       }
-      if (!geo.hasCoordinates) {
+      if (!geo.hasUsableGps) {
         final c = _gpsReadyCompleter;
         if (c != null && !c.isCompleted) {
           final resolved = await c.future.timeout(
             VisitGpsSession.oneShotTimeout,
             onTimeout: () => null,
           );
-          if (resolved != null && resolved.hasCoordinates) {
-            geo = resolved;
+          if (resolved != null) {
+            if (resolved.hasUsableGps) {
+              geo = resolved;
+            } else if (!geo.hasCoordinates && resolved.hasCoordinates) {
+              geo = resolved;
+            }
           }
         }
       }
@@ -501,7 +505,6 @@ class CaptureWorkCoordinator {
     );
   }
 
-  /// Close / discard current capture work (keep or dispose session separately).
   void cancelCapture({String reason = 'close'}) {
     _captureCancelled = true;
     _generation += 1;
@@ -510,14 +513,8 @@ class CaptureWorkCoordinator {
     _warmError = null;
     captureId = null;
     _firstFrameSeen = false;
-    if (kDebugMode) {
-      debugPrint(
-        '[CaptureWork] cancelCapture reason=$reason session=$sessionId',
-      );
-    }
   }
 
-  /// Retake: drop capture-scoped work; keep session GPS / draft prewarm.
   void prepareRetake() {
     cancelCapture(reason: 'retake');
   }
@@ -529,12 +526,8 @@ class CaptureWorkCoordinator {
     if (identical(_active, this)) {
       _active = null;
     }
-    if (kDebugMode) {
-      debugPrint('[CaptureWork] disposeSession reason=$reason id=$sessionId');
-    }
   }
 
-  /// Ensures a post-frame / end-of-frame barrier without fake delays.
   static Future<void> waitForNextFrame() async {
     final completer = Completer<void>();
     SchedulerBinding.instance.addPostFrameCallback((_) {
@@ -542,7 +535,6 @@ class CaptureWorkCoordinator {
         if (!completer.isCompleted) completer.complete();
       });
     });
-    // If no frame is scheduled, complete on microtask after endOfFrame.
     unawaited(
       WidgetsBinding.instance.endOfFrame.then((_) {
         if (!completer.isCompleted) {

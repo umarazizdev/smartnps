@@ -37,7 +37,8 @@ import flutter_background_service_ios
   private var gpsPollInFlight = false
   private var gpsPollTimer: Timer?
   private var lastNativeGpsAt: Date?
-  private let dutyGpsDistanceFilter: CLLocationDistance = 5
+  private let dutyGpsDistanceFilter: CLLocationDistance = kCLDistanceFilterNone
+  /// Quiet-poll backup while native keep-alive stream is silent (matches Flutter stationary band).
   private let gpsPollInterval: TimeInterval = 30
   private var lastGeofenceCoordinate: CLLocationCoordinate2D?
   private var slcEventSink: FlutterEventSink?
@@ -365,7 +366,7 @@ import flutter_background_service_ios
 
     if !launchedForLocation {
       // Tap/open while still flagged on duty: keep SLC + GPS ring so a later
-      // swipe-kill can relaunch. Do not start 5m GPS until duty is confirmed.
+      // swipe-kill can relaunch. Do not start duty GPS until duty is confirmed.
       // Without a stored session token, disarm — e.g. login screen / logged out.
       if wasOnDuty,
          wasArmed,
@@ -413,7 +414,7 @@ import flutter_background_service_ios
   }
 
   /// Restores SLC + GPS ring without stopping existing iOS region monitoring.
-  /// 5m GPS stays off until Flutter or native heartbeat confirms on_duty.
+  /// Duty GPS keep-alive stays off until Flutter or native heartbeat confirms on_duty.
   private func restoreSlcAfterLocationWake(startNativePing: Bool) {
     awaitingFlutterDutyConfirm = true
     UserDefaults.standard.set(true, forKey: onDutyKey)
@@ -549,7 +550,7 @@ import flutter_background_service_ios
     if CLLocationManager.significantLocationChangeMonitoringAvailable() {
       manager.startMonitoringSignificantLocationChanges()
     } else {
-      NSLog("[SmartNPS360][SLC] significant-change unavailable; duty GPS 5m keep-alive still running")
+      NSLog("[SmartNPS360][SLC] significant-change unavailable; duty GPS keep-alive still running")
     }
 
     if let saved = savedGeofenceCoordinate() {
@@ -567,7 +568,7 @@ import flutter_background_service_ios
       "gpsKeepAlive": !isUnpaidBreak(),
       "launchedForLocation": launchedForLocation,
       "awaitingDutyConfirm": false,
-      "distanceFilterMeters": dutyGpsDistanceFilter,
+      "distanceFilterMeters": 0,
       "geofenceRadiusMeters": dutyGeofenceRadius,
       "geofenceArmed": lastGeofenceCoordinate != nil,
       "geofenceRingCount": dutyGeofenceRingSlots.count,

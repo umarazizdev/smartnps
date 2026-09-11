@@ -1,8 +1,7 @@
 enum CaptureQuality {
-  /// Highest practical still / video quality for evidence capture.
+
   maximum,
 
-  /// Prefer quality but allow smaller files when the device struggles.
   balanced,
 }
 

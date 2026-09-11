@@ -1,15 +1,11 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:get/get.dart';
 import 'package:video_player/video_player.dart';
 
-import '../../app/app_navigator.dart';
 import '../../native_camera/native_camera.dart';
-import '../../widgets/dialogs/glass_action_dialog.dart';
 import '../flow/cam_perf.dart';
 import '../flow/capture_work_coordinator.dart';
 import '../flow/visit_media_draft_store.dart';
@@ -44,12 +40,10 @@ class CaptureReviewController extends GetxController {
   final videoReady = false.obs;
   final videoError = false.obs;
   final isPlaying = false.obs;
-  final gpsIssueMessage = RxnString();
   final persistError = RxnString();
 
   VideoPlayerController? videoController;
   String? _durablePath;
-  bool _gpsDialogVisible = false;
   bool _isClosing = false;
   bool _accepted = false;
   bool _firstFrameNotified = false;
@@ -57,11 +51,6 @@ class CaptureReviewController extends GetxController {
 
   bool get isPhoto => mediaType == VisitMediaType.photo;
   String get filePath => mediaPath.value;
-  bool get requiresGpsForDone => resolveLocationInBackground;
-  bool get isDoneBlockedByMissingGps =>
-      requiresGpsForDone && !geo.value.hasCoordinates;
-  String get doneBlockedMessage =>
-      'Done is disabled until GPS is available. You cannot finish without GPS.';
 
   VisitVideoFlowController get _flow {
     return Get.isRegistered<VisitVideoFlowController>()
@@ -88,10 +77,9 @@ class CaptureReviewController extends GetxController {
   @override
   void onInit() {
     super.onInit();
-    if (kDebugMode) {
-      debugPrint('[CaptureTxn] REVIEW_OPEN id=$captureId path=$displayPath');
+    if (resolveLocationInBackground && !geo.value.hasUsableGps) {
+      isResolvingLocation.value = true;
     }
-    // Register pending row ASAP for notes; durable import waits for first frame.
     SchedulerBinding.instance.addPostFrameCallback((_) {
       if (isClosed) return;
       unawaited(_registerPendingOnly());
@@ -101,7 +89,6 @@ class CaptureReviewController extends GetxController {
     }
   }
 
-  /// Photo [Image.file] / video ready — starts P2 warm work after paint.
   void notifyDisplayFirstFrame() {
     if (_firstFrameNotified || isClosed || _isClosing) return;
     _firstFrameNotified = true;
@@ -123,17 +110,11 @@ class CaptureReviewController extends GetxController {
           onWarmError: (error) {
             if (!isClosed) {
               persistError.value = 'Could not save media. Please try again.';
-              if (kDebugMode) {
-                debugPrint(
-                  '[CaptureTxn] IMPORT_FAILED id=$captureId error=$error',
-                );
-              }
             }
           },
           onGeoUpdated: (resolved) {
             if (isClosed || _isClosing || _accepted) return;
             geo.value = resolved;
-            gpsIssueMessage.value = null;
             isResolvingLocation.value = false;
             unawaited(
               _flow.updateCaptureGeo(
@@ -145,13 +126,12 @@ class CaptureReviewController extends GetxController {
           },
         ),
       );
-      if (resolveLocationInBackground && !geo.value.hasCoordinates) {
+      if (resolveLocationInBackground && !geo.value.hasUsableGps) {
         isResolvingLocation.value = true;
         unawaited(_watchCoordinatorGps());
       }
       return;
     }
-    // Legacy path when no coordinator is attached (tests / fallback).
     _startLegacyWarmPersist();
   }
 
@@ -160,30 +140,27 @@ class CaptureReviewController extends GetxController {
     if (coordinator == null) return;
     final fut = coordinator.gpsContinueFuture;
     if (fut == null) {
-      isResolvingLocation.value = false;
-      if (!geo.value.hasCoordinates) {
-        await _refreshGpsIssueMessage();
-        await _showGpsFailedDialog();
-      }
+      if (!isClosed) isResolvingLocation.value = false;
       return;
     }
     try {
       final resolved = await fut;
       if (isClosed || _isClosing || _accepted) return;
-      if (resolved == null || !resolved.hasCoordinates) {
-        isResolvingLocation.value = false;
-        await _refreshGpsIssueMessage();
-        await _showGpsFailedDialog();
-        return;
+      if (resolved != null && resolved.hasCoordinates) {
+        geo.value = resolved;
+        unawaited(
+          _flow.updateCaptureGeo(
+            mediaPath: mediaPath.value,
+            geo: resolved,
+            captureId: captureId,
+          ),
+        );
       }
-      geo.value = resolved;
-      gpsIssueMessage.value = null;
-      isResolvingLocation.value = false;
     } catch (_) {
-      if (!isClosed && !_isClosing && !geo.value.hasCoordinates) {
+
+    } finally {
+      if (!isClosed) {
         isResolvingLocation.value = false;
-        await _refreshGpsIssueMessage();
-        await _showGpsFailedDialog();
       }
     }
   }
@@ -238,107 +215,21 @@ class CaptureReviewController extends GetxController {
     try {
       final resolvedGeo = await VisitMediaGeo.captureFast();
       if (isClosed || _isClosing) return;
-      if (!resolvedGeo.hasCoordinates) {
-        await _refreshGpsIssueMessage();
-        isResolvingLocation.value = false;
-        await _showGpsFailedDialog();
-        return;
+      if (resolvedGeo.hasCoordinates) {
+        geo.value = resolvedGeo;
+        await _flow.updateCaptureGeo(
+          mediaPath: mediaPath.value,
+          geo: resolvedGeo,
+          captureId: captureId,
+        );
       }
-      geo.value = resolvedGeo;
-      gpsIssueMessage.value = null;
-      await _flow.updateCaptureGeo(
-        mediaPath: mediaPath.value,
-        geo: resolvedGeo,
-        captureId: captureId,
-      );
     } catch (_) {
-      if (!isClosed && !_isClosing) {
-        await _refreshGpsIssueMessage();
-        await _showGpsFailedDialog();
-      }
+
     } finally {
       if (!isClosed) {
         isResolvingLocation.value = false;
       }
     }
-  }
-
-  Future<void> _retryGps() async {
-    if (isClosed || isBusy.value) return;
-    isResolvingLocation.value = true;
-    try {
-      final resolvedGeo = await VisitMediaGeo.captureFast();
-      if (isClosed) return;
-      if (!resolvedGeo.hasCoordinates) {
-        await _refreshGpsIssueMessage();
-        isResolvingLocation.value = false;
-        await _showGpsFailedDialog();
-        return;
-      }
-      geo.value = resolvedGeo;
-      gpsIssueMessage.value = null;
-      await _flow.updateCaptureGeo(
-        mediaPath: mediaPath.value,
-        geo: resolvedGeo,
-        captureId: captureId,
-      );
-    } catch (_) {
-      if (!isClosed) {
-        await _refreshGpsIssueMessage();
-        isResolvingLocation.value = false;
-        await _showGpsFailedDialog();
-        return;
-      }
-    } finally {
-      if (!isClosed) {
-        isResolvingLocation.value = false;
-      }
-    }
-  }
-
-  Future<void> _showGpsFailedDialog() async {
-    if (isClosed || _gpsDialogVisible) return;
-    _gpsDialogVisible = true;
-
-    try {
-      final failure = await _refreshGpsIssueMessage();
-      final readyContext = AppNavigator.key.currentContext ?? Get.context;
-      if (readyContext == null || !readyContext.mounted || isClosed) {
-        await cancel();
-        return;
-      }
-
-      final retry = await GlassActionDialog.show(
-        context: readyContext,
-        icon: Icons.gps_off_rounded,
-        title: 'Failed to get GPS',
-        message: failure,
-        primaryLabel: 'Retry',
-        secondaryLabel: 'Cancel',
-        iconColor: const Color(0xFFE53935),
-        variant: GlassActionDialogVariant.error,
-        barrierDismissible: false,
-        useRootNavigator: true,
-      );
-
-      if (isClosed) return;
-      if (retry == true) {
-        await _retryGps();
-      } else {
-        await cancel();
-      }
-    } finally {
-      _gpsDialogVisible = false;
-    }
-  }
-
-  Future<String> _refreshGpsIssueMessage() async {
-    final failure = await VisitMediaGeo.describeFailure();
-    if (!isClosed) {
-      gpsIssueMessage.value =
-          'GPS is missing, so we cannot stamp this media with your patrol location.\n$failure';
-    }
-    return failure;
   }
 
   Future<void> _initVideo() async {
@@ -405,13 +296,11 @@ class CaptureReviewController extends GetxController {
   }
 
   Future<void> cancel() async {
-    if (_isClosing || _accepted) return;
+    if (_accepted) return;
+    if (_isClosing) return;
     _isClosing = true;
     isBusy.value = true;
-    if (kDebugMode) {
-      debugPrint('[CaptureTxn] CANCEL_ROLLBACK id=$captureId');
-      debugPrint('[CaptureReview] PREVIEW_CLOSE_TAPPED');
-    }
+    isResolvingLocation.value = false;
 
     _coordinator?.cancelCapture(reason: 'close');
     await _detachVideo();
@@ -435,9 +324,6 @@ class CaptureReviewController extends GetxController {
     if (_isClosing || _accepted || isBusy.value) return;
     _isClosing = true;
     isBusy.value = true;
-    if (kDebugMode) {
-      debugPrint('[CaptureTxn] RETAKE_ROLLBACK id=$captureId');
-    }
 
     final initialType = isPhoto ? CaptureType.photo : CaptureType.video;
 
@@ -452,16 +338,12 @@ class CaptureReviewController extends GetxController {
     if (!isClosed) {
       Get.back();
     }
-    await VisitNativeCaptureLauncher.open(initialType: initialType);
+    await VisitNativeCaptureLauncher.reopenForRetake(initialType: initialType);
   }
 
   Future<void> done() async {
     if (_isClosing || _accepted) return;
     if (isBusy.value) return;
-    if (isDoneBlockedByMissingGps) {
-      await _showGpsFailedDialog();
-      return;
-    }
     CamPerf.markUsePhoto(captureId);
     CamPerf.stage(
       captureId,
@@ -470,16 +352,12 @@ class CaptureReviewController extends GetxController {
       usePhotoClock: true,
     );
     isBusy.value = true;
-    if (kDebugMode) {
-      debugPrint('[CaptureTxn] FINALIZE_START id=$captureId (accept)');
-    }
 
     try {
       await videoController?.pause();
     } catch (_) {}
 
     try {
-      // Ensure first-frame warm work has at least started.
       if (!_firstFrameNotified) {
         notifyDisplayFirstFrame();
       }
@@ -489,19 +367,17 @@ class CaptureReviewController extends GetxController {
 
       final coordinator = _coordinator;
       if (coordinator != null && !coordinator.isDisposed) {
+
         final waited = await coordinator.waitForAcceptRequirements(
-          gpsRequired: requiresGpsForDone,
+          gpsRequired: resolveLocationInBackground,
           currentGeo: geo.value,
         );
         durable = waited.durable;
         acceptGeo = waited.geo;
-        if (acceptGeo.hasCoordinates && !geo.value.hasCoordinates) {
+        if (acceptGeo.hasCoordinates &&
+            (!geo.value.hasCoordinates ||
+                acceptGeo.accuracyMeters != geo.value.accuracyMeters)) {
           geo.value = acceptGeo;
-        }
-        if (requiresGpsForDone && !acceptGeo.hasCoordinates) {
-          isBusy.value = false;
-          await _showGpsFailedDialog();
-          return;
         }
       } else {
         if (_legacyPersistFuture == null) {
@@ -583,9 +459,6 @@ class CaptureReviewController extends GetxController {
     } catch (error) {
       persistError.value = 'Could not save media. Please try again.';
       isBusy.value = false;
-      if (kDebugMode) {
-        debugPrint('[CaptureTxn] FINALIZE_FAILED id=$captureId error=$error');
-      }
     }
   }
 }

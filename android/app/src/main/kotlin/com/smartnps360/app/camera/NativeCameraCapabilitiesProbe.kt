@@ -453,62 +453,23 @@ object NativeCameraZoom {
     return minOf(deviceMax, maxOf(minZoom, relativeCap))
   }
 
-  /**
-   * Stock-camera style zoom chips from the *bound* camera only.
-   *
-   * - Ultra-wide only when [minZoom] is below ~1x (or optical reports UW)
-   * - 1x always when available
-   * - Tele only from real optical ratios / clear switchovers
-   * - Never invent digital 5x shortcuts the OS camera does not show
-   */
+  /** Standard zoom shortcuts supported by the bound camera's real zoom range. */
   fun usefulLevels(
     minZoom: Double,
     maxZoom: Double,
     opticalRatios: List<Double> = emptyList(),
   ): List<Double> {
     val levels = linkedSetOf<Double>()
-    val optical = opticalRatios.map { niceZoom(it) }.distinct().sorted()
-
-    // Ultra-wide from bound zoom range and/or optical focal ratios.
-    val opticalUltra = optical.filter { it in 0.35..0.75 }
-    when {
-      minZoom <= 0.70 -> {
-        val ultra = when {
-          minZoom <= 0.55 -> 0.5
-          opticalUltra.isNotEmpty() -> opticalUltra.first()
-          else -> niceZoom(minZoom)
-        }
-        val clamped = ultra.coerceIn(minZoom, maxZoom)
-        if (clamped <= 0.75) levels.add(clamped)
-      }
-      opticalUltra.isNotEmpty() && opticalUltra.first() >= minZoom - 0.02 -> {
-        levels.add(opticalUltra.first().coerceIn(minZoom, maxZoom))
-      }
+    // Ultra-wide chip = exact hardware minimum (full FOV). Never request 0.5
+    // when minZoom is lower — that would digitally zoom in past stock 0.5x.
+    if (minZoom <= 0.55 && maxZoom >= minZoom) {
+      levels.add(minZoom)
     }
 
-    // Primary wide / 1x — stock default lens.
-    if (maxZoom >= 0.95) {
-      val oneX = 1.0.coerceIn(minZoom.coerceAtMost(1.0), maxZoom)
-      levels.add(oneX)
-    }
-
-    // Optical tele / switchover levels (2x, 3x, …) only when real.
-    val opticalTele = optical
-      .filter { it >= 1.4 && it <= maxZoom + 0.05 }
-      .distinct()
-      .sorted()
-
-    for (ratio in opticalTele) {
-      val clamped = ratio.coerceIn(minZoom, maxZoom)
-      if (levels.none { abs(it - clamped) < 0.12 }) {
-        levels.add(clamped)
-      }
-    }
-
-    // Dual-cam without optical metadata: expose a single 2x if in range.
-    if (opticalTele.isEmpty() && maxZoom >= 1.95 && minZoom <= 1.05) {
-      if (levels.none { abs(it - 2.0) < 0.12 }) {
-        levels.add(2.0.coerceIn(minZoom, maxZoom))
+    for (whole in 1..4) {
+      val level = whole.toDouble()
+      if (level >= minZoom - 0.02 && level <= maxZoom + 0.02) {
+        levels.add(level)
       }
     }
 
@@ -516,7 +477,7 @@ object NativeCameraZoom {
       levels.add(1.0.coerceIn(minZoom, maxZoom))
     }
 
-    return levels.sorted().take(4)
+    return levels.sorted()
   }
 
   /**

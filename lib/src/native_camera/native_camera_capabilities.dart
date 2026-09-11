@@ -39,13 +39,10 @@ class NativeCameraCapabilities {
   final bool rearCameraAvailable;
   final bool logicalMultiCamera;
 
-  /// Android CameraX HDR Extension (not a soft heuristic).
   final bool hdrPhoto;
 
-  /// Android CameraX NIGHT Extension. Always false on iOS (no public Night API).
   final bool nightPhoto;
 
-  /// Android CameraX AUTO Extension, or iOS virtual multi-cam device.
   final bool autoExtension;
 
   final bool flash;
@@ -54,12 +51,10 @@ class NativeCameraCapabilities {
   final bool continuousAutofocus;
   final bool exposureCompensation;
 
-  /// Android CameraX exposure index range (nullable when unsupported).
   final int? minExposureIndex;
   final int? maxExposureIndex;
   final double? exposureStep;
 
-  /// iOS EV bias range (nullable when unsupported).
   final double? minExposureBias;
   final double? maxExposureBias;
 
@@ -81,7 +76,6 @@ class NativeCameraCapabilities {
   final double minZoom;
   final double maxZoom;
 
-  /// Wire labels: `auto`, `hdr`, `night` (Android Extensions only).
   final List<String> supportedExtensionModes;
   final List<String> availableSceneModes;
 
@@ -108,7 +102,7 @@ class NativeCameraCapabilities {
         if (label != null && label.isNotEmpty) extensions.add(label);
       }
     } else {
-      // Back-compat: derive from individual flags when list missing.
+
       if (map['autoExtension'] == true) extensions.add('auto');
       if (map['hdrPhoto'] == true) extensions.add('hdr');
       if (map['nightPhoto'] == true) extensions.add('night');

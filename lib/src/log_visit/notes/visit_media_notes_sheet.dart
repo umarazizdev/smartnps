@@ -58,7 +58,7 @@ Future<void> openVisitBatchNotesSheet({
   final note = isGeneral
       ? (flow?.generalNote.value ?? const VisitBatchNote())
       : (flow?.batchNote.value ?? const VisitBatchNote());
-  final label = isGeneral ? 'General' : 'Attention Needed';
+  final label = isGeneral ? 'Additional' : 'Attention Needed';
   await _openNotesDialog(
     context: context,
     kind: kind,
@@ -72,10 +72,14 @@ Future<void> openVisitBatchNotesSheet({
         ? '$label Text Note'
         : '$label Voice Note',
     subtitle: kind == VisitMediaNoteKind.text
-        ? 'Add a ${isGeneral ? 'general' : 'attention needed'} text note.'
-        : 'Record a ${isGeneral ? 'general' : 'attention needed'} voice note.',
+        ? (isGeneral
+              ? 'Add an additional text note.'
+              : 'Add an attention needed text note.')
+        : (isGeneral
+              ? 'Record an additional voice note.'
+              : 'Record an attention needed voice note.'),
     textHint: isGeneral
-        ? 'Type your general note...'
+        ? 'Type your additional note...'
         : 'Type your attention needed note...',
   );
 }
@@ -99,7 +103,8 @@ Future<void> _openNotesDialog({
   }
 
   final isDark = Theme.of(context).brightness == Brightness.dark;
-  final useAlertAccent = forceAlertAccent ||
+  final useAlertAccent =
+      forceAlertAccent ||
       (batchMode && batchScope == VisitBatchNoteScope.attentionNeeded);
   final accentColor = useAlertAccent
       ? const Color(0xFFDC2626)
@@ -498,8 +503,7 @@ class _VoiceNoteSection extends StatelessWidget {
 
                     return GestureDetector(
                       behavior: HitTestBehavior.opaque,
-                      onTapDown: (details) =>
-                          seekAt(details.localPosition.dx),
+                      onTapDown: (details) => seekAt(details.localPosition.dx),
                       onHorizontalDragStart: (details) =>
                           seekAt(details.localPosition.dx),
                       onHorizontalDragUpdate: (details) =>
@@ -559,9 +563,7 @@ class _VoiceNoteSection extends StatelessWidget {
                       ),
                     ),
                     icon: Icon(
-                      playing
-                          ? Icons.pause_rounded
-                          : Icons.play_arrow_rounded,
+                      playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
                       size: 20,
                     ),
                     label: Text(playing ? 'Pause' : 'Play'),

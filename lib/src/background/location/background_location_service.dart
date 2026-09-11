@@ -5,7 +5,7 @@ import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../../location/adaptive_gps_stream_controller.dart';
-import '../../location/location_keep_point_gate.dart';
+import '../../location/duty_location_upload_gate.dart';
 import '../../location/mock_location_detection.dart';
 import '../../location/speed_adaptive_gps_policy.dart';
 import '../../auth/auth_repository.dart';
@@ -24,7 +24,6 @@ import '../../utilities/app_debug_log.dart';
 class BackgroundLocationService {
   static const String _channelId = 'smartnps360_location';
   static const int _notificationId = 9911;
-  static const Duration _forcePollAfter = Duration(seconds: 45);
   static const Duration _rebuildStreamAfter = Duration(minutes: 3);
   static const Duration _androidStreamInterval = Duration(seconds: 5);
   static const Duration _dutyGateEvery = Duration(seconds: 30);
@@ -247,7 +246,6 @@ class BackgroundLocationService {
       return;
     }
 
-    // Native kill keep-alive may restart FGS before UI snapshot is refreshed.
     if (await AndroidDutyKillWatch.isNativeApiOnDutyFresh() ||
         await AndroidDutyKillWatch.isKillWatchArmed()) {
       final token = await AuthRepository.instance.getAccessToken();
@@ -372,8 +370,8 @@ class BackgroundLocationService {
     DateTime? lastAnyFixAt;
     final startedAt = DateTime.now();
     final policyTracker = SpeedAdaptiveGpsPolicyTracker();
-    final keepPointGate = LocationKeepPointGate();
     final streamController = AdaptiveGpsStreamController();
+    final uploadGate = DutyLocationUploadGate();
     unawaited(MotionActivityFusionController.instance.acquire());
 
     late final Future<void> Function() stop;
@@ -384,16 +382,19 @@ class BackgroundLocationService {
     late final Future<void> Function({required String reason}) forcePoll;
     late final Future<void> Function() runDutyGate;
     late final Future<bool> Function() trackingStillAllowed;
+    late final void Function() syncQuietPollInterval;
 
     Timer? healthTimer;
     Timer? dutyGateTimer;
+    Timer? quietPollTimer;
+    Duration? appliedQuietPollInterval;
+    DateTime? lastUploadAt;
 
     trackingStillAllowed = () async {
       if (await AndroidDutyKillWatch.isForceOff()) return false;
       if (await AndroidDutyKillWatch.isUnpaidBreak()) return false;
       if (await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) return true;
-      // Kill-path only: native confirmed on_duty recently and may restart FGS
-      // before Flutter snapshot is rewritten.
+
       if (!uiForeground &&
           await AndroidDutyKillWatch.isNativeApiOnDutyFresh()) {
         await DutyStatusSnapshot.markOnDuty();
@@ -504,15 +505,16 @@ class BackgroundLocationService {
       }
 
       final policyDecision = policyTracker.evaluate(pos);
-      streamController.observe(pos, policyDecision);
 
-      final keepDecision = keepPointGate.evaluate(
-        pos,
-        policyDecision,
-        streamInterval: streamController.interval,
-      );
-      if (!keepDecision.shouldKeep) {
-        return;
+      final wasCurveBoosting = streamController.isCurveBoosting;
+      streamController.observe(pos, policyDecision);
+      syncQuietPollInterval();
+      if (!wasCurveBoosting && streamController.isCurveBoosting) {
+        locationDebugLog(
+          '[DutyLocation] Android curve boost poll → '
+          '${streamController.pollInterval.inSeconds}s '
+          '(stream not rebuilt)',
+        );
       }
       if (stopping) return;
 
@@ -529,6 +531,11 @@ class BackgroundLocationService {
         });
       }
 
+      final captureEvery = streamController.pollInterval;
+      if (!uploadGate.tryAccept(captureEvery)) {
+        return;
+      }
+
       try {
         if (stopping) return;
         await uploader.pingNow(
@@ -542,13 +549,17 @@ class BackgroundLocationService {
           policyDecision: policyDecision,
           motionFusion: motionFusion,
         );
+        lastUploadAt = DateTime.now();
         service.invoke(AndroidDutyLocationHealth.uploadEvent, {
           'at': DateTime.now().toIso8601String(),
         });
         unawaited(AndroidDutyLocationHealth.persistUpload(DateTime.now()));
         locationDebugLog(
           '[DutyLocation] Android upload ok '
-          'acc=${pos.accuracy.toStringAsFixed(1)}m',
+          'acc=${pos.accuracy.toStringAsFixed(1)}m '
+          'band=${policyDecision.band.label} '
+          'captureEvery=${captureEvery.inSeconds}s '
+          'curveBoost=${streamController.isCurveBoosting}',
         );
       } catch (e) {
         locationDebugLog('[DutyLocation] Android upload failed: $e');
@@ -581,15 +592,30 @@ class BackgroundLocationService {
       }
     };
 
+    syncQuietPollInterval = () {
+      final every = streamController.pollInterval;
+      if (appliedQuietPollInterval == every && quietPollTimer != null) {
+        return;
+      }
+      locationDebugLog(
+        '[DutyLocation] Android quiet poll interval '
+        '${appliedQuietPollInterval?.inSeconds ?? '-'}s → ${every.inSeconds}s '
+        '(speed band, stream not rebuilt)',
+      );
+      appliedQuietPollInterval = every;
+      quietPollTimer?.cancel();
+      quietPollTimer = Timer.periodic(every, (_) {
+        if (stopping) return;
+        final last = lastUploadAt ?? lastAcceptedFixAt ?? startedAt;
+        if (DateTime.now().difference(last) < every) return;
+        unawaited(forcePoll(reason: 'speed_quiet_poll'));
+      });
+    };
+
     healthTimer = Timer.periodic(const Duration(seconds: 20), (_) {
       if (stopping) return;
       final now = DateTime.now();
-      final lastAccepted = lastAcceptedFixAt ?? startedAt;
       final lastAny = lastAnyFixAt ?? startedAt;
-
-      if (now.difference(lastAccepted) > _forcePollAfter) {
-        unawaited(forcePoll(reason: 'stale_accepted_fix'));
-      }
 
       if (now.difference(lastAny) > _rebuildStreamAfter) {
         unawaited(rebuildStreamIfNeeded(reason: 'stream_dead'));
@@ -607,6 +633,11 @@ class BackgroundLocationService {
       healthTimer = null;
       dutyGateTimer?.cancel();
       dutyGateTimer = null;
+      quietPollTimer?.cancel();
+      quietPollTimer = null;
+      appliedQuietPollInterval = null;
+      lastUploadAt = null;
+      uploadGate.reset();
       locationDebugLog('[DutyLocation] STOPPED (Android background service)');
       streamController
         ..onSettingsChanged = null
@@ -658,13 +689,15 @@ class BackgroundLocationService {
         },
       );
       streamController.markSettingsApplied();
+      syncQuietPollInterval();
       locationDebugLog(
         '[DutyLocation] Android GPS stream subscribed '
-        '(stable ${_androidStreamInterval.inSeconds}s, no policy rebuild)',
+        '(stable ${_androidStreamInterval.inSeconds}s / distanceFilter=0, '
+        'speed quiet-poll only)',
       );
     };
 
-    streamController.onSettingsChanged = null;
+    streamController.onSettingsChanged = syncQuietPollInterval;
 
     service.on('stop').listen((event) {
       unawaited(stop());

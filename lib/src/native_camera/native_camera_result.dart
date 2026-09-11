@@ -25,7 +25,6 @@ class NativeCameraResult {
   final CaptureType type;
   final DateTime capturedAt;
 
-  /// Stable identity for one physical native capture across Review → Draft.
   final String? captureId;
   final int? width;
   final int? height;

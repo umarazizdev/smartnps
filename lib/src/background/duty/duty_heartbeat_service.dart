@@ -18,7 +18,9 @@ import '../../permissions/required_permissions_gate.dart';
 import '../../utilities/overlay_prompt_guard.dart';
 import '../../utilities/permission_settings_helper.dart';
 import '../../utilities/device_identity.dart';
+import '../../widgets/dialogs/clock_in_permissions_dialog.dart';
 import '../../widgets/dialogs/location_tracking_disclosure_dialog.dart';
+import '../../widgets/dialogs/on_duty_permissions_dialog.dart';
 import '../location/android_duty_location_health.dart';
 import '../location/background_location_controller.dart';
 import '../location/background_location_permissions.dart';
@@ -233,7 +235,6 @@ class DutyHeartbeatService {
       return;
     }
 
-    // Login / logout may have raced while we confirmed duty.
     if (!await AuthRepository.instance.isOfficerLoggedIn()) {
       dutyHeartbeatDebugLog(
         '[DutyHeartbeatService] iOS location wake aborted; logged out during confirm',
@@ -426,8 +427,6 @@ class DutyHeartbeatService {
       backgroundLocationPermissionMissing.value = missing;
     }
 
-    // Permission just became sufficient while still on duty — Flutter must
-    // start FGS (native kill-watch does not start FGS while UI is open).
     if (wasMissing && !missing && _heartbeatActive) {
       dutyHeartbeatDebugLog(
         '[DutyHeartbeatService] BG permission became ready on duty; '
@@ -465,8 +464,7 @@ class DutyHeartbeatService {
 
   void endResumeDutyReconcile() {
     _deferTrackingStart = false;
-    // Resume may have deferred on_duty tracking start while prompts ran.
-    // Permissions may also have just become granted — start FGS from Flutter.
+
     unawaited(_retryTrackingAfterResumeIfNeeded());
   }
 
@@ -718,7 +716,7 @@ class DutyHeartbeatService {
       }
     } else if (!pageReload) {
       await PushNotificationService.instance.waitForPermissionPromptCompleted(
-        // On resume, OnDutyPermissionsDialog covers missing notifications.
+
         promptIfNeeded: !fromResume,
       );
       await OverlayPromptGuard.waitUntilReady();
@@ -821,8 +819,7 @@ class DutyHeartbeatService {
     }
 
     await _ensureTrackingRunningForOnDuty(
-      // Resume: do not show Always/settings/disclosure dialogs — the
-      // OnDutyPermissionsDialog already covers all missing permissions.
+
       allowPrompts: !pageReload && !fromResume,
       ignoreDefer: fromResume,
     );
@@ -1634,7 +1631,10 @@ class DutyHeartbeatService {
     if (!accepted) return false;
 
     if (_requestPermissionAfterDisclosure) {
-      await PermissionSettingsHelper.requestForegroundLocationStep();
+
+      if (!_permissionsDialogOwnsOsPrompts) {
+        await PermissionSettingsHelper.requestForegroundLocationStep();
+      }
       _requestPermissionAfterDisclosure = false;
     }
 
@@ -1686,6 +1686,8 @@ class DutyHeartbeatService {
   Future<void> _advanceBannerLocationPermissionStep(
     BuildContext context,
   ) async {
+    if (_permissionsDialogOwnsOsPrompts) return;
+
     if (await BackgroundLocationPermissions.hasSufficientBackgroundAccess() &&
         await BackgroundLocationPermissions.hasPreciseLocationAccess()) {
       return;
@@ -1758,6 +1760,7 @@ class DutyHeartbeatService {
     BuildContext context,
   ) async {
     if (RequiredPermissionsGate.shouldSuppressCompetingDialogs) return false;
+    if (_permissionsDialogOwnsOsPrompts) return false;
 
     if (!await LocationDisclosureConsent.shouldShowLocationDisclosure()) {
       _disclosureAccepted = true;
@@ -1795,10 +1798,17 @@ class DutyHeartbeatService {
     return accepted;
   }
 
+  bool get _permissionsDialogOwnsOsPrompts =>
+      ClockInPermissionsDialog.isVisible || OnDutyPermissionsDialog.isVisible;
+
   Future<bool> _runPostDisclosurePermissionStep({
     bool userInitiated = false,
   }) async {
     if (await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled()) {
+      return false;
+    }
+
+    if (!userInitiated && _permissionsDialogOwnsOsPrompts) {
       return false;
     }
 
@@ -2161,8 +2171,6 @@ class DutyHeartbeatService {
   }) async {
     if (_backgroundLocationSettingsDialogVisible) return false;
 
-    // On duty: consolidated OnDutyPermissionsDialog owns missing-permission UX.
-    // Skip auto Always/settings popups (resume / poll); allow user-initiated.
     if (!userInitiated && _lastAppliedStatus == onDuty) {
       await refreshBackgroundLocationPermissionBannerState();
       return false;

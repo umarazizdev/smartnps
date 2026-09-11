@@ -115,11 +115,16 @@ class NativeCameraPlugin :
     val preferHeic = call.argument<Boolean>("preferHeic") ?: false
     // Optional initial extension mode: auto | hdr | night | standard.
     val preferredExtension = call.argument<String>("preferredExtension")
+    val showOnboarding = call.argument<Boolean>("showOnboarding") ?: false
+    @Suppress("UNCHECKED_CAST")
+    val onboardingSteps = call.argument<List<Map<String, Any?>>>("onboardingSteps")
+    val onboardingStepsJson = encodeOnboardingSteps(onboardingSteps)
 
     Log.d(
       NativeCameraContract.LOG_TAG,
       "CAMERA_OPEN_REQUEST type=$type modeSwitch=$allowModeSwitch " +
-        "landscape=$landscapeOnly rear=$rearCameraOnly quality=$quality",
+        "landscape=$landscapeOnly rear=$rearCameraOnly quality=$quality " +
+        "onboarding=$showOnboarding",
     )
 
     pendingResult = result
@@ -130,6 +135,10 @@ class NativeCameraPlugin :
       putExtra(NativeCameraContract.EXTRA_REAR_CAMERA_ONLY, rearCameraOnly)
       putExtra(NativeCameraContract.EXTRA_QUALITY, quality)
       putExtra(NativeCameraContract.EXTRA_PREFER_HEIC, false)
+      putExtra(NativeCameraContract.EXTRA_SHOW_ONBOARDING, showOnboarding)
+      if (onboardingStepsJson != null) {
+        putExtra(NativeCameraContract.EXTRA_ONBOARDING_STEPS, onboardingStepsJson)
+      }
       if (!preferredExtension.isNullOrBlank()) {
         putExtra(
           NativeCameraContract.EXTRA_PREFERRED_EXTENSION,
@@ -164,7 +173,12 @@ class NativeCameraPlugin :
 
     if (data == null) {
       if (resultCode == Activity.RESULT_CANCELED) {
-        reply.success(mapOf(NativeCameraContract.RESULT_CANCELED to true))
+        reply.success(
+          mapOf(
+            NativeCameraContract.RESULT_CANCELED to true,
+            NativeCameraContract.RESULT_ONBOARDING_COMPLETED to false,
+          ),
+        )
       } else {
         reply.error(
           NativeCameraContract.ErrorCode.UNKNOWN,
@@ -175,12 +189,22 @@ class NativeCameraPlugin :
       return true
     }
 
+    val onboardingCompleted = data.getBooleanExtra(
+      NativeCameraContract.RESULT_ONBOARDING_COMPLETED,
+      false,
+    )
+
     val errorCode = data.getStringExtra(NativeCameraContract.RESULT_ERROR_CODE)
     if (!errorCode.isNullOrEmpty()) {
       val message = data.getStringExtra(NativeCameraContract.RESULT_ERROR_MESSAGE)
         ?: "Native camera error"
       if (errorCode == NativeCameraContract.ErrorCode.CANCELED) {
-        reply.success(mapOf(NativeCameraContract.RESULT_CANCELED to true))
+        reply.success(
+          mapOf(
+            NativeCameraContract.RESULT_CANCELED to true,
+            NativeCameraContract.RESULT_ONBOARDING_COMPLETED to onboardingCompleted,
+          ),
+        )
       } else {
         reply.error(errorCode, message, null)
       }
@@ -190,7 +214,12 @@ class NativeCameraPlugin :
     if (data.getBooleanExtra(NativeCameraContract.RESULT_CANCELED, false) ||
       resultCode == Activity.RESULT_CANCELED
     ) {
-      reply.success(mapOf(NativeCameraContract.RESULT_CANCELED to true))
+      reply.success(
+        mapOf(
+          NativeCameraContract.RESULT_CANCELED to true,
+          NativeCameraContract.RESULT_ONBOARDING_COMPLETED to onboardingCompleted,
+        ),
+      )
       return true
     }
 
@@ -245,6 +274,7 @@ class NativeCameraPlugin :
       data.getStringExtra(NativeCameraContract.RESULT_PHOTO_DIMENSIONS)
     payload[NativeCameraContract.RESULT_CAPTURE_ID] =
       data.getStringExtra(NativeCameraContract.RESULT_CAPTURE_ID)
+    payload[NativeCameraContract.RESULT_ONBOARDING_COMPLETED] = onboardingCompleted
 
     Log.d(
       NativeCameraContract.LOG_TAG,
@@ -266,5 +296,25 @@ class NativeCameraPlugin :
     if (!data.hasExtra(key)) return
     // Width/height/orientation are ints.
     payload[key] = data.getIntExtra(key, 0)
+  }
+
+  private fun encodeOnboardingSteps(
+    steps: List<Map<String, Any?>>?,
+  ): String? {
+    if (steps.isNullOrEmpty()) return null
+    return try {
+      val array = org.json.JSONArray()
+      for (step in steps) {
+        val obj = org.json.JSONObject()
+        obj.put("id", step["id"]?.toString().orEmpty())
+        obj.put("title", step["title"]?.toString().orEmpty())
+        obj.put("body", step["body"]?.toString().orEmpty())
+        obj.put("arrow", step["arrow"]?.toString().orEmpty().ifEmpty { "auto" })
+        array.put(obj)
+      }
+      array.toString()
+    } catch (_: Exception) {
+      null
+    }
   }
 }

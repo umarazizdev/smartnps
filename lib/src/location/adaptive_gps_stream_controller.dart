@@ -10,7 +10,7 @@ class AdaptiveGpsStreamController {
 
   void Function()? onSettingsChanged;
 
-  static const int iosLockedDistanceFilterMeters = 5;
+  static const int iosLockedDistanceFilterMeters = 0;
 
   static const Duration curveBoostDuration = Duration(seconds: 12);
   static const Duration curveBoostInterval = Duration(seconds: 1);
@@ -32,7 +32,6 @@ class AdaptiveGpsStreamController {
   SpeedAdaptiveGpsPolicyBand get band => _band;
 
   bool get isCurveBoosting {
-    if (Platform.isIOS) return false;
     final until = _curveBoostUntil;
     if (until == null) return false;
     if (DateTime.now().isBefore(until)) return true;
@@ -44,10 +43,9 @@ class AdaptiveGpsStreamController {
       isCurveBoosting ? curveBoostInterval : _band.captureInterval;
 
   int get distanceFilterMeters {
+
     if (Platform.isIOS) return iosLockedDistanceFilterMeters;
-    return isCurveBoosting
-        ? curveBoostDistanceFilterMeters
-        : _band.distanceFilterMeters;
+    return 0;
   }
 
   Duration get pollInterval => interval;
@@ -69,17 +67,13 @@ class AdaptiveGpsStreamController {
   ) {
     _band = policyDecision.band;
 
-    if (Platform.isIOS) {
-      return false;
-    }
-
     final curveHit = _detectCurveAndAdvance(position);
     if (curveHit) {
       _curveBoostUntil = DateTime.now().add(curveBoostDuration);
       _scheduleBoostEndNotification();
     }
 
-    return _settingsDifferFromApplied();
+    return false;
   }
 
   void markSettingsApplied() {

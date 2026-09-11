@@ -175,7 +175,6 @@ void main() {
         mediaType: VisitMediaType.photo,
       );
 
-      // Simulate post-first-frame durable import ownership.
       final warmFuture = flow.finalizeCaptureDraft(
         previewPath: source.path,
         type: VisitMediaType.photo,

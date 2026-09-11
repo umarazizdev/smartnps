@@ -1,22 +1,20 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import 'capture_onboarding_step.dart';
 import 'capture_quality.dart';
 import 'capture_type.dart';
 import 'native_camera_capabilities.dart';
 import 'native_camera_error.dart';
 import 'native_camera_result.dart';
 
+export 'capture_onboarding_step.dart';
 export 'capture_quality.dart';
 export 'capture_type.dart';
 export 'native_camera_capabilities.dart';
 export 'native_camera_error.dart';
 export 'native_camera_result.dart';
 
-/// Opens the in-app native CameraX / AVFoundation capture UI.
-///
-/// Returns the original captured file path + metadata, or `null` when the
-/// user cancels. Does not stream preview frames through Flutter.
 class NativeCamera {
   NativeCamera._();
 
@@ -26,13 +24,14 @@ class NativeCamera {
 
   static NativeCameraCapabilities? _cachedCaps;
   static CaptureType? _cachedCapsType;
+  static bool _lastOnboardingCompleted = false;
 
-  /// Opens the native camera UI and returns one capture result.
-  ///
-  /// [type] is the initial mode. When [allowModeSwitch] is true the native UI
-  /// may switch between photo and video.
-  ///
-  /// Photos are always rear-camera-only. Videos follow [rearCameraOnly].
+  static bool takeLastOnboardingCompleted() {
+    final value = _lastOnboardingCompleted;
+    _lastOnboardingCompleted = false;
+    return value;
+  }
+
   static Future<NativeCameraResult?> open({
     CaptureType type = CaptureType.photo,
     bool allowModeSwitch = true,
@@ -40,10 +39,17 @@ class NativeCamera {
     bool rearCameraOnly = true,
     CaptureQuality quality = CaptureQuality.maximum,
     bool preferHeic = false,
+    bool showOnboarding = false,
+    List<CaptureOnboardingStep> onboardingSteps =
+        const <CaptureOnboardingStep>[],
   }) async {
+    _lastOnboardingCompleted = false;
     try {
       if (kDebugMode) {
-        debugPrint('[NativeCamera] CAMERA_OPEN_REQUEST type=${type.wireName}');
+        debugPrint(
+          '[NativeCamera] CAMERA_OPEN_REQUEST type=${type.wireName} '
+          'onboarding=$showOnboarding steps=${onboardingSteps.length}',
+        );
       }
       final raw = await _channel.invokeMethod<dynamic>('open', <String, Object?>{
         'type': type.wireName,
@@ -52,6 +58,10 @@ class NativeCamera {
         'rearCameraOnly': rearCameraOnly,
         'quality': quality.wireName,
         'preferHeic': preferHeic,
+        'showOnboarding': showOnboarding,
+        'onboardingSteps': onboardingSteps
+            .map((step) => step.toWire())
+            .toList(growable: false),
       });
 
       if (raw == null) return null;
@@ -63,6 +73,7 @@ class NativeCamera {
       }
 
       final map = Map<Object?, Object?>.from(raw);
+      _lastOnboardingCompleted = map['onboardingCompleted'] == true;
       if (map['canceled'] == true) return null;
 
       final result = NativeCameraResult.fromMap(map);
@@ -88,8 +99,6 @@ class NativeCamera {
     }
   }
 
-  /// Process-scoped capability snapshot. Safe to call repeatedly; probes once
-  /// per [type] until [invalidateCapabilitiesCache] is called.
   static Future<NativeCameraCapabilities> getCapabilities({
     CaptureType type = CaptureType.photo,
     bool forceRefresh = false,

@@ -42,18 +42,21 @@ class OnDutyPermissionsDialog {
     final context = AppNavigator.key.currentContext;
     if (context == null || !context.mounted) return false;
 
+    await OverlayPromptGuard.waitUntilReady();
+
+    if (_visible) return false;
+    if (RequiredPermissionsGate.isPrivacyNoticeVisible) return false;
+
+    final readyContext = AppNavigator.key.currentContext;
+    if (readyContext == null || !readyContext.mounted) return false;
+
+    final gate = RequiredPermissionsGate.instance;
+    final missing = await gate.missingOnDutyPermissionItems();
+    if (missing.isEmpty) return false;
+
     _visible = true;
     OverlayPromptGuard.registerBlockingOverlay();
     try {
-      await OverlayPromptGuard.waitUntilReady();
-
-      final readyContext = AppNavigator.key.currentContext;
-      if (readyContext == null || !readyContext.mounted) return false;
-
-      final gate = RequiredPermissionsGate.instance;
-      final missing = await gate.missingOnDutyPermissionItems();
-      if (missing.isEmpty) return false;
-
       await showDialog<void>(
         context: readyContext,
         useRootNavigator: true,
@@ -230,7 +233,13 @@ class _OnDutyPermissionsDialogPanelState
   Future<bool> _showDisclosureFor(RequiredPermissionItem item) async {
     if (!mounted) return false;
 
-    if (Platform.isAndroid && item.id != 'backgroundLocation') {
+    if (Platform.isAndroid &&
+        item.id != 'backgroundLocation' &&
+        item.id != 'foregroundLocation' &&
+        item.id != 'motionActivity') {
+      return true;
+    }
+    if (Platform.isIOS && item.id == 'motionActivity') {
       return true;
     }
 
@@ -270,7 +279,10 @@ class _OnDutyPermissionsDialogPanelState
 
     return Dialog(
       backgroundColor: colors.background,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+      insetPadding: EdgeInsets.symmetric(
+        horizontal: media.orientation == Orientation.landscape ? 40 : 16,
+        vertical: media.orientation == Orientation.landscape ? 16 : 20,
+      ),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       clipBehavior: Clip.antiAlias,
       child: ConstrainedBox(

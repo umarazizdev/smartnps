@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:io';
 
+import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -20,13 +22,24 @@ class _DebugEnvScreenState extends State<DebugEnvScreen> {
   String? _apiError;
   String? _webError;
   bool _saving = false;
+  bool _crashlyticsBusy = false;
 
   @override
   void initState() {
     super.initState();
+    _apiController = TextEditingController();
+    _webController = TextEditingController();
+    unawaited(_loadEnv());
+  }
+
+  Future<void> _loadEnv() async {
+    await DebugEnvConfig.instance.ensureReady();
+    if (!mounted) return;
     final env = DebugEnvConfig.instance;
-    _apiController = TextEditingController(text: env.apiOrigin);
-    _webController = TextEditingController(text: env.webBaseUrl);
+    setState(() {
+      _apiController.text = env.apiOrigin;
+      _webController.text = env.webBaseUrl;
+    });
   }
 
   @override
@@ -34,6 +47,80 @@ class _DebugEnvScreenState extends State<DebugEnvScreen> {
     _apiController.dispose();
     _webController.dispose();
     super.dispose();
+  }
+
+  Future<void> _enableCrashlyticsForTest() async {
+    await FirebaseCrashlytics.instance.setCrashlyticsCollectionEnabled(true);
+  }
+
+  Future<void> _sendTestReport() async {
+    if (_crashlyticsBusy) return;
+    setState(() => _crashlyticsBusy = true);
+    try {
+      await _enableCrashlyticsForTest();
+      await FirebaseCrashlytics.instance.log('manual_crashlytics_test');
+      await FirebaseCrashlytics.instance.recordError(
+        Exception('Crashlytics test report from DebugEnvScreen'),
+        StackTrace.current,
+        reason: 'manual_test',
+        fatal: true,
+      );
+      await FirebaseCrashlytics.instance.sendUnsentReports();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Test report sent. Check Firebase Crashlytics in a few minutes.',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to send test report: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _crashlyticsBusy = false);
+    }
+  }
+
+  Future<void> _forceTestCrash() async {
+    if (_crashlyticsBusy) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Force test crash?'),
+        content: const Text(
+          'The app will close. Reopen it once so Crashlytics can upload '
+          'the crash, then check the Firebase console.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Crash now'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _crashlyticsBusy = true);
+    try {
+      await _enableCrashlyticsForTest();
+      await FirebaseCrashlytics.instance.log('manual_force_test_crash');
+
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      FirebaseCrashlytics.instance.crash();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _crashlyticsBusy = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to force crash: $e')),
+      );
+    }
   }
 
   Future<void> _save() async {
@@ -355,6 +442,89 @@ class _DebugEnvScreenState extends State<DebugEnvScreen> {
                         decoration: _fieldDecoration(
                           colors: colors,
                           errorText: _webError,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Container(
+                  padding: const EdgeInsets.fromLTRB(16, 18, 16, 18),
+                  decoration: BoxDecoration(
+                    color: colors.card,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: colors.cardBorder),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Crashlytics test',
+                        style: TextStyle(
+                          color: colors.title,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Send a report without killing the app, or force a '
+                        'real crash. Reopen after a crash so it uploads.',
+                        style: TextStyle(
+                          color: colors.subtitle,
+                          fontSize: 13,
+                          height: 1.4,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 46,
+                        child: FilledButton(
+                          onPressed: _crashlyticsBusy ? null : _sendTestReport,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFF0F766E),
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            textStyle: const TextStyle(
+                              fontSize: 14.5,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          child: _crashlyticsBusy
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Text('Send test report'),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 46,
+                        child: OutlinedButton(
+                          onPressed: _crashlyticsBusy ? null : _forceTestCrash,
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: colors.error,
+                            side: BorderSide(color: colors.error),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            textStyle: const TextStyle(
+                              fontSize: 14.5,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          child: const Text('Force test crash'),
                         ),
                       ),
                     ],

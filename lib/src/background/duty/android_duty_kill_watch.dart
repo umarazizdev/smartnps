@@ -6,12 +6,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../auth/auth_repository.dart';
 import '../../utilities/app_debug_log.dart';
 
-/// Arms native Android keep-alive for when the UI is killed.
-///
-/// While the Flutter UI is open, [BackgroundLocationController.ensureStarted]
-/// owns starting the location FGS. Native code only restarts/stops that same
-/// FGS after the UI has been away long enough (real kill), not during brief
-/// Settings jumps.
 class AndroidDutyKillWatch {
   AndroidDutyKillWatch._();
 
@@ -27,7 +21,6 @@ class AndroidDutyKillWatch {
   static String? _lastArmedAccessToken;
   static Future<void>? _armInFlight;
 
-  /// Full arm once per on-duty session; later calls only refresh tokens.
   static Future<void> arm() async {
     if (!Platform.isAndroid) return;
     final inFlight = _armInFlight;
@@ -105,7 +98,7 @@ class AndroidDutyKillWatch {
     try {
       await _channel.invokeMethod<void>('disarm', {'forceOff': forceOff});
     } on MissingPluginException {
-      // FGS isolate has no UI plugin; prefs + native alarm still see force_off.
+
     } catch (e) {
       locationDebugLog('[AndroidDutyKill] disarm failed: $e');
     }
@@ -126,7 +119,7 @@ class AndroidDutyKillWatch {
       });
       _lastArmedAccessToken = access;
     } on MissingPluginException {
-      // UI isolate owns token sync.
+
     } catch (e) {
       locationDebugLog('[AndroidDutyKill] syncSession failed: $e');
     }
