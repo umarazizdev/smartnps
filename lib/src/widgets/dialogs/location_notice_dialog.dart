@@ -9,6 +9,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../app/native_theme_controller.dart';
 import '../../app/app_routes.dart';
+import '../../debug/debug_env_pin_dialog.dart';
 import '../../utilities/app_config.dart';
 import 'glass_action_dialog.dart';
 
@@ -457,11 +458,11 @@ class _NoticeHeader extends StatelessWidget {
               child: Padding(
                 padding: const EdgeInsets.all(2),
                 child: ClipOval(
-                  child: Image.asset(
-                    'assets/npslogo.png',
+                  child: DebugEnvLogoHotspot(
                     width: 56,
                     height: 56,
-                    fit: BoxFit.contain,
+                    padding: EdgeInsets.zero,
+                    borderRadius: 28,
                   ),
                 ),
               ),

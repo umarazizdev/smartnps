@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -11,6 +12,8 @@ import '../widgets/dialogs/glass_action_dialog.dart';
 import 'debug_env_config.dart';
 import 'debug_env_screen.dart';
 
+/// True on Android/iOS for **debug, profile, release, and TestFlight**.
+/// Intentionally not gated by [kDebugMode].
 bool get isDebugEnvSupported =>
     !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
@@ -23,6 +26,48 @@ Future<void> openDebugEnvFromLogo(BuildContext context) async {
   await Navigator.of(navContext, rootNavigator: true).push(
     MaterialPageRoute<void>(builder: (_) => const DebugEnvScreen()),
   );
+}
+
+/// Long-press NPS logo to open the PIN-gated debug env screen.
+class DebugEnvLogoHotspot extends StatelessWidget {
+  const DebugEnvLogoHotspot({
+    super.key,
+    this.height,
+    this.width,
+    this.padding = const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+    this.borderRadius = 16,
+  });
+
+  final double? height;
+  final double? width;
+  final EdgeInsetsGeometry padding;
+  final double borderRadius;
+
+  @override
+  Widget build(BuildContext context) {
+    final logo = Image.asset(
+      'assets/npslogo.png',
+      height: height,
+      width: width,
+      fit: BoxFit.contain,
+      filterQuality: FilterQuality.high,
+    );
+
+    if (!isDebugEnvSupported) {
+      return Padding(padding: padding, child: logo);
+    }
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(borderRadius),
+        onLongPress: () {
+          unawaited(openDebugEnvFromLogo(context));
+        },
+        child: Padding(padding: padding, child: logo),
+      ),
+    );
+  }
 }
 
 Future<bool> showDebugEnvPinDialog(BuildContext context) async {

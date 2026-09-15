@@ -288,6 +288,9 @@ final class NativeCameraViewController: UIViewController {
   private var videoGuideTop: NSLayoutConstraint?
   private var videoGuideWidth: NSLayoutConstraint?
   private var videoGuideHeight: NSLayoutConstraint?
+  /// Avoid layout re-entrancy while updating video guide constraints from
+  /// `viewDidLayoutSubviews` (can crash inside `CALayer.setFrame`).
+  private var isApplyingVideoContentGuide = false
   private var zoomTrailingToVideoConstraint: NSLayoutConstraint?
   private var flashLeadingConstraint: NSLayoutConstraint?
   /// Landscape-only trailing inset before the shutter rail. Portrait uses 0.
@@ -452,7 +455,9 @@ final class NativeCameraViewController: UIViewController {
 
   override func viewDidLayoutSubviews() {
     super.viewDidLayoutSubviews()
-    cameraSession.previewLayer.frame = previewContainer.bounds
+    // Skip nested passes triggered by guide-constraint updates inside
+    // `syncVideoContentGuide` — those re-entrancy loops crashed CALayer.
+    guard !isApplyingVideoContentGuide else { return }
     syncVideoContentGuide()
     applyVideoOrientationFromInterface()
     syncPortraitBlock()
@@ -924,16 +929,20 @@ final class NativeCameraViewController: UIViewController {
     else { return }
 
     let bounds = previewContainer.bounds
-    guard bounds.width > 1, bounds.height > 1 else { return }
+    guard Self.isUsableSize(bounds.size) else { return }
 
     let layer = cameraSession.previewLayer
     // Measure the aspect-fit size as if the layer filled the container.
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
     layer.frame = bounds
     layer.videoGravity = .resizeAspect
+    CATransaction.commit()
+
     var videoRect = layer.layerRectConverted(
       fromMetadataOutputRect: CGRect(x: 0, y: 0, width: 1, height: 1)
     )
-    if videoRect.isNull || videoRect.isInfinite || videoRect.width < 8 || videoRect.height < 8 {
+    if !Self.isUsableRect(videoRect) {
       videoRect = bounds
     }
 
@@ -948,14 +957,55 @@ final class NativeCameraViewController: UIViewController {
     }
     videoRect.origin.y = (bounds.height - videoRect.height) / 2
 
+    guard Self.isUsableRect(videoRect) else { return }
+    // Keep the frame inside the container so CALayer never gets NaN / empty.
+    let clamped = videoRect.intersection(bounds)
+    guard Self.isUsableRect(clamped) else { return }
+    videoRect = clamped
+
     // Frame matches the fitted video exactly; resize fills without extra crop.
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
     layer.frame = videoRect
     layer.videoGravity = .resize
+    CATransaction.commit()
 
-    leading.constant = videoRect.minX
-    top.constant = videoRect.minY
-    width.constant = videoRect.width
-    height.constant = videoRect.height
+    let nextLeading = videoRect.minX
+    let nextTop = videoRect.minY
+    let nextWidth = videoRect.width
+    let nextHeight = videoRect.height
+    let epsilon: CGFloat = 0.5
+    let constraintsChanged =
+      abs(leading.constant - nextLeading) > epsilon
+      || abs(top.constant - nextTop) > epsilon
+      || abs(width.constant - nextWidth) > epsilon
+      || abs(height.constant - nextHeight) > epsilon
+    guard constraintsChanged else { return }
+
+    // Updating Autolayout constants from layout triggers another layout pass.
+    // Gate nested `viewDidLayoutSubviews` until this runloop finishes.
+    isApplyingVideoContentGuide = true
+    leading.constant = nextLeading
+    top.constant = nextTop
+    width.constant = nextWidth
+    height.constant = nextHeight
+    DispatchQueue.main.async { [weak self] in
+      self?.isApplyingVideoContentGuide = false
+    }
+  }
+
+  private static func isUsableSize(_ size: CGSize) -> Bool {
+    size.width.isFinite && size.height.isFinite && size.width > 1 && size.height > 1
+  }
+
+  private static func isUsableRect(_ rect: CGRect) -> Bool {
+    guard !rect.isNull, !rect.isInfinite else { return false }
+    guard rect.origin.x.isFinite,
+          rect.origin.y.isFinite,
+          rect.size.width.isFinite,
+          rect.size.height.isFinite
+    else { return false }
+    return rect.width >= 8 && rect.height >= 8
   }
 
   /// Landscape: Close on black shutter chrome (top). Portrait: top-leading.

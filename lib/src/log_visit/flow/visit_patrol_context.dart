@@ -144,10 +144,11 @@ class VisitPatrolContext {
     };
   }
 
-  Map<String, dynamic> toUploadMetaFields() {
+  Map<String, dynamic> toUploadMetaFields({Object? officerId}) {
     return <String, dynamic>{
       if (clientDraftId != null && clientDraftId!.isNotEmpty)
         'client_draft_id': clientDraftId,
+      'officer_id': ?officerId,
       if (regionId != null) 'region_id': regionId,
       if (siteId != null) 'site_id': siteId,
       if (regionName != null && regionName!.trim().isNotEmpty)

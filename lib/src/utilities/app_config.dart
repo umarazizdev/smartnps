@@ -20,8 +20,8 @@ class AppConfig {
 
   static const bool enableMockLocationDetection = true;
 
-  static const bool enablePingDebugLog = true;
-  static const bool enableBatchDebugLog = true;
+  static const bool enablePingDebugLog = false;
+  static const bool enableBatchDebugLog = false;
   static const bool enableDutyHeartbeatDebugLog = false;
   static const bool enablePermissionStatusDebugLog = false;
   static const bool enablePatrolLogDebugLog = true;

@@ -297,32 +297,8 @@ class _OnDutyPermissionsDialogPanelState
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Center(
-                    child: Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(16),
-                        onLongPress: isDebugEnvSupported
-                            ? () {
-                                final navContext =
-                                    AppNavigator.key.currentContext ?? context;
-                                unawaited(openDebugEnvFromLogo(navContext));
-                              }
-                            : null,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 24,
-                            vertical: 8,
-                          ),
-                          child: Image.asset(
-                            'assets/npslogo.png',
-                            height: 72,
-                            fit: BoxFit.contain,
-                            filterQuality: FilterQuality.high,
-                          ),
-                        ),
-                      ),
-                    ),
+                  const Center(
+                    child: DebugEnvLogoHotspot(height: 72),
                   ),
                   const SizedBox(height: 8),
                   Text(

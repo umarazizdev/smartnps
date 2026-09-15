@@ -2,14 +2,13 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:flutter/services.dart';
 
+import '../../utilities/secure_storage_access.dart';
 import '../location/background_location_permissions.dart';
 
 class LocationDisclosureConsent {
   LocationDisclosureConsent._();
-
-  static const _storage = FlutterSecureStorage();
 
   static const _kDutyState = 'location.disclosure.duty.v2';
   static const _kClockInState = 'location.disclosure.clockin.v2';
@@ -36,18 +35,18 @@ class LocationDisclosureConsent {
 
   static Future<bool> isDutyAccepted() async {
     await ensureMigrated();
-    return (await _storage.read(key: _kDutyState)) == accepted;
+    return (await SecureStorageAccess.read(_kDutyState)) == accepted;
   }
 
   static Future<bool> isClockInAccepted() async {
     await ensureMigrated();
-    return (await _storage.read(key: _kClockInState)) == accepted;
+    return (await SecureStorageAccess.read(_kClockInState)) == accepted;
   }
 
   static Future<void> markDutyAccepted() async {
     await ensureMigrated();
     if (await isDutyAccepted()) return;
-    await _storage.write(key: _kDutyState, value: accepted);
+    await SecureStorageAccess.write(_kDutyState, accepted);
     if (kDebugMode) {
       debugPrint('[LocationDisclosureConsent] stored duty=accepted (device-wide)');
     }
@@ -56,7 +55,7 @@ class LocationDisclosureConsent {
   static Future<void> markClockInAccepted() async {
     await ensureMigrated();
     if (await isClockInAccepted()) return;
-    await _storage.write(key: _kClockInState, value: accepted);
+    await SecureStorageAccess.write(_kClockInState, accepted);
     if (kDebugMode) {
       debugPrint(
         '[LocationDisclosureConsent] stored clockin=accepted (device-wide)',
@@ -86,8 +85,8 @@ class LocationDisclosureConsent {
     }
     if (await isDutyAccepted() || await isClockInAccepted()) return;
 
-    await _storage.write(key: _kDutyState, value: accepted);
-    await _storage.write(key: _kClockInState, value: accepted);
+    await SecureStorageAccess.write(_kDutyState, accepted);
+    await SecureStorageAccess.write(_kClockInState, accepted);
     if (kDebugMode) {
       debugPrint(
         '[LocationDisclosureConsent] reconciled disclosure from OS background grant',
@@ -98,42 +97,54 @@ class LocationDisclosureConsent {
   static Future<void> ensureMigrated() async {
     if (_migrationComplete) return;
 
-    await _migrateLegacyFlatKeysIfNeeded();
-    await _migrateLegacyPerAccountRecordsIfNeeded();
-    await _storage.delete(key: _kLegacyLastOfficerId);
-    await _storage.delete(key: _kLegacyPendingAccept);
-    await _storage.delete(key: _kLegacyRecords);
-
-    _migrationComplete = true;
+    try {
+      await _migrateLegacyFlatKeysIfNeeded();
+      await _migrateLegacyPerAccountRecordsIfNeeded();
+      await SecureStorageAccess.delete(_kLegacyLastOfficerId);
+      await SecureStorageAccess.delete(_kLegacyPendingAccept);
+      await SecureStorageAccess.delete(_kLegacyRecords);
+      _migrationComplete = true;
+    } on PlatformException catch (e) {
+      if (SecureStorageAccess.isInteractionNotAllowed(e)) {
+        if (kDebugMode) {
+          debugPrint(
+            '[LocationDisclosureConsent] migration deferred; '
+            'keychain interaction not allowed',
+          );
+        }
+        return;
+      }
+      rethrow;
+    }
   }
 
   static Future<void> _migrateLegacyFlatKeysIfNeeded() async {
-    final legacyDuty = await _storage.read(key: _legacyDutyState);
-    final legacyClockIn = await _storage.read(key: _legacyClockInState);
-    final currentDuty = await _storage.read(key: _kDutyState);
-    final currentClockIn = await _storage.read(key: _kClockInState);
+    final legacyDuty = await SecureStorageAccess.read(_legacyDutyState);
+    final legacyClockIn = await SecureStorageAccess.read(_legacyClockInState);
+    final currentDuty = await SecureStorageAccess.read(_kDutyState);
+    final currentClockIn = await SecureStorageAccess.read(_kClockInState);
 
     if (legacyDuty == accepted && currentDuty != accepted) {
-      await _storage.write(key: _kDutyState, value: accepted);
+      await SecureStorageAccess.write(_kDutyState, accepted);
     }
     if (legacyClockIn == accepted && currentClockIn != accepted) {
-      await _storage.write(key: _kClockInState, value: accepted);
+      await SecureStorageAccess.write(_kClockInState, accepted);
     }
 
     if (legacyDuty != null) {
-      await _storage.delete(key: _legacyDutyState);
+      await SecureStorageAccess.delete(_legacyDutyState);
     }
     if (legacyClockIn != null) {
-      await _storage.delete(key: _legacyClockInState);
+      await SecureStorageAccess.delete(_legacyClockInState);
     }
   }
 
   static Future<void> _migrateLegacyPerAccountRecordsIfNeeded() async {
-    final currentDuty = await _storage.read(key: _kDutyState);
-    final currentClockIn = await _storage.read(key: _kClockInState);
+    final currentDuty = await SecureStorageAccess.read(_kDutyState);
+    final currentClockIn = await SecureStorageAccess.read(_kClockInState);
     if (currentDuty == accepted || currentClockIn == accepted) return;
 
-    final raw = await _storage.read(key: _kLegacyRecords);
+    final raw = await SecureStorageAccess.read(_kLegacyRecords);
     if (raw == null || raw.isEmpty) return;
 
     try {
@@ -146,8 +157,8 @@ class LocationDisclosureConsent {
         final duty = record['duty']?.toString();
         final clockIn = record['clockin']?.toString();
         if (duty == accepted || clockIn == accepted) {
-          await _storage.write(key: _kDutyState, value: accepted);
-          await _storage.write(key: _kClockInState, value: accepted);
+          await SecureStorageAccess.write(_kDutyState, accepted);
+          await SecureStorageAccess.write(_kClockInState, accepted);
           if (kDebugMode) {
             debugPrint(
               '[LocationDisclosureConsent] migrated per-account acceptance '
