@@ -305,7 +305,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     flow.uploadLocationLabel.value = locationLabel;
 
     try {
-      final meta = flow.buildUploadMeta();
+      final meta = await flow.buildUploadMeta();
       if (kDebugMode) {
         debugPrint('[VisitUpload] meta=$meta');
       }

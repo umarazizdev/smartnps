@@ -65,6 +65,7 @@ class _DebugEnvScreenState extends State<DebugEnvScreen> {
         reason: 'manual_test',
         fatal: true,
       );
+      // Force immediate upload while the app is still alive.
       await FirebaseCrashlytics.instance.sendUnsentReports();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

@@ -85,32 +85,8 @@ class _RequiredPermissionsBlockerState extends State<RequiredPermissionsBlocker>
                                 mainAxisSize: MainAxisSize.min,
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
-                                  Center(
-                                    child: Material(
-                                      color: Colors.transparent,
-                                      child: InkWell(
-                                        borderRadius: BorderRadius.circular(16),
-                                        onLongPress: isDebugEnvSupported
-                                            ? () {
-                                                unawaited(
-                                                  openDebugEnvFromLogo(context),
-                                                );
-                                              }
-                                            : null,
-                                        child: Padding(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 24,
-                                            vertical: 8,
-                                          ),
-                                          child: Image.asset(
-                                            'assets/npslogo.png',
-                                            height: 88,
-                                            fit: BoxFit.contain,
-                                            filterQuality: FilterQuality.high,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
+                                  const Center(
+                                    child: DebugEnvLogoHotspot(height: 88),
                                   ),
                                   const SizedBox(height: 14),
                                   Text(

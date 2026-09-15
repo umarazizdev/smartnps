@@ -285,7 +285,7 @@ class VisitUploadQueue {
     final runner = _uploadRunner;
     if (runner != null) return runner(snapshot);
 
-    final meta = VisitUploadMeta.buildFromSnapshot(snapshot);
+    final meta = await VisitUploadMeta.buildFromSnapshot(snapshot);
     return VisitUploadApi.instance.uploadVisit(
       meta: meta,
       items: snapshot.items,

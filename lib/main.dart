@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -13,6 +12,7 @@ import 'firebase_options.dart';
 import 'src/app/smart_nps_app.dart';
 import 'src/background/location/android_duty_location_health.dart';
 import 'src/background/location/background_location_service.dart';
+import 'src/crashlytics/crashlytics_reporter.dart';
 import 'src/push/notifications/push_notification_service.dart';
 import 'src/api/api_client.dart';
 import 'src/auth/auth_repository.dart';
@@ -42,28 +42,7 @@ Future<void> main() async {
 
 Future<void> _initCrashlytics() async {
   try {
-    FlutterError.onError = (errorDetails) {
-      FirebaseCrashlytics.instance.recordFlutterFatalError(errorDetails);
-
-      if (kDebugMode) {
-        FlutterError.presentError(errorDetails);
-      }
-    };
-
-    PlatformDispatcher.instance.onError = (error, stack) {
-      FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
-
-      return !kDebugMode;
-    };
-
-    if (kDebugMode) {
-
-      await FirebaseCrashlytics.instance.setCrashlyticsCollectionEnabled(true);
-      await FirebaseCrashlytics.instance.sendUnsentReports();
-      await FirebaseCrashlytics.instance.setCrashlyticsCollectionEnabled(false);
-    } else {
-      await FirebaseCrashlytics.instance.setCrashlyticsCollectionEnabled(true);
-    }
+    await CrashlyticsReporter.init();
   } catch (e, st) {
     if (kDebugMode) {
       debugPrint('[SmartNPS360] Crashlytics init failed: $e\n$st');
