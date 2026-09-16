@@ -55,7 +55,7 @@ class CrashlyticsReporter {
 
   /// Recoverable conditions we should not spam into Crashlytics.
   static bool shouldIgnoreError(Object error) {
-    if (SecureStorageAccess.isInteractionNotAllowed(error)) return true;
+    if (SecureStorageAccess.isRecoverableKeychainError(error)) return true;
     final text = error.toString();
     return _looksLikeNetworkNoise(text);
   }
@@ -84,7 +84,7 @@ class CrashlyticsReporter {
     if (isNonFatalError(details.exception)) return true;
     final text = '${details.exceptionAsString()} ${details.library ?? ''}';
     return _looksLikeLayoutOverflow(text) ||
-        SecureStorageAccess.isInteractionNotAllowed(text) ||
+        SecureStorageAccess.isRecoverableKeychainError(text) ||
         _looksLikeNetworkNoise(text);
   }
 
@@ -92,7 +92,7 @@ class CrashlyticsReporter {
     if (details.silent) return true;
     if (shouldIgnoreError(details.exception)) return true;
     final text = details.exceptionAsString();
-    return SecureStorageAccess.isInteractionNotAllowed(text) ||
+    return SecureStorageAccess.isRecoverableKeychainError(text) ||
         _looksLikeNetworkNoise(text);
   }
 

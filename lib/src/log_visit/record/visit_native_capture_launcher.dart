@@ -9,6 +9,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../../app/app_navigator.dart';
 import '../../app/app_routes.dart';
 import '../../native_camera/native_camera.dart';
+import '../../utilities/permission_settings_helper.dart';
 import '../../widgets/dialogs/glass_action_dialog.dart';
 import '../capture/capture_review_screen.dart';
 import '../capture/onboarding/capture_onboarding_catalog.dart';
@@ -112,6 +113,18 @@ class VisitNativeCaptureLauncher {
         if (error.isPortraitRejected) {
           await _showPortraitDialog(
             isPhoto: requestedType == CaptureType.photo,
+          );
+          return;
+        }
+        if (error.isPermissionDenied) {
+          await _showPermissionDeniedDialog(
+            title: error.code == NativeCameraErrorCode.microphonePermissionDenied
+                ? 'Microphone permission required'
+                : 'Camera permission required',
+            message: _userFacingMessage(error),
+            icon: error.code == NativeCameraErrorCode.microphonePermissionDenied
+                ? Icons.mic_off_outlined
+                : Icons.photo_camera_outlined,
           );
           return;
         }
@@ -308,10 +321,13 @@ class VisitNativeCaptureLauncher {
 
     final camera = statuses[Permission.camera] ?? await Permission.camera.status;
     if (!camera.isGranted) {
-      await _showErrorDialog(
-        camera.isPermanentlyDenied
-            ? 'Camera permission is permanently denied. Enable it in Settings.'
+      await _showPermissionDeniedDialog(
+        title: 'Camera permission required',
+        message: camera.isPermanentlyDenied
+            ? 'Camera permission is permanently denied. Enable it in Settings '
+                'to capture photos and videos.'
             : 'Camera permission is required to capture photos and videos.',
+        icon: Icons.photo_camera_outlined,
       );
       return false;
     }
@@ -320,8 +336,13 @@ class VisitNativeCaptureLauncher {
       final mic =
           statuses[Permission.microphone] ?? await Permission.microphone.status;
       if (!mic.isGranted) {
-        await _showErrorDialog(
-          'Microphone permission is required to record video.',
+        await _showPermissionDeniedDialog(
+          title: 'Microphone permission required',
+          message: mic.isPermanentlyDenied
+              ? 'Microphone permission is permanently denied. Enable it in '
+                  'Settings to record video.'
+              : 'Microphone permission is required to record video.',
+          icon: Icons.mic_off_outlined,
         );
         return false;
       }
@@ -344,6 +365,31 @@ class VisitNativeCaptureLauncher {
       barrierDismissible: false,
       useRootNavigator: true,
     );
+  }
+
+  static Future<void> _showPermissionDeniedDialog({
+    required String title,
+    required String message,
+    required IconData icon,
+  }) async {
+    final context = AppNavigator.key.currentContext ?? Get.context;
+    if (context == null || !context.mounted) return;
+    final openSettings = await GlassActionDialog.show(
+      context: context,
+      icon: icon,
+      title: title,
+      message: message,
+      primaryLabel: 'Open Settings',
+      secondaryLabel: 'Cancel',
+      showCloseButton: true,
+      iconColor: const Color(0xFFE53935),
+      variant: GlassActionDialogVariant.error,
+      barrierDismissible: true,
+      useRootNavigator: true,
+    );
+    if (openSettings == true) {
+      await PermissionSettingsHelper.launchAppSettings();
+    }
   }
 
   static Future<void> _showErrorDialog(String message) async {

@@ -430,15 +430,10 @@ class VisitVideoFlowController extends GetxController {
     required String textNote,
   }) async {
     final trimmed = textNote.trim();
-    final previousVoice = current.value.voiceNotePath;
     if (trimmed.isNotEmpty) {
-      if (previousVoice != null && previousVoice.trim().isNotEmpty) {
-        await _store.deleteQuietly(previousVoice);
-      }
       current.value = current.value.copyWith(
         enabled: true,
         textNote: trimmed,
-        clearVoiceNote: true,
       );
     } else {
       current.value = current.value.copyWith(textNote: '');
@@ -473,7 +468,6 @@ class VisitVideoFlowController extends GetxController {
     } else {
       current.value = current.value.copyWith(
         enabled: true,
-        textNote: '',
         voiceNotePath: durableVoice,
       );
     }
@@ -1340,20 +1334,9 @@ class VisitVideoFlowController extends GetxController {
   }) async {
     final index = mediaItems.indexWhere((e) => e.path == mediaPath);
     if (index < 0) return;
-    final trimmed = textNote.trim();
-    if (trimmed.isNotEmpty) {
-      final previousVoice = mediaItems[index].voiceNotePath;
-      if (previousVoice != null && previousVoice.trim().isNotEmpty) {
-        await _store.deleteQuietly(previousVoice);
-      }
-      mediaItems[index] = mediaItems[index].copyWith(
-        textNote: trimmed,
-        clearVoiceNote: true,
-      );
-      await _persistDraft();
-      return;
-    }
-    mediaItems[index] = mediaItems[index].copyWith(textNote: '');
+    mediaItems[index] = mediaItems[index].copyWith(
+      textNote: textNote.trim(),
+    );
     await _persistDraft();
   }
 
@@ -1386,7 +1369,6 @@ class VisitVideoFlowController extends GetxController {
     }
     mediaItems[index] = mediaItems[index].copyWith(
       voiceNotePath: durableVoice,
-      textNote: '',
     );
     await _persistDraft();
   }

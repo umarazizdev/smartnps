@@ -440,7 +440,6 @@ class BackgroundLocationPermissions {
         if (Platform.isAndroid) return 'Precise location required';
         return 'Enable Precise location';
       case 'notification':
-        if (Platform.isAndroid) return 'Notifications required';
         return 'Enable notifications';
       default:
         return 'Permission needed';
@@ -625,8 +624,8 @@ class BackgroundLocationPermissions {
         if (Platform.isAndroid) {
           return 'Notifications are not enabled. Please allow notifications for SmartNPS360 in Settings.';
         }
-        return 'Notifications are required for shift alerts. Please enable '
-            'notifications for SmartNPS360.';
+        return 'Notifications are used for shift alerts and important updates. '
+            'Please enable notifications for SmartNPS360.';
       default:
         if (Platform.isAndroid) {
           return 'A required location permission is not enabled. Please update it in Settings.';

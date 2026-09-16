@@ -70,10 +70,11 @@ class AppUpgradeReconciler {
       }
       _storageReconcileDone = true;
     } on PlatformException catch (e) {
-      if (SecureStorageAccess.isInteractionNotAllowed(e)) {
+      if (SecureStorageAccess.isRecoverableKeychainError(e)) {
         if (kDebugMode) {
           debugPrint(
-            '[AppUpgradeReconciler] skipped; keychain interaction not allowed',
+            '[AppUpgradeReconciler] skipped; recoverable keychain error '
+            'code=${e.code} ${e.message}',
           );
         }
         // Leave _storageReconcileDone false so a later unlock/resume can retry.

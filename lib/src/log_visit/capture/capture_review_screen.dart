@@ -624,52 +624,54 @@ class _ReviewMediaStamp extends StatelessWidget {
     return ColoredBox(
       color: const Color(0xE6121318),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _ReviewStampRow(
-              icon: Icons.calendar_today_outlined,
-              text: timestamp,
-            ),
-            if (location.isNotEmpty) ...[
-              const SizedBox(height: 7),
-              _ReviewStampRow(icon: Icons.location_on_outlined, text: location),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.calendar_today_outlined,
+                color: _kReviewAccent,
+                size: 17,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                timestamp,
+                maxLines: 1,
+                softWrap: false,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  height: 1,
+                ),
+              ),
+              if (location.isNotEmpty) ...[
+                const SizedBox(width: 14),
+                const Icon(
+                  Icons.location_on_outlined,
+                  color: _kReviewAccent,
+                  size: 17,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  location,
+                  maxLines: 1,
+                  softWrap: false,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    height: 1,
+                  ),
+                ),
+              ],
             ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ReviewStampRow extends StatelessWidget {
-  const _ReviewStampRow({required this.icon, required this.text});
-
-  final IconData icon;
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Icon(icon, color: _kReviewAccent, size: 17),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Text(
-            text,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
-              height: 1,
-            ),
           ),
         ),
-      ],
+      ),
     );
   }
 }

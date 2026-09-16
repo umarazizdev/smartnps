@@ -308,12 +308,23 @@ class PushNotificationService {
   }
 
   Future<void> disablePushNotifications() async {
-    await deletePushToken();
+    await clearPushTokenOnLogout();
+  }
+
+  /// Unregisters the device push token with the backend, then deletes the
+  /// local FCM/APNs registration so this device stops receiving account pushes.
+  ///
+  /// Call while auth credentials are still available.
+  Future<void> clearPushTokenOnLogout() async {
+    try {
+      await deletePushToken();
+    } catch (_) {}
     try {
       await FirebaseMessaging.instance.deleteToken();
-    } catch (e) {}
+    } catch (_) {}
     _lastFcmToken = null;
     _iosPendingTokenUpload = false;
+    _lastUploadedPushTokenFingerprint = null;
   }
 
   Future<void> waitForPermissionPromptCompleted({

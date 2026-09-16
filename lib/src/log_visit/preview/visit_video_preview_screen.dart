@@ -2784,14 +2784,12 @@ class _InlineNotePanel extends StatelessWidget {
       width: double.infinity,
       padding: padding,
       decoration: BoxDecoration(color: panelBg, borderRadius: radius),
-      child: item.hasVoiceNote
-          ? InlineVoiceNotePlayer(
-              path: item.voiceNotePath!,
-              isDark: isDark,
-              accent: accent,
-              compact: compact,
-            )
-          : Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (item.hasTextNote || !item.hasVoiceNote)
+            Row(
               children: [
                 Icon(
                   Icons.sticky_note_2_outlined,
@@ -2818,6 +2816,17 @@ class _InlineNotePanel extends StatelessWidget {
                 ),
               ],
             ),
+          if (item.hasTextNote && item.hasVoiceNote)
+            SizedBox(height: compact ? 6 : 8),
+          if (item.hasVoiceNote)
+            InlineVoiceNotePlayer(
+              path: item.voiceNotePath!,
+              isDark: isDark,
+              accent: accent,
+              compact: compact,
+            ),
+        ],
+      ),
     );
   }
 }
