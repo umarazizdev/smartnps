@@ -19,6 +19,9 @@ class AdaptiveGpsStreamController {
   static const double minCornerBearingDegrees = 12;
   static const double minBearingDistanceMeters = 2;
 
+  /// Curve boost is for real turns while moving; skip below walking speed.
+  static const double minCurveBoostSpeedKmh = 2;
+
   SpeedAdaptiveGpsPolicyBand _band = SpeedAdaptiveGpsPolicyBand.bands.first;
   DateTime? _curveBoostUntil;
   Timer? _boostEndTimer;
@@ -43,7 +46,6 @@ class AdaptiveGpsStreamController {
       isCurveBoosting ? curveBoostInterval : _band.captureInterval;
 
   int get distanceFilterMeters {
-
     if (Platform.isIOS) return iosLockedDistanceFilterMeters;
     return 0;
   }
@@ -68,12 +70,23 @@ class AdaptiveGpsStreamController {
     _band = policyDecision.band;
 
     final curveHit = _detectCurveAndAdvance(position);
-    if (curveHit) {
+    if (curveHit && !_shouldSkipCurveBoost(position, policyDecision.band)) {
       _curveBoostUntil = DateTime.now().add(curveBoostDuration);
       _scheduleBoostEndNotification();
     }
 
     return false;
+  }
+
+  /// Skip when stationary band or GPS speed is below walking threshold.
+  static bool _shouldSkipCurveBoost(
+    Position position,
+    SpeedAdaptiveGpsPolicyBand band,
+  ) {
+    if (band.maxKmh != null && band.maxKmh! <= 2) return true;
+    final speed = position.speed;
+    if (speed.isNaN || speed < 0) return false;
+    return speed * 3.6 < minCurveBoostSpeedKmh;
   }
 
   void markSettingsApplied() {

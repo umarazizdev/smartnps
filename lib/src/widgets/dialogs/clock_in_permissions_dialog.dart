@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import '../../app/app_navigator.dart';
 import '../../app/native_theme_controller.dart';
+import '../../debug/debug_env_pin_dialog.dart';
 import '../../permissions/required_permissions_gate.dart';
 import '../../utilities/app_version_info.dart';
 import '../../utilities/overlay_prompt_guard.dart';
@@ -237,11 +238,8 @@ class _ClockInPermissionsBlockerScreenState
                                 mainAxisSize: MainAxisSize.min,
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
-                                  Image.asset(
-                                    'assets/npslogo.png',
-                                    height: 88,
-                                    fit: BoxFit.contain,
-                                    filterQuality: FilterQuality.high,
+                                  const Center(
+                                    child: DebugEnvLogoHotspot(height: 88),
                                   ),
                                   const SizedBox(height: 14),
                                   Text(

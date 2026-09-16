@@ -29,30 +29,19 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Camera access is required to record visit videos and capture photos for Daily Activity Reports, visit evidence, and profile/ID attachments.</string>
+	<string>Camera access is required to capture photos and videos for patrol round reports, and for profile/ID attachments.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Microphone access is required to record audio with visit videos.</string>
+	<string>Microphone access is required to record audio with patrol round report videos and to record voice notes on patrol round report photos and videos.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>You may see this reminder because SmartNPS360 has background location permission. This does not mean you are being tracked while off duty.
-
-SmartNPS360 uses your location only while you are clocked in and actively working a shift to support attendance verification, time tracking, timesheets, and site patrols.
-
-Location tracking automatically stops when you clock out. SmartNPS360 does not track or share your location while you are off duty.</string>
+	<string>SmartNPS360 uses background location while you are clocked in on an active shift, including when the app is in the background, to verify attendance and site presence. Tracking stops when you clock out. Location is not collected while you are off duty, logged out, or not clocked in.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Location access is used only while you are on duty (shift active) to verify attendance, breaks, and visits.</string>
+	<string>Location access is used only while you are clocked in to verify attendance, breaks, and site presence.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>SmartNPS360 uses motion activity to detect whether you are walking, running, driving, cycling, or stationary while on duty, so patrol and attendance tracking can adapt to your physical activity.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Photo library access is required to select profile and ID images during registration and to attach images to reports.</string>
+	<string>Photo library access is required to select profile and ID images during registration and to attach images to patrol round reports.</string>
 	<key>NSUserNotificationsUsageDescription</key>
 	<string>Enable notifications to receive important updates and messages related to your account and activity.</string>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsArbitraryLoads</key>
-		<true/>
-		<key>NSAllowsLocalNetworking</key>
-		<true/>
-	</dict>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>dev.flutter.background.refresh</string>

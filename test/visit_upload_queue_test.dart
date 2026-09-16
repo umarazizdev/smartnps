@@ -277,7 +277,7 @@ void main() {
   });
 
   group('VisitUploadMeta', () {
-    test('builds meta from snapshot with client draft id', () {
+    test('builds meta from snapshot with client draft id', () async {
       final snapshot = VisitMediaDraftSnapshot(
         draftKey: const VisitDraftKey(regionId: 1, siteId: 2),
         startedAt: DateTime.utc(2026, 9, 8),
@@ -297,10 +297,14 @@ void main() {
         ],
       );
 
-      final meta = VisitUploadMeta.buildFromSnapshot(snapshot);
+      final meta = await VisitUploadMeta.buildFromSnapshot(
+        snapshot,
+        officerId: '42',
+      );
       expect(meta['client_draft_id'], 'abc');
       expect(meta['site_id'], 2);
       expect(meta['region_id'], 1);
+      expect(meta['officer_id'], 42);
       expect((meta['items'] as List).length, 1);
     });
   });

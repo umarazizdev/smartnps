@@ -23,8 +23,6 @@ Future<void> openVisitMediaNotesSheet({
     tag: 'notes-${item.path}',
     item: item,
     batchMode: false,
-    hasTextNote: item.hasTextNote,
-    hasVoiceNote: item.hasVoiceNote,
     title: kind == VisitMediaNoteKind.text
         ? (alert
               ? 'Attention Text Note'
@@ -51,13 +49,7 @@ Future<void> openVisitBatchNotesSheet({
   VisitMediaNoteKind kind = VisitMediaNoteKind.text,
   VisitBatchNoteScope scope = VisitBatchNoteScope.attentionNeeded,
 }) async {
-  final flow = Get.isRegistered<VisitVideoFlowController>()
-      ? Get.find<VisitVideoFlowController>()
-      : null;
   final isGeneral = scope == VisitBatchNoteScope.generalNote;
-  final note = isGeneral
-      ? (flow?.generalNote.value ?? const VisitBatchNote())
-      : (flow?.batchNote.value ?? const VisitBatchNote());
   final label = isGeneral ? 'Additional' : 'Attention Needed';
   await _openNotesDialog(
     context: context,
@@ -66,8 +58,6 @@ Future<void> openVisitBatchNotesSheet({
     item: null,
     batchMode: true,
     batchScope: scope,
-    hasTextNote: note.hasTextNote,
-    hasVoiceNote: note.hasVoiceNote,
     title: kind == VisitMediaNoteKind.text
         ? '$label Text Note'
         : '$label Voice Note',
@@ -91,8 +81,6 @@ Future<void> _openNotesDialog({
   required VisitMediaItem? item,
   required bool batchMode,
   VisitBatchNoteScope batchScope = VisitBatchNoteScope.attentionNeeded,
-  required bool hasTextNote,
-  required bool hasVoiceNote,
   required String title,
   required String subtitle,
   required String textHint,
@@ -145,34 +133,10 @@ Future<void> _openNotesDialog({
     return result == true;
   }
 
-  var replacingOther = false;
-  if (kind == VisitMediaNoteKind.text && hasVoiceNote) {
-    final ok = await confirmAction(
-      title: 'Replace voice note?',
-      message:
-          'Switching to a text note will remove the current voice note. Continue?',
-      primaryLabel: 'Replace',
-      destructive: true,
-    );
-    if (!ok) return;
-    replacingOther = true;
-  } else if (kind == VisitMediaNoteKind.voice && hasTextNote) {
-    final ok = await confirmAction(
-      title: 'Replace text note?',
-      message:
-          'Recording a voice note will remove the current text note. Continue?',
-      primaryLabel: 'Replace',
-      destructive: true,
-    );
-    if (!ok) return;
-    replacingOther = true;
-  }
-
   final controller = Get.put(
     VisitMediaNotesController(
       mediaPath: item?.path ?? '',
       kind: kind,
-      replacingOther: replacingOther,
       batchMode: batchMode,
       batchScope: batchScope,
     ),
@@ -224,8 +188,8 @@ Future<void> _openNotesDialog({
         if (controller.isClosed) return false;
         if (controller.hasChanges.value) {
           controller.errorMessage.value = isText
-              ? 'Enter a text note to replace the voice note.'
-              : 'Record a voice note to replace the text note.';
+              ? 'Enter a text note to save.'
+              : 'Record a voice note to save.';
           return false;
         }
         didSave = true;

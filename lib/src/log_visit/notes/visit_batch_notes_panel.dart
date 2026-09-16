@@ -140,7 +140,8 @@ class VisitBatchNotesPanel extends StatelessWidget {
                   bodyColor: bodyColor,
                   accent: actionAccent,
                 ),
-              ] else if (note.hasVoiceNote) ...[
+              ],
+              if (note.hasVoiceNote) ...[
                 const SizedBox(height: 6),
                 _SavedVoiceNote(
                   path: note.voiceNotePath!,

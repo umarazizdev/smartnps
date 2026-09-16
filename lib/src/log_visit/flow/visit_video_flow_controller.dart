@@ -6,6 +6,7 @@ import 'package:get/get.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:video_thumbnail/video_thumbnail.dart' as vt;
 
+import '../../auth/auth_repository.dart';
 import '../../utilities/app_debug_log.dart';
 import 'cam_perf.dart';
 import 'visit_checkpoint.dart';
@@ -429,15 +430,10 @@ class VisitVideoFlowController extends GetxController {
     required String textNote,
   }) async {
     final trimmed = textNote.trim();
-    final previousVoice = current.value.voiceNotePath;
     if (trimmed.isNotEmpty) {
-      if (previousVoice != null && previousVoice.trim().isNotEmpty) {
-        await _store.deleteQuietly(previousVoice);
-      }
       current.value = current.value.copyWith(
         enabled: true,
         textNote: trimmed,
-        clearVoiceNote: true,
       );
     } else {
       current.value = current.value.copyWith(textNote: '');
@@ -472,7 +468,6 @@ class VisitVideoFlowController extends GetxController {
     } else {
       current.value = current.value.copyWith(
         enabled: true,
-        textNote: '',
         voiceNotePath: durableVoice,
       );
     }
@@ -647,8 +642,9 @@ class VisitVideoFlowController extends GetxController {
     return id;
   }
 
-  Map<String, dynamic> buildUploadMeta({DateTime? submittedAt}) {
+  Future<Map<String, dynamic>> buildUploadMeta({DateTime? submittedAt}) async {
     final draftId = ensureClientDraftId();
+    final officerId = await AuthRepository.instance.getOfficerAccountId();
     return VisitUploadMeta.build(
       mediaItems: mediaItems.toList(growable: false),
       context: patrolContext.value,
@@ -657,6 +653,7 @@ class VisitVideoFlowController extends GetxController {
       generalNote: generalNote.value,
       clientDraftId: draftId,
       submittedAt: submittedAt,
+      officerId: officerId,
     );
   }
 
@@ -1337,20 +1334,9 @@ class VisitVideoFlowController extends GetxController {
   }) async {
     final index = mediaItems.indexWhere((e) => e.path == mediaPath);
     if (index < 0) return;
-    final trimmed = textNote.trim();
-    if (trimmed.isNotEmpty) {
-      final previousVoice = mediaItems[index].voiceNotePath;
-      if (previousVoice != null && previousVoice.trim().isNotEmpty) {
-        await _store.deleteQuietly(previousVoice);
-      }
-      mediaItems[index] = mediaItems[index].copyWith(
-        textNote: trimmed,
-        clearVoiceNote: true,
-      );
-      await _persistDraft();
-      return;
-    }
-    mediaItems[index] = mediaItems[index].copyWith(textNote: '');
+    mediaItems[index] = mediaItems[index].copyWith(
+      textNote: textNote.trim(),
+    );
     await _persistDraft();
   }
 
@@ -1383,7 +1369,6 @@ class VisitVideoFlowController extends GetxController {
     }
     mediaItems[index] = mediaItems[index].copyWith(
       voiceNotePath: durableVoice,
-      textNote: '',
     );
     await _persistDraft();
   }
@@ -1449,14 +1434,17 @@ class VisitVideoFlowController extends GetxController {
 class VisitUploadMeta {
   VisitUploadMeta._();
 
-  static Map<String, dynamic> buildFromSnapshot(
+  static Future<Map<String, dynamic>> buildFromSnapshot(
     VisitMediaDraftSnapshot snapshot, {
     DateTime? submittedAt,
-  }) {
+    String? officerId,
+  }) async {
     final context = snapshot.context;
     final draftId = context?.clientDraftId?.trim().isNotEmpty == true
         ? context!.clientDraftId!.trim()
         : VisitPatrolContext.generateClientDraftId();
+    final resolvedOfficerId =
+        officerId ?? await AuthRepository.instance.getOfficerAccountId();
     return build(
       mediaItems: snapshot.items,
       context: context,
@@ -1465,6 +1453,7 @@ class VisitUploadMeta {
       generalNote: snapshot.generalNote,
       clientDraftId: draftId,
       submittedAt: submittedAt,
+      officerId: resolvedOfficerId,
     );
   }
 
@@ -1476,6 +1465,7 @@ class VisitUploadMeta {
     required VisitBatchNote generalNote,
     required String clientDraftId,
     DateTime? submittedAt,
+    String? officerId,
   }) {
     final started = (startedAt ?? DateTime.now()).toUtc();
     final submitted = (submittedAt ?? DateTime.now()).toUtc();
@@ -1542,6 +1532,7 @@ class VisitUploadMeta {
       });
     }
 
+    final resolvedOfficerId = _officerIdForUpload(officerId);
     final meta = <String, dynamic>{
       'client_draft_id': clientDraftId,
       'started_at': started.toIso8601String(),
@@ -1551,11 +1542,19 @@ class VisitUploadMeta {
       'general_note': generalNote.toGeneralUploadMeta(),
       if (checkpointsMeta.isNotEmpty) 'checkpoints': checkpointsMeta,
     };
-    final contextFields = context?.toUploadMetaFields();
-    if (contextFields != null) {
-      contextFields.remove('client_draft_id');
-      meta.addAll(contextFields);
-    }
+    final contextFields =
+        context?.toUploadMetaFields(officerId: resolvedOfficerId) ??
+        <String, dynamic>{
+          'officer_id': ?resolvedOfficerId,
+        };
+    contextFields.remove('client_draft_id');
+    meta.addAll(contextFields);
     return meta;
+  }
+
+  static Object? _officerIdForUpload(String? officerId) {
+    final trimmed = officerId?.trim();
+    if (trimmed == null || trimmed.isEmpty) return null;
+    return int.tryParse(trimmed) ?? trimmed;
   }
 }

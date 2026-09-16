@@ -102,7 +102,7 @@ void main() {
       ),
     ]);
 
-    final meta = flow.buildUploadMeta(
+    final meta = await flow.buildUploadMeta(
       submittedAt: DateTime.utc(2026, 8, 2, 8, 15),
     );
 

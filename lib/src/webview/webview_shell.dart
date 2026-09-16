@@ -310,7 +310,7 @@ class _WebViewShellState extends State<WebViewShell>
         ),
       );
 
-      await AuthSessionManager.clearNativeSession(deletePushToken: false);
+      await AuthSessionManager.clearNativeSession(deletePushToken: true);
 
       if (kDebugMode) {
         debugPrint(

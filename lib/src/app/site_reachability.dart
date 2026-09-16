@@ -54,12 +54,18 @@ class SiteReachability {
       final request = await client.openUrl(method, uri).timeout(_timeout);
       request.followRedirects = true;
       request.maxRedirects = 5;
+      // Keep-alive reuse is a common source of uncaught
+      // "unsolicited response without request" HttpExceptions.
       request.persistentConnection = false;
       if (method == 'GET') {
         request.headers.set(HttpHeaders.rangeHeader, 'bytes=0-0');
       }
       final response = await request.close().timeout(_timeout);
-      unawaited(response.drain<void>());
+      try {
+        await response.drain<void>().timeout(_timeout);
+      } catch (_) {
+        // Body drain failures must not escape as uncaught async errors.
+      }
       return response.statusCode;
     } on TimeoutException {
       return null;

@@ -27,7 +27,6 @@ class VisitMediaNotesController extends GetxController {
   VisitMediaNotesController({
     this.mediaPath = '',
     required this.kind,
-    this.replacingOther = false,
     this.batchMode = false,
     this.batchScope = VisitBatchNoteScope.attentionNeeded,
   });
@@ -37,8 +36,6 @@ class VisitMediaNotesController extends GetxController {
 
   final bool batchMode;
   final VisitBatchNoteScope batchScope;
-
-  bool replacingOther;
 
   NotesConfirmCallback? confirm;
 
@@ -117,21 +114,15 @@ class VisitMediaNotesController extends GetxController {
         ? _flowController.generalNote.value
         : _flowController.batchNote.value;
     if (isTextMode) {
+      _initialText = note.textNote;
+      textController.text = _initialText;
+      hasTextNote.value = _initialText.trim().isNotEmpty;
       _initialVoicePath = note.voiceNotePath;
-      if (note.hasVoiceNote && replacingOther) {
-        _initialText = '';
-        textController.text = '';
-        hasTextNote.value = false;
-      } else {
-        _initialText = note.textNote;
-        textController.text = _initialText;
-        hasTextNote.value = _initialText.trim().isNotEmpty;
-      }
       voiceNotePath.value = null;
     } else if (note.hasVoiceNote) {
       _initialVoicePath = note.voiceNotePath;
       voiceNotePath.value = note.voiceNotePath;
-      _initialText = '';
+      _initialText = note.textNote;
       textController.text = '';
       hasTextNote.value = false;
       _recordedWaveLevels = _fallbackWaveLevels();
@@ -155,21 +146,15 @@ class VisitMediaNotesController extends GetxController {
     }
 
     if (isTextMode) {
+      _initialText = item?.textNote ?? '';
+      textController.text = _initialText;
+      hasTextNote.value = _initialText.trim().isNotEmpty;
       _initialVoicePath = item?.voiceNotePath;
-      if (item != null && item.hasVoiceNote && replacingOther) {
-        _initialText = '';
-        textController.text = '';
-        hasTextNote.value = false;
-      } else {
-        _initialText = item?.textNote ?? '';
-        textController.text = _initialText;
-        hasTextNote.value = _initialText.trim().isNotEmpty;
-      }
       voiceNotePath.value = null;
     } else if (item != null && item.hasVoiceNote) {
       _initialVoicePath = item.voiceNotePath;
       voiceNotePath.value = item.voiceNotePath;
-      _initialText = '';
+      _initialText = item.textNote;
       textController.text = '';
       hasTextNote.value = false;
       _recordedWaveLevels = _fallbackWaveLevels();
@@ -247,20 +232,7 @@ class VisitMediaNotesController extends GetxController {
     }
     if (voiceNotePath.value == null) return;
 
-    if (!skipConfirm) {
-      final ok = await _askConfirm(
-        title: 'Replace voice note?',
-        message:
-            'Switching to a text note will remove the current voice note. Continue?',
-        primaryLabel: 'Replace',
-        destructive: true,
-      );
-      if (!ok || isClosed) return;
-    }
-
     await _clearVoiceDraft(deleteFile: true);
-    textController.clear();
-    hasTextNote.value = false;
     errorMessage.value = null;
     _refreshHasChanges();
   }
@@ -268,18 +240,6 @@ class VisitMediaNotesController extends GetxController {
   Future<void> clearTextDraftForVoice({bool skipConfirm = false}) async {
     if (isClosed) return;
     if (!hasTextNote.value && textController.text.trim().isEmpty) return;
-
-    if (!skipConfirm) {
-      final ok = await _askConfirm(
-        title: 'Replace text note?',
-        message:
-            'Recording a voice note will remove the current text note. Continue?',
-        primaryLabel: 'Replace',
-        destructive: true,
-      );
-      if (!ok || isClosed) return;
-    }
-
     await _clearTextDraft();
     errorMessage.value = null;
   }
@@ -325,20 +285,6 @@ class VisitMediaNotesController extends GetxController {
     errorMessage.value = null;
 
     if (!await _ensureMicPermission()) return;
-
-    if (hasTextNote.value || textController.text.trim().isNotEmpty) {
-      if (!replacingOther) {
-        final ok = await _askConfirm(
-          title: 'Replace text note?',
-          message:
-              'Recording a voice note will remove the current text note. Continue?',
-          primaryLabel: 'Replace',
-          destructive: true,
-        );
-        if (!ok) return;
-      }
-      await _clearTextDraft();
-    }
 
     try {
       isBusy.value = true;
@@ -508,8 +454,6 @@ class VisitMediaNotesController extends GetxController {
         ..clear()
         ..addAll(_recordedWaveLevels);
 
-      textController.clear();
-      hasTextNote.value = false;
       voiceNotePath.value = path;
       _tempVoicePaths.add(path);
       _refreshHasChanges();
@@ -647,9 +591,6 @@ class VisitMediaNotesController extends GetxController {
 
     if (isTextMode) {
       final text = textController.text.trim();
-      if (replacingOther && _initialVoicePath != null && text.isEmpty) {
-        return;
-      }
       _committed = true;
       if (batchMode) {
         if (batchScope == VisitBatchNoteScope.generalNote) {
@@ -668,12 +609,6 @@ class VisitMediaNotesController extends GetxController {
     }
 
     final voice = voiceNotePath.value;
-    if (replacingOther &&
-        _initialText.trim().isNotEmpty &&
-        (voice == null || voice.trim().isEmpty) &&
-        _initialVoicePath == null) {
-      return;
-    }
 
     _committed = true;
     if (voice != null && voice.trim().isNotEmpty) {
