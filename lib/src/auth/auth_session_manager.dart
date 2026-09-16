@@ -16,7 +16,7 @@ class AuthSessionManager {
   static bool isOfficerApplicationUrl(Uri? uri) =>
       AppConfig.isOfficerApplicationUrl(uri);
 
-  static Future<void> clearNativeSession({bool deletePushToken = false}) async {
+  static Future<void> clearNativeSession({bool deletePushToken = true}) async {
     if (kDebugMode) {
       debugPrint('[AuthSessionManager] logout phase 1: instant UI flags');
     }
@@ -24,11 +24,18 @@ class AuthSessionManager {
     AuthState.instance.clear();
     await DutyHeartbeatService.instance.finalizeLogoutInstant();
 
-    if (kDebugMode && deletePushToken) {
+    if (deletePushToken) {
       if (kDebugMode) {
         debugPrint(
-          '[AuthSessionManager] skip FCM/APNs delete on logout (temporarily disabled)',
+          '[AuthSessionManager] logout: delete push token (API + FCM/APNs)',
         );
+      }
+      try {
+        await PushNotificationService.instance.clearPushTokenOnLogout();
+      } catch (e) {
+        if (kDebugMode) {
+          debugPrint('[AuthSessionManager] push token delete failed: $e');
+        }
       }
     }
 
@@ -40,10 +47,7 @@ class AuthSessionManager {
     await BackgroundLocationUploader.drainAndDiscardOnLogoutStatic();
 
     if (kDebugMode) {
-      debugPrint(
-        '[AuthSessionManager] logout phase 3: clear auth token '
-        '(FCM/APNs kept)',
-      );
+      debugPrint('[AuthSessionManager] logout phase 3: clear auth token');
     }
     NativePermissionStatusService.instance.resetSyncState();
     await AuthRepository.instance.clear();
