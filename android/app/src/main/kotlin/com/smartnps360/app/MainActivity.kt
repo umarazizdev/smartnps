@@ -17,6 +17,7 @@ import android.provider.Settings
 import com.smartnps360.app.camera.NativeCameraPlugin
 import com.smartnps360.app.duty.AndroidDutyKillPlugin
 import com.smartnps360.app.duty.AndroidDutyUiState
+import com.smartnps360.app.permission.AndroidPermissionStatusPlugin
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -69,6 +70,7 @@ class MainActivity : FlutterActivity() {
   override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
     super.configureFlutterEngine(flutterEngine)
     flutterEngine.plugins.add(AndroidDutyKillPlugin())
+    flutterEngine.plugins.add(AndroidPermissionStatusPlugin())
     flutterEngine.plugins.add(NativeCameraPlugin())
 
     val channel = MethodChannel(

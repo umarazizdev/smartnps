@@ -17,6 +17,7 @@ import '../auth/auth_repository.dart';
 import '../background/location/background_location_permissions.dart';
 import '../motion/motion_activity_service.dart';
 import '../push/notifications/push_notification_preferences.dart';
+import 'android_permission_status_watch.dart';
 import 'os_notification_permission.dart';
 import '../utilities/app_config.dart';
 import '../utilities/app_version_info.dart';
@@ -115,6 +116,7 @@ class NativePermissionStatusService {
     _syncForceNext = false;
     _syncInFlight = null;
     _deferredSyncAfterAppCycle = false;
+    unawaited(AndroidPermissionStatusWatch.disarm());
   }
 
   Future<Map<String, dynamic>> buildPayload() async {
@@ -265,6 +267,9 @@ class NativePermissionStatusService {
         final fingerprint = _fingerprint(payload);
         if (!force && fingerprint == _lastPayloadFingerprint) {
           _debugLog('skip upload (unchanged permissions)');
+          unawaited(
+            AndroidPermissionStatusWatch.arm(markSynced: true),
+          );
           continue;
         }
 
@@ -277,6 +282,9 @@ class NativePermissionStatusService {
         if (uploaded) {
           _lastPayloadFingerprint = fingerprint;
           didUpload = true;
+          unawaited(
+            AndroidPermissionStatusWatch.arm(markSynced: true),
+          );
         }
       } while (_syncCoalescePending);
     });
@@ -363,6 +371,9 @@ class NativePermissionStatusService {
           'skip app_cycle upload '
           '(unchanged cycle=$appCycle and permissions)',
         );
+        unawaited(
+          AndroidPermissionStatusWatch.arm(markSynced: true),
+        );
         return;
       }
 
@@ -375,6 +386,9 @@ class NativePermissionStatusService {
       if (uploaded) {
         _lastAppCycle = appCycle;
         _lastPayloadFingerprint = fingerprint;
+        unawaited(
+          AndroidPermissionStatusWatch.arm(markSynced: true),
+        );
       }
     });
     return uploaded;
@@ -410,6 +424,9 @@ class NativePermissionStatusService {
         final uploaded = await _upload(payload);
         if (uploaded) {
           _lastPayloadFingerprint = _fingerprint(payload);
+          unawaited(
+            AndroidPermissionStatusWatch.arm(markSynced: true),
+          );
         }
       });
     } finally {
