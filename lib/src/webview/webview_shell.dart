@@ -174,10 +174,7 @@ class _WebViewShellState extends State<WebViewShell>
   static const _recoveryTimeout = Duration(seconds: 10);
   static const _resumeHealthDelay = Duration(milliseconds: 450);
   static const _resumeStuckWatchdogDelay = Duration(seconds: 8);
-  static const _resumeStaleReloadThreshold = Duration(minutes: 30);
   static const _maxSilentRecoveries = 2;
-
-  DateTime? _lastBackgroundedAt;
 
   Timer? _splashReleaseTimer;
   Timer? _loadWatchdog;
@@ -521,6 +518,37 @@ class _WebViewShellState extends State<WebViewShell>
   void _clearPullToRefreshState() {
     _ui.pullToRefreshActive.value = false;
     _pullToRefreshSourceUri = null;
+  }
+
+  void _finishPullToRefreshChrome() {
+    _pullToRefreshController?.endRefreshing();
+    _clearPullToRefreshState();
+    _webReloadInProgress = false;
+    _ui.endNavigation();
+  }
+
+  Future<void> _performPullToRefresh() async {
+    final controller = _controller;
+    if (controller == null) return;
+    if (_ui.showingLogVisit.value || _ui.showOffline.value) {
+      _finishPullToRefreshChrome();
+      return;
+    }
+
+    final currentUrl = await controller.getUrl();
+    _ui.pullToRefreshActive.value = true;
+    _webReloadInProgress = true;
+    _pullToRefreshSourceUri = currentUrl?.uriValue ?? _ui.currentUri.value;
+
+    try {
+      await _pullToRefreshController?.beginRefreshing();
+    } catch (_) {}
+
+    try {
+      await controller.reload();
+    } catch (_) {
+      _finishPullToRefreshChrome();
+    }
   }
 
   bool _isTransientReloadUri(Uri? uri) {
@@ -1918,6 +1946,109 @@ class _WebViewShellState extends State<WebViewShell>
     injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
   );
 
+  static final UserScript _iosPullToRefreshAssistScript = UserScript(
+    source: r'''
+    (function () {
+      'use strict';
+      if (window.__smartnps_ios_ptr_assist_installed) return;
+      window.__smartnps_ios_ptr_assist_installed = true;
+
+      var THRESHOLD_PX = 72;
+      var COOLDOWN_MS = 1200;
+      var startY = 0;
+      var tracking = false;
+      var triggered = false;
+      var lastTriggerAt = 0;
+
+      function injectOverscrollStyle() {
+        if (!document.head || document.getElementById('smartnps-ios-ptr-assist-style')) return;
+        var style = document.createElement('style');
+        style.id = 'smartnps-ios-ptr-assist-style';
+        style.textContent = [
+          'html, body {',
+          '  overscroll-behavior-y: auto !important;',
+          '}'
+        ].join('\n');
+        document.head.appendChild(style);
+      }
+
+      function isScrollable(el) {
+        if (!el || el.nodeType !== 1) return false;
+        var style = window.getComputedStyle(el);
+        var oy = style.overflowY;
+        if (oy !== 'auto' && oy !== 'scroll' && oy !== 'overlay') return false;
+        return el.scrollHeight > el.clientHeight + 1;
+      }
+
+      function canPullFrom(target) {
+        var el = target;
+        while (el && el !== document.documentElement) {
+          if (isScrollable(el)) {
+            return el.scrollTop <= 0;
+          }
+          el = el.parentElement;
+        }
+        var root = document.scrollingElement || document.documentElement;
+        return (window.pageYOffset || root.scrollTop || 0) <= 0;
+      }
+
+      function notifyNative() {
+        var now = Date.now();
+        if (now - lastTriggerAt < COOLDOWN_MS) return;
+        lastTriggerAt = now;
+        try {
+          if (
+            window.flutter_inappwebview &&
+            typeof window.flutter_inappwebview.callHandler === 'function'
+          ) {
+            window.flutter_inappwebview.callHandler('nativePullToRefresh');
+          }
+        } catch (_) {}
+      }
+
+      function onTouchStart(event) {
+        if (!event.touches || event.touches.length !== 1) return;
+        triggered = false;
+        tracking = canPullFrom(event.target);
+        startY = event.touches[0].clientY;
+      }
+
+      function onTouchMove(event) {
+        if (!tracking || triggered || !event.touches || !event.touches.length) return;
+        if (!canPullFrom(event.target)) {
+          tracking = false;
+          return;
+        }
+        var dy = event.touches[0].clientY - startY;
+        if (dy >= THRESHOLD_PX) {
+          triggered = true;
+          tracking = false;
+          notifyNative();
+        }
+      }
+
+      function onTouchEnd() {
+        tracking = false;
+      }
+
+      function boot() {
+        injectOverscrollStyle();
+        document.addEventListener('touchstart', onTouchStart, { passive: true, capture: true });
+        document.addEventListener('touchmove', onTouchMove, { passive: true, capture: true });
+        document.addEventListener('touchend', onTouchEnd, { passive: true, capture: true });
+        document.addEventListener('touchcancel', onTouchEnd, { passive: true, capture: true });
+      }
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', boot);
+      } else {
+        boot();
+      }
+    })();
+  ''',
+    injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+  );
+
   static final UserScript _iosPopoverFixScript = UserScript(
     source: r'''
     (function () {
@@ -2158,6 +2289,30 @@ class _WebViewShellState extends State<WebViewShell>
         systemStatusBarContrastEnforced: false,
       ),
     );
+    unawaited(_syncPullToRefreshColors(isDark));
+  }
+
+  Color _pullToRefreshIndicatorColor(bool isDark) =>
+      isDark ? Colors.white : const Color(AppConfig.cPrimary);
+
+  Color _pullToRefreshBackgroundColor(bool isDark) {
+    if (isDark) {
+      return Platform.isAndroid
+          ? const Color(AppConfig.cDarkCardColor)
+          : const Color(0xFF0F1724);
+    }
+    return Platform.isAndroid
+        ? Colors.white
+        : const Color(AppConfig.cSurface);
+  }
+
+  Future<void> _syncPullToRefreshColors(bool isDark) async {
+    final controller = _pullToRefreshController;
+    if (controller == null) return;
+    try {
+      await controller.setColor(_pullToRefreshIndicatorColor(isDark));
+      await controller.setBackgroundColor(_pullToRefreshBackgroundColor(isDark));
+    } catch (_) {}
   }
 
   void _setNativeThemeFromWeb(bool isDark) {
@@ -2179,7 +2334,6 @@ class _WebViewShellState extends State<WebViewShell>
     unawaited(AppUpgradeReconciler.reconcileOsAfterEngineReady());
     RequiredPermissionsGate.privacyNoticeVisibleChecker = () =>
         _ui.showLocationNotice.value ||
-
         (_pendingLocationNoticeAfterLogin &&
             AuthSessionManager.isLoginRoute(_ui.currentUri.value));
     OffDutyPushPromptService.currentUriChecker = () => _ui.currentUri.value;
@@ -2197,18 +2351,15 @@ class _WebViewShellState extends State<WebViewShell>
     _applySystemUi();
 
     if (Platform.isAndroid || Platform.isIOS) {
+      final isDark = _ui.webPrefersDark.value;
       _pullToRefreshController = PullToRefreshController(
-        settings: PullToRefreshSettings(color: const Color(AppConfig.cPrimary)),
-        onRefresh: () async {
-          final controller = _controller;
-          if (controller == null) return;
-          final currentUrl = await controller.getUrl();
-          _ui.pullToRefreshActive.value = true;
-          _webReloadInProgress = true;
-          _pullToRefreshSourceUri =
-              currentUrl?.uriValue ?? _ui.currentUri.value;
-
-          await controller.reload();
+        settings: PullToRefreshSettings(
+          enabled: true,
+          color: _pullToRefreshIndicatorColor(isDark),
+          backgroundColor: _pullToRefreshBackgroundColor(isDark),
+        ),
+        onRefresh: () {
+          unawaited(_performPullToRefresh());
         },
       );
     }
@@ -2472,7 +2623,6 @@ class _WebViewShellState extends State<WebViewShell>
         unawaited(BackgroundLocationController.notifyAppBackgrounded());
       } else if (state == AppLifecycleState.paused ||
           state == AppLifecycleState.hidden) {
-        _lastBackgroundedAt = DateTime.now();
         unawaited(BackgroundLocationController.notifyAppBackgrounded());
       } else if (state == AppLifecycleState.resumed) {
         unawaited(BackgroundLocationController.notifyAppForegrounded());
@@ -2480,11 +2630,8 @@ class _WebViewShellState extends State<WebViewShell>
     }
 
     if (state == AppLifecycleState.resumed) {
-      final staleBackground = _isStaleBackgroundResume();
-      if (!staleBackground) {
-        unawaited(_checkWebViewHealthAfterResume());
-        _scheduleResumeStuckRecoveryWatchdog();
-      }
+      unawaited(_checkWebViewHealthAfterResume());
+      _scheduleResumeStuckRecoveryWatchdog();
       unawaited(_syncOfflineFromConnectivity());
       if (_ui.officerLoggedIn.value && !_ui.showLocationNotice.value) {
         unawaited(RequiredPermissionsGate.instance.refresh(force: true));
@@ -2514,7 +2661,6 @@ class _WebViewShellState extends State<WebViewShell>
           if (controller != null) {
             await _reconcileBottomBarFromWebView(controller);
           }
-          await _maybeReloadWebViewAfterLongBackground();
           return;
         }
 
@@ -2534,7 +2680,6 @@ class _WebViewShellState extends State<WebViewShell>
           if (controller != null) {
             await _reconcileBottomBarFromWebView(controller);
           }
-          await _maybeReloadWebViewAfterLongBackground();
           return;
         }
         DutyHeartbeatService.instance.beginResumeDutyReconcile();
@@ -2573,12 +2718,9 @@ class _WebViewShellState extends State<WebViewShell>
         await OfficerAnnouncementCoordinator.instance.tryDeliverPending(
           source: 'resumed',
         );
-        await _maybeReloadWebViewAfterLongBackground();
         await _refreshNativeAuthSessionFromStorage();
         await _maybePromptUnfinishedDraft(force: true);
       }());
-    } else if (state == AppLifecycleState.resumed) {
-      unawaited(_maybeReloadWebViewAfterLongBackground());
     }
   }
 
@@ -2824,36 +2966,6 @@ class _WebViewShellState extends State<WebViewShell>
     }
     if (!mounted) return;
     _showOffline(needsReload: true);
-  }
-
-  bool _isStaleBackgroundResume() {
-    final lastBackgrounded = _lastBackgroundedAt;
-    if (lastBackgrounded == null) return false;
-    return DateTime.now().difference(lastBackgrounded) >=
-        _resumeStaleReloadThreshold;
-  }
-
-  Future<void> _maybeReloadWebViewAfterLongBackground() async {
-    if (!mounted) return;
-    if (_ui.showOffline.value) return;
-    if (_ui.showingLogVisit.value) return;
-    if (_ui.pullToRefreshActive.value) return;
-    if (!_ui.firstPageLoaded.value) return;
-
-    final lastBackgrounded = _lastBackgroundedAt;
-    _lastBackgroundedAt = null;
-    if (lastBackgrounded == null) return;
-
-    final away = DateTime.now().difference(lastBackgrounded);
-    if (away < _resumeStaleReloadThreshold) return;
-
-    if (kDebugMode) {
-      debugPrint(
-        '[SmartNPS360][WebView] stale background reload after '
-        '${away.inMinutes}m',
-      );
-    }
-    await _recoverWebView(reason: 'resume_stale_background', recreate: true);
   }
 
   Future<_WebViewHealth> _probeWebViewHealth(
@@ -3163,13 +3275,81 @@ class _WebViewShellState extends State<WebViewShell>
     }
     final controller = _controller;
     if (controller == null) return true;
+
+    Uri? liveUri;
+    try {
+      liveUri = (await controller.getUrl())?.uriValue;
+    } catch (_) {}
+
+    // Shift Log is intentionally not a bottom-bar route (bar hidden). Android
+    // history after tab loadUrl often fails to reselect Dashboard on goBack,
+    // so leaving the Shift Log landing page always returns to Dashboard.
+    if (_isShiftLogLandingUri(_ui.currentUri.value) ||
+        _isShiftLogLandingUri(liveUri)) {
+      await _popFromShiftLogToDashboard(controller);
+      return false;
+    }
+
     final canGoBack = await controller.canGoBack();
     if (canGoBack) {
       await controller.goBack();
-      unawaited(_reconcileBottomBarFromWebView(controller));
+      await _syncChromeAfterWebHistoryBack(controller);
       return false;
     }
     return true;
+  }
+
+  bool _isShiftLogLandingUri(Uri? uri) {
+    final path = AppConfig.normalizeWebPath(uri);
+    return path == _BottomItem.shiftLog.normalizedPath;
+  }
+
+  Future<void> _popFromShiftLogToDashboard(
+    InAppWebViewController controller,
+  ) async {
+    _finishBottomTabNavigation();
+    _clearWebBottomBarHide();
+    _ui.selectedBottomTabIndex.value = _BottomItem.dashboard.index;
+    _ui.preserveBottomBarDuringLoad.value = true;
+
+    final canGoBack = await controller.canGoBack();
+    if (canGoBack) {
+      await controller.goBack();
+      await _syncChromeAfterWebHistoryBack(controller);
+      if (_isBottomBarRoute(_ui.currentUri.value) &&
+          !_isShiftLogLandingUri(_ui.currentUri.value)) {
+        return;
+      }
+    }
+
+    await _ensureDashboardVisible();
+  }
+
+  Future<void> _syncChromeAfterWebHistoryBack(
+    InAppWebViewController controller,
+  ) async {
+    // Android WebView often still reports the previous URL immediately after
+    // goBack(); give history a moment to commit before reading it.
+    if (Platform.isAndroid) {
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+    }
+    _finishBottomTabNavigation();
+    try {
+      final live = await controller.getUrl();
+      final liveUri = live?.uriValue;
+      if (liveUri != null) {
+        _ui.webHidesBottomBar.value = false;
+        _ui.currentUri.value = liveUri;
+        _recheckBottomBarForUri(liveUri);
+        if (_isBottomBarRoute(liveUri)) {
+          _ui.preserveBottomBarDuringLoad.value = true;
+        }
+      } else {
+        await _reconcileBottomBarFromWebView(controller);
+      }
+    } catch (_) {
+      await _reconcileBottomBarFromWebView(controller);
+    }
   }
 
   void _dismissLogVisit() {
@@ -3291,7 +3471,6 @@ class _WebViewShellState extends State<WebViewShell>
     if (!alreadyOnResume && target != null && controller != null) {
       final restoredByHistory = await _tryWebHistoryBackTo(controller, target);
       if (!restoredByHistory) {
-
         await _navigateWebTo(target);
       }
     } else if (target != null) {
@@ -4042,6 +4221,16 @@ class _WebViewShellState extends State<WebViewShell>
           if (kDebugMode) {
             debugPrint('[SmartNPS360][iOS PopoverFix] event received');
           }
+        },
+      );
+    }
+
+    if (Platform.isIOS) {
+      controller.addJavaScriptHandler(
+        handlerName: 'nativePullToRefresh',
+        callback: (args) {
+          unawaited(_performPullToRefresh());
+          return null;
         },
       );
     }
@@ -5353,6 +5542,7 @@ class _WebViewShellState extends State<WebViewShell>
         source: _injectPlatformLocationLabels(_geolocationScript.source),
         injectionTime: _geolocationScript.injectionTime,
       ),
+      if (Platform.isIOS) _iosPullToRefreshAssistScript,
       if (Platform.isIOS) _iosPopoverFixScript,
       if (Platform.isIOS) _iosKeyboardInputFixScript,
     ];
@@ -5421,6 +5611,8 @@ class _WebViewShellState extends State<WebViewShell>
       allowsBackForwardNavigationGestures: true,
       verticalScrollBarEnabled: true,
       horizontalScrollBarEnabled: false,
+      alwaysBounceVertical: Platform.isIOS ? true : null,
+      disallowOverScroll: Platform.isIOS ? false : null,
 
       disableDefaultErrorPage: Platform.isAndroid ? true : null,
     );
@@ -5473,11 +5665,9 @@ class _WebViewShellState extends State<WebViewShell>
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-
                       Expanded(
                         child: Stack(
                           children: [
-
                             Obx(() {
                               final hideWebViewForLogVisit =
                                   _ui.showingLogVisit.value;
@@ -5511,6 +5701,15 @@ class _WebViewShellState extends State<WebViewShell>
                                         onWebViewCreated: (controller) {
                                           _controller = controller;
                                           _installJsHandlers(controller);
+                                          unawaited(
+                                            _pullToRefreshController
+                                                ?.setEnabled(true),
+                                          );
+                                          unawaited(
+                                            _syncPullToRefreshColors(
+                                              _ui.webPrefersDark.value,
+                                            ),
+                                          );
                                           unawaited(_loadPendingPushUrl());
                                           if (_ui.showOffline.value) {
                                             unawaited(() async {
@@ -5595,7 +5794,9 @@ class _WebViewShellState extends State<WebViewShell>
                                               !_pendingBottomTabLoadStarted) {
                                             return;
                                           }
-                                          if (progress > 0 && progress < 100) {
+                                          if (!_ui.pullToRefreshActive.value &&
+                                              progress > 0 &&
+                                              progress < 100) {
                                             _ui.setLoadProgress(progress);
                                           }
                                           if (progress == 100) {
@@ -5606,18 +5807,22 @@ class _WebViewShellState extends State<WebViewShell>
                                           }
                                         },
                                         onLoadStop: (controller, url) async {
-                                          _pullToRefreshController
-                                              ?.endRefreshing();
                                           final nextUri = url?.uriValue;
                                           final recoveryLoad =
                                               _awaitingRecoveryLoad;
+                                          final isPullReload =
+                                              _isPullToRefreshReload(nextUri);
+                                          final preservedUri =
+                                              _pullToRefreshSourceUri ??
+                                              _uriAtLoadStart ??
+                                              _ui.currentUri.value;
+                                          _finishPullToRefreshChrome();
 
                                           final ignoreEvent =
                                               _shouldIgnoreWebViewNavigationEvent(
                                                 nextUri,
                                               );
                                           var isSamePageReload = false;
-                                          Uri? preservedUri;
                                           var androidBottomTabNavComplete =
                                               false;
 
@@ -5645,17 +5850,11 @@ class _WebViewShellState extends State<WebViewShell>
                                             }
                                             isSamePageReload =
                                                 !isBottomTabNavigationComplete &&
-                                                (_isPullToRefreshReload(
-                                                      nextUri,
-                                                    ) ||
+                                                (isPullReload ||
                                                     _isSamePageReload(
                                                       _uriAtLoadStart,
                                                       nextUri,
                                                     ));
-                                            preservedUri =
-                                                _pullToRefreshSourceUri ??
-                                                _uriAtLoadStart ??
-                                                _ui.currentUri.value;
                                             try {
                                               final webThemeIsDark =
                                                   _hasWebThemeSignal
@@ -5705,7 +5904,6 @@ class _WebViewShellState extends State<WebViewShell>
                                                         .showLocationNotice
                                                         .value ||
                                                     _pendingLocationNoticeAfterLogin) {
-
                                                 } else {
                                                   await _requestNotificationPermissionForRoute(
                                                     nextUri,
@@ -5749,8 +5947,6 @@ class _WebViewShellState extends State<WebViewShell>
                                             } catch (_) {}
                                           }
 
-                                          _clearPullToRefreshState();
-                                          _webReloadInProgress = false;
                                           final loadStartUri = _uriAtLoadStart;
                                           _uriAtLoadStart = null;
                                           if (!ignoreEvent &&
@@ -5790,10 +5986,7 @@ class _WebViewShellState extends State<WebViewShell>
                                         },
                                         onReceivedError:
                                             (controller, request, error) async {
-                                              _pullToRefreshController
-                                                  ?.endRefreshing();
-                                              _clearPullToRefreshState();
-                                              _webReloadInProgress = false;
+                                              _finishPullToRefreshChrome();
                                               _finishBottomTabNavigation();
                                               _endMainFrameNavigationChrome();
 
@@ -6239,21 +6432,21 @@ class _SplashOverlay extends StatelessWidget {
 enum _BottomItem {
   dashboard(
     'Dashboard',
-    'assets/postFilFill.png',
-    'assets/postFil.png',
+    'assets/home-outline.png',
+    'assets/home-icon-silhouette.png',
     '/officer/dashboard',
   ),
-  shiftLog('Shift Log', '', '', '/officer/shift-log'),
+  shiftLog('Shift Log', 'assets/list.png', 'assets/list.png', '/officer/shift-log'),
   timesheet(
     'TimeSheet',
-    'assets/calendar_outline.png',
+    'assets/schedule-outline.png',
     'assets/schedule.png',
     '/officer/timesheet/monthly',
   ),
   profile(
     'Profile',
-    'assets/avatar.png',
-    'assets/profile.png',
+    'assets/user-outline.png',
+    'assets/user.png',
     '/officer/profile',
   );
 
@@ -6312,10 +6505,7 @@ class _BottomBar extends StatelessWidget {
             _BottomItem.shiftLog => 19,
             _ => null,
           },
-          materialIcon: switch (item) {
-            _BottomItem.shiftLog => Icons.assignment_outlined,
-            _ => null,
-          },
+          materialIcon: null,
           activeAssetIcon: item.iconAssetSelected.isEmpty
               ? null
               : item.iconAssetSelected,
