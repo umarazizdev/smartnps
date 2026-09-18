@@ -18,7 +18,7 @@ class AppConfig {
   static const int cDarkCardColor = 0xFF1A2332;
   static const int cBottomBarActive = 0xFF0F93D2;
 
-  static const bool enableMockLocationDetection = false;
+  static const bool enableMockLocationDetection = true;
 
   static const bool enablePingDebugLog = false;
   static const bool enableBatchDebugLog = false;
