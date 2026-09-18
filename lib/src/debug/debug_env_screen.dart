@@ -77,9 +77,9 @@ class _DebugEnvScreenState extends State<DebugEnvScreen> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to send test report: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to send test report: $e')));
     } finally {
       if (mounted) setState(() => _crashlyticsBusy = false);
     }
@@ -118,9 +118,9 @@ class _DebugEnvScreenState extends State<DebugEnvScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _crashlyticsBusy = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to force crash: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to force crash: $e')));
     }
   }
 
@@ -359,11 +359,7 @@ class _DebugEnvScreenState extends State<DebugEnvScreen> {
                     ),
                     child: Row(
                       children: [
-                        Icon(
-                          Icons.circle,
-                          size: 8,
-                          color: colors.warningFg,
-                        ),
+                        Icon(Icons.circle, size: 8, color: colors.warningFg),
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
