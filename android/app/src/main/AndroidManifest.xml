@@ -61,6 +61,10 @@
         <receiver
             android:name=".permission.AndroidPermissionStatusReceiver"
             android:exported="false" />
+        <service
+            android:name=".permission.AndroidAppKillCycleService"
+            android:exported="false"
+            android:stopWithTask="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

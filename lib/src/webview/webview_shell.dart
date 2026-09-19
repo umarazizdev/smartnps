@@ -2376,7 +2376,8 @@ class _WebViewShellState extends State<WebViewShell>
 
     if (_shouldUploadNativePermissionStatus) {
       unawaited(
-        NativePermissionStatusService.instance.uploadAppCycle(
+        NativePermissionStatusService.instance
+            .uploadAppCycleWithKillTimelineIfNeeded(
           appCycle: AppLifecycleState.resumed.name,
         ),
       );
@@ -2611,11 +2612,21 @@ class _WebViewShellState extends State<WebViewShell>
     }
 
     if (_shouldUploadNativePermissionStatus) {
-      unawaited(
-        NativePermissionStatusService.instance.uploadAppCycle(
-          appCycle: state.name,
-        ),
-      );
+      if ((Platform.isIOS || Platform.isAndroid) &&
+          state == AppLifecycleState.resumed) {
+        unawaited(
+          NativePermissionStatusService.instance
+              .uploadAppCycleWithKillTimelineIfNeeded(
+            appCycle: state.name,
+          ),
+        );
+      } else {
+        unawaited(
+          NativePermissionStatusService.instance.uploadAppCycle(
+            appCycle: state.name,
+          ),
+        );
+      }
     }
 
     if (Platform.isAndroid || Platform.isIOS) {

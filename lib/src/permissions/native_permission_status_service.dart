@@ -19,6 +19,7 @@ import '../motion/motion_activity_service.dart';
 import '../push/notifications/push_notification_preferences.dart';
 import 'android_permission_status_watch.dart';
 import 'os_notification_permission.dart';
+import 'permission_status_api_contract.dart';
 import '../utilities/app_config.dart';
 import '../utilities/app_version_info.dart';
 import '../utilities/device_identity.dart';
@@ -87,6 +88,7 @@ class NativePermissionStatusService {
   String? _lastPayloadFingerprint;
   String? _lastAppCycle;
   String? _pendingAppCycle;
+  PermissionStatusTimeline? _pendingTimeline;
   Future<bool>? _appCycleUploadInFlight;
   Timer? _batteryMonitorTimer;
   int? _lastUploadedBatteryPercentage;
@@ -110,6 +112,7 @@ class NativePermissionStatusService {
     _lastPayloadFingerprint = null;
     _lastAppCycle = null;
     _pendingAppCycle = null;
+    _pendingTimeline = null;
     _appCycleUploadInFlight = null;
     _lastUploadedBatteryPercentage = null;
     _syncCoalescePending = false;
@@ -301,11 +304,17 @@ class NativePermissionStatusService {
     return syncIfChanged(force: true);
   }
 
-  Future<bool> uploadAppCycle({required String appCycle}) async {
+  Future<bool> uploadAppCycle({
+    required String appCycle,
+    PermissionStatusTimeline? timeline,
+  }) async {
     if (!Platform.isAndroid && !Platform.isIOS) return false;
     if (!await AuthRepository.instance.isOfficerLoggedIn()) return false;
 
     _pendingAppCycle = appCycle;
+    if (timeline != null && !timeline.isEmpty) {
+      _pendingTimeline = timeline;
+    }
     final inFlight = _appCycleUploadInFlight;
     if (inFlight != null) {
       _debugLog('queued app_cycle upload $appCycle');
@@ -323,6 +332,32 @@ class NativePermissionStatusService {
     }
   }
 
+  /// Attach queued kill → open timeline on resume (iOS + Android), then clear native queue.
+  Future<bool> uploadAppCycleWithKillTimelineIfNeeded({
+    required String appCycle,
+  }) async {
+    if (!Platform.isIOS && !Platform.isAndroid) {
+      return uploadAppCycle(appCycle: appCycle);
+    }
+
+    final timeline = await _peekAppKillTimeline();
+    final uploaded = await uploadAppCycle(
+      appCycle: appCycle,
+      timeline: timeline.isEmpty ? null : timeline,
+    );
+    if (uploaded && timeline.isKillReopen) {
+      await _clearAppKillTimeline();
+    }
+    return uploaded;
+  }
+
+  @Deprecated('Use uploadAppCycleWithKillTimelineIfNeeded')
+  Future<bool> uploadAppCycleWithIosKillTimelineIfNeeded({
+    required String appCycle,
+  }) {
+    return uploadAppCycleWithKillTimelineIfNeeded(appCycle: appCycle);
+  }
+
   Future<bool> _drainAppCycleUploads() async {
     var ok = true;
 
@@ -330,10 +365,15 @@ class NativePermissionStatusService {
       await Future<void>.delayed(_appCycleDebounce);
 
       final appCycle = _pendingAppCycle;
+      final timeline = _pendingTimeline;
       _pendingAppCycle = null;
+      _pendingTimeline = null;
       if (appCycle == null) continue;
 
-      final uploaded = await _uploadAppCycleNow(appCycle);
+      final uploaded = await _uploadAppCycleNow(
+        appCycle,
+        timeline: timeline,
+      );
       ok = ok && uploaded;
     }
 
@@ -346,27 +386,36 @@ class NativePermissionStatusService {
     return ok;
   }
 
-  Future<bool> _uploadAppCycleNow(String appCycle) async {
+  Future<bool> _uploadAppCycleNow(
+    String appCycle, {
+    PermissionStatusTimeline? timeline,
+  }) async {
     final accessToken = await _accessTokenForLoggedInOfficer();
     if (accessToken == null || accessToken.isEmpty) return false;
 
     var uploaded = false;
     await _serialized(() async {
       if (Platform.isIOS &&
-          appCycle == 'resumed' &&
-          (_lastAppCycle == 'paused' || _lastAppCycle == 'hidden')) {
+          appCycle == PermissionStatusApiContract.cycleResumed &&
+          (_lastAppCycle == PermissionStatusApiContract.cyclePaused ||
+              _lastAppCycle == PermissionStatusApiContract.cycleHidden)) {
         await _confirmIosForegroundLastingAfterRealBackground();
       }
 
       await BackgroundLocationPermissions.refreshPermissionStateFromOs();
       final payload = await buildPayload();
-      payload['app_cycle'] = appCycle;
+      payload[PermissionStatusApiContract.appCycle] = appCycle;
+      if (timeline != null && !timeline.isEmpty) {
+        payload.addAll(timeline.toPayloadFields());
+      }
 
       final fingerprint = _fingerprint(payload);
       final cycleChanged = appCycle != _lastAppCycle;
       final permissionsChanged = fingerprint != _lastPayloadFingerprint;
+      final hasTimeline = timeline != null && !timeline.isEmpty;
 
-      if (!cycleChanged && !permissionsChanged) {
+      // Timeline events must always POST even when permissions are unchanged.
+      if (!cycleChanged && !permissionsChanged && !hasTimeline) {
         _debugLog(
           'skip app_cycle upload '
           '(unchanged cycle=$appCycle and permissions)',
@@ -379,7 +428,8 @@ class NativePermissionStatusService {
 
       _debugLog(
         'app_cycle upload $appCycle '
-        '(cycleChanged=$cycleChanged permissionsChanged=$permissionsChanged) '
+        '(cycleChanged=$cycleChanged permissionsChanged=$permissionsChanged '
+        'timeline=$hasTimeline) '
         'permissions=${payload['permissions']}',
       );
       uploaded = await _upload(payload);
@@ -392,6 +442,32 @@ class NativePermissionStatusService {
       }
     });
     return uploaded;
+  }
+
+  Future<PermissionStatusTimeline> _peekAppKillTimeline() async {
+    if (!Platform.isIOS && !Platform.isAndroid) {
+      return const PermissionStatusTimeline();
+    }
+    try {
+      final raw = await _settingsChannel.invokeMethod<dynamic>(
+        'peekAppKillTimeline',
+      );
+      if (raw is Map) {
+        return PermissionStatusTimeline.fromMap(raw);
+      }
+    } catch (error) {
+      _debugLog('peekAppKillTimeline failed: $error');
+    }
+    return const PermissionStatusTimeline();
+  }
+
+  Future<void> _clearAppKillTimeline() async {
+    if (!Platform.isIOS && !Platform.isAndroid) return;
+    try {
+      await _settingsChannel.invokeMethod<dynamic>('clearAppKillTimeline');
+    } catch (error) {
+      _debugLog('clearAppKillTimeline failed: $error');
+    }
   }
 
   Future<void> _uploadBatteryIfChanged() async {
@@ -454,10 +530,10 @@ class NativePermissionStatusService {
   }
 
   String _fingerprint(Map<String, dynamic> payload) {
-    final copy = Map<String, dynamic>.from(payload)
-      ..remove('app_cycle')
-      ..remove('battery_percentage')
-      ..remove('checkedAt');
+    final copy = Map<String, dynamic>.from(payload);
+    for (final key in PermissionStatusApiContract.fingerprintIgnoredKeys) {
+      copy.remove(key);
+    }
     return jsonEncode(copy);
   }
 
