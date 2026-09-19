@@ -47,6 +47,7 @@ internal object AndroidPermissionStatusWatch {
       fingerprint = fingerprint,
     )
     schedule(context, FIRST_CHECK_AFTER_KILL_MS)
+    AndroidAppKillCycleReporter.ensureTrackingService(context)
     Log.i(TAG, "armed permission-status watch")
   }
 
@@ -86,6 +87,7 @@ internal object AndroidPermissionStatusWatch {
   fun disarm(context: Context) {
     AndroidPermissionStatusStore.disarm(context)
     cancel(context)
+    AndroidAppKillCycleReporter.ensureTrackingService(context)
     Log.i(TAG, "disarmed permission-status watch")
   }
 

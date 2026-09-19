@@ -17,6 +17,7 @@ import android.provider.Settings
 import com.smartnps360.app.camera.NativeCameraPlugin
 import com.smartnps360.app.duty.AndroidDutyKillPlugin
 import com.smartnps360.app.duty.AndroidDutyUiState
+import com.smartnps360.app.permission.AndroidAppKillCycleReporter
 import com.smartnps360.app.permission.AndroidPermissionStatusPlugin
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -117,6 +118,13 @@ class MainActivity : FlutterActivity() {
         "backgroundAppRefreshStatus" -> {
           result.success(backgroundAppRefreshStatus())
         }
+        "peekAppKillTimeline" -> {
+          result.success(AndroidAppKillCycleReporter.peekTimeline(this))
+        }
+        "clearAppKillTimeline" -> {
+          AndroidAppKillCycleReporter.clearPendingAfterFlutterUpload(this)
+          result.success(true)
+        }
         else -> result.notImplemented()
       }
     }
@@ -126,6 +134,8 @@ class MainActivity : FlutterActivity() {
     AndroidDutyUiState.noteResumed()
     super.onResume()
     notifyLowPowerModeChanged()
+    AndroidAppKillCycleReporter.markOpenedAfterKillIfNeeded(this)
+    AndroidAppKillCycleReporter.flushPendingIfNeeded(this, "onResume")
   }
 
   override fun onPause() {

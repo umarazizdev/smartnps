@@ -52,6 +52,9 @@ internal object AndroidPermissionStatusUploader {
     copy.remove("app_cycle")
     copy.remove("battery_percentage")
     copy.remove("checkedAt")
+    copy.remove("killed_at")
+    copy.remove("opened_at")
+    copy.remove("slc_awakened_at")
     // Stable key order for permissions sub-object.
     val perms = copy.optJSONObject("permissions")
     if (perms != null) {
@@ -96,9 +99,74 @@ internal object AndroidPermissionStatusUploader {
     return false
   }
 
+  /**
+   * Explicit app_cycle timeline upload (killed / slc_awakened / kill+open).
+   * Always POSTs; does not use permission fingerprint skip.
+   */
+  fun uploadAppCycleEvent(
+    context: Context,
+    appCycle: String,
+    killedAt: String?,
+    openedAt: String?,
+    slcAwakenedAt: String?,
+    connectTimeoutMs: Int = 12_000,
+    readTimeoutMs: Int = 12_000,
+  ): Boolean {
+    ensureAuthFromDutyStoreIfNeeded(context)
+    val snapshot = buildSnapshot(context)
+    val payload = snapshot.payload
+    payload.put("app_cycle", appCycle)
+    payload.put("checkedAt", utcNow())
+    if (!killedAt.isNullOrEmpty()) {
+      payload.put("killed_at", killedAt)
+    }
+    if (!openedAt.isNullOrEmpty()) {
+      payload.put("opened_at", openedAt)
+    }
+    if (!slcAwakenedAt.isNullOrEmpty()) {
+      payload.put("slc_awakened_at", slcAwakenedAt)
+    }
+
+    var result = postPermissionStatus(
+      context,
+      payload,
+      connectTimeoutMs = connectTimeoutMs,
+      readTimeoutMs = readTimeoutMs,
+    )
+    if (result.code == 401 || result.code == 403) {
+      if (refreshAccessToken(context)) {
+        result = postPermissionStatus(
+          context,
+          payload,
+          connectTimeoutMs = connectTimeoutMs,
+          readTimeoutMs = readTimeoutMs,
+        )
+      }
+    }
+    val ok = result.code in 200..299
+    Log.i(TAG, "app_cycle=$appCycle status=${result.code}")
+    return ok
+  }
+
+  private fun ensureAuthFromDutyStoreIfNeeded(context: Context) {
+    if (!AndroidPermissionStatusStore.accessToken(context).isNullOrEmpty()) return
+    val dutyAccess = com.smartnps360.app.duty.AndroidDutyKillStore.accessToken(context)
+      ?: return
+    val dutyRefresh = com.smartnps360.app.duty.AndroidDutyKillStore.refreshToken(context)
+    AndroidPermissionStatusStore.writeAccessToken(context, dutyAccess)
+    if (!dutyRefresh.isNullOrEmpty()) {
+      AndroidPermissionStatusStore.writeRefreshToken(context, dutyRefresh)
+    }
+  }
+
   private data class HttpResult(val code: Int, val body: String?)
 
-  private fun postPermissionStatus(context: Context, payload: JSONObject): HttpResult {
+  private fun postPermissionStatus(
+    context: Context,
+    payload: JSONObject,
+    connectTimeoutMs: Int = 12_000,
+    readTimeoutMs: Int = 12_000,
+  ): HttpResult {
     val token = AndroidPermissionStatusStore.accessToken(context)
       ?: return HttpResult(0, null)
     val base = AndroidPermissionStatusStore.apiBaseUrl(context).trimEnd('/')
@@ -112,11 +180,17 @@ internal object AndroidPermissionStatusUploader {
         "Authorization" to "Bearer $token",
       ),
       payload.toString(),
+      connectTimeoutMs = connectTimeoutMs,
+      readTimeoutMs = readTimeoutMs,
     )
   }
 
   private fun refreshAccessToken(context: Context): Boolean {
-    val refresh = AndroidPermissionStatusStore.refreshToken(context) ?: return false
+    var refresh = AndroidPermissionStatusStore.refreshToken(context)
+    if (refresh.isNullOrEmpty()) {
+      refresh = com.smartnps360.app.duty.AndroidDutyKillStore.refreshToken(context)
+    }
+    if (refresh.isNullOrEmpty()) return false
     val base = AndroidPermissionStatusStore.apiBaseUrl(context).trimEnd('/')
     val body = JSONObject().put("refresh_token", refresh).toString()
     val result = http(
@@ -139,9 +213,11 @@ internal object AndroidPermissionStatusUploader {
       val access = firstString(payload, "access_token", "accessToken", "token")
       if (access.isNullOrEmpty()) return false
       AndroidPermissionStatusStore.writeAccessToken(context, access)
+      com.smartnps360.app.duty.AndroidDutyKillStore.writeAccessToken(context, access)
       val newRefresh = firstString(payload, "refresh_token", "refreshToken")
       if (!newRefresh.isNullOrEmpty()) {
         AndroidPermissionStatusStore.writeRefreshToken(context, newRefresh)
+        com.smartnps360.app.duty.AndroidDutyKillStore.writeRefreshToken(context, newRefresh)
       }
       true
     } catch (e: Exception) {
@@ -169,13 +245,15 @@ internal object AndroidPermissionStatusUploader {
     url: String,
     headers: Map<String, String>,
     body: String?,
+    connectTimeoutMs: Int = 12_000,
+    readTimeoutMs: Int = 12_000,
   ): HttpResult {
     var connection: HttpURLConnection? = null
     return try {
       connection = (URL(url).openConnection() as HttpURLConnection).apply {
         requestMethod = method
-        connectTimeout = 12_000
-        readTimeout = 12_000
+        connectTimeout = connectTimeoutMs
+        readTimeout = readTimeoutMs
         doInput = true
         instanceFollowRedirects = true
         headers.forEach { setRequestProperty(it.key, it.value) }
