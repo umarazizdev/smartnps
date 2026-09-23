@@ -24,7 +24,7 @@ class AppConfig {
   static const bool enableBatchDebugLog = false;
   static const bool enableDutyHeartbeatDebugLog = false;
   static const bool enablePermissionStatusDebugLog = false;
-  static const bool enablePatrolLogDebugLog = false;
+  static const bool enablePatrolLogDebugLog = true;
 
   static const bool enableBgLocationStartTestAlert = false;
 

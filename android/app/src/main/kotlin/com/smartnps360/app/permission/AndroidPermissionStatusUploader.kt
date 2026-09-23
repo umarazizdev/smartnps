@@ -54,7 +54,6 @@ internal object AndroidPermissionStatusUploader {
     copy.remove("checkedAt")
     copy.remove("killed_at")
     copy.remove("opened_at")
-    copy.remove("slc_awakened_at")
     // Stable key order for permissions sub-object.
     val perms = copy.optJSONObject("permissions")
     if (perms != null) {
@@ -100,7 +99,7 @@ internal object AndroidPermissionStatusUploader {
   }
 
   /**
-   * Explicit app_cycle timeline upload (killed / slc_awakened / kill+open).
+   * Explicit app_cycle timeline upload (killed / kill+open).
    * Always POSTs; does not use permission fingerprint skip.
    */
   fun uploadAppCycleEvent(
@@ -108,23 +107,33 @@ internal object AndroidPermissionStatusUploader {
     appCycle: String,
     killedAt: String?,
     openedAt: String?,
-    slcAwakenedAt: String?,
     connectTimeoutMs: Int = 12_000,
     readTimeoutMs: Int = 12_000,
+    lightweight: Boolean = false,
   ): Boolean {
-    ensureAuthFromDutyStoreIfNeeded(context)
-    val snapshot = buildSnapshot(context)
-    val payload = snapshot.payload
-    payload.put("app_cycle", appCycle)
-    payload.put("checkedAt", utcNow())
-    if (!killedAt.isNullOrEmpty()) {
-      payload.put("killed_at", killedAt)
+    seedAuthAndApiBase(context)
+    val token = AndroidPermissionStatusStore.accessToken(context)
+    if (token.isNullOrEmpty()) {
+      Log.w(TAG, "app_cycle=$appCycle skipped; no access token")
+      return false
     }
-    if (!openedAt.isNullOrEmpty()) {
-      payload.put("opened_at", openedAt)
-    }
-    if (!slcAwakenedAt.isNullOrEmpty()) {
-      payload.put("slc_awakened_at", slcAwakenedAt)
+    val base = resolveApiBaseUrl(context)
+    Log.i(TAG, "app_cycle=$appCycle POST $base/native-app/permission-status lightweight=$lightweight")
+
+    val payload = if (lightweight) {
+      buildLightweightPayload(context, appCycle, killedAt, openedAt)
+    } else {
+      val snapshot = buildSnapshot(context)
+      val full = snapshot.payload
+      full.put("app_cycle", appCycle)
+      full.put("checkedAt", utcNow())
+      if (!killedAt.isNullOrEmpty()) {
+        full.put("killed_at", killedAt)
+      }
+      if (!openedAt.isNullOrEmpty()) {
+        full.put("opened_at", openedAt)
+      }
+      full
     }
 
     var result = postPermissionStatus(
@@ -134,6 +143,7 @@ internal object AndroidPermissionStatusUploader {
       readTimeoutMs = readTimeoutMs,
     )
     if (result.code == 401 || result.code == 403) {
+      Log.w(TAG, "app_cycle=$appCycle unauthorized; refreshing token")
       if (refreshAccessToken(context)) {
         result = postPermissionStatus(
           context,
@@ -144,19 +154,94 @@ internal object AndroidPermissionStatusUploader {
       }
     }
     val ok = result.code in 200..299
-    Log.i(TAG, "app_cycle=$appCycle status=${result.code}")
+    if (!ok) {
+      Log.w(
+        TAG,
+        "app_cycle=$appCycle failed status=${result.code} body=${result.body?.take(200)}",
+      )
+    } else {
+      Log.i(TAG, "app_cycle=$appCycle status=${result.code}")
+    }
     return ok
   }
 
-  private fun ensureAuthFromDutyStoreIfNeeded(context: Context) {
-    if (!AndroidPermissionStatusStore.accessToken(context).isNullOrEmpty()) return
+  /** Minimal payload for kill/wake — reuse last full Flutter snapshot when present. */
+  private fun buildLightweightPayload(
+    context: Context,
+    appCycle: String,
+    killedAt: String?,
+    openedAt: String?,
+  ): JSONObject {
+    val push = AndroidPermissionStatusStore.pushStatus(context).let {
+      if (it == "disabled") "disabled" else "enabled"
+    }
+    val cached = AndroidPermissionStatusStore.readFullPermissionsCache(context)
+    val permissions = JSONObject()
+    if (cached != null) {
+      for ((key, value) in cached) {
+        permissions.put(key, value)
+      }
+      if (!permissions.has("push")) {
+        permissions.put("push", push)
+      }
+    } else {
+      permissions
+        .put("foregroundLocation", "unknown")
+        .put("backgroundLocation", "unknown")
+        .put("preciseLocation", "unknown")
+        .put("notifications", "unknown")
+        .put("motionActivity", "unknown")
+        .put("batteryOptimization", "unknown")
+        .put("backgroundAppRefresh", "unknown")
+        .put("push", push)
+    }
+    val payload = JSONObject()
+      .put("platform", "android")
+      .put("deviceId", AndroidPermissionStatusStore.deviceId(context))
+      .put("appVersion", AndroidPermissionStatusStore.appVersion(context))
+      .put("build", AndroidPermissionStatusStore.build(context))
+      .put("app_cycle", appCycle)
+      .put("checkedAt", utcNow())
+      .put("permissions", permissions)
+    AndroidPermissionStatusStore.deviceName(context)?.let {
+      payload.put("deviceName", it)
+    }
+    if (!killedAt.isNullOrEmpty()) {
+      payload.put("killed_at", killedAt)
+    }
+    if (!openedAt.isNullOrEmpty()) {
+      payload.put("opened_at", openedAt)
+    }
+    return payload
+  }
+
+  private fun seedAuthAndApiBase(context: Context) {
     val dutyAccess = com.smartnps360.app.duty.AndroidDutyKillStore.accessToken(context)
-      ?: return
     val dutyRefresh = com.smartnps360.app.duty.AndroidDutyKillStore.refreshToken(context)
-    AndroidPermissionStatusStore.writeAccessToken(context, dutyAccess)
-    if (!dutyRefresh.isNullOrEmpty()) {
+    if (AndroidPermissionStatusStore.accessToken(context).isNullOrEmpty() &&
+      !dutyAccess.isNullOrEmpty()
+    ) {
+      AndroidPermissionStatusStore.writeAccessToken(context, dutyAccess)
+    }
+    if (AndroidPermissionStatusStore.refreshToken(context).isNullOrEmpty() &&
+      !dutyRefresh.isNullOrEmpty()
+    ) {
       AndroidPermissionStatusStore.writeRefreshToken(context, dutyRefresh)
     }
+    val dutyBase = com.smartnps360.app.duty.AndroidDutyKillStore.apiBaseUrl(context)
+    if (!dutyBase.isNullOrEmpty()) {
+      // Keep kill uploads on the same API host Flutter is using.
+      context.getSharedPreferences("smartnps360_android_permission_status", Context.MODE_PRIVATE)
+        .edit()
+        .putString("api_base_url", dutyBase)
+        .apply()
+    }
+  }
+
+  private fun resolveApiBaseUrl(context: Context): String {
+    val dutyBase = com.smartnps360.app.duty.AndroidDutyKillStore.apiBaseUrl(context)
+    if (!dutyBase.isNullOrEmpty()) return dutyBase.trimEnd('/')
+    return AndroidPermissionStatusStore.apiBaseUrl(context).trimEnd('/')
   }
 
   private data class HttpResult(val code: Int, val body: String?)
@@ -168,8 +253,9 @@ internal object AndroidPermissionStatusUploader {
     readTimeoutMs: Int = 12_000,
   ): HttpResult {
     val token = AndroidPermissionStatusStore.accessToken(context)
+      ?: com.smartnps360.app.duty.AndroidDutyKillStore.accessToken(context)
       ?: return HttpResult(0, null)
-    val base = AndroidPermissionStatusStore.apiBaseUrl(context).trimEnd('/')
+    val base = resolveApiBaseUrl(context)
     val url = "$base/native-app/permission-status"
     return http(
       "POST",
@@ -191,7 +277,7 @@ internal object AndroidPermissionStatusUploader {
       refresh = com.smartnps360.app.duty.AndroidDutyKillStore.refreshToken(context)
     }
     if (refresh.isNullOrEmpty()) return false
-    val base = AndroidPermissionStatusStore.apiBaseUrl(context).trimEnd('/')
+    val base = resolveApiBaseUrl(context)
     val body = JSONObject().put("refresh_token", refresh).toString()
     val result = http(
       "POST",
@@ -235,9 +321,11 @@ internal object AndroidPermissionStatusUploader {
   }
 
   private fun utcNow(): String {
-    val fmt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
+    val fmt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.US)
     fmt.timeZone = TimeZone.getTimeZone("UTC")
-    return fmt.format(Date())
+    // Native clock is millisecond-resolution; pad the microsecond part with 000
+    // to match the 6-digit ISO-8601 used by updated_at (e.g. ...:00.123000Z).
+    return "${fmt.format(Date())}000Z"
   }
 
   private fun http(

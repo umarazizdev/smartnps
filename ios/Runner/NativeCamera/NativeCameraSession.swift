@@ -183,6 +183,8 @@ final class NativeCameraSession: NSObject {
   private(set) var zoomChips: [NativeCameraZoomChip] = []
   /// Device zoom that maps to Camera.app "1x".
   private(set) var wideDeviceZoomFactor: CGFloat = 1
+  /// Survives configureLocked so photo↔video keeps the officer's zoom (e.g. 1x).
+  private var preferredZoomFactor: CGFloat?
   private(set) var isConfigured = false
   private(set) var isInterrupted = false
   /// Applied EV bias; survives camera / mode switches (re-clamped per device).
@@ -328,6 +330,10 @@ final class NativeCameraSession: NSObject {
       }
       return
     }
+    // Snapshot zoom before configure resets hardware to min (often 0.5x).
+    if let live = currentDevice?.videoZoomFactor, live > 0.01 {
+      preferredZoomFactor = live
+    }
     isVideoMode = video
     // Photos are always rear-only — snap back to the back camera.
     if !video {
@@ -340,8 +346,8 @@ final class NativeCameraSession: NSObject {
     sessionQueue.async { [weak self] in
       guard let self else { return }
       do {
-        // Full reconfigure so photo↔video also swaps activeFormat (widest FOV
-        // for photo vs resolution-first for video).
+        // Full reconfigure; photo and video share the same photo FOV framing so
+        // long-press video does not change on-screen zoom/frame size.
         try self.configureLocked()
         let lightOn = video ? self.preferredTorchOn : self.photoFlashMode == .on
         self.setTorch(enabled: !self.isUsingFrontCamera && lightOn)
@@ -632,6 +638,7 @@ final class NativeCameraSession: NSObject {
       )
       let maxZ = min(hardwareMax, self.wideDeviceZoomFactor * Self.maximumUserDisplayZoom)
       let clamped = max(minZ, min(maxZ, factor))
+      self.preferredZoomFactor = clamped
       do {
         try device.lockForConfiguration()
         if animated {
@@ -973,19 +980,19 @@ final class NativeCameraSession: NSObject {
       noteFallback("single_lens")
     }
 
-    // Photo: use system `.photo` preset so FOV / crop match Camera.app.
-    // Forcing `activeFormat` under `.inputPriority` often picks a video readout
-    // that is slightly tighter than stock Photo — the main remaining zoom gap.
-    // Video: keep `.inputPriority` + explicit format for 4K/1080 control.
-    if isVideoMode {
-      session.sessionPreset = .inputPriority
-      try applyPreferredFormat(on: device)
-    } else if session.canSetSessionPreset(.photo) {
+    // Photo and video share Camera.app Photo FOV (.photo preset) so long-press
+    // video does not widen/narrow the on-screen frame vs photo mode.
+    // Video still records via movieOutput; quality may follow the photo pipeline.
+    if session.canSetSessionPreset(.photo) {
       session.sessionPreset = .photo
-      NSLog("\(Self.logPrefix) sessionPreset=photo (Camera.app-matching FOV)")
+      NSLog(
+        "\(Self.logPrefix) sessionPreset=photo "
+          + "(shared photo FOV; mode=\(isVideoMode ? "video" : "photo"))"
+      )
     } else {
       session.sessionPreset = .inputPriority
-      try applyPreferredFormat(on: device)
+      // Match photo FOV even in video mode when .photo preset is unavailable.
+      try applyPreferredFormat(on: device, forcePhotoFov: true)
       noteFallback("photo_preset_unavailable")
     }
 
@@ -993,6 +1000,7 @@ final class NativeCameraSession: NSObject {
     let built = Self.buildZoomChips(for: device)
     zoomChips = built.chips
     wideDeviceZoomFactor = built.wideDeviceFactor
+    restorePreferredZoom(on: device)
 
     try reconfigureOutputsLocked(inBeginConfiguration: true)
     NSLog("\(Self.logPrefix) PHOTO_OUTPUT_READY +\(ms())ms")
@@ -1089,6 +1097,29 @@ final class NativeCameraSession: NSObject {
         + "zoom=\(zoomChips.map { "\($0.label)@\($0.deviceFactor)" }) "
         + "fallback=\(fallbackLevelWireName ?? "none")"
     )
+  }
+
+  /// Re-applies the officer's last zoom after configure resets the device to min.
+  private func restorePreferredZoom(on device: AVCaptureDevice) {
+    let minZ = device.minAvailableVideoZoomFactor
+    let hardwareMax = min(
+      device.maxAvailableVideoZoomFactor,
+      device.activeFormat.videoMaxZoomFactor
+    )
+    let maxZ = min(hardwareMax, wideDeviceZoomFactor * Self.maximumUserDisplayZoom)
+    // Prefer the remembered selection; fall back to Camera.app-style 1x (wide).
+    let target = preferredZoomFactor ?? wideDeviceZoomFactor
+    let clamped = max(minZ, min(maxZ, target))
+    preferredZoomFactor = clamped
+    guard abs(device.videoZoomFactor - clamped) > 0.02 else { return }
+    do {
+      try device.lockForConfiguration()
+      device.videoZoomFactor = clamped
+      device.unlockForConfiguration()
+      NSLog("\(Self.logPrefix) restored zoom=\(clamped) (preferred)")
+    } catch {
+      NSLog("\(Self.logPrefix) restore zoom failed: \(error.localizedDescription)")
+    }
   }
 
   private func reconfigureOutputsLocked(inBeginConfiguration: Bool = false) throws {
@@ -1188,17 +1219,19 @@ final class NativeCameraSession: NSObject {
     )
   }
 
-  private func applyPreferredFormat(on device: AVCaptureDevice) throws {
+  private func applyPreferredFormat(
+    on device: AVCaptureDevice,
+    forcePhotoFov: Bool = false
+  ) throws {
     let formats = device.formats
     guard !formats.isEmpty else { return }
 
     let best: AVCaptureDevice.Format
-    if isVideoMode {
-      best = Self.preferredVideoFormat(from: formats, quality: quality)
-    } else {
-      // Photo: widest FOV first so UW 0.5x matches Camera.app (no extra crop
-      // from a video-oriented / lower-FOV activeFormat).
+    if forcePhotoFov || !isVideoMode {
+      // Photo FOV (widest) — also used for video when matching photo framing.
       best = Self.preferredPhotoFormat(from: formats)
+    } else {
+      best = Self.preferredVideoFormat(from: formats, quality: quality)
     }
 
     try device.lockForConfiguration()
@@ -1215,7 +1248,8 @@ final class NativeCameraSession: NSObject {
     device.unlockForConfiguration()
     NSLog(
       "\(Self.logPrefix) active format \(dims.width)x\(dims.height) "
-        + "fov=\(best.videoFieldOfView) mode=\(isVideoMode ? "video" : "photo")"
+        + "fov=\(best.videoFieldOfView) mode=\(isVideoMode ? "video" : "photo") "
+        + "forcePhotoFov=\(forcePhotoFov)"
     )
   }
 

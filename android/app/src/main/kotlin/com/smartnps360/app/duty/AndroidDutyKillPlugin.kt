@@ -41,6 +41,7 @@ class AndroidDutyKillPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
           context,
           access,
           call.argument<String>("refreshToken"),
+          call.argument<String>("apiBaseUrl"),
         )
         result.success(true)
       }
@@ -54,6 +55,7 @@ class AndroidDutyKillPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
           context,
           access,
           call.argument<String>("refreshToken"),
+          call.argument<String>("apiBaseUrl"),
         )
         result.success(true)
       }

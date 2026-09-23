@@ -15,6 +15,7 @@ import '../api/api_client.dart';
 import '../api/api_urls.dart';
 import '../auth/auth_repository.dart';
 import '../background/location/background_location_permissions.dart';
+import '../debug/kill_cycle_debug_service.dart';
 import '../motion/motion_activity_service.dart';
 import '../push/notifications/push_notification_preferences.dart';
 import 'android_permission_status_watch.dart';
@@ -89,7 +90,11 @@ class NativePermissionStatusService {
   String? _lastAppCycle;
   String? _pendingAppCycle;
   PermissionStatusTimeline? _pendingTimeline;
+  /// Last successful kill→open pair. Kept on later sync/resume POSTs so a bare
+  /// upload cannot wipe `opened_at` from the dashboard after we clear the queue.
+  PermissionStatusTimeline? _stickyKillReopenTimeline;
   Future<bool>? _appCycleUploadInFlight;
+  Future<bool>? _killReopenUploadInFlight;
   Timer? _batteryMonitorTimer;
   int? _lastUploadedBatteryPercentage;
   bool _batteryUploadInFlight = false;
@@ -113,7 +118,9 @@ class NativePermissionStatusService {
     _lastAppCycle = null;
     _pendingAppCycle = null;
     _pendingTimeline = null;
+    _stickyKillReopenTimeline = null;
     _appCycleUploadInFlight = null;
+    _killReopenUploadInFlight = null;
     _lastUploadedBatteryPercentage = null;
     _syncCoalescePending = false;
     _syncForceNext = false;
@@ -124,6 +131,9 @@ class NativePermissionStatusService {
 
   Future<Map<String, dynamic>> buildPayload() async {
     final deviceName = await DeviceIdentity.getDeviceName();
+    final permissions = await _readPermissions();
+    // Persist full snapshot for native kill/wake lightweight POSTs.
+    unawaited(_persistFullPermissionsCache(permissions));
     return {
       'platform': DeviceIdentity.platformName(),
       'deviceId': await DeviceIdentity.getDeviceId(),
@@ -132,9 +142,44 @@ class NativePermissionStatusService {
       'build': AppVersionInfo.buildNumber,
       'battery_percentage': await _batteryPercentage(),
       'low_power_mode': await _lowPowerModeStatus(),
-      'permissions': await _readPermissions(),
-      'checkedAt': DateTime.now().toUtc().toIso8601String(),
+      'permissions': permissions,
+      'checkedAt': isoUtcMicros(DateTime.now()),
     };
+  }
+
+  /// Write last-known full permissions to native storage for kill uploads.
+  Future<void> _persistFullPermissionsCache(
+    Map<String, dynamic> permissions,
+  ) async {
+    if (!Platform.isIOS && !Platform.isAndroid) return;
+    try {
+      final asStrings = <String, String>{};
+      for (final entry in permissions.entries) {
+        final value = entry.value?.toString().trim();
+        if (value == null || value.isEmpty) continue;
+        asStrings[entry.key] = value;
+      }
+      if (asStrings.isEmpty) return;
+      await _settingsChannel.invokeMethod<void>(
+        'cacheFullPermissionSnapshot',
+        asStrings,
+      );
+    } catch (error) {
+      _debugLog('cacheFullPermissionSnapshot failed: $error');
+    }
+  }
+
+  /// 6-digit microsecond UTC ISO-8601 (e.g. `2026-09-20T02:06:00.000000Z`).
+  ///
+  /// Matches the server `updated_at` format so `checkedAt`, `killed_at`,
+  /// and `opened_at` all upload with an identical shape across Flutter and
+  /// the native (Android/iOS) uploaders.
+  static String isoUtcMicros(DateTime dt) {
+    final u = dt.toUtc();
+    String pad(int value, int width) => value.toString().padLeft(width, '0');
+    return '${pad(u.year, 4)}-${pad(u.month, 2)}-${pad(u.day, 2)}'
+        'T${pad(u.hour, 2)}:${pad(u.minute, 2)}:${pad(u.second, 2)}'
+        '.${pad(u.millisecond, 3)}${pad(u.microsecond, 3)}Z';
   }
 
   Future<dynamic> _handleSettingsMethodCall(MethodCall call) async {
@@ -270,9 +315,7 @@ class NativePermissionStatusService {
         final fingerprint = _fingerprint(payload);
         if (!force && fingerprint == _lastPayloadFingerprint) {
           _debugLog('skip upload (unchanged permissions)');
-          unawaited(
-            AndroidPermissionStatusWatch.arm(markSynced: true),
-          );
+          unawaited(AndroidPermissionStatusWatch.arm(markSynced: true));
           continue;
         }
 
@@ -285,9 +328,7 @@ class NativePermissionStatusService {
         if (uploaded) {
           _lastPayloadFingerprint = fingerprint;
           didUpload = true;
-          unawaited(
-            AndroidPermissionStatusWatch.arm(markSynced: true),
-          );
+          unawaited(AndroidPermissionStatusWatch.arm(markSynced: true));
         }
       } while (_syncCoalescePending);
     });
@@ -332,7 +373,11 @@ class NativePermissionStatusService {
     }
   }
 
-  /// Attach queued kill → open timeline on resume (iOS + Android), then clear native queue.
+  /// Attach queued kill → open timeline on Flutter [AppLifecycleState.resumed].
+  ///
+  /// Always asks native to stamp `opened_at` (via prepare) even when auth is not
+  /// ready yet. Upload runs when both timestamps exist and a token is available;
+  /// otherwise the queue is left for auth-ready / native backup.
   Future<bool> uploadAppCycleWithKillTimelineIfNeeded({
     required String appCycle,
   }) async {
@@ -340,14 +385,136 @@ class NativePermissionStatusService {
       return uploadAppCycle(appCycle: appCycle);
     }
 
-    final timeline = await _peekAppKillTimeline();
-    final uploaded = await uploadAppCycle(
-      appCycle: appCycle,
-      timeline: timeline.isEmpty ? null : timeline,
-    );
-    if (uploaded && timeline.isKillReopen) {
-      await _clearAppKillTimeline();
+    var timeline = await _prepareAppKillTimelineForReopen();
+
+    // New kill cycle — drop sticky reopen from a previous kill.
+    if (timeline.hasKill &&
+        _stickyKillReopenTimeline != null &&
+        _stickyKillReopenTimeline!.killedAt != timeline.killedAt) {
+      _stickyKillReopenTimeline = null;
     }
+
+    // Prepare should stamp opened_at; one retry if native was briefly late.
+    if (timeline.hasKill && !timeline.hasOpen) {
+      unawaited(
+        KillCycleDebugService.append(
+          'flutter resume: killed_at present, opened_at missing — retry prepare',
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      timeline = await _prepareAppKillTimelineForReopen();
+    }
+
+    if (timeline.isKillReopen) {
+      final inFlight = _killReopenUploadInFlight;
+      if (inFlight != null) {
+        unawaited(
+          KillCycleDebugService.append(
+            'flutter kill-reopen coalesce; upload already in flight',
+          ),
+        );
+        return inFlight;
+      }
+
+      final reopenTimeline = timeline;
+      final task = () async {
+        unawaited(
+          KillCycleDebugService.append(
+            'flutter kill-reopen upload '
+            'killed_at=${reopenTimeline.killedAt} opened_at=${reopenTimeline.openedAt}',
+          ),
+        );
+        final uploaded = await _uploadKillReopenNow(reopenTimeline);
+        unawaited(
+          KillCycleDebugService.append(
+            'flutter kill-reopen result uploaded=$uploaded',
+          ),
+        );
+        if (uploaded) {
+          // Keep attaching this pair on later POSTs after native queue is cleared.
+          _stickyKillReopenTimeline = reopenTimeline;
+          await _clearAppKillTimeline();
+          unawaited(
+            KillCycleDebugService.append(
+              'flutter kill-reopen sticky kept for follow-up syncs',
+            ),
+          );
+        }
+        return uploaded;
+      }();
+
+      _killReopenUploadInFlight = task;
+      try {
+        return await task;
+      } finally {
+        if (identical(_killReopenUploadInFlight, task)) {
+          _killReopenUploadInFlight = null;
+        }
+      }
+    }
+
+    if (timeline.hasKill && !timeline.hasOpen) {
+      // Never POST resumed with only killed_at — wait for open stamp / backup.
+      unawaited(
+        KillCycleDebugService.append(
+          'flutter resume skip reopen; opened_at still missing '
+          'killed_at=${timeline.killedAt}',
+        ),
+      );
+      return false;
+    }
+
+    return uploadAppCycle(appCycle: appCycle);
+  }
+
+  /// Single authoritative POST for kill → user-open (must include opened_at).
+  Future<bool> _uploadKillReopenNow(PermissionStatusTimeline timeline) async {
+    if (!timeline.isKillReopen) return false;
+    if (!await AuthRepository.instance.isOfficerLoggedIn()) {
+      unawaited(
+        KillCycleDebugService.append(
+          'flutter kill-reopen skip; officer not logged in',
+        ),
+      );
+      return false;
+    }
+
+    final accessToken = await _accessTokenForLoggedInOfficer();
+    if (accessToken == null || accessToken.isEmpty) {
+      unawaited(
+        KillCycleDebugService.append(
+          'flutter kill-reopen skip; no access token',
+        ),
+      );
+      return false;
+    }
+
+    var uploaded = false;
+    await _serialized(() async {
+      await BackgroundLocationPermissions.refreshPermissionStateFromOs();
+      final payload = await buildPayload();
+      // Keep cycle as resumed (user opened app) but always attach kill timeline.
+      payload[PermissionStatusApiContract.appCycle] =
+          PermissionStatusApiContract.cycleResumed;
+      payload.addAll(timeline.toPayloadFields());
+
+      _debugLog(
+        'kill-reopen upload app_cycle=resumed '
+        'killed_at=${timeline.killedAt} opened_at=${timeline.openedAt}',
+      );
+      unawaited(
+        KillCycleDebugService.append(
+          'flutter kill-reopen POST app_cycle=resumed '
+          'killed_at=${timeline.killedAt} opened_at=${timeline.openedAt}',
+        ),
+      );
+      uploaded = await _upload(payload);
+      if (uploaded) {
+        _lastAppCycle = PermissionStatusApiContract.cycleResumed;
+        _lastPayloadFingerprint = _fingerprint(payload);
+        unawaited(AndroidPermissionStatusWatch.arm(markSynced: true));
+      }
+    });
     return uploaded;
   }
 
@@ -370,10 +537,7 @@ class NativePermissionStatusService {
       _pendingTimeline = null;
       if (appCycle == null) continue;
 
-      final uploaded = await _uploadAppCycleNow(
-        appCycle,
-        timeline: timeline,
-      );
+      final uploaded = await _uploadAppCycleNow(appCycle, timeline: timeline);
       ok = ok && uploaded;
     }
 
@@ -420,9 +584,7 @@ class NativePermissionStatusService {
           'skip app_cycle upload '
           '(unchanged cycle=$appCycle and permissions)',
         );
-        unawaited(
-          AndroidPermissionStatusWatch.arm(markSynced: true),
-        );
+        unawaited(AndroidPermissionStatusWatch.arm(markSynced: true));
         return;
       }
 
@@ -436,12 +598,33 @@ class NativePermissionStatusService {
       if (uploaded) {
         _lastAppCycle = appCycle;
         _lastPayloadFingerprint = fingerprint;
-        unawaited(
-          AndroidPermissionStatusWatch.arm(markSynced: true),
-        );
+        unawaited(AndroidPermissionStatusWatch.arm(markSynced: true));
       }
     });
     return uploaded;
+  }
+
+  Future<PermissionStatusTimeline> _prepareAppKillTimelineForReopen() async {
+    if (!Platform.isIOS && !Platform.isAndroid) {
+      return const PermissionStatusTimeline();
+    }
+    try {
+      // Native stamps opened_at if killed_at exists, then returns full map.
+      final raw = await _settingsChannel.invokeMethod<dynamic>(
+        'prepareAppKillTimelineForReopen',
+      );
+      if (raw is Map) {
+        return PermissionStatusTimeline.fromMap(raw);
+      }
+    } catch (error) {
+      _debugLog('prepareAppKillTimelineForReopen failed: $error');
+      unawaited(
+        KillCycleDebugService.append(
+          'flutter: prepareAppKillTimelineForReopen failed: $error',
+        ),
+      );
+    }
+    return _peekAppKillTimeline();
   }
 
   Future<PermissionStatusTimeline> _peekAppKillTimeline() async {
@@ -500,9 +683,7 @@ class NativePermissionStatusService {
         final uploaded = await _upload(payload);
         if (uploaded) {
           _lastPayloadFingerprint = _fingerprint(payload);
-          unawaited(
-            AndroidPermissionStatusWatch.arm(markSynced: true),
-          );
+          unawaited(AndroidPermissionStatusWatch.arm(markSynced: true));
         }
       });
     } finally {
@@ -1159,11 +1340,31 @@ class NativePermissionStatusService {
   }
 
   Future<bool> _upload(Map<String, dynamic> payload) async {
+    // Keep kill→open timeline on every POST so a bare resumed/sync cannot wipe
+    // opened_at / app_cycle from the dashboard after the native queue is cleared.
+    final pending = await _peekAppKillTimeline();
+    if (pending.isKillReopen) {
+      payload.addAll(pending.toPayloadFields());
+    } else if (_stickyKillReopenTimeline != null &&
+        payload[PermissionStatusApiContract.appCycle] !=
+            PermissionStatusApiContract.cycleKilled) {
+      payload.addAll(_stickyKillReopenTimeline!.toPayloadFields());
+    }
+
+    // Whenever both timeline stamps are present, app_cycle must be resumed.
+    // Sticky follow-up syncs otherwise omit app_cycle and wipe it server-side.
+    _ensureResumedAppCycleForKillReopen(payload);
+
     ApiClient.instance.ensureAuthInterceptorInstalled();
     final uri = Uri.parse(ApiUrls.permissionStatusUrl);
 
     try {
-      _debugLog('POST ${uri.path} keys=${payload.keys.toList()}');
+      _debugLog(
+        'POST ${uri.path} keys=${payload.keys.toList()} '
+        'app_cycle=${payload[PermissionStatusApiContract.appCycle]} '
+        'opened_at=${payload[PermissionStatusApiContract.openedAt]} '
+        'killed_at=${payload[PermissionStatusApiContract.killedAt]}',
+      );
       final response = await ApiClient.instance.dio.postUri(
         uri,
         data: payload,
@@ -1183,6 +1384,17 @@ class NativePermissionStatusService {
     } catch (_) {
       return false;
     }
+  }
+
+  /// Kill→open pair on the wire always implies user reopen (`app_cycle=resumed`).
+  void _ensureResumedAppCycleForKillReopen(Map<String, dynamic> payload) {
+    final killed = payload[PermissionStatusApiContract.killedAt]?.toString().trim();
+    final opened = payload[PermissionStatusApiContract.openedAt]?.toString().trim();
+    if (killed == null || killed.isEmpty || opened == null || opened.isEmpty) {
+      return;
+    }
+    payload[PermissionStatusApiContract.appCycle] =
+        PermissionStatusApiContract.cycleResumed;
   }
 
   void _rememberUploadedBattery(Map<String, dynamic> payload) {

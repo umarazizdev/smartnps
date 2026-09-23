@@ -17,7 +17,8 @@ class IosSignificantLocationChangeService {
 
   static StreamSubscription<dynamic>? _subscription;
   static Future<void> Function(Position position, String source)? _onLocation;
-  static Future<void> Function()? _onLocationWake;
+  /// Returns true when Flutter successfully started duty GPS for this wake.
+  static Future<bool> Function()? _onLocationWake;
   static bool _nativeCallHandlerInstalled = false;
   static bool _nativeMonitoring = false;
 
@@ -53,7 +54,7 @@ class IosSignificantLocationChangeService {
     }
   }
 
-  static void setOnLocationWake(Future<void> Function() handler) {
+  static void setOnLocationWake(Future<bool> Function() handler) {
     _onLocationWake = handler;
     _installNativeCallHandler();
   }
@@ -63,9 +64,24 @@ class IosSignificantLocationChangeService {
     _nativeCallHandlerInstalled = true;
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'onLocationWake') {
-        unawaited(_onLocationWake?.call() ?? Future<void>.value());
-        return true;
+        final handler = _onLocationWake;
+        if (handler == null) {
+          // Let native DutyWakeUploader start GPS.
+          return false;
+        }
+        try {
+          final claimed = await handler();
+          locationDebugLog(
+            '[IosSLC] onLocationWake done; flutterGpsRunning=$claimed '
+            '(native fallback ${claimed ? 'skipped' : 'allowed'})',
+          );
+          return claimed;
+        } catch (e) {
+          locationDebugLog('[IosSLC] onLocationWake handler failed: $e');
+          return false;
+        }
       }
+      return null;
     });
   }
 

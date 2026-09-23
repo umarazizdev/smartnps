@@ -165,7 +165,8 @@ final class DutyWakeUploader {
           self.onNeedsGps?()
         }
       case .unknown:
-        NSLog("[SmartNPS360][WakeUpload] duty unknown; not uploading")
+        // Keep optimistic local GPS if already running; do not disarm on flaky API.
+        NSLog("[SmartNPS360][WakeUpload] duty unknown; leaving local GPS/SLC as-is")
         self.finish()
       }
     }
