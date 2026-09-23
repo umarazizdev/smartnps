@@ -246,9 +246,6 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
 
     final locationLabel = flow.locationSubtitle?.trim() ?? '';
     final movedToDashboard = onUploadStarted != null;
-    final draftKey =
-        flow.activeDraftKey.value ??
-        VisitDraftKey.fromContext(flow.patrolContext.value);
 
     void beginLeaveDraftUi({required bool showProgress}) {
       if (showProgress) {
@@ -267,18 +264,8 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       onUploadStarted?.call();
     }
 
-    // Move draft → queue as soon as upload is confirmed (Yes / skip confirm),
-    // so it leaves the editable drafts list before network check / API upload.
-    Future<void>? claimForQueueFuture;
-    Future<void> claimDraftForQueue() {
-      return claimForQueueFuture ??= () async {
-        await flow.persistCurrentDraft();
-        await flow.clearLastUploadIssue();
-        await VisitUploadQueue.instance.markInFlight(draftKey);
-      }();
-    }
-
     if (!skipCompletionConfirm) {
+
       var leaveStarted = false;
       final confirmed = await _confirmPatrolUploadCompletion(
         flow: flow,
@@ -286,7 +273,6 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
         context: context,
         onYesPressed: () {
           leaveStarted = true;
-          unawaited(claimDraftForQueue());
           beginLeaveDraftUi(showProgress: false);
         },
       );
@@ -298,13 +284,19 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       beginLeaveDraftUi(showProgress: false);
     }
 
-    await claimDraftForQueue();
+    await flow.persistCurrentDraft();
+    final draftKey =
+        flow.activeDraftKey.value ??
+        VisitDraftKey.fromContext(flow.patrolContext.value);
 
     final online = await _hasNetworkInterface();
     if (!online) {
       await _enqueueForSilentRetry(flow: flow, draftKey: draftKey);
       return;
     }
+
+    await flow.clearLastUploadIssue();
+    await VisitUploadQueue.instance.markInFlight(draftKey);
 
     flow.isUploading.value = true;
     flow.isQueueUploading.value = false;
@@ -323,7 +315,6 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
         items: items,
         batchVoicePath: flow.batchNote.value.voiceNotePath,
         generalVoicePath: flow.generalNote.value.voiceNotePath,
-        uploadUrl: flow.patrolContext.value?.uploadUrl,
         onProgress: (current, total) {
           flow.uploadProgressCurrent.value = current;
           flow.uploadProgressTotal.value = total;

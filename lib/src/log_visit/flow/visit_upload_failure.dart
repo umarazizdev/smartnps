@@ -82,15 +82,10 @@ class VisitUploadFailure {
     for (final index in checkpointIndexes) {
       if (index < 0 || index >= completed.length) continue;
       final checkpoint = completed[index];
-      var mediaIndex = mediaItems.indexWhere(
+      final photoIndex = mediaItems.indexWhere(
         (e) => e.siteCheckpointId == checkpoint.id && e.isPhoto,
       );
-      if (mediaIndex < 0) {
-        mediaIndex = mediaItems.indexWhere(
-          (e) => e.siteCheckpointId == checkpoint.id && e.isVideo,
-        );
-      }
-      if (mediaIndex >= 0) resolvedItemIndexes.add(mediaIndex);
+      if (photoIndex >= 0) resolvedItemIndexes.add(photoIndex);
     }
 
     final sortedIndexes = resolvedItemIndexes.toList()..sort();
@@ -187,12 +182,10 @@ class VisitUploadFailure {
   ) {
     final completed = <VisitCheckpoint>[];
     for (final checkpoint in checkpoints) {
-      final hasMedia = mediaItems.any(
-        (e) =>
-            e.siteCheckpointId == checkpoint.id &&
-            (e.isPhoto || e.isVideo),
+      final hasPhoto = mediaItems.any(
+        (e) => e.siteCheckpointId == checkpoint.id && e.isPhoto,
       );
-      if (hasMedia) completed.add(checkpoint);
+      if (hasPhoto) completed.add(checkpoint);
     }
     return completed;
   }

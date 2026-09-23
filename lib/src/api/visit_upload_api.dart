@@ -70,7 +70,6 @@ class VisitUploadApi {
     required List<VisitMediaItem> items,
     String? batchVoicePath,
     String? generalVoicePath,
-    String? uploadUrl,
     void Function(int current, int total)? onProgress,
   }) async {
     if (items.isEmpty) {
@@ -173,11 +172,9 @@ class VisitUploadApi {
       return generalVoiceResult;
     }
 
-    final resolvedUploadUrl = _resolveUploadUrl(uploadUrl);
-
     if (kDebugMode) {
       debugPrint(
-        '[VisitUploadApi] POST $resolvedUploadUrl '
+        '[VisitUploadApi] POST ${ApiUrls.visitsUploadUrl} '
         'items=${items.length} metaKeys=${meta.keys.toList()}',
       );
     }
@@ -186,7 +183,7 @@ class VisitUploadApi {
 
     try {
       final response = await ApiClient.instance.dio.post<dynamic>(
-        resolvedUploadUrl,
+        ApiUrls.visitsUploadUrl,
         data: form,
         options: Options(
           headers: const {'Accept': 'application/json'},
@@ -257,14 +254,6 @@ class VisitUploadApi {
       _logResult(fallback);
       return fallback;
     }
-  }
-
-  static String _resolveUploadUrl(String? uploadUrl) {
-    final trimmed = uploadUrl?.trim();
-    if (trimmed == null || trimmed.isEmpty) {
-      return ApiUrls.visitsUploadUrl;
-    }
-    return trimmed;
   }
 
   static int _itemProgressFromBytes({

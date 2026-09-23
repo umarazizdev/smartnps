@@ -17,7 +17,6 @@
 		7884E8682EC3CC0700C636F2 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */; };
 		A1B2C3D42EC4000100F1A201 /* MotionActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D42EC4000100F1A200 /* MotionActivityManager.swift */; };
 		A1B2C3D52EC4000200F1A201 /* DutyWakeUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D52EC4000200F1A200 /* DutyWakeUploader.swift */; };
-		A1B2C3DE2EC4000B00F1A201 /* IosAppKillCycleReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3DE2EC4000B00F1A200 /* IosAppKillCycleReporter.swift */; };
 		A1B2C3D62EC4000300F1A201 /* DeviceCheckManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D62EC4000300F1A200 /* DeviceCheckManager.swift */; };
 		A1B2C3D72EC4000400F1A201 /* NativeCameraPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D72EC4000400F1A200 /* NativeCameraPlugin.swift */; };
 		A1B2C3D82EC4000500F1A201 /* NativeCameraViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D82EC4000500F1A200 /* NativeCameraViewController.swift */; };
@@ -73,7 +72,6 @@
 		7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
 		A1B2C3D42EC4000100F1A200 /* MotionActivityManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionActivityManager.swift; sourceTree = "<group>"; };
 		A1B2C3D52EC4000200F1A200 /* DutyWakeUploader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DutyWakeUploader.swift; sourceTree = "<group>"; };
-		A1B2C3DE2EC4000B00F1A200 /* IosAppKillCycleReporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IosAppKillCycleReporter.swift; sourceTree = "<group>"; };
 		A1B2C3D62EC4000300F1A200 /* DeviceCheckManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceCheckManager.swift; sourceTree = "<group>"; };
 		A1B2C3D72EC4000400F1A200 /* NativeCameraPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCameraPlugin.swift; sourceTree = "<group>"; };
 		A1B2C3D82EC4000500F1A200 /* NativeCameraViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCameraViewController.swift; sourceTree = "<group>"; };
@@ -197,7 +195,6 @@
 				7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */,
 				A1B2C3D42EC4000100F1A200 /* MotionActivityManager.swift */,
 				A1B2C3D52EC4000200F1A200 /* DutyWakeUploader.swift */,
-				A1B2C3DE2EC4000B00F1A200 /* IosAppKillCycleReporter.swift */,
 				A1B2C3D62EC4000300F1A200 /* DeviceCheckManager.swift */,
 				A1B2C3DB2EC4000800F1A200 /* NativeCamera */,
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
@@ -497,7 +494,6 @@
 				7884E8682EC3CC0700C636F2 /* SceneDelegate.swift in Sources */,
 				A1B2C3D42EC4000100F1A201 /* MotionActivityManager.swift in Sources */,
 				A1B2C3D52EC4000200F1A201 /* DutyWakeUploader.swift in Sources */,
-				A1B2C3DE2EC4000B00F1A201 /* IosAppKillCycleReporter.swift in Sources */,
 				A1B2C3D62EC4000300F1A201 /* DeviceCheckManager.swift in Sources */,
 				A1B2C3D72EC4000400F1A201 /* NativeCameraPlugin.swift in Sources */,
 				A1B2C3D82EC4000500F1A201 /* NativeCameraViewController.swift in Sources */,

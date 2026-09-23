@@ -1,13 +1,13 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app/native_theme_controller.dart';
 import '../utilities/app_config.dart';
 import 'debug_env_config.dart';
-import 'kill_cycle_debug_service.dart';
 
 class DebugEnvScreen extends StatefulWidget {
   const DebugEnvScreen({super.key});
@@ -22,8 +22,7 @@ class _DebugEnvScreenState extends State<DebugEnvScreen> {
   String? _apiError;
   String? _webError;
   bool _saving = false;
-  bool _killCycleBusy = false;
-  KillCycleDebugSnapshot _killCycle = const KillCycleDebugSnapshot.empty();
+  bool _crashlyticsBusy = false;
 
   @override
   void initState() {
@@ -31,7 +30,6 @@ class _DebugEnvScreenState extends State<DebugEnvScreen> {
     _apiController = TextEditingController();
     _webController = TextEditingController();
     unawaited(_loadEnv());
-    unawaited(_refreshKillCycle());
   }
 
   Future<void> _loadEnv() async {
@@ -44,45 +42,86 @@ class _DebugEnvScreenState extends State<DebugEnvScreen> {
     });
   }
 
-  Future<void> _refreshKillCycle() async {
-    setState(() => _killCycleBusy = true);
-    try {
-      final snapshot = await KillCycleDebugService.loadSnapshot();
-      if (!mounted) return;
-      setState(() => _killCycle = snapshot);
-    } finally {
-      if (mounted) setState(() => _killCycleBusy = false);
-    }
-  }
-
-  Future<void> _clearKillCycleLogs() async {
-    setState(() => _killCycleBusy = true);
-    try {
-      await KillCycleDebugService.clearLogs();
-      final snapshot = await KillCycleDebugService.loadSnapshot();
-      if (!mounted) return;
-      setState(() => _killCycle = snapshot);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Kill-cycle logs cleared')),
-      );
-    } finally {
-      if (mounted) setState(() => _killCycleBusy = false);
-    }
-  }
-
-  Future<void> _copyKillCycle() async {
-    await Clipboard.setData(ClipboardData(text: _killCycle.toCopyText()));
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Kill-cycle debug copied')),
-    );
-  }
-
   @override
   void dispose() {
     _apiController.dispose();
     _webController.dispose();
     super.dispose();
+  }
+
+  Future<void> _enableCrashlyticsForTest() async {
+    await FirebaseCrashlytics.instance.setCrashlyticsCollectionEnabled(true);
+  }
+
+  Future<void> _sendTestReport() async {
+    if (_crashlyticsBusy) return;
+    setState(() => _crashlyticsBusy = true);
+    try {
+      await _enableCrashlyticsForTest();
+      await FirebaseCrashlytics.instance.log('manual_crashlytics_test');
+      await FirebaseCrashlytics.instance.recordError(
+        Exception('Crashlytics test report from DebugEnvScreen'),
+        StackTrace.current,
+        reason: 'manual_test',
+        fatal: true,
+      );
+      // Force immediate upload while the app is still alive.
+      await FirebaseCrashlytics.instance.sendUnsentReports();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Test report sent. Check Firebase Crashlytics in a few minutes.',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to send test report: $e')));
+    } finally {
+      if (mounted) setState(() => _crashlyticsBusy = false);
+    }
+  }
+
+  Future<void> _forceTestCrash() async {
+    if (_crashlyticsBusy) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Force test crash?'),
+        content: const Text(
+          'The app will close. Reopen it once so Crashlytics can upload '
+          'the crash, then check the Firebase console.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Crash now'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _crashlyticsBusy = true);
+    try {
+      await _enableCrashlyticsForTest();
+      await FirebaseCrashlytics.instance.log('manual_force_test_crash');
+
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      FirebaseCrashlytics.instance.crash();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _crashlyticsBusy = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to force crash: $e')));
+    }
   }
 
   Future<void> _save() async {
@@ -230,42 +269,6 @@ class _DebugEnvScreenState extends State<DebugEnvScreen> {
           fontWeight: FontWeight.w700,
           letterSpacing: 0.2,
         ),
-      ),
-    );
-  }
-
-  Widget _killCycleStatusLine(
-    _DebugEnvColors colors,
-    String label,
-    String value,
-  ) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 128,
-            child: Text(
-              label,
-              style: TextStyle(
-                color: colors.subtitle,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          Expanded(
-            child: Text(
-              value,
-              style: TextStyle(
-                color: colors.title,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -453,7 +456,7 @@ class _DebugEnvScreenState extends State<DebugEnvScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Kill cycle debug (TestFlight)',
+                        'Crashlytics test',
                         style: TextStyle(
                           color: colors.title,
                           fontSize: 15,
@@ -462,9 +465,8 @@ class _DebugEnvScreenState extends State<DebugEnvScreen> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        'After swipe-kill + reopen, refresh here. Logs survive '
-                        'process death. Check onDuty, wake_service, killed_at/'
-                        'opened_at.',
+                        'Send a report without killing the app, or force a '
+                        'real crash. Reopen after a crash so it uploads.',
                         style: TextStyle(
                           color: colors.subtitle,
                           fontSize: 13,
@@ -472,198 +474,55 @@ class _DebugEnvScreenState extends State<DebugEnvScreen> {
                           fontWeight: FontWeight.w500,
                         ),
                       ),
-                      const SizedBox(height: 14),
-                      _killCycleStatusLine(
-                        colors,
-                        'onDuty',
-                        '${_killCycle.onDuty}',
-                      ),
-                      _killCycleStatusLine(
-                        colors,
-                        'unpaidBreak',
-                        '${_killCycle.unpaidBreak}',
-                      ),
-                      _killCycleStatusLine(
-                        colors,
-                        'slcArmed',
-                        '${_killCycle.slcArmed}',
-                      ),
-                      _killCycleStatusLine(
-                        colors,
-                        'hasAccessToken',
-                        '${_killCycle.hasAccessToken}',
-                      ),
-                      _killCycleStatusLine(
-                        colors,
-                        'notificationAuth',
-                        _killCycle.notificationAuth.isEmpty
-                            ? '—'
-                            : _killCycle.notificationAuth,
-                      ),
-                      _killCycleStatusLine(
-                        colors,
-                        'killed_at',
-                        _killCycle.killedAt.isEmpty ? '—' : _killCycle.killedAt,
-                      ),
-                      _killCycleStatusLine(
-                        colors,
-                        'opened_at',
-                        _killCycle.openedAt.isEmpty ? '—' : _killCycle.openedAt,
-                      ),
-                      _killCycleStatusLine(
-                        colors,
-                        'background_at',
-                        _killCycle.backgroundAt.isEmpty
-                            ? '—'
-                            : _killCycle.backgroundAt,
-                      ),
-                      _killCycleStatusLine(
-                        colors,
-                        'wake_service',
-                        _killCycle.wakeService.isEmpty
-                            ? '—'
-                            : _killCycle.wakeService,
-                      ),
-                      _killCycleStatusLine(
-                        colors,
-                        'wake_at',
-                        _killCycle.wakeAt.isEmpty ? '—' : _killCycle.wakeAt,
-                      ),
-                      _killCycleStatusLine(
-                        colors,
-                        'wake_detail',
-                        _killCycle.wakeDetail.isEmpty
-                            ? '—'
-                            : _killCycle.wakeDetail,
-                      ),
-                      _killCycleStatusLine(
-                        colors,
-                        'killed_uploaded',
-                        '${_killCycle.killedUploaded}',
-                      ),
-                      const SizedBox(height: 12),
-                      Text(
-                        'Logs (${_killCycle.logs.length})',
-                        style: TextStyle(
-                          color: colors.title,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Container(
+                      const SizedBox(height: 16),
+                      SizedBox(
                         width: double.infinity,
-                        constraints: const BoxConstraints(maxHeight: 220),
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: colors.background,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: colors.cardBorder),
+                        height: 46,
+                        child: FilledButton(
+                          onPressed: _crashlyticsBusy ? null : _sendTestReport,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFF0F766E),
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            textStyle: const TextStyle(
+                              fontSize: 14.5,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          child: _crashlyticsBusy
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Text('Send test report'),
                         ),
-                        child: _killCycle.logs.isEmpty
-                            ? Text(
-                                'No kill-cycle logs yet. Clock in, background, '
-                                'swipe-kill, reopen, then Refresh.',
-                                style: TextStyle(
-                                  color: colors.subtitle,
-                                  fontSize: 12,
-                                  height: 1.35,
-                                ),
-                              )
-                            : SingleChildScrollView(
-                                child: SelectableText(
-                                  _killCycle.logs.join('\n'),
-                                  style: TextStyle(
-                                    color: colors.title,
-                                    fontSize: 11.5,
-                                    height: 1.35,
-                                    fontFamily: 'Courier',
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                              ),
                       ),
-                      const SizedBox(height: 14),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: SizedBox(
-                              height: 44,
-                              child: FilledButton(
-                                onPressed:
-                                    _killCycleBusy ? null : _refreshKillCycle,
-                                style: FilledButton.styleFrom(
-                                  backgroundColor: const Color(
-                                    AppConfig.cPrimary,
-                                  ),
-                                  foregroundColor: Colors.white,
-                                  elevation: 0,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  textStyle: const TextStyle(
-                                    fontSize: 13.5,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                                child: _killCycleBusy
-                                    ? const SizedBox(
-                                        width: 16,
-                                        height: 16,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: Colors.white,
-                                        ),
-                                      )
-                                    : const Text('Refresh'),
-                              ),
+                      const SizedBox(height: 10),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 46,
+                        child: OutlinedButton(
+                          onPressed: _crashlyticsBusy ? null : _forceTestCrash,
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: colors.error,
+                            side: BorderSide(color: colors.error),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            textStyle: const TextStyle(
+                              fontSize: 14.5,
+                              fontWeight: FontWeight.w700,
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: SizedBox(
-                              height: 44,
-                              child: OutlinedButton(
-                                onPressed:
-                                    _killCycleBusy ? null : _copyKillCycle,
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: colors.title,
-                                  side: BorderSide(color: colors.cardBorder),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  textStyle: const TextStyle(
-                                    fontSize: 13.5,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                                child: const Text('Copy'),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: SizedBox(
-                              height: 44,
-                              child: OutlinedButton(
-                                onPressed:
-                                    _killCycleBusy ? null : _clearKillCycleLogs,
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: colors.error,
-                                  side: BorderSide(color: colors.error),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  textStyle: const TextStyle(
-                                    fontSize: 13.5,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                                child: const Text('Clear'),
-                              ),
-                            ),
-                          ),
-                        ],
+                          child: const Text('Force test crash'),
+                        ),
                       ),
                     ],
                   ),

@@ -14,6 +14,4 @@ class ApiUrls {
   static String get pushTokenUrl => '$baseUrl/push-token';
   static String get permissionStatusUrl => '$baseUrl/native-app/permission-status';
   static String get visitsUploadUrl => '$baseUrl/visits';
-  static String get onsitePatrolVisitsUploadUrl =>
-      '$baseUrl/onsite-patrol/visits';
 }

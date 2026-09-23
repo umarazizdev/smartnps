@@ -118,53 +118,6 @@ void main() {
     expect(flow.additionalMediaItems, hasLength(1));
   });
 
-  test('checkpoint completes with video-only capture', () {
-    final flow = VisitVideoFlowController();
-    flow.patrolContext.value = const VisitPatrolContext(
-      clientDraftId: 'draft-video',
-      regionId: 7,
-      siteId: 123,
-      regionName: 'Lahore North',
-      siteName: 'Gate A',
-      sitePatrolWindowId: 44,
-      checkpoints: [
-        VisitCheckpoint(id: 501, name: 'Main Gate'),
-      ],
-    );
-    final items = [
-      VisitMediaItem(
-        path: '/tmp/gate.mp4',
-        type: VisitMediaType.video,
-        capturedAt: DateTime.utc(2026, 8, 2, 8, 10),
-        latitude: 31.52,
-        longitude: 74.35,
-        siteCheckpointId: 501,
-      ),
-    ];
-    flow.mediaItems
-      ..clear()
-      ..addAll(items);
-
-    expect(flow.isCheckpointCompleted(501), isTrue);
-    expect(flow.hasIncompleteCheckpoints, isFalse);
-
-    final meta = VisitUploadMeta.build(
-      mediaItems: items,
-      context: flow.patrolContext.value,
-      startedAt: DateTime.utc(2026, 8, 2, 8, 0),
-      batchNote: flow.batchNote.value,
-      generalNote: flow.generalNote.value,
-      clientDraftId: 'draft-video',
-      submittedAt: DateTime.utc(2026, 8, 2, 8, 15),
-      officerId: '1',
-    );
-    expect(meta['checkpoints'], hasLength(1));
-    final checkpoint = (meta['checkpoints'] as List).first as Map;
-    expect(checkpoint['site_checkpoint_id'], 501);
-    expect(checkpoint['status'], 'completed');
-    expect(checkpoint['photo_client_index'], 0);
-  });
-
   test('resolves relative photo_path against upload origin', () {
     final checkpoint = VisitCheckpoint.fromJson(
       {

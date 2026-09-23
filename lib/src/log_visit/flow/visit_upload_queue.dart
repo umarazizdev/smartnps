@@ -291,7 +291,6 @@ class VisitUploadQueue {
       items: snapshot.items,
       batchVoicePath: snapshot.batchNote.voiceNotePath,
       generalVoicePath: snapshot.generalNote.voiceNotePath,
-      uploadUrl: snapshot.context?.uploadUrl,
       onProgress: onProgress,
     );
   }

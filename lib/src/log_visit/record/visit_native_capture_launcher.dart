@@ -26,6 +26,7 @@ class VisitNativeCaptureLauncher {
 
   static bool _opening = false;
   static Completer<void>? _openCompletion;
+  static CaptureType _lastCaptureType = CaptureType.photo;
 
   static Future<void> reopenForRetake({
     CaptureType initialType = CaptureType.photo,
@@ -42,14 +43,11 @@ class VisitNativeCaptureLauncher {
     bool allowModeSwitch = true,
   }) async {
     if (_opening) return;
-    // Always open photo unless the caller explicitly requests a type (e.g. retake).
-    // Video is entered only via long-press inside the native camera — never
-    // remembered across reopen after a video capture.
-    final requestedType = initialType ?? CaptureType.photo;
+    final requestedType = initialType ?? _lastCaptureType;
     _opening = true;
     final completion = Completer<void>();
     _openCompletion = completion;
-    _log('CAMERA_REQUEST type=${requestedType.name}');
+    _log('CAMERA_REQUEST');
 
     var coverPushed = false;
     try {
@@ -139,6 +137,7 @@ class VisitNativeCaptureLauncher {
         await _popTransitionCoverIfNeeded(coverPushed);
         return;
       }
+      _lastCaptureType = result.type;
       CamPerf.stage(result.captureId, 'FLUTTER_RESULT_VALIDATION_START');
       if (result.path.isEmpty || !File(result.path).existsSync()) {
         coordinator.disposeSession(reason: 'invalidResult');

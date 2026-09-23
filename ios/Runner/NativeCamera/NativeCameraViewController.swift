@@ -1803,11 +1803,9 @@ final class NativeCameraViewController: UIViewController {
       zoomStack.addArrangedSubview(button)
       zoomButtons.append(button)
     }
-    // Do not overwrite currentZoomFactor here — callers that reconfigure
-    // (photo↔video) restore the officer's selection after refresh.
-    let live = cameraSession.currentZoomFactor()
-    configureZoomWheel(currentDeviceFactor: live)
-    highlightZoomChip(closestTo: live)
+    currentZoomFactor = cameraSession.currentZoomFactor()
+    configureZoomWheel(currentDeviceFactor: currentZoomFactor)
+    highlightZoomChip(closestTo: currentZoomFactor)
   }
 
   /// Photo opens at Camera.app-style 1x (wide). Video keeps the device default.
@@ -2433,18 +2431,15 @@ extension NativeCameraViewController: UIGestureRecognizerDelegate {
 extension NativeCameraViewController: NativeCameraSessionDelegate {
   func sessionDidFinishConfiguration(_ session: NativeCameraSession) {
     busyOverlay.stopAnimating()
-    // configureLocked resets hardware zoom to the device minimum (often 0.5x).
-    // Capture the UI selection BEFORE refreshZoomChips, which would otherwise
-    // overwrite currentZoomFactor with that reset value and "restore" 0.x.
-    let zoomToRestore = currentZoomFactor
     refreshZoomChips()
+    // configureLocked resets hardware zoom — restore the UI selection so a
+    // photo↔video switch does not silently jump FOV.
     let range = session.zoomFactorRange()
-    let restored = min(max(zoomToRestore, range.lowerBound), range.upperBound)
+    let restored = min(max(currentZoomFactor, range.lowerBound), range.upperBound)
     if restored > 0.01 {
       currentZoomFactor = restored
       session.setZoomFactor(restored, animated: false)
       highlightZoomChip(closestTo: restored)
-      configureZoomWheel(currentDeviceFactor: restored)
     }
     refreshFlashButton()
     refreshFlipButton(isRecording: session.isRecording)

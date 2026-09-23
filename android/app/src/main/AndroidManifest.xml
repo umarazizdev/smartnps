@@ -39,8 +39,6 @@
     <!-- Push notifications and foreground-service notification. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
-    <!-- Deferred kill-security alert (~4s after background). -->
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
     <!-- Activity recognition: legacy Play Services + Android 10+ (API 29). -->
     <uses-permission android:name="com.google.android.gms.permission.ACTIVITY_RECOGNITION" />
@@ -60,16 +58,6 @@
         <receiver
             android:name=".duty.AndroidDutyKillReceiver"
             android:exported="false" />
-        <receiver
-            android:name=".permission.AndroidPermissionStatusReceiver"
-            android:exported="false" />
-        <receiver
-            android:name=".permission.AndroidKillSecurityAlertReceiver"
-            android:exported="false" />
-        <service
-            android:name=".permission.AndroidAppKillCycleService"
-            android:exported="false"
-            android:stopWithTask="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

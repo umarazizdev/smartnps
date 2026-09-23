@@ -141,19 +141,9 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
   private var lastZoomHapticIndex = -1
   private val gestureTouchSlop by lazy { ViewConfiguration.get(this).scaledTouchSlop.toFloat() }
   private val shutterLongPressRunnable = Runnable {
-    if (!shutterTouchActive || shutterDragActive || shutterGestureBlocked) {
-      logShutterGate(
-        "long_press_skipped",
-        "touch=$shutterTouchActive drag=$shutterDragActive blocked=$shutterGestureBlocked",
-      )
-      return@Runnable
-    }
-    if (isCaptureBlocked() || isRecordingUi) {
-      logShutterGate("long_press_blocked", shutterGateSnapshot())
-      return@Runnable
-    }
+    if (!shutterTouchActive || shutterDragActive || shutterGestureBlocked) return@Runnable
+    if (isCaptureBlocked() || isRecordingUi) return@Runnable
     shutterLongPressActive = true
-    logShutterGate("long_press_start_video", "mode=$mode")
     onLongPressStartVideo()
   }
   private var pendingVideoResult: ((Result<NativeCameraSession.CaptureOutput>) -> Unit)? = null
@@ -448,13 +438,6 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     }
     val metrics = resources.displayMetrics
     val portrait = metrics.heightPixels >= metrics.widthPixels
-    if (isPortraitBlocked != portrait) {
-      Log.d(
-        NativeCameraContract.LOG_TAG,
-        "portrait_block changed=$portrait " +
-          "h=${metrics.heightPixels} w=${metrics.widthPixels}",
-      )
-    }
     isPortraitBlocked = portrait
     portraitBlockOverlay.visibility = if (portrait) View.VISIBLE else View.GONE
     // Keep the live camera preview visible under the dialog; only hide capture chrome.
@@ -608,24 +591,6 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
       session?.isRebinding() == true
   }
 
-  private fun shutterGateSnapshot(): String {
-    return "mode=$mode " +
-      "portrait=$isPortraitBlocked " +
-      "busy=$busyVisible " +
-      "ready=$sessionReady " +
-      "rebinding=${session?.isRebinding() == true} " +
-      "recordingUi=$isRecordingUi " +
-      "sessionRecording=${session?.isRecording() == true} " +
-      "capturing=${session?.isCapturing() == true} " +
-      "longPress=$shutterLongPressActive " +
-      "gestureBlocked=$shutterGestureBlocked"
-  }
-
-  private fun logShutterGate(event: String, detail: String = "") {
-    val suffix = if (detail.isBlank()) "" else " $detail"
-    Log.d(NativeCameraContract.LOG_TAG, "SHUTTER_GATE event=$event$suffix")
-  }
-
   override fun onSessionError(code: String, message: String) {
     pendingStartRecording = false
     hideBusy()
@@ -691,7 +656,10 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     btnModeVideo.visibility = View.GONE
 
     btnShutter.setOnClickListener {
-      onShutterClicked()
+      if (isCaptureBlocked() || isRecordingUi || shutterLongPressActive) {
+        return@setOnClickListener
+      }
+      onTakePhoto()
     }
     btnShutter.setOnTouchListener { _, event ->
       when (event.actionMasked) {
@@ -703,10 +671,6 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
           shutterZoomStart = session?.currentZoomRatio() ?: 1f
           shutterDragActive = false
           shutterLongPressActive = false
-          logShutterGate(
-            "touch_down",
-            "${shutterGateSnapshot()} gestureBlocked=$shutterGestureBlocked",
-          )
           mainHandler.postDelayed(shutterLongPressRunnable, SHUTTER_LONG_PRESS_MS)
         }
         MotionEvent.ACTION_POINTER_DOWN -> {
@@ -738,11 +702,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
               }
             }
             if (shutterDragActive) {
-              // While switching photo→video (or busy rebind), keep the selected
-              // zoom frozen — vertical wobble on a long-press must not jump to 0.x.
-              if (!pendingStartRecording && sessionReady && !(session?.isRebinding() == true)) {
-                applyVerticalZoom(shutterZoomStart, dragY)
-              }
+              applyVerticalZoom(shutterZoomStart, dragY)
             }
           }
 
@@ -905,49 +865,15 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     if (shutterPointerId == MotionEvent.INVALID_POINTER_ID) return
     mainHandler.removeCallbacks(shutterLongPressRunnable)
     if (shutterLongPressActive) {
-      logShutterGate("touch_up_end_long_press", "cancelled=$cancelled")
       shutterLongPressActive = false
       onLongPressEndVideo()
     } else if (!cancelled && !shutterDragActive && !shutterGestureBlocked) {
-      logShutterGate("touch_up_click", shutterGateSnapshot())
       btnShutter.performClick()
-    } else {
-      logShutterGate(
-        "touch_up_ignored",
-        "cancelled=$cancelled drag=$shutterDragActive " +
-          "gestureBlocked=$shutterGestureBlocked ${shutterGateSnapshot()}",
-      )
     }
     shutterPointerId = MotionEvent.INVALID_POINTER_ID
     shutterTouchActive = false
     shutterDragActive = false
     shutterGestureBlocked = false
-  }
-
-  /**
-   * Short tap always takes a photo. Video is long-press only
-   * ([shutterLongPressRunnable] → [onLongPressStartVideo]).
-   */
-  private fun onShutterClicked() {
-    CamPerf.markShutterTap()
-    if (shutterLongPressActive) {
-      logShutterGate("click_ignored", "reason=longPressActive ${shutterGateSnapshot()}")
-      return
-    }
-    if (isRecordingUi || session?.isRecording() == true) {
-      logShutterGate("click_ignored", "reason=recording ${shutterGateSnapshot()}")
-      return
-    }
-    if (isCaptureBlocked()) {
-      logShutterGate("click_blocked", shutterGateSnapshot())
-      return
-    }
-    if (mode != NativeCameraSession.Mode.PHOTO) {
-      logShutterGate("click_ignored", "reason=not_photo_mode ${shutterGateSnapshot()}")
-      return
-    }
-    logShutterGate("click_take_photo", shutterGateSnapshot())
-    onTakePhoto()
   }
 
   private fun finishZoomPointer(cancelled: Boolean) {
@@ -1033,32 +959,13 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
   }
 
   private fun onTakePhoto() {
+    CamPerf.markShutterTap()
     CamPerf.stage(null, "SHUTTER_HANDLER_ENTER", "thread=${Thread.currentThread().name}")
-    if (isPortraitBlocked) {
-      logShutterGate("take_photo_ignored", "reason=portrait ${shutterGateSnapshot()}")
-      return
-    }
-    val active = session
-    if (active == null) {
-      logShutterGate("take_photo_ignored", "reason=no_session")
-      return
-    }
-    if (!sessionReady) {
-      logShutterGate("take_photo_ignored", "reason=not_ready ${shutterGateSnapshot()}")
-      return
-    }
-    if (mode != NativeCameraSession.Mode.PHOTO) {
-      logShutterGate("take_photo_ignored", "reason=not_photo_mode ${shutterGateSnapshot()}")
-      return
-    }
-    if (active.isCapturing() || active.isRebinding()) {
-      logShutterGate(
-        "take_photo_ignored",
-        "reason=busy capturing=${active.isCapturing()} " +
-          "rebinding=${active.isRebinding()}",
-      )
-      return
-    }
+    if (isPortraitBlocked) return
+    val active = session ?: return
+    if (!sessionReady) return
+    if (mode != NativeCameraSession.Mode.PHOTO) return
+    if (active.isCapturing() || active.isRebinding()) return
     showBusy(R.string.native_camera_busy_capturing)
     btnShutter.isEnabled = false
     CamPerf.stage(null, "SESSION_TAKE_PICTURE_REQUEST")
@@ -1139,28 +1046,10 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
   }
 
   private fun beginRecordingNow() {
-    val active = session
-    if (active == null) {
-      logShutterGate("begin_recording_ignored", "reason=no_session")
-      return
-    }
-    if (!sessionReady || mode != NativeCameraSession.Mode.VIDEO) {
-      logShutterGate(
-        "begin_recording_ignored",
-        "reason=not_ready_or_mode ${shutterGateSnapshot()}",
-      )
-      return
-    }
-    if (active.isRecording() || active.isRebinding()) {
-      logShutterGate(
-        "begin_recording_ignored",
-        "reason=busy recording=${active.isRecording()} " +
-          "rebinding=${active.isRebinding()}",
-      )
-      return
-    }
+    val active = session ?: return
+    if (!sessionReady || mode != NativeCameraSession.Mode.VIDEO) return
+    if (active.isRecording() || active.isRebinding()) return
 
-    logShutterGate("begin_recording", shutterGateSnapshot())
     showBusy(R.string.native_camera_busy_starting)
     val callback: (Result<NativeCameraSession.CaptureOutput>) -> Unit = { result ->
       pendingVideoResult = null

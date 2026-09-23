@@ -8,7 +8,6 @@ internal object AndroidDutyKillStore {
   private const val KEY_ARMED = "armed"
   private const val KEY_ACCESS = "access_token"
   private const val KEY_REFRESH = "refresh_token"
-  private const val KEY_API_BASE = "api_base_url"
   const val FLUTTER_FORCE_OFF = "flutter.android_duty.kill.force_off"
   const val FLUTTER_ARMED = "flutter.android_duty.kill.armed"
   const val FLUTTER_API_ON_DUTY_UNTIL = "flutter.android_duty.kill.api_on_duty_until"
@@ -16,40 +15,24 @@ internal object AndroidDutyKillStore {
 
   private const val API_ON_DUTY_GRACE_MS = 30L * 60L * 1000L
 
-  fun arm(
-    context: Context,
-    accessToken: String,
-    refreshToken: String?,
-    apiBaseUrl: String? = null,
-  ) {
-    val editor = context.getSharedPreferences(NATIVE_PREFS, Context.MODE_PRIVATE)
+  fun arm(context: Context, accessToken: String, refreshToken: String?) {
+    context.getSharedPreferences(NATIVE_PREFS, Context.MODE_PRIVATE)
       .edit()
       .putBoolean(KEY_ARMED, true)
       .putString(KEY_ACCESS, accessToken)
       .putString(KEY_REFRESH, refreshToken ?: "")
-    if (!apiBaseUrl.isNullOrBlank()) {
-      editor.putString(KEY_API_BASE, apiBaseUrl.trim().trimEnd('/'))
-    }
-    editor.apply()
+      .apply()
     writeFlutterBoolean(context, FLUTTER_FORCE_OFF, false)
     writeFlutterBoolean(context, FLUTTER_ARMED, true)
   }
 
-  fun syncSession(
-    context: Context,
-    accessToken: String,
-    refreshToken: String?,
-    apiBaseUrl: String? = null,
-  ) {
+  fun syncSession(context: Context, accessToken: String, refreshToken: String?) {
     val prefs = context.getSharedPreferences(NATIVE_PREFS, Context.MODE_PRIVATE)
     if (!prefs.getBoolean(KEY_ARMED, false)) return
-    val editor = prefs.edit()
+    prefs.edit()
       .putString(KEY_ACCESS, accessToken)
       .putString(KEY_REFRESH, refreshToken ?: "")
-    if (!apiBaseUrl.isNullOrBlank()) {
-      editor.putString(KEY_API_BASE, apiBaseUrl.trim().trimEnd('/'))
-    }
-    editor.apply()
+      .apply()
   }
 
   fun disarm(context: Context, forceOff: Boolean) {
@@ -98,12 +81,6 @@ internal object AndroidDutyKillStore {
   fun refreshToken(context: Context): String? {
     return context.getSharedPreferences(NATIVE_PREFS, Context.MODE_PRIVATE)
       .getString(KEY_REFRESH, null)
-      ?.takeIf { it.isNotEmpty() }
-  }
-
-  fun apiBaseUrl(context: Context): String? {
-    return context.getSharedPreferences(NATIVE_PREFS, Context.MODE_PRIVATE)
-      .getString(KEY_API_BASE, null)
       ?.takeIf { it.isNotEmpty() }
   }
 
