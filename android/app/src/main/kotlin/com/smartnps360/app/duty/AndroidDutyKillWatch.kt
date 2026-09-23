@@ -28,15 +28,16 @@ internal object AndroidDutyKillWatch {
 
   const val ACTION = "com.smartnps360.app.ANDROID_DUTY_KILL_TICK"
 
-  fun arm(context: Context, accessToken: String, refreshToken: String?) {
+  fun arm(context: Context, accessToken: String, refreshToken: String?, apiBaseUrl: String? = null) {
     val alreadyArmed = AndroidDutyKillStore.isArmed(context)
     Config(context).setManuallyStopped(false)
     if (alreadyArmed) {
       // Quiet token refresh — no log spam, no FGS start.
-      AndroidDutyKillStore.syncSession(context, accessToken, refreshToken)
+      AndroidDutyKillStore.syncSession(context, accessToken, refreshToken, apiBaseUrl)
+      AndroidAppKillCycleReporter.ensureTrackingService(context)
       return
     }
-    AndroidDutyKillStore.arm(context, accessToken, refreshToken)
+    AndroidDutyKillStore.arm(context, accessToken, refreshToken, apiBaseUrl)
     // Never start FGS from arm — Flutter owns start while UI is open.
     // After a real kill, tick() starts FGS once the UI has been away ≥45s.
     schedule(context, 15_000L)
@@ -44,8 +45,13 @@ internal object AndroidDutyKillWatch {
     Log.i(TAG, "armed native kill-watch uiResumed=${AndroidDutyUiState.isUiResumed}")
   }
 
-  fun syncSession(context: Context, accessToken: String, refreshToken: String?) {
-    AndroidDutyKillStore.syncSession(context, accessToken, refreshToken)
+  fun syncSession(
+    context: Context,
+    accessToken: String,
+    refreshToken: String?,
+    apiBaseUrl: String? = null,
+  ) {
+    AndroidDutyKillStore.syncSession(context, accessToken, refreshToken, apiBaseUrl)
   }
 
   fun disarm(context: Context, forceOff: Boolean) {
@@ -123,11 +129,19 @@ internal object AndroidDutyKillWatch {
       if (!running) {
         Log.i(TAG, "tick: FGS down after kill — restarting immediately")
         AndroidDutyKillStore.markApiOnDuty(context)
+        AndroidAppKillCycleReporter.recordWakeService(
+          context,
+          "android_duty_kill_watch",
+          detail = "AlarmManager tick restarted location FGS",
+        )
         ensureLocationServiceRunning(context, reason = "keep_alive")
+        AndroidAppKillCycleReporter.uploadKilledEventIfNeeded(
+          context,
+          reason = "duty_kill_watch",
+        )
       } else {
         WatchdogReceiver.enqueue(context, 5_000)
       }
-      AndroidAppKillCycleReporter.handleNativeAwakenedAfterKillIfNeeded(context)
     }
 
     val status = AndroidDutyKillHeartbeat.confirmDuty(context)
@@ -147,6 +161,13 @@ internal object AndroidDutyKillWatch {
         AndroidDutyKillStore.setUnpaidBreak(context, false)
         AndroidDutyKillStore.markApiOnDuty(context)
         ensureLocationServiceRunning(context, reason = "heartbeat_on_duty")
+        if (AndroidAppKillCycleReporter.peekTimeline(context) != null) {
+          AndroidAppKillCycleReporter.recordWakeService(
+            context,
+            "android_duty_heartbeat",
+            detail = "heartbeat ON_DUTY restarted FGS after kill",
+          )
+        }
       }
       AndroidDutyKillHeartbeat.DutyStatus.UNKNOWN -> {
         if (!AndroidDutyKillStore.isUnpaidBreak(context) &&

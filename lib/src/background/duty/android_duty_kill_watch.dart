@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../api/api_urls.dart';
 import '../../auth/auth_repository.dart';
 import '../../utilities/app_debug_log.dart';
 
@@ -54,6 +55,7 @@ class AndroidDutyKillWatch {
       await _channel.invokeMethod<void>('arm', {
         'accessToken': access,
         'refreshToken': refresh,
+        'apiBaseUrl': ApiUrls.baseUrl,
       });
       _lastArmedAccessToken = access;
     } on MissingPluginException {
@@ -116,6 +118,7 @@ class AndroidDutyKillWatch {
       await _channel.invokeMethod<void>('syncSession', {
         'accessToken': access,
         'refreshToken': refresh,
+        'apiBaseUrl': ApiUrls.baseUrl,
       });
       _lastArmedAccessToken = access;
     } on MissingPluginException {

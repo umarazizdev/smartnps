@@ -18,6 +18,7 @@ internal object AndroidPermissionStatusStore {
   private const val KEY_BUILD = "build"
   private const val KEY_PUSH = "push_status"
   private const val KEY_FINGERPRINT = "last_fingerprint"
+  private const val KEY_FULL_PERMISSIONS_JSON = "full_permissions_json"
 
   fun arm(
     context: Context,
@@ -163,5 +164,39 @@ internal object AndroidPermissionStatusStore {
       .edit()
       .putString(KEY_FINGERPRINT, fingerprint)
       .apply()
+  }
+
+  /** Full Flutter permission map for kill/wake lightweight POSTs. */
+  fun writeFullPermissionsCache(context: Context, permissions: Map<String, String>) {
+    if (permissions.isEmpty()) return
+    val obj = org.json.JSONObject()
+    for ((key, value) in permissions) {
+      obj.put(key, value)
+    }
+    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+      .edit()
+      .putString(KEY_FULL_PERMISSIONS_JSON, obj.toString())
+      .apply()
+    android.util.Log.i("AndroidPermStatus", "cached full permission snapshot (${permissions.size} keys)")
+  }
+
+  fun readFullPermissionsCache(context: Context): Map<String, String>? {
+    val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+      .getString(KEY_FULL_PERMISSIONS_JSON, null)
+      ?.takeIf { it.isNotEmpty() }
+      ?: return null
+    return try {
+      val obj = org.json.JSONObject(raw)
+      val out = linkedMapOf<String, String>()
+      val keys = obj.keys()
+      while (keys.hasNext()) {
+        val key = keys.next()
+        val value = obj.optString(key, "").trim()
+        if (value.isNotEmpty()) out[key] = value
+      }
+      out.takeIf { it.isNotEmpty() }
+    } catch (_: Exception) {
+      null
+    }
   }
 }

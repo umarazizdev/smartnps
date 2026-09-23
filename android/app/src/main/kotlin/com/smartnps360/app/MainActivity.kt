@@ -19,6 +19,7 @@ import com.smartnps360.app.duty.AndroidDutyKillPlugin
 import com.smartnps360.app.duty.AndroidDutyUiState
 import com.smartnps360.app.permission.AndroidAppKillCycleReporter
 import com.smartnps360.app.permission.AndroidPermissionStatusPlugin
+import com.smartnps360.app.permission.AndroidPermissionStatusStore
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -36,6 +37,7 @@ class MainActivity : FlutterActivity() {
 
   override fun onCreate(savedInstanceState: android.os.Bundle?) {
     super.onCreate(savedInstanceState)
+    AndroidAppKillCycleReporter.onActivityCreated(this)
     observePowerSaveModeChanges()
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -121,9 +123,47 @@ class MainActivity : FlutterActivity() {
         "peekAppKillTimeline" -> {
           result.success(AndroidAppKillCycleReporter.peekTimeline(this))
         }
+        "prepareAppKillTimelineForReopen" -> {
+          result.success(AndroidAppKillCycleReporter.prepareTimelineForReopen(this))
+        }
         "clearAppKillTimeline" -> {
           AndroidAppKillCycleReporter.clearPendingAfterFlutterUpload(this)
           result.success(true)
+        }
+        "getAppKillCycleDebugSnapshot" -> {
+          result.success(AndroidAppKillCycleReporter.debugSnapshot(this))
+        }
+        "clearAppKillCycleDebugLogs" -> {
+          AndroidAppKillCycleReporter.clearDebugLogs(this)
+          result.success(true)
+        }
+        "appendAppKillCycleDebugLog" -> {
+          val message = when (val args = call.arguments) {
+            is String -> args
+            is Map<*, *> -> args["message"]?.toString()
+            else -> null
+          }
+          if (!message.isNullOrBlank()) {
+            AndroidAppKillCycleReporter.appendFlutterDebugLog(this, message)
+          }
+          result.success(true)
+        }
+        "cacheFullPermissionSnapshot" -> {
+          @Suppress("UNCHECKED_CAST")
+          val raw = call.arguments as? Map<String, Any?>
+          if (raw == null) {
+            result.error("bad_args", "cacheFullPermissionSnapshot expects a map", null)
+          } else {
+            val asStrings = linkedMapOf<String, String>()
+            for ((key, value) in raw) {
+              val text = value?.toString()?.trim().orEmpty()
+              if (text.isNotEmpty() && text != "null") {
+                asStrings[key] = text
+              }
+            }
+            AndroidPermissionStatusStore.writeFullPermissionsCache(this, asStrings)
+            result.success(true)
+          }
         }
         else -> result.notImplemented()
       }
@@ -134,8 +174,11 @@ class MainActivity : FlutterActivity() {
     AndroidDutyUiState.noteResumed()
     super.onResume()
     notifyLowPowerModeChanged()
+    // Keep tracker alive while on duty so onTaskRemoved can fire on swipe-kill.
+    AndroidAppKillCycleReporter.ensureTrackingService(this)
+    // Stamp opened_at only; Flutter owns the reopen POST (avoids racing a bare resumed).
     AndroidAppKillCycleReporter.markOpenedAfterKillIfNeeded(this)
-    AndroidAppKillCycleReporter.flushPendingIfNeeded(this, "onResume")
+    AndroidAppKillCycleReporter.scheduleReopenFlushBackup(this)
   }
 
   override fun onPause() {
@@ -143,7 +186,16 @@ class MainActivity : FlutterActivity() {
     super.onPause()
   }
 
+  override fun onStop() {
+    AndroidAppKillCycleReporter.onActivityStopped(this)
+    super.onStop()
+  }
+
   override fun onDestroy() {
+    // Backup when service onTaskRemoved is missed (still sync; may be cut short).
+    if (!isChangingConfigurations) {
+      AndroidAppKillCycleReporter.handleTerminateWhileOnDuty(this)
+    }
     if (powerSaveReceiverRegistered) {
       try {
         unregisterReceiver(powerSaveModeReceiver)

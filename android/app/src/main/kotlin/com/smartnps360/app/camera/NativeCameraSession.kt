@@ -6,6 +6,8 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureRequest
 import android.os.StatFs
 import android.util.Log
+import android.util.Rational
+import android.util.Size
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import androidx.camera.camera2.interop.Camera2CameraInfo
@@ -18,12 +20,12 @@ import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
 import androidx.camera.core.UseCase
 import androidx.camera.core.UseCaseGroup
+import androidx.camera.core.ViewPort
 import androidx.camera.core.ZoomState
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import android.os.SystemClock
-import android.util.Size
 import androidx.camera.extensions.ExtensionMode
 import androidx.camera.extensions.ExtensionsManager
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -149,6 +151,12 @@ class NativeCameraSession(
 
   /** Survives rebinds so zoom is restored after an extension switch. */
   private var desiredZoomRatio: Float = 1f
+  /**
+   * When true, [desiredZoomRatio] was snapshotted for a mode switch and must
+   * not be overwritten by live CameraX state or shutter-drag gestures until
+   * [restoreDesiredZoom] runs (keeps 1x → video as 1x, not 0.x).
+   */
+  private var freezeDesiredZoom: Boolean = false
 
   private val capturing = AtomicBoolean(false)
   private val released = AtomicBoolean(false)
@@ -223,6 +231,10 @@ class NativeCameraSession(
 
   fun switchMode(newMode: Mode) {
     if (mode == newMode || isRecording()) return
+    // Snapshot before CameraX unbind resets zoom to the device default
+    // (often ultrawide / 0.x). Long-press video must keep the officer's 1x.
+    desiredZoomRatio = currentZoomRatio()
+    freezeDesiredZoom = true
     mode = newMode
     if (newMode == Mode.PHOTO) {
       facingBack = true
@@ -272,6 +284,15 @@ class NativeCameraSession(
   fun setZoomRatio(ratio: Float) {
     val clamped = ratio.coerceIn(minZoom, maxZoom)
     // Remember the intent even without a bound camera so a rebind restores it.
+    // Ignore gesture updates while a mode-switch freeze / rebind is in flight so
+    // shutter wobble during long-press→video cannot replace snapshotted 1x with 0.x.
+    if (freezeDesiredZoom || isRebinding.get()) {
+      Log.d(
+        NativeCameraContract.LOG_TAG,
+        "setZoomRatio ignored during zoom-freeze requested=$clamped kept=$desiredZoomRatio",
+      )
+      return
+    }
     desiredZoomRatio = clamped
     val cam = camera ?: return
     cam.cameraControl.setZoomRatio(clamped)
@@ -670,6 +691,7 @@ class NativeCameraSession(
   @SuppressLint("MissingPermission")
   fun startRecording(onFinal: (Result<CaptureOutput>) -> Unit) {
     if (mode != Mode.VIDEO) {
+      Log.d(NativeCameraContract.LOG_TAG, "startRecording blocked reason=not_video mode=$mode")
       onFinal(
         Result.failure(
           SessionException(
@@ -681,6 +703,7 @@ class NativeCameraSession(
       return
     }
     if (isRebinding.get()) {
+      Log.d(NativeCameraContract.LOG_TAG, "startRecording blocked reason=rebinding")
       onFinal(
         Result.failure(
           SessionException(
@@ -691,9 +714,13 @@ class NativeCameraSession(
       )
       return
     }
-    if (activeRecording != null) return
+    if (activeRecording != null) {
+      Log.d(NativeCameraContract.LOG_TAG, "startRecording blocked reason=already_recording")
+      return
+    }
     val capture = videoCapture
     if (capture == null) {
+      Log.d(NativeCameraContract.LOG_TAG, "startRecording blocked reason=video_capture_null")
       onFinal(
         Result.failure(
           SessionException(
@@ -704,6 +731,7 @@ class NativeCameraSession(
       )
       return
     }
+    Log.d(NativeCameraContract.LOG_TAG, "startRecording begin cameraId=$activeCameraId")
     if (!hasEnoughStorage()) {
       onFinal(
         Result.failure(
@@ -1117,9 +1145,8 @@ class NativeCameraSession(
   }
 
   /**
-   * Video rungs, highest quality first. Each rung pins one exact [Quality] so
-   * an unsupported UHD (or an unsupported UHD+stabilization combination) walks
-   * down the ladder instead of silently collapsing to whatever CameraX picks.
+   * Video rungs, highest quality first. Stabilization is intentionally off:
+   * EIS crops the FOV and looks like an automatic zoom-in vs photo mode.
    */
   private fun videoBindAttempts(): List<BindAttempt> {
     val tiers = if (quality == NativeCameraContract.QUALITY_BALANCED) {
@@ -1133,18 +1160,6 @@ class NativeCameraSession(
         Quality.UHD -> NativeCameraContract.FallbackLevel.STANDARD_MAX
         Quality.FHD -> NativeCameraContract.FallbackLevel.STANDARD_16_9
         else -> NativeCameraContract.FallbackLevel.LAST_RESORT_BASIC
-      }
-      // HD is a compatibility rung; stabilization is not worth another attempt.
-      if (tier != Quality.HD) {
-        attempts.add(
-          BindAttempt(
-            profile = BindProfile.STANDARD_MAX_QUALITY,
-            extensionLabel = null,
-            fallbackLevel = level,
-            videoQuality = tier,
-            videoStabilization = true,
-          ),
-        )
       }
       attempts.add(
         BindAttempt(
@@ -1164,9 +1179,11 @@ class NativeCameraSession(
     if (released.get()) throw IllegalStateException("Session released")
 
     val profile = attempt.profile
-    // Capture the live zoom before tearing the camera down so the new bind can
-    // restore it (CameraX resets zoom to 1x on every bind).
-    camera?.let { desiredZoomRatio = currentZoomRatio() }
+    // Capture live zoom before unbind unless a mode-switch freeze already
+    // snapshotted the officer's selection (e.g. 1x for long-press video).
+    if (!freezeDesiredZoom) {
+      camera?.let { desiredZoomRatio = currentZoomRatio() }
+    }
     CamPerf.noteUnbindAll("bindWithAttempt profile=${attempt.profile}")
     provider.unbindAll()
     previewUseCase = null
@@ -1223,16 +1240,25 @@ class NativeCameraSession(
       activeVideoStabilization = attempt.videoStabilization
     }
 
-    // ViewPort follows PreviewView FIT_CENTER: full sensor FOV (letterbox), no
-    // fill-crop. Same FOV for Preview + ImageCapture (WYSIWYG ≈ stock Camera).
-    val viewPort = previewView.getViewPort(rotation)
-    camera = if (viewPort != null) {
+    // Photo: shared ViewPort so Preview + ImageCapture stay WYSIWYG.
+    // Video: bind WITHOUT a shared ViewPort. A 4:3/screen ViewPort + 16:9
+    // VideoCapture center-crops the preview and looks like an automatic zoom-in
+    // vs photo. Preview keeps its 4:3 selector FOV; VideoCapture records alone.
+    camera = if (mode == Mode.PHOTO) {
+      val viewPort = previewView.getViewPort(rotation)
+        ?: ViewPort.Builder(Rational(4, 3), rotation)
+          .setScaleType(ViewPort.FIT)
+          .build()
       val groupBuilder = UseCaseGroup.Builder().setViewPort(viewPort)
       for (useCase in useCases) {
         groupBuilder.addUseCase(useCase)
       }
       provider.bindToLifecycle(lifecycleOwner, selector, groupBuilder.build())
     } else {
+      Log.d(
+        NativeCameraContract.LOG_TAG,
+        "video bind without shared ViewPort (photo-matched preview FOV)",
+      )
       provider.bindToLifecycle(
         lifecycleOwner,
         selector,
@@ -1368,8 +1394,7 @@ class NativeCameraSession(
   /** Human-readable resolution strategy for bind diagnostics. */
   private fun resolutionStrategyLabel(profile: BindProfile): String = when (profile) {
     BindProfile.EXTENSION_OEM_FLEX -> "oem_flex_no_forced_aspect"
-    BindProfile.STANDARD_MAX_QUALITY ->
-      if (mode == Mode.VIDEO) "aspect_16_9" else "aspect_4_3"
+    BindProfile.STANDARD_MAX_QUALITY -> "aspect_4_3"
     BindProfile.ALIGNED_16_9 -> "aspect_16_9"
     BindProfile.MINIMAL, BindProfile.MINIMAL_LATENCY -> "camerax_default"
   }
@@ -1383,12 +1408,16 @@ class NativeCameraSession(
     }
   }
 
-  /** Stock photo is typically 4:3; video is 16:9. */
+  /**
+   * Preview stays 4:3 in photo and video so the on-screen frame does not grow
+   * when long-press switches into video mode.
+   */
   private fun efficientPreviewSelector(): ResolutionSelector {
     return ResolutionSelector.Builder()
+      .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
       .setResolutionStrategy(
         ResolutionStrategy(
-          Size(1280, 720),
+          Size(1440, 1080),
           ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER,
         ),
       )
@@ -1396,13 +1425,9 @@ class NativeCameraSession(
   }
 
   private fun resolutionSelectorForMode(): ResolutionSelector {
-    return if (mode == Mode.VIDEO) {
-      resolutionSelector16x9()
-    } else {
-      ResolutionSelector.Builder()
-        .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
-        .build()
-    }
+    return ResolutionSelector.Builder()
+      .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+      .build()
   }
 
   private fun resolutionSelector16x9(): ResolutionSelector {
@@ -1520,6 +1545,7 @@ class NativeCameraSession(
   private fun restoreDesiredZoom() {
     val clamped = desiredZoomRatio.coerceIn(minZoom, maxZoom)
     desiredZoomRatio = clamped
+    freezeDesiredZoom = false
     val cam = camera ?: return
     try {
       cam.cameraControl.setZoomRatio(clamped)

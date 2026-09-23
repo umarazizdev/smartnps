@@ -1,27 +1,64 @@
 package com.smartnps360.app.camera
 
+import android.util.Log
+
+/**
+ * Lightweight shutter/bind timing breadcrumbs. Always logs to Logcat under
+ * [NativeCameraContract.LOG_TAG] so Android capture regressions are visible
+ * without a separate debug flag.
+ */
 object CamPerf {
-  fun configure(debuggable: Boolean) {}
+  @Volatile
+  private var debuggable: Boolean = true
 
-  fun resetSession() {}
+  fun configure(debuggable: Boolean) {
+    this.debuggable = debuggable
+  }
 
-  fun markFirstPreviewFrame() {}
+  fun resetSession() {
+    log(null, "PERF_RESET_SESSION")
+  }
 
-  fun markShutterTap(captureId: String? = null) {}
+  fun markFirstPreviewFrame() {
+    log(null, "FIRST_PREVIEW_FRAME_MARK")
+  }
 
-  fun markTakePictureInvoke(captureId: String?) {}
+  fun markShutterTap(captureId: String? = null) {
+    log(captureId, "SHUTTER_TAP")
+  }
 
-  fun markImageCallback(captureId: String?) {}
+  fun markTakePictureInvoke(captureId: String?) {
+    log(captureId, "TAKE_PICTURE_INVOKE")
+  }
 
-  fun markValidationComplete(captureId: String?) {}
+  fun markImageCallback(captureId: String?) {
+    log(captureId, "IMAGE_CALLBACK")
+  }
 
-  fun markNativeResultFinish(captureId: String?) {}
+  fun markValidationComplete(captureId: String?) {
+    log(captureId, "VALIDATION_COMPLETE")
+  }
 
-  fun noteRebind(reason: String) {}
+  fun markNativeResultFinish(captureId: String?) {
+    log(captureId, "NATIVE_RESULT_FINISH")
+  }
 
-  fun noteUnbindAll(where: String) {}
+  fun noteRebind(reason: String) {
+    log(null, "REBIND", reason)
+  }
 
-  fun stage(captureId: String?, name: String, detail: String? = null) {}
+  fun noteUnbindAll(where: String) {
+    log(null, "UNBIND_ALL", where)
+  }
 
-  fun log(captureId: String?, name: String, detail: String = "") {}
+  fun stage(captureId: String?, name: String, detail: String? = null) {
+    log(captureId, name, detail.orEmpty())
+  }
+
+  fun log(captureId: String?, name: String, detail: String = "") {
+    if (!debuggable) return
+    val idPart = if (captureId.isNullOrBlank()) "" else " id=$captureId"
+    val detailPart = if (detail.isBlank()) "" else " $detail"
+    Log.d(NativeCameraContract.LOG_TAG, "PERF $name$idPart$detailPart")
+  }
 }

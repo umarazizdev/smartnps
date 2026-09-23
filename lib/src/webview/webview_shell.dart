@@ -174,7 +174,10 @@ class _WebViewShellState extends State<WebViewShell>
   static const _recoveryTimeout = Duration(seconds: 10);
   static const _resumeHealthDelay = Duration(milliseconds: 450);
   static const _resumeStuckWatchdogDelay = Duration(seconds: 8);
+  static const _resumeStaleReloadThreshold = Duration(minutes: 30);
   static const _maxSilentRecoveries = 2;
+
+  DateTime? _lastBackgroundedAt;
 
   Timer? _splashReleaseTimer;
   Timer? _loadWatchdog;
@@ -193,10 +196,21 @@ class _WebViewShellState extends State<WebViewShell>
   String? _lastBottomBarVisibilityLog;
 
   void _setNativeAuthSession(bool value) {
+    final wasReady = _shouldUploadNativePermissionStatus;
     final active = value && _ui.officerLoggedIn.value;
     _ui.setNativeAuthSession(active);
     if (_shouldUploadNativePermissionStatus) {
       NativePermissionStatusService.instance.startBatteryMonitoring();
+      // Cold open after kill often resumes before auth flags are restored.
+      // Retry kill→opened upload once the session is ready.
+      if (!wasReady) {
+        unawaited(
+          NativePermissionStatusService.instance
+              .uploadAppCycleWithKillTimelineIfNeeded(
+                appCycle: AppLifecycleState.resumed.name,
+              ),
+        );
+      }
     } else {
       NativePermissionStatusService.instance.stopBatteryMonitoring();
     }
@@ -940,6 +954,15 @@ class _WebViewShellState extends State<WebViewShell>
             .then(function () {
               return window.flutter_inappwebview.callHandler(
                 'openLogVisit',
+                payload == null ? {} : payload
+              );
+            });
+        };
+        window.SmartNPS360.openOnsiteLogVisit = function (payload) {
+          return ensureFlutterBridge()
+            .then(function () {
+              return window.flutter_inappwebview.callHandler(
+                'openOnsiteLogVisit',
                 payload == null ? {} : payload
               );
             });
@@ -2301,9 +2324,7 @@ class _WebViewShellState extends State<WebViewShell>
           ? const Color(AppConfig.cDarkCardColor)
           : const Color(0xFF0F1724);
     }
-    return Platform.isAndroid
-        ? Colors.white
-        : const Color(AppConfig.cSurface);
+    return Platform.isAndroid ? Colors.white : const Color(AppConfig.cSurface);
   }
 
   Future<void> _syncPullToRefreshColors(bool isDark) async {
@@ -2311,7 +2332,9 @@ class _WebViewShellState extends State<WebViewShell>
     if (controller == null) return;
     try {
       await controller.setColor(_pullToRefreshIndicatorColor(isDark));
-      await controller.setBackgroundColor(_pullToRefreshBackgroundColor(isDark));
+      await controller.setBackgroundColor(
+        _pullToRefreshBackgroundColor(isDark),
+      );
     } catch (_) {}
   }
 
@@ -2374,12 +2397,14 @@ class _WebViewShellState extends State<WebViewShell>
     DutyHeartbeatService.instance.backgroundLocationPermissionMissing
         .addListener(_onBackgroundLocationPermissionChanged);
 
-    if (_shouldUploadNativePermissionStatus) {
+    // Flutter resumed is the primary kill→open upload signal. Always run prepare
+    // on mobile even before auth flags are restored (upload may wait for token).
+    if (Platform.isIOS || Platform.isAndroid) {
       unawaited(
         NativePermissionStatusService.instance
             .uploadAppCycleWithKillTimelineIfNeeded(
-          appCycle: AppLifecycleState.resumed.name,
-        ),
+              appCycle: AppLifecycleState.resumed.name,
+            ),
       );
     }
 
@@ -2611,22 +2636,19 @@ class _WebViewShellState extends State<WebViewShell>
       NativePermissionStatusService.instance.stopBatteryMonitoring();
     }
 
-    if (_shouldUploadNativePermissionStatus) {
-      if ((Platform.isIOS || Platform.isAndroid) &&
-          state == AppLifecycleState.resumed) {
-        unawaited(
-          NativePermissionStatusService.instance
-              .uploadAppCycleWithKillTimelineIfNeeded(
-            appCycle: state.name,
-          ),
-        );
-      } else {
-        unawaited(
-          NativePermissionStatusService.instance.uploadAppCycle(
-            appCycle: state.name,
-          ),
-        );
-      }
+    if ((Platform.isIOS || Platform.isAndroid) &&
+        state == AppLifecycleState.resumed) {
+      // Primary reopen upload path — not gated on auth (prepare stamps opened_at).
+      unawaited(
+        NativePermissionStatusService.instance
+            .uploadAppCycleWithKillTimelineIfNeeded(appCycle: state.name),
+      );
+    } else if (_shouldUploadNativePermissionStatus) {
+      unawaited(
+        NativePermissionStatusService.instance.uploadAppCycle(
+          appCycle: state.name,
+        ),
+      );
     }
 
     if (Platform.isAndroid || Platform.isIOS) {
@@ -2634,6 +2656,7 @@ class _WebViewShellState extends State<WebViewShell>
         unawaited(BackgroundLocationController.notifyAppBackgrounded());
       } else if (state == AppLifecycleState.paused ||
           state == AppLifecycleState.hidden) {
+        _lastBackgroundedAt = DateTime.now();
         unawaited(BackgroundLocationController.notifyAppBackgrounded());
       } else if (state == AppLifecycleState.resumed) {
         unawaited(BackgroundLocationController.notifyAppForegrounded());
@@ -2641,8 +2664,11 @@ class _WebViewShellState extends State<WebViewShell>
     }
 
     if (state == AppLifecycleState.resumed) {
-      unawaited(_checkWebViewHealthAfterResume());
-      _scheduleResumeStuckRecoveryWatchdog();
+      final staleBackground = _isStaleBackgroundResume();
+      if (!staleBackground) {
+        unawaited(_checkWebViewHealthAfterResume());
+        _scheduleResumeStuckRecoveryWatchdog();
+      }
       unawaited(_syncOfflineFromConnectivity());
       if (_ui.officerLoggedIn.value && !_ui.showLocationNotice.value) {
         unawaited(RequiredPermissionsGate.instance.refresh(force: true));
@@ -2672,6 +2698,7 @@ class _WebViewShellState extends State<WebViewShell>
           if (controller != null) {
             await _reconcileBottomBarFromWebView(controller);
           }
+          await _maybeReloadWebViewAfterLongBackground();
           return;
         }
 
@@ -2691,6 +2718,7 @@ class _WebViewShellState extends State<WebViewShell>
           if (controller != null) {
             await _reconcileBottomBarFromWebView(controller);
           }
+          await _maybeReloadWebViewAfterLongBackground();
           return;
         }
         DutyHeartbeatService.instance.beginResumeDutyReconcile();
@@ -2729,9 +2757,12 @@ class _WebViewShellState extends State<WebViewShell>
         await OfficerAnnouncementCoordinator.instance.tryDeliverPending(
           source: 'resumed',
         );
+        await _maybeReloadWebViewAfterLongBackground();
         await _refreshNativeAuthSessionFromStorage();
         await _maybePromptUnfinishedDraft(force: true);
       }());
+    } else if (state == AppLifecycleState.resumed) {
+      unawaited(_maybeReloadWebViewAfterLongBackground());
     }
   }
 
@@ -2977,6 +3008,36 @@ class _WebViewShellState extends State<WebViewShell>
     }
     if (!mounted) return;
     _showOffline(needsReload: true);
+  }
+
+  bool _isStaleBackgroundResume() {
+    final lastBackgrounded = _lastBackgroundedAt;
+    if (lastBackgrounded == null) return false;
+    return DateTime.now().difference(lastBackgrounded) >=
+        _resumeStaleReloadThreshold;
+  }
+
+  Future<void> _maybeReloadWebViewAfterLongBackground() async {
+    if (!mounted) return;
+    if (_ui.showOffline.value) return;
+    if (_ui.showingLogVisit.value) return;
+    if (_ui.pullToRefreshActive.value) return;
+    if (!_ui.firstPageLoaded.value) return;
+
+    final lastBackgrounded = _lastBackgroundedAt;
+    _lastBackgroundedAt = null;
+    if (lastBackgrounded == null) return;
+
+    final away = DateTime.now().difference(lastBackgrounded);
+    if (away < _resumeStaleReloadThreshold) return;
+
+    if (kDebugMode) {
+      debugPrint(
+        '[SmartNPS360][WebView] stale background reload after '
+        '${away.inMinutes}m',
+      );
+    }
+    await _recoverWebView(reason: 'resume_stale_background', recreate: true);
   }
 
   Future<_WebViewHealth> _probeWebViewHealth(
@@ -3718,10 +3779,138 @@ class _WebViewShellState extends State<WebViewShell>
     _scrollYBeforeLogVisit = await _readWebScrollY(controller);
   }
 
-  Future<Map<String, dynamic>> _openLogVisitScreen([Map? payload]) async {
+  Future<Map<String, dynamic>> _handleOpenLogVisitBridge(
+    List<dynamic> args, {
+    required String handlerName,
+    required String uploadUrl,
+  }) async {
+    final isOnsite = handlerName == 'openOnsiteLogVisit';
+    patrolLogDebugLog(
+      '[SmartNPS360][JS Bridge] ================================\n'
+      '[SmartNPS360][JS Bridge] CALLED FROM WEB\n'
+      '[SmartNPS360][JS Bridge] route=$handlerName\n'
+      '[SmartNPS360][JS Bridge] kind=${isOnsite ? 'onsite_patrol' : 'standard_patrol'}\n'
+      '[SmartNPS360][JS Bridge] uploadUrl=$uploadUrl\n'
+      '[SmartNPS360][JS Bridge] argsCount=${args.length}\n'
+      '[SmartNPS360][JS Bridge] ================================',
+    );
+    patrolLogDebugLog(
+      '[SmartNPS360] $handlerName called argsCount=${args.length} '
+      'uploadUrl=$uploadUrl rawArgs=$args',
+    );
+
+    final currentHost = _ui.currentUri.value?.host;
+    if (!AppConfig.isAllowedHost(currentHost)) {
+      patrolLogDebugLog(
+        '[SmartNPS360] denied $handlerName from host=$currentHost',
+      );
+      return {
+        'ok': false,
+        'error': {'code': 'untrusted_origin', 'message': 'Untrusted origin'},
+      };
+    }
+
+    final dynamic first = args.isNotEmpty ? args.first : null;
+    var payload = _normalizeBridgeMap(first);
+
+    if (payload == null ||
+        (_valueFromPayload(payload, const ['siteId', 'site_id']) == null &&
+            _valueFromPayload(payload, const ['regionId', 'region_id']) ==
+                null)) {
+      final fromContext = await _readPatrolDraftContextFromWeb();
+      if (fromContext != null) {
+        patrolLogDebugLog(
+          '[SmartNPS360] $handlerName using patrolDraftContext '
+          'keys=${fromContext.keys.toList()} context=$fromContext',
+        );
+        payload = {...?payload, ...fromContext};
+      }
+    }
+
+    final existingCheckpoints = payload?['checkpoints'];
+    final hasCheckpoints =
+        existingCheckpoints is List && existingCheckpoints.isNotEmpty;
+    if (!hasCheckpoints) {
+      final fromWeb = await _readPatrolCheckpointsFromWeb();
+      if (fromWeb != null && fromWeb.isNotEmpty) {
+        payload = {...?payload, 'checkpoints': fromWeb};
+        patrolLogDebugLog(
+          '[SmartNPS360] $handlerName merged checkpoints '
+          'count=${fromWeb.length}',
+        );
+      }
+    } else {
+      _logRawCheckpoints(existingCheckpoints);
+      final needsPhotos = _checkpointsMissingPhotos(existingCheckpoints);
+      if (needsPhotos) {
+        final fromWeb = await _readPatrolCheckpointsFromWeb();
+        if (fromWeb != null && fromWeb.isNotEmpty) {
+          payload = {
+            ...?payload,
+            'checkpoints': _mergeCheckpointPhotos(existingCheckpoints, fromWeb),
+          };
+          patrolLogDebugLog(
+            '[SmartNPS360] $handlerName enriched checkpoint photos '
+            'from getPatrolCheckpoints count=${fromWeb.length}',
+          );
+          _logRawCheckpoints(payload!['checkpoints']);
+        }
+      }
+    }
+
+    final siteId = _valueFromPayload(payload, const ['siteId', 'site_id']);
+    final regionId = _valueFromPayload(payload, const [
+      'regionId',
+      'region_id',
+    ]);
+    final siteName = _stringFromPayload(payload, const [
+      'siteName',
+      'site_name',
+      'site',
+    ]);
+    final regionName = _stringFromPayload(payload, const [
+      'regionName',
+      'region_name',
+      'region',
+    ]);
+    final checkpointCount = payload?['checkpoints'] is List
+        ? (payload!['checkpoints'] as List).length
+        : 0;
+    final checkpointPhotoDebug = _checkpointPhotoDebugSummary(
+      payload?['checkpoints'],
+    );
+
+    patrolLogDebugLog(
+      '[SmartNPS360] $handlerName site/region '
+      'siteId=$siteId regionId=$regionId '
+      'siteName=$siteName regionName=$regionName '
+      'checkpoints=$checkpointCount '
+      'checkpointPhotos=$checkpointPhotoDebug '
+      'uploadUrl=$uploadUrl',
+    );
+
+    final result = await _openLogVisitScreen(payload, uploadUrl: uploadUrl);
+    patrolLogDebugLog(
+      '[SmartNPS360] $handlerName ok=${result['ok']} '
+      'reopenedPending=${result['reopenedPending']} '
+      'itemCount=${result['itemCount']} '
+      'result=$result',
+    );
+    return result;
+  }
+
+  Future<Map<String, dynamic>> _openLogVisitScreen(
+    Map? payload, {
+    required String uploadUrl,
+  }) async {
     final flow = VisitDraftResumeDialog.ensureFlowController();
     unawaited(VisitGpsSession.instance.start());
-    final normalized = _normalizeBridgeMap(payload);
+    final normalized = <String, dynamic>{
+      ...?_normalizeBridgeMap(payload),
+      'api_upload_url': uploadUrl,
+      'upload_url': uploadUrl,
+      'uploadUrl': uploadUrl,
+    };
 
     await _captureWebResumePoint();
 
@@ -3737,6 +3926,7 @@ class _WebViewShellState extends State<WebViewShell>
       'siteName=${ctx?.siteName} regionName=${ctx?.regionName} '
       'clientDraftId=${ctx?.clientDraftId} '
       'sitePatrolWindowId=${ctx?.sitePatrolWindowId} '
+      'uploadUrl=${ctx?.uploadUrl} '
       'resumeUri=$_uriBeforeLogVisit '
       'scrollY=$_scrollYBeforeLogVisit '
       'payload=$normalized',
@@ -3756,6 +3946,7 @@ class _WebViewShellState extends State<WebViewShell>
       'siteName': ctx?.siteName,
       'regionName': ctx?.regionName,
       'clientDraftId': ctx?.clientDraftId,
+      'uploadUrl': ctx?.uploadUrl,
     };
   }
 
@@ -4649,116 +4840,19 @@ class _WebViewShellState extends State<WebViewShell>
     );
     controller.addJavaScriptHandler(
       handlerName: 'openLogVisit',
-      callback: (args) async {
-        patrolLogDebugLog(
-          '[SmartNPS360] openLogVisit called argsCount=${args.length} '
-          'rawArgs=$args',
-        );
-
-        final currentHost = _ui.currentUri.value?.host;
-        if (!AppConfig.isAllowedHost(currentHost)) {
-          patrolLogDebugLog(
-            '[SmartNPS360] denied openLogVisit from host=$currentHost',
-          );
-          return {
-            'ok': false,
-            'error': {
-              'code': 'untrusted_origin',
-              'message': 'Untrusted origin',
-            },
-          };
-        }
-
-        final dynamic first = args.isNotEmpty ? args.first : null;
-        var payload = _normalizeBridgeMap(first);
-
-        if (payload == null ||
-            (_valueFromPayload(payload, const ['siteId', 'site_id']) == null &&
-                _valueFromPayload(payload, const ['regionId', 'region_id']) ==
-                    null)) {
-          final fromContext = await _readPatrolDraftContextFromWeb();
-          if (fromContext != null) {
-            patrolLogDebugLog(
-              '[SmartNPS360] openLogVisit using patrolDraftContext '
-              'keys=${fromContext.keys.toList()} context=$fromContext',
-            );
-            payload = {...?payload, ...fromContext};
-          }
-        }
-
-        final existingCheckpoints = payload?['checkpoints'];
-        final hasCheckpoints =
-            existingCheckpoints is List && existingCheckpoints.isNotEmpty;
-        if (!hasCheckpoints) {
-          final fromWeb = await _readPatrolCheckpointsFromWeb();
-          if (fromWeb != null && fromWeb.isNotEmpty) {
-            payload = {...?payload, 'checkpoints': fromWeb};
-            patrolLogDebugLog(
-              '[SmartNPS360] openLogVisit merged checkpoints '
-              'count=${fromWeb.length}',
-            );
-          }
-        } else {
-          _logRawCheckpoints(existingCheckpoints);
-          final needsPhotos = _checkpointsMissingPhotos(existingCheckpoints);
-          if (needsPhotos) {
-            final fromWeb = await _readPatrolCheckpointsFromWeb();
-            if (fromWeb != null && fromWeb.isNotEmpty) {
-              payload = {
-                ...?payload,
-                'checkpoints': _mergeCheckpointPhotos(
-                  existingCheckpoints,
-                  fromWeb,
-                ),
-              };
-              patrolLogDebugLog(
-                '[SmartNPS360] openLogVisit enriched checkpoint photos '
-                'from getPatrolCheckpoints count=${fromWeb.length}',
-              );
-              _logRawCheckpoints(payload!['checkpoints']);
-            }
-          }
-        }
-
-        final siteId = _valueFromPayload(payload, const ['siteId', 'site_id']);
-        final regionId = _valueFromPayload(payload, const [
-          'regionId',
-          'region_id',
-        ]);
-        final siteName = _stringFromPayload(payload, const [
-          'siteName',
-          'site_name',
-          'site',
-        ]);
-        final regionName = _stringFromPayload(payload, const [
-          'regionName',
-          'region_name',
-          'region',
-        ]);
-        final checkpointCount = payload?['checkpoints'] is List
-            ? (payload!['checkpoints'] as List).length
-            : 0;
-        final checkpointPhotoDebug = _checkpointPhotoDebugSummary(
-          payload?['checkpoints'],
-        );
-
-        patrolLogDebugLog(
-          '[SmartNPS360] openLogVisit site/region '
-          'siteId=$siteId regionId=$regionId '
-          'siteName=$siteName regionName=$regionName '
-          'checkpoints=$checkpointCount '
-          'checkpointPhotos=$checkpointPhotoDebug',
-        );
-
-        final result = await _openLogVisitScreen(payload);
-        patrolLogDebugLog(
-          '[SmartNPS360] openLogVisit ok=${result['ok']} '
-          'reopenedPending=${result['reopenedPending']} '
-          'itemCount=${result['itemCount']} '
-          'result=$result',
-        );
-        return result;
-      },
+      callback: (args) => _handleOpenLogVisitBridge(
+        args,
+        handlerName: 'openLogVisit',
+        uploadUrl: ApiUrls.visitsUploadUrl,
+      ),
+    );
+    controller.addJavaScriptHandler(
+      handlerName: 'openOnsiteLogVisit',
+      callback: (args) => _handleOpenLogVisitBridge(
+        args,
+        handlerName: 'openOnsiteLogVisit',
+        uploadUrl: ApiUrls.onsitePatrolVisitsUploadUrl,
+      ),
     );
     controller.addJavaScriptHandler(
       handlerName: 'getPendingDrafts',
@@ -6447,7 +6541,12 @@ enum _BottomItem {
     'assets/home-icon-silhouette.png',
     '/officer/dashboard',
   ),
-  shiftLog('Shift Log', 'assets/list.png', 'assets/list.png', '/officer/shift-log'),
+  shiftLog(
+    'Shift Log',
+    'assets/list.png',
+    'assets/list.png',
+    '/officer/shift-log',
+  ),
   timesheet(
     'TimeSheet',
     'assets/schedule-outline.png',

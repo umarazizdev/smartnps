@@ -31,6 +31,16 @@ import flutter_background_service_ios
   private var slcMethodChannel: FlutterMethodChannel?
   private var launchedForLocation = false
   private var awaitingFlutterDutyConfirm = false
+  /// After a background location relaunch, ignore scene-active until the user
+  /// really brings the UI forward. Prevents false opened_at + Flutter resume
+  /// side-effects that can disarm SLC.
+  private var suppressKillCycleForegroundUntilUserOpen = false
+  /// When suppress was armed (for brief false-active debounce after SLC wake).
+  private var locationWakeSuppressStartedAt: Date?
+  /// Ignore false foreground for this long after a location relaunch.
+  private let locationWakeForegroundDebounce: TimeInterval = 8
+  /// Avoid stacking many deferred foreground rechecks.
+  private var pendingForegroundRecheck = false
   private var slcLocationManager: CLLocationManager?
   private var dutyGpsLocationManager: CLLocationManager?
   private var dutyPollLocationManager: CLLocationManager?
@@ -70,6 +80,9 @@ import flutter_background_service_ios
     observeBackgroundAppRefreshChanges()
     notifyFlutterOfLocationWakeIfNeeded()
     application.registerForRemoteNotifications()
+    IosAppKillCycleReporter.shared.recoverKillFromBackgroundIfNeeded()
+    // Near-realtime killed POST if terminate was missed (location wake / relaunch).
+    IosAppKillCycleReporter.shared.uploadKilledEventIfNeeded(reason: "didFinishLaunching")
     // Retry upload only if both timestamps already queued (never stamp opened_at here).
     IosAppKillCycleReporter.shared.flushPendingIfNeeded(reason: "didFinishLaunching")
 
@@ -81,9 +94,8 @@ import flutter_background_service_ios
     let onDuty = isOnDuty()
     let unpaidBreak = isUnpaidBreak()
     guard onDuty, !unpaidBreak else {
-      NSLog(
-        "[SmartNPS360][KillCycle] skip terminate report; "
-          + "onDuty=\(onDuty) unpaidBreak=\(unpaidBreak)"
+      IosAppKillCycleReporter.shared.appendDebugLog(
+        "skip terminate report; onDuty=\(onDuty) unpaidBreak=\(unpaidBreak)"
       )
       super.applicationWillTerminate(application)
       return
@@ -102,12 +114,176 @@ import flutter_background_service_ios
   }
 
   override func applicationDidBecomeActive(_ application: UIApplication) {
+    // With UIScene, this often does not run — SceneDelegate.sceneDidBecomeActive owns it.
+    onUserSceneBecameActive()
+    super.applicationDidBecomeActive(application)
+  }
+
+  override func applicationDidEnterBackground(_ application: UIApplication) {
+    // With UIScene, this often does not run — SceneDelegate.sceneDidEnterBackground owns it.
+    onUserSceneEnteredBackground()
+    super.applicationDidEnterBackground(application)
+  }
+
+  /// Shared by AppDelegate + SceneDelegate (UIScene no longer calls app-level active/background).
+  func onUserSceneWillEnterForeground() {
+    // SLC relaunch often fires this without a real open. Don't clear suppress yet.
+    if suppressKillCycleForegroundUntilUserOpen {
+      if let started = locationWakeSuppressStartedAt,
+         Date().timeIntervalSince(started) < locationWakeForegroundDebounce
+      {
+        IosAppKillCycleReporter.shared.appendDebugLog(
+          "willEnterForeground ignored; within \(Int(locationWakeForegroundDebounce))s wake debounce"
+        )
+        return
+      }
+      IosAppKillCycleReporter.shared.appendDebugLog(
+        "willEnterForeground; scheduling active recheck"
+      )
+      scheduleForegroundRecheck(reason: "willEnterForeground", after: foregroundRecheckDelay())
+      return
+    }
+    if hasQueuedKillTimeline() {
+      IosAppKillCycleReporter.shared.appendDebugLog(
+        "willEnterForeground; scheduling active recheck (kill queued)"
+      )
+      scheduleForegroundRecheck(reason: "willEnterForeground_kill", after: 0.75)
+    }
+  }
+
+  func onUserSceneBecameActive() {
+    guard UIApplication.shared.applicationState == .active else {
+      IosAppKillCycleReporter.shared.appendDebugLog(
+        "skip foreground; applicationState=\(UIApplication.shared.applicationState.rawValue)"
+      )
+      // Only retry after wake debounce — early inactive→active is common on SLC wake.
+      if shouldScheduleForegroundRecheckWhileSuppressed() {
+        scheduleForegroundRecheck(reason: "becameActive_inactive", after: 1.0)
+      }
+      return
+    }
+    guard hasForegroundActiveWindowScene() else {
+      IosAppKillCycleReporter.shared.appendDebugLog(
+        "skip foreground; no foregroundActive scene"
+      )
+      if shouldScheduleForegroundRecheckWhileSuppressed() {
+        scheduleForegroundRecheck(reason: "no_foregroundActive_scene", after: 1.0)
+      }
+      return
+    }
+
+    if suppressKillCycleForegroundUntilUserOpen,
+       let started = locationWakeSuppressStartedAt,
+       Date().timeIntervalSince(started) < locationWakeForegroundDebounce
+    {
+      IosAppKillCycleReporter.shared.appendDebugLog(
+        "defer foreground; location wake too recent — recheck after debounce"
+      )
+      scheduleForegroundRecheck(
+        reason: "wake_debounce",
+        after: locationWakeForegroundDebounce - Date().timeIntervalSince(started)
+      )
+      return
+    }
+
+    if suppressKillCycleForegroundUntilUserOpen {
+      suppressKillCycleForegroundUntilUserOpen = false
+      locationWakeSuppressStartedAt = nil
+      IosAppKillCycleReporter.shared.setSuppressOpenedAtUntilUserForeground(false)
+      IosAppKillCycleReporter.shared.appendDebugLog(
+        "cleared location-wake suppress (app active)"
+      )
+    }
+
     registerPlatformChannelsIfNeeded()
     notifyFlutterOfLocationWakeIfNeeded()
-    // opened_at only when returning from a queued kill — not normal background resume.
-    IosAppKillCycleReporter.shared.markOpenedAfterKillIfNeeded()
-    IosAppKillCycleReporter.shared.flushPendingIfNeeded(reason: "didBecomeActive")
-    super.applicationDidBecomeActive(application)
+    // Same-process resume: drop background candidate (cold launch already recovered).
+    UserDefaults.standard.removeObject(forKey: "smartnps360.ios_app_cycle.pending_background_at")
+    // User is visibly back — cancel pending kill alert (not on background location wake).
+    IosAppKillCycleReporter.shared.cancelKillSecurityAlertOnForeground()
+    // Stamp opened_at; Flutter owns reopen POST (native backup if Flutter is late).
+    IosAppKillCycleReporter.shared.markOpenedAfterKillIfNeeded(forceForReopenUpload: true)
+    IosAppKillCycleReporter.shared.scheduleReopenFlushBackup()
+    IosAppKillCycleReporter.shared.appendDebugLog("user foreground (scene/app active)")
+  }
+
+  /// Called from Flutter prepare when UI is already active (covers missed scene callbacks).
+  @discardableResult
+  func claimRealUserForegroundIfActive() -> Bool {
+    guard UIApplication.shared.applicationState == .active else { return false }
+    guard hasForegroundActiveWindowScene() else { return false }
+    if suppressKillCycleForegroundUntilUserOpen,
+       let started = locationWakeSuppressStartedAt,
+       Date().timeIntervalSince(started) < locationWakeForegroundDebounce
+    {
+      return false
+    }
+    onUserSceneBecameActive()
+    return true
+  }
+
+  func onUserSceneEnteredBackground() {
+    pendingForegroundRecheck = false
+    if isOnDuty(), !isUnpaidBreak() {
+      IosAppKillCycleReporter.shared.noteEnteredBackground()
+    } else {
+      IosAppKillCycleReporter.shared.appendDebugLog(
+        "skip background_at; onDuty=\(isOnDuty()) unpaidBreak=\(isUnpaidBreak())"
+      )
+      IosAppKillCycleReporter.shared.cancelKillSecurityAlertNotArmed()
+    }
+  }
+
+  private func hasForegroundActiveWindowScene() -> Bool {
+    if #available(iOS 13.0, *) {
+      return UIApplication.shared.connectedScenes.contains { scene in
+        guard let windowScene = scene as? UIWindowScene else { return false }
+        return windowScene.activationState == .foregroundActive
+      }
+    }
+    return true
+  }
+
+  private func hasQueuedKillTimeline() -> Bool {
+    let killed = UserDefaults.standard.string(
+      forKey: "smartnps360.ios_app_cycle.pending_killed_at"
+    )?
+      .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return !killed.isEmpty
+  }
+
+  private func shouldScheduleForegroundRecheckWhileSuppressed() -> Bool {
+    guard suppressKillCycleForegroundUntilUserOpen || hasQueuedKillTimeline() else {
+      return false
+    }
+    if suppressKillCycleForegroundUntilUserOpen,
+       let started = locationWakeSuppressStartedAt,
+       Date().timeIntervalSince(started) < locationWakeForegroundDebounce
+    {
+      return false
+    }
+    return true
+  }
+
+  private func foregroundRecheckDelay() -> TimeInterval {
+    if let started = locationWakeSuppressStartedAt {
+      return max(1.0, locationWakeForegroundDebounce - Date().timeIntervalSince(started))
+    }
+    return 1.0
+  }
+
+  private func scheduleForegroundRecheck(reason: String, after: TimeInterval) {
+    guard !pendingForegroundRecheck else { return }
+    let delay = max(0.5, after)
+    pendingForegroundRecheck = true
+    IosAppKillCycleReporter.shared.appendDebugLog(
+      "schedule foreground recheck in \(String(format: "%.1f", delay))s (\(reason))"
+    )
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+      guard let self else { return }
+      self.pendingForegroundRecheck = false
+      self.onUserSceneBecameActive()
+    }
   }
 
   /// Registers custom channels on the active Flutter engine messenger.
@@ -200,9 +376,46 @@ import flutter_background_service_ios
         result(self?.hasPreciseLocationPermission() ?? false)
       case "peekAppKillTimeline":
         result(IosAppKillCycleReporter.shared.peekTimeline())
+      case "prepareAppKillTimelineForReopen":
+        result(IosAppKillCycleReporter.shared.prepareTimelineForReopen())
       case "clearAppKillTimeline":
         IosAppKillCycleReporter.shared.clearPendingAfterFlutterUpload()
         result(true)
+      case "getAppKillCycleDebugSnapshot":
+        result(self?.appKillCycleDebugSnapshot() ?? [:])
+      case "clearAppKillCycleDebugLogs":
+        IosAppKillCycleReporter.shared.clearDebugLogs()
+        result(true)
+      case "appendAppKillCycleDebugLog":
+        if let message = call.arguments as? String, !message.isEmpty {
+          IosAppKillCycleReporter.shared.appendDebugLog("flutter: \(message)")
+        } else if let map = call.arguments as? [String: Any],
+                  let message = map["message"] as? String,
+                  !message.isEmpty
+        {
+          IosAppKillCycleReporter.shared.appendDebugLog("flutter: \(message)")
+        }
+        result(true)
+      case "cacheFullPermissionSnapshot":
+        if let map = call.arguments as? [String: Any] {
+          var asStrings: [String: String] = [:]
+          for (key, value) in map {
+            let text = String(describing: value).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty, text != "null" {
+              asStrings[key] = text
+            }
+          }
+          IosAppKillCycleReporter.shared.cacheFullPermissionsSnapshot(asStrings)
+          result(true)
+        } else {
+          result(
+            FlutterError(
+              code: "bad_args",
+              message: "cacheFullPermissionSnapshot expects a string map",
+              details: nil
+            )
+          )
+        }
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -390,6 +603,46 @@ import flutter_background_service_ios
     let wasArmed = UserDefaults.standard.bool(forKey: slcEnabledKey)
     let backgroundLaunch = application.applicationState == .background
     launchedForLocation = locationKey || (backgroundLaunch && wasOnDuty && wasArmed)
+    if launchedForLocation {
+      // Stay silent for kill-cycle "open" until the app is truly .active.
+      suppressKillCycleForegroundUntilUserOpen = true
+      locationWakeSuppressStartedAt = Date()
+      IosAppKillCycleReporter.shared.setSuppressOpenedAtUntilUserForeground(true)
+    } else {
+      // Fresh icon/cold open — never inherit a stale location-wake suppress.
+      suppressKillCycleForegroundUntilUserOpen = false
+      locationWakeSuppressStartedAt = nil
+      IosAppKillCycleReporter.shared.setSuppressOpenedAtUntilUserForeground(false)
+    }
+
+    // Classify what woke/relaunched the process after a kill (Debug Env panel).
+    let hadKillCandidate =
+      UserDefaults.standard.string(forKey: "smartnps360.ios_app_cycle.pending_killed_at") != nil
+      || UserDefaults.standard.string(forKey: "smartnps360.ios_app_cycle.pending_background_at") != nil
+    if hadKillCandidate || launchedForLocation {
+      if locationKey {
+        IosAppKillCycleReporter.shared.recordWakeService(
+          "ios_location_launch",
+          detail: "LaunchOptions.location (SLC or geofence)"
+        )
+        UserDefaults.standard.set("ios_location_launch", forKey: "smartnps360.ios_wake.trigger")
+      } else if backgroundLaunch && wasOnDuty && wasArmed {
+        IosAppKillCycleReporter.shared.recordWakeService(
+          "ios_background_location_relaunch",
+          detail: "background launch while onDuty+SLC armed"
+        )
+        UserDefaults.standard.set(
+          "ios_background_location_relaunch",
+          forKey: "smartnps360.ios_wake.trigger"
+        )
+      } else if hadKillCandidate {
+        IosAppKillCycleReporter.shared.recordWakeService(
+          "user_open",
+          detail: "cold launch / icon tap after kill"
+        )
+        UserDefaults.standard.set("user_open", forKey: "smartnps360.ios_wake.trigger")
+      }
+    }
 
     if !launchedForLocation {
       // Tap/open while still flagged on duty: keep SLC + GPS ring so a later
@@ -441,7 +694,8 @@ import flutter_background_service_ios
   }
 
   /// Restores SLC + GPS ring without stopping existing iOS region monitoring.
-  /// Duty GPS keep-alive stays off until Flutter or native heartbeat confirms on_duty.
+  /// On location wake: start duty GPS immediately from local on_duty (optimistic),
+  /// then reconcile via native/Flutter heartbeat (stop if API says off_duty).
   private func restoreSlcAfterLocationWake(startNativePing: Bool) {
     awaitingFlutterDutyConfirm = true
     UserDefaults.standard.set(true, forKey: onDutyKey)
@@ -451,9 +705,9 @@ import flutter_background_service_ios
 
     if CLLocationManager.significantLocationChangeMonitoringAvailable() {
       manager.startMonitoringSignificantLocationChanges()
-      NSLog("[SmartNPS360][SLC] restored SLC; GPS deferred until on_duty confirm")
+      NSLog("[SmartNPS360][SLC] restored SLC after location wake")
     } else {
-      NSLog("[SmartNPS360][SLC] SLC unavailable; waiting for duty confirm")
+      NSLog("[SmartNPS360][SLC] SLC unavailable after location wake")
     }
 
     if let saved = savedGeofenceCoordinate() {
@@ -461,11 +715,42 @@ import flutter_background_service_ios
       syncDutyGeofenceRing(around: saved, manager: manager)
     }
     requestGpsFix(reason: "wake_restore")
+
     if startNativePing {
+      // Optimistic duty GPS from local storage — do not wait for API/UI.
+      if startOptimisticDutyGpsIfArmed(reason: "location_wake") {
+        IosAppKillCycleReporter.shared.appendDebugLog(
+          "optimistic duty GPS started (local on_duty)"
+        )
+      } else {
+        NSLog("[SmartNPS360][SLC] optimistic GPS skipped; awaiting confirm")
+      }
+
       DutyWakeUploader.shared.beginLocationWake(flutterTimeout: 3)
-      // Location/SLC relaunch after swipe-kill — timeline event, not user open.
-      IosAppKillCycleReporter.shared.handleSlcAwakenedAfterKillIfNeeded()
+      // Location/SLC relaunch after swipe-kill — upload killed without waiting for user open.
+      IosAppKillCycleReporter.shared.recoverKillFromBackgroundIfNeeded()
+      IosAppKillCycleReporter.shared.uploadKilledEventIfNeeded(reason: "location_wake")
+
+      // Let Flutter attach pinger; only claims wake if its GPS is running.
+      DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+        self?.notifyFlutterOfLocationWakeIfNeeded()
+      }
     }
+  }
+
+  /// Start continuous duty GPS when native local on_duty is armed (post-kill wake).
+  @discardableResult
+  private func startOptimisticDutyGpsIfArmed(reason: String) -> Bool {
+    guard isOnDuty() else { return false }
+    guard !isUnpaidBreak() else { return false }
+    guard DutyWakeUploader.shared.hasAccessToken else { return false }
+    guard CLLocationManager.authorizationStatus() == .authorizedAlways else { return false }
+
+    awaitingFlutterDutyConfirm = false
+    startDutyGpsMonitoring()
+    startDutyMotionIfAllowed()
+    NSLog("[SmartNPS360][DutyGPS] optimistic start reason=\(reason)")
+    return true
   }
 
   private func wireDutyWakeUploader() {
@@ -510,6 +795,15 @@ import flutter_background_service_ios
 
   private func isOnDuty() -> Bool {
     return UserDefaults.standard.bool(forKey: onDutyKey)
+  }
+
+  private func appKillCycleDebugSnapshot() -> [String: Any] {
+    IosAppKillCycleReporter.shared.debugSnapshot(
+      onDuty: isOnDuty(),
+      unpaidBreak: isUnpaidBreak(),
+      slcArmed: UserDefaults.standard.bool(forKey: slcEnabledKey),
+      hasAccessToken: DutyWakeUploader.shared.hasAccessToken
+    )
   }
 
   private func setOnDuty(_ onDuty: Bool) {
@@ -866,12 +1160,22 @@ import flutter_background_service_ios
   private func handleSignificantMotion(_ activity: String) {
     guard isOnDuty(), !awaitingFlutterDutyConfirm else { return }
     NSLog("[SmartNPS360][Motion] significant activity=\(activity); requesting GPS")
+    IosAppKillCycleReporter.shared.recordWakeService(
+      "ios_motion",
+      detail: activity
+    )
     requestFreshGpsPoll(reason: "motion_\(activity)")
   }
 
   private func handleGeofenceWake(region: CLRegion, event: String) {
     guard isOnDuty(), UserDefaults.standard.bool(forKey: slcEnabledKey) else { return }
     NSLog("[SmartNPS360][Geofence] \(event) \(region.identifier)")
+    IosAppKillCycleReporter.shared.recordWakeService(
+      "ios_geofence",
+      detail: "\(event) \(region.identifier)"
+    )
+    UserDefaults.standard.set("ios_geofence_\(event)", forKey: "smartnps360.ios_wake.trigger")
+    IosAppKillCycleReporter.shared.uploadKilledEventIfNeeded(reason: "geofence_\(event)")
 
     if let coord = lastGeofenceCoordinate ?? savedGeofenceCoordinate() {
       let marker = CLLocation(
@@ -998,6 +1302,12 @@ import flutter_background_service_ios
     }
 
     if awaitingFlutterDutyConfirm {
+      IosAppKillCycleReporter.shared.recordWakeService(
+        "ios_slc",
+        detail: "significant location change while awaiting duty confirm"
+      )
+      UserDefaults.standard.set("ios_slc", forKey: "smartnps360.ios_wake.trigger")
+      IosAppKillCycleReporter.shared.uploadKilledEventIfNeeded(reason: "slc_wake")
       emitLocation(location, source: "ios_slc")
       requestGpsFix(reason: "slc_wake")
       return
