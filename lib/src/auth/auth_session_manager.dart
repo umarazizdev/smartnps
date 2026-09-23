@@ -2,7 +2,6 @@ import 'package:flutter/foundation.dart';
 
 import '../background/location/background_location_uploader.dart';
 import '../background/duty/duty_heartbeat_service.dart';
-import '../permissions/android_permission_status_watch.dart';
 import '../permissions/native_permission_status_service.dart';
 import '../push/notifications/push_notification_service.dart';
 import '../utilities/app_config.dart';
@@ -51,7 +50,6 @@ class AuthSessionManager {
       debugPrint('[AuthSessionManager] logout phase 3: clear auth token');
     }
     NativePermissionStatusService.instance.resetSyncState();
-    await AndroidPermissionStatusWatch.disarm();
     await AuthRepository.instance.clear();
     PushNotificationService.instance.setIosSessionAuth();
 

@@ -9,7 +9,6 @@ import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.ContextCompat
-import com.smartnps360.app.permission.AndroidAppKillCycleReporter
 import id.flutter.flutter_background_service.BackgroundService
 import id.flutter.flutter_background_service.Config
 import id.flutter.flutter_background_service.WatchdogReceiver
@@ -40,7 +39,6 @@ internal object AndroidDutyKillWatch {
     // Never start FGS from arm — Flutter owns start while UI is open.
     // After a real kill, tick() starts FGS once the UI has been away ≥45s.
     schedule(context, 15_000L)
-    AndroidAppKillCycleReporter.ensureTrackingService(context)
     Log.i(TAG, "armed native kill-watch uiResumed=${AndroidDutyUiState.isUiResumed}")
   }
 
@@ -54,7 +52,6 @@ internal object AndroidDutyKillWatch {
     if (forceOff) {
       stopLocationService(context)
     }
-    AndroidAppKillCycleReporter.ensureTrackingService(context)
     Log.i(TAG, "disarmed native kill-watch forceOff=$forceOff")
   }
 
@@ -127,7 +124,6 @@ internal object AndroidDutyKillWatch {
       } else {
         WatchdogReceiver.enqueue(context, 5_000)
       }
-      AndroidAppKillCycleReporter.handleNativeAwakenedAfterKillIfNeeded(context)
     }
 
     val status = AndroidDutyKillHeartbeat.confirmDuty(context)

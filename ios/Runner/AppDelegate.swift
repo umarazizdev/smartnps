@@ -70,27 +70,8 @@ import flutter_background_service_ios
     observeBackgroundAppRefreshChanges()
     notifyFlutterOfLocationWakeIfNeeded()
     application.registerForRemoteNotifications()
-    // Retry upload only if both timestamps already queued (never stamp opened_at here).
-    IosAppKillCycleReporter.shared.flushPendingIfNeeded(reason: "didFinishLaunching")
 
     return didLaunch
-  }
-
-  /// On-duty swipe/terminate: save local kill stamp, best-effort sync upload, local alert.
-  override func applicationWillTerminate(_ application: UIApplication) {
-    let onDuty = isOnDuty()
-    let unpaidBreak = isUnpaidBreak()
-    guard onDuty, !unpaidBreak else {
-      NSLog(
-        "[SmartNPS360][KillCycle] skip terminate report; "
-          + "onDuty=\(onDuty) unpaidBreak=\(unpaidBreak)"
-      )
-      super.applicationWillTerminate(application)
-      return
-    }
-
-    IosAppKillCycleReporter.shared.handleTerminateWhileOnDuty()
-    super.applicationWillTerminate(application)
   }
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
@@ -104,9 +85,6 @@ import flutter_background_service_ios
   override func applicationDidBecomeActive(_ application: UIApplication) {
     registerPlatformChannelsIfNeeded()
     notifyFlutterOfLocationWakeIfNeeded()
-    // opened_at only when returning from a queued kill — not normal background resume.
-    IosAppKillCycleReporter.shared.markOpenedAfterKillIfNeeded()
-    IosAppKillCycleReporter.shared.flushPendingIfNeeded(reason: "didBecomeActive")
     super.applicationDidBecomeActive(application)
   }
 
@@ -198,11 +176,6 @@ import flutter_background_service_ios
         result(self?.backgroundAppRefreshStatus() ?? "unknown")
       case "hasPreciseLocationPermission":
         result(self?.hasPreciseLocationPermission() ?? false)
-      case "peekAppKillTimeline":
-        result(IosAppKillCycleReporter.shared.peekTimeline())
-      case "clearAppKillTimeline":
-        IosAppKillCycleReporter.shared.clearPendingAfterFlutterUpload()
-        result(true)
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -463,8 +436,6 @@ import flutter_background_service_ios
     requestGpsFix(reason: "wake_restore")
     if startNativePing {
       DutyWakeUploader.shared.beginLocationWake(flutterTimeout: 3)
-      // Location/SLC relaunch after swipe-kill — timeline event, not user open.
-      IosAppKillCycleReporter.shared.handleSlcAwakenedAfterKillIfNeeded()
     }
   }
 
