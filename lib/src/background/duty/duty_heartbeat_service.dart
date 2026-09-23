@@ -50,8 +50,10 @@ class DutyHeartbeatService {
       IosDutyLocationPinger.confirmOnDutyBeforeStart = () {
         return confirmOnDutyFromApiForTracking(stopIfNotOnDuty: true);
       };
-      IosSignificantLocationChangeService.setOnLocationWake(() {
-        return recoverAfterIosLocationWakeIfNeeded();
+      IosSignificantLocationChangeService.setOnLocationWake(() async {
+        await recoverAfterIosLocationWakeIfNeeded();
+        // true → native skips GPS fallback; false → native starts GPS on SLC wake.
+        return IosDutyLocationPinger.isRunning;
       });
     }
   }
@@ -181,10 +183,27 @@ class DutyHeartbeatService {
       return;
     }
 
+    final status = await IosSignificantLocationChangeService.status();
+    final launchedForLocation = status['launchedForLocation'] == true;
+    final nativeOnDuty = status['onDuty'] == true;
+    final nativeRunning = status['running'] == true;
+
     final loggedIn = await AuthRepository.instance.isOfficerLoggedIn();
     final token = await AuthRepository.instance.getAccessToken();
     final hasToken = token != null && token.isNotEmpty;
     if (!loggedIn || !hasToken) {
+      // Cold location wake often runs Flutter before secure-storage auth is ready.
+      // Disarming here kills SLC and breaks post-kill tracking — wait and retry.
+      if (nativeOnDuty || nativeRunning || launchedForLocation) {
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] iOS location wake defer disarm; '
+          'auth not ready yet (native still armed) — retry in 2s',
+        );
+        Future<void>.delayed(const Duration(seconds: 2), () {
+          unawaited(recoverAfterIosLocationWakeIfNeeded());
+        });
+        return;
+      }
       dutyHeartbeatDebugLog(
         '[DutyHeartbeatService] iOS location wake stopped; '
         'not logged in or no auth token',
@@ -195,20 +214,11 @@ class DutyHeartbeatService {
       return;
     }
 
-    final status = await IosSignificantLocationChangeService.status();
-    final launchedForLocation = status['launchedForLocation'] == true;
-    final nativeOnDuty = status['onDuty'] == true;
-    final nativeRunning = status['running'] == true;
-
     if (!nativeOnDuty && !nativeRunning) {
       dutyHeartbeatDebugLog(
         '[DutyHeartbeatService] iOS location wake ignored; native duty/slc not armed',
       );
       return;
-    }
-
-    if (launchedForLocation) {
-      await IosSignificantLocationChangeService.claimWake();
     }
 
     if (!nativeOnDuty) {
@@ -219,10 +229,43 @@ class DutyHeartbeatService {
       return;
     }
 
+    // Location wake: start GPS from local native on_duty first (post-kill),
+    // then reconcile with API. Do not block GPS on heartbeat latency.
+    if (launchedForLocation) {
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] iOS location wake; optimistic GPS from local on_duty',
+      );
+      _lastAppliedStatus = onDuty;
+      await IosDutyLocationPinger.recoverIfNeeded(
+        fromLocationWake: true,
+        dutyAlreadyConfirmed: true,
+      );
+      start();
+
+      if (IosDutyLocationPinger.isRunning) {
+        await IosSignificantLocationChangeService.claimWake();
+      }
+
+      // Background reconcile — stop only if API clearly says off_duty.
+      unawaited(() async {
+        final allowed = await confirmOnDutyFromApiForTracking(
+          stopIfNotOnDuty: true,
+        );
+        if (!allowed) {
+          dutyHeartbeatDebugLog(
+            '[DutyHeartbeatService] iOS location wake reconcile: not on_duty; stopped',
+          );
+        } else {
+          dutyHeartbeatDebugLog(
+            '[DutyHeartbeatService] iOS location wake reconcile: on_duty confirmed',
+          );
+        }
+      }());
+      return;
+    }
+
     dutyHeartbeatDebugLog(
-      launchedForLocation
-          ? '[DutyHeartbeatService] iOS location wake; confirming duty before GPS'
-          : '[DutyHeartbeatService] iOS on-duty launch; confirming duty before GPS',
+      '[DutyHeartbeatService] iOS on-duty launch; confirming duty before GPS',
     );
 
     final allowed = await confirmOnDutyFromApiForTracking(

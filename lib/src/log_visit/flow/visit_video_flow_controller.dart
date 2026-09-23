@@ -257,7 +257,8 @@ class VisitVideoFlowController extends GetxController {
   }
 
   bool isCheckpointCompleted(int checkpointId) {
-    return mediaForCheckpoint(checkpointId).any((e) => e.isPhoto);
+    // Photo or video capture both complete the checkpoint.
+    return mediaForCheckpoint(checkpointId).isNotEmpty;
   }
 
   int get completedCheckpointCount =>
@@ -1496,39 +1497,49 @@ class VisitUploadMeta {
             (e) => e.siteCheckpointId == checkpoint.id && !e.isPendingCapture,
           )
           .toList(growable: false);
-      final photoIndex = mediaItems.indexWhere(
+      // Prefer a photo when both exist; video alone also completes the checkpoint.
+      var primaryIndex = mediaItems.indexWhere(
         (e) => e.siteCheckpointId == checkpoint.id && e.isPhoto,
       );
-      if (photoIndex < 0) continue;
+      if (primaryIndex < 0) {
+        primaryIndex = mediaItems.indexWhere(
+          (e) =>
+              e.siteCheckpointId == checkpoint.id &&
+              !e.isPendingCapture &&
+              e.isVideo,
+        );
+      }
+      if (primaryIndex < 0) continue;
 
-      final photo = mediaItems[photoIndex];
+      final primary = mediaItems[primaryIndex];
       final notesItem = linked.firstWhere(
         (e) => e.hasTextNote,
-        orElse: () => photo,
+        orElse: () => primary,
       );
       double? distanceMeters;
       if (checkpoint.hasCoordinates &&
-          photo.latitude != null &&
-          photo.longitude != null) {
+          primary.latitude != null &&
+          primary.longitude != null) {
         distanceMeters = Geolocator.distanceBetween(
           checkpoint.latitude!,
           checkpoint.longitude!,
-          photo.latitude!,
-          photo.longitude!,
+          primary.latitude!,
+          primary.longitude!,
         );
       }
 
       checkpointsMeta.add(<String, dynamic>{
         'site_checkpoint_id': checkpoint.id,
         'status': 'completed',
-        'checked_at': (photo.capturedAt ?? submitted).toUtc().toIso8601String(),
-        'latitude': photo.latitude,
-        'longitude': photo.longitude,
-        'accuracy_meters': photo.accuracyMeters,
+        'checked_at':
+            (primary.capturedAt ?? submitted).toUtc().toIso8601String(),
+        'latitude': primary.latitude,
+        'longitude': primary.longitude,
+        'accuracy_meters': primary.accuracyMeters,
         if (distanceMeters != null)
           'distance_meters': double.parse(distanceMeters.toStringAsFixed(1)),
         'notes': notesItem.textNote.trim(),
-        'photo_client_index': photoIndex,
+        'photo_client_index': primaryIndex,
       });
     }
 
