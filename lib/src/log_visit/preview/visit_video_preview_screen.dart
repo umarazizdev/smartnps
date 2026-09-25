@@ -244,6 +244,23 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
 
     if (flow.hasIncompleteCheckpoints) return;
 
+    final minimumPhotos = ctx?.minimumPhotos;
+    if (minimumPhotos != null &&
+        minimumPhotos > 0 &&
+        !flow.meetsMinimumPhotoRequirement) {
+      final photoLabel = minimumPhotos == 1 ? 'photo' : 'photos';
+      final captured = flow.capturedPhotoCount;
+      _showTopSnack(
+        title: 'More photos needed',
+        message:
+            'This site requires at least $minimumPhotos $photoLabel. '
+            'You have $captured so far. Videos do not count toward this requirement.',
+        isDark: isDark,
+        isError: true,
+      );
+      return;
+    }
+
     final locationLabel = flow.locationSubtitle?.trim() ?? '';
     final movedToDashboard = onUploadStarted != null;
     final draftKey =
@@ -269,12 +286,15 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
 
     // Move draft → queue as soon as upload is confirmed (Yes / skip confirm),
     // so it leaves the editable drafts list before network check / API upload.
+    // Also detach the in-memory editor so reopening Log Visit looks fresh while
+    // the queued draft files remain on disk for upload.
     Future<void>? claimForQueueFuture;
     Future<void> claimDraftForQueue() {
       return claimForQueueFuture ??= () async {
         await flow.persistCurrentDraft();
         await flow.clearLastUploadIssue();
         await VisitUploadQueue.instance.markInFlight(draftKey);
+        await flow.releaseEditorAfterQueuedClaim();
       }();
     }
 
@@ -306,24 +326,36 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       return;
     }
 
+    final snapshot = await VisitMediaDraftStore.instance.loadDraftSnapshot(
+      key: draftKey,
+    );
+    if (!snapshot.hasItems) {
+      _clearUploadProgress(flow);
+      await VisitUploadQueue.instance.remove(draftKey);
+      return;
+    }
+
     flow.isUploading.value = true;
     flow.isQueueUploading.value = false;
     flow.uploadProgressCurrent.value = 0;
-    flow.uploadProgressTotal.value = items.length;
-    flow.uploadLocationLabel.value = locationLabel;
+    flow.uploadProgressTotal.value = snapshot.items.length;
+    flow.uploadLocationLabel.value =
+        snapshot.locationLabel?.trim().isNotEmpty == true
+        ? snapshot.locationLabel!.trim()
+        : locationLabel;
 
     try {
-      final meta = await flow.buildUploadMeta();
+      final meta = await VisitUploadMeta.buildFromSnapshot(snapshot);
       if (kDebugMode) {
         debugPrint('[VisitUpload] meta=$meta');
       }
 
       final result = await VisitUploadApi.instance.uploadVisit(
         meta: meta,
-        items: items,
-        batchVoicePath: flow.batchNote.value.voiceNotePath,
-        generalVoicePath: flow.generalNote.value.voiceNotePath,
-        uploadUrl: flow.patrolContext.value?.uploadUrl,
+        items: snapshot.items,
+        batchVoicePath: snapshot.batchNote.voiceNotePath,
+        generalVoicePath: snapshot.generalNote.voiceNotePath,
+        uploadUrl: snapshot.context?.uploadUrl,
         onProgress: (current, total) {
           flow.uploadProgressCurrent.value = current;
           flow.uploadProgressTotal.value = total;
@@ -344,7 +376,10 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
         }
         _clearUploadProgress(flow);
         await VisitUploadQueue.instance.remove(draftKey);
-        await flow.clearAll();
+        await VisitMediaDraftStore.instance.clearDraft(
+          deleteFiles: true,
+          key: draftKey,
+        );
         unawaited(VisitGpsSession.instance.stop());
         await _showUploadSuccessFeedback(isDark: isDark);
         if (!movedToDashboard) {
@@ -370,9 +405,10 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       await VisitUploadQueue.instance.remove(draftKey);
       final presentation = VisitUploadFailure.present(
         result: result,
-        mediaItems: flow.mediaItems.toList(growable: false),
-        checkpoints: flow.checkpoints,
+        mediaItems: snapshot.items,
+        checkpoints: snapshot.context?.checkpoints ?? const [],
       );
+      await flow.activateDraft(draftKey);
       await flow.recordLastUploadIssue(presentation.toDraftIssue());
       await _showUploadFailureDialog(
         flow: flow,
@@ -397,6 +433,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       _clearUploadProgress(flow);
       await VisitUploadQueue.instance.remove(draftKey);
       final presentation = VisitUploadFailure.presentUnexpected(error);
+      await flow.activateDraft(draftKey);
       await flow.recordLastUploadIssue(presentation.toDraftIssue());
       await _showUploadFailureDialog(
         flow: flow,
@@ -422,8 +459,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     required VisitDraftKey draftKey,
   }) async {
     _clearUploadProgress(flow);
-    await flow.clearLastUploadIssue();
-    await flow.persistCurrentDraft();
+    // Editor was already released; draft remains on disk for the queue worker.
     await VisitUploadQueue.instance.enqueue(draftKey);
     unawaited(VisitGpsSession.instance.stop());
     if (kDebugMode) {
@@ -550,9 +586,11 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     final fromContext = flow.patrolContext.value?.locationSubtitle?.trim();
     if (fromContext != null && fromContext.isNotEmpty) return fromContext;
 
-    final site = flow.patrolContext.value?.siteName?.trim() ??
+    final site =
+        flow.patrolContext.value?.siteName?.trim() ??
         flow.draftSiteName.value?.trim();
-    final region = flow.patrolContext.value?.regionName?.trim() ??
+    final region =
+        flow.patrolContext.value?.regionName?.trim() ??
         flow.draftRegionName.value?.trim();
     if (site != null &&
         site.isNotEmpty &&
@@ -849,6 +887,10 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                                 onFilterChanged: (filter) =>
                                     _mediaFilter.value = filter,
                                 locationLabel: locationLabel,
+                                minimumPhotos: controller
+                                    .patrolContext
+                                    .value
+                                    ?.minimumPhotos,
                                 onBack: () => _handleBack(context),
                                 hasCheckpoints: hasCheckpoints,
                                 checkpointCompleted: completedCheckpoints,
@@ -923,6 +965,8 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                           onFilterChanged: (filter) =>
                               _mediaFilter.value = filter,
                           locationLabel: locationLabel,
+                          minimumPhotos:
+                              controller.patrolContext.value?.minimumPhotos,
                           onBack: () => _handleBack(context),
                           hasCheckpoints: hasCheckpoints,
                           checkpointCompleted: completedCheckpoints,
@@ -1395,13 +1439,10 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
           SizedBox(width: isLandscape ? 8 : 10),
           Expanded(
             child: Obx(() {
-              final uploading = controller.isUploading.value;
               controller.mediaItems.length;
               controller.patrolContext.value;
-              final canComplete =
-                  hasMedia &&
-                  !uploading &&
-                  !controller.hasIncompleteCheckpoints;
+              controller.isUploading.value;
+              final canComplete = controller.canCompleteReport;
               final completeAccent = _visitPrimaryActionColor(isDark);
               return ElevatedButton.icon(
                 onPressed: canComplete ? () => _uploadAllMedia(context) : null,
@@ -1957,7 +1998,7 @@ class _DraftLandscapeSidebar extends StatelessWidget {
   Widget build(BuildContext context) {
     final controller = Get.find<VisitVideoFlowController>();
     final primary = _visitPrimaryActionColor(isDark);
-    final rightPad = Platform.isAndroid ? 14.0 : 10.0;
+    final rightPad = Platform.isAndroid ? 8.0 : 6.0;
     final captureLabel = hasCheckpoints
         ? 'Add more'
         : (hasMedia ? 'Take more photos' : 'Take photos');
@@ -1972,22 +2013,21 @@ class _DraftLandscapeSidebar extends StatelessWidget {
         border: Border(left: BorderSide(color: panelBorder)),
       ),
       child: Padding(
-        padding: EdgeInsets.fromLTRB(10, 10, rightPad, 10),
+        padding: EdgeInsets.fromLTRB(8, 8, rightPad, 8),
         child: SizedBox(
-          width: 152,
+          width: 128,
           child: Obx(() {
             final uploading = controller.isUploading.value;
             controller.mediaItems.length;
             controller.patrolContext.value;
-            final canComplete =
-                hasMedia && !uploading && !controller.hasIncompleteCheckpoints;
+            final canComplete = controller.canCompleteReport;
 
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 SizedBox(
-                  height: 118,
+                  height: 96,
                   child: _DraftLandscapeRailButton(
                     isDark: isDark,
                     filled: false,
@@ -1997,9 +2037,9 @@ class _DraftLandscapeSidebar extends StatelessWidget {
                     onPressed: uploading ? null : onCapture,
                   ),
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 8),
                 SizedBox(
-                  height: 118,
+                  height: 96,
                   child: _DraftLandscapeRailButton(
                     isDark: isDark,
                     filled: true,
@@ -2042,9 +2082,7 @@ class _DraftLandscapeRailButton extends StatelessWidget {
     final bg = filled
         ? (enabled
               ? accent
-              : (isDark
-                    ? const Color(0xFF2A3548)
-                    : const Color(0xFFC5D0E3)))
+              : (isDark ? const Color(0xFF2A3548) : const Color(0xFFC5D0E3)))
         : (isDark ? const Color(0xFF1B2638) : Colors.white);
     final border = filled
         ? (enabled
@@ -2081,33 +2119,33 @@ class _DraftLandscapeRailButton extends StatelessWidget {
 
     return Material(
       color: bg,
-      elevation: filled && enabled ? 2 : 0,
+      elevation: filled && enabled ? 1.5 : 0,
       shadowColor: accent.withValues(alpha: isDark ? 0.35 : 0.22),
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-        side: BorderSide(color: border, width: 1.2),
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: border, width: 1),
       ),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onPressed,
         child: Center(
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Container(
-                  width: 44,
-                  height: 44,
+                  width: 34,
+                  height: 34,
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
                     color: iconBg,
                     shape: BoxShape.circle,
                   ),
-                  child: Icon(icon, color: iconFg, size: 24),
+                  child: Icon(icon, color: iconFg, size: 18),
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 6),
                 Text(
                   label,
                   textAlign: TextAlign.center,
@@ -2115,10 +2153,10 @@ class _DraftLandscapeRailButton extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: labelColor,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w800,
-                    height: 1.2,
-                    letterSpacing: -0.15,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    height: 1.15,
+                    letterSpacing: -0.1,
                   ),
                 ),
               ],
@@ -2140,6 +2178,7 @@ class _VisitHeader extends StatelessWidget {
     required this.onFilterChanged,
     required this.onBack,
     this.locationLabel,
+    this.minimumPhotos,
     this.isLandscape = false,
     this.hasCheckpoints = false,
     this.checkpointCompleted = 0,
@@ -2155,6 +2194,7 @@ class _VisitHeader extends StatelessWidget {
   final ValueChanged<_VisitMediaFilter> onFilterChanged;
   final VoidCallback onBack;
   final String? locationLabel;
+  final int? minimumPhotos;
   final bool isLandscape;
   final bool hasCheckpoints;
   final int checkpointCompleted;
@@ -2293,6 +2333,15 @@ class _VisitHeader extends StatelessWidget {
                   ),
                 ],
               ),
+            ),
+          ],
+          if (minimumPhotos != null && minimumPhotos! > 0) ...[
+            SizedBox(height: isLandscape ? 6 : 10),
+            _MinimumPhotosNotice(
+              isDark: isDark,
+              compact: isLandscape,
+              minimumPhotos: minimumPhotos,
+              embedded: true,
             ),
           ],
           if (!hasCheckpoints) ...[
@@ -3805,6 +3854,112 @@ class _DraftAutosaveNotice extends StatelessWidget {
         ),
       );
     });
+  }
+}
+
+class _MinimumPhotosNotice extends StatelessWidget {
+  const _MinimumPhotosNotice({
+    required this.isDark,
+    required this.minimumPhotos,
+    this.compact = false,
+    this.embedded = false,
+  });
+
+  final bool isDark;
+  final int? minimumPhotos;
+  final bool compact;
+  final bool embedded;
+
+  @override
+  Widget build(BuildContext context) {
+    final count = minimumPhotos;
+    if (count == null || count <= 0) {
+      return const SizedBox.shrink();
+    }
+
+    final photoLabel = count == 1 ? 'photo' : 'photos';
+    final bg = isDark
+        ? const Color(0xFF2A2118).withValues(alpha: 0.95)
+        : const Color(0xFFFFF7ED);
+    final border = isDark
+        ? const Color(0xFFE48E15).withValues(alpha: 0.35)
+        : const Color(0xFFFDBA74);
+    final iconColor = isDark
+        ? const Color(0xFFFBBF24)
+        : const Color(0xFFC2410C);
+    final titleColor = isDark ? Colors.white : const Color(0xFF7C2D12);
+    final bodyColor = isDark
+        ? Colors.white.withValues(alpha: 0.75)
+        : const Color(0xFF9A3412);
+
+    final card = DecoratedBox(
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(compact ? 12 : 14),
+        border: Border.all(color: border),
+      ),
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          compact ? 10 : 12,
+          compact ? 8 : 10,
+          compact ? 10 : 12,
+          compact ? 8 : 10,
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: EdgeInsets.only(top: compact ? 1 : 2),
+              child: Icon(
+                Icons.photo_library_outlined,
+                size: compact ? 16 : 18,
+                color: iconColor,
+              ),
+            ),
+            SizedBox(width: compact ? 8 : 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Report requirement',
+                    style: TextStyle(
+                      color: titleColor,
+                      fontSize: compact ? 12 : 13,
+                      fontWeight: FontWeight.w700,
+                      height: 1.2,
+                    ),
+                  ),
+                  SizedBox(height: compact ? 2 : 3),
+                  Text(
+                    'This site requires $count $photoLabel for the patrol report.',
+                    style: TextStyle(
+                      color: bodyColor,
+                      fontSize: compact ? 11 : 12,
+                      fontWeight: FontWeight.w500,
+                      height: 1.35,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (embedded) return card;
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        compact ? 12 : 16,
+        0,
+        compact ? 12 : 16,
+        compact ? 6 : 8,
+      ),
+      child: card,
+    );
   }
 }
 

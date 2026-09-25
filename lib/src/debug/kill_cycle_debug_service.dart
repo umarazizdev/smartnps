@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 
+import 'session_debug_logger.dart';
+
 /// Reads native kill-cycle debug snapshot for the Debug Env screen (TestFlight).
 class KillCycleDebugService {
   KillCycleDebugService._();
@@ -32,10 +34,26 @@ class KillCycleDebugService {
     } catch (_) {}
   }
 
-  static Future<void> append(String message) async {
+  /// Enables/disables native kill-cycle log persistence (Run + Kill category).
+  static Future<void> setKillDebugCaptureEnabled(bool enabled) async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
+    try {
+      await _settingsChannel.invokeMethod<dynamic>(
+        'setKillDebugCaptureEnabled',
+        {'enabled': enabled},
+      );
+    } catch (_) {}
+  }
+
+  static Future<void> append(String message) async {
     final trimmed = message.trim();
     if (trimmed.isEmpty) return;
+    final logger = SessionDebugLogger.instance;
+    await logger.ensureReady();
+    // Kill-cycle debug lines only while Run + Kill category.
+    if (!logger.isCategoryActive(SessionDebugCategory.kill)) return;
+    logger.log(SessionDebugCategory.kill, trimmed);
+    if (!Platform.isAndroid && !Platform.isIOS) return;
     try {
       await _settingsChannel.invokeMethod<dynamic>(
         'appendAppKillCycleDebugLog',

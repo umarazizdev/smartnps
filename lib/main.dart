@@ -16,6 +16,7 @@ import 'src/crashlytics/crashlytics_reporter.dart';
 import 'src/push/notifications/push_notification_service.dart';
 import 'src/api/api_client.dart';
 import 'src/auth/auth_repository.dart';
+import 'src/debug/debug_env_access_service.dart';
 import 'src/debug/debug_env_config.dart';
 import 'src/location/mock_location_guard.dart';
 import 'src/utilities/app_upgrade_reconciler.dart';
@@ -31,6 +32,7 @@ Future<void> main() async {
   await _initCrashlytics();
   if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
     await DebugEnvConfig.instance.init();
+    unawaited(DebugEnvAccessService.instance.ensureReady());
   }
   await AppVersionInfo.init();
   await AppUpgradeReconciler.reconcileIfNeeded();

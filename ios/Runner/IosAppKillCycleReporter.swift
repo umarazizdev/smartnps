@@ -20,6 +20,7 @@ final class IosAppKillCycleReporter {
   private let pendingOpenedAtKey = "smartnps360.ios_app_cycle.pending_opened_at"
   private let pendingBackgroundAtKey = "smartnps360.ios_app_cycle.pending_background_at"
   private let debugLogsKey = "smartnps360.ios_app_cycle.debug_logs"
+  private let killCaptureEnabledKey = "smartnps360.ios_app_cycle.kill_debug_capture"
   private let lastWakeServiceKey = "smartnps360.ios_app_cycle.last_wake_service"
   private let lastWakeAtKey = "smartnps360.ios_app_cycle.last_wake_at"
   private let lastWakeDetailKey = "smartnps360.ios_app_cycle.last_wake_detail"
@@ -68,7 +69,9 @@ final class IosAppKillCycleReporter {
   }
 
   /// Persisted ring buffer for TestFlight Debug Env screen (survives swipe-kill).
+  /// Only writes while Flutter Session debug Run is active with Kill selected.
   func appendDebugLog(_ message: String) {
+    guard isKillDebugCaptureEnabled() else { return }
     let line = "\(Date().toISO8601UTC()) \(message)"
     NSLog("[SmartNPS360][KillCycle] \(message)")
     lock.lock()
@@ -81,6 +84,15 @@ final class IosAppKillCycleReporter {
     lock.unlock()
     // synchronize outside lock — avoid nested lock if another log arrives.
     UserDefaults.standard.synchronize()
+  }
+
+  func setKillDebugCaptureEnabled(_ enabled: Bool) {
+    UserDefaults.standard.set(enabled, forKey: killCaptureEnabledKey)
+    UserDefaults.standard.synchronize()
+  }
+
+  func isKillDebugCaptureEnabled() -> Bool {
+    UserDefaults.standard.bool(forKey: killCaptureEnabledKey)
   }
 
   func clearDebugLogs() {
@@ -315,7 +327,8 @@ final class IosAppKillCycleReporter {
   func scheduleReopenFlushBackup() {
     guard pendingKilledAt() != nil else { return }
     markOpenedAfterKillIfNeeded(forceForReopenUpload: true)
-    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 4) { [weak self] in
+    // Backup sooner so it still runs before Flutter delayed clear (~8s).
+    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2.5) { [weak self] in
       guard let self else { return }
       guard self.pendingKilledAt() != nil else {
         self.appendDebugLog("reopen backup skip; Flutter already cleared queue")

@@ -16,6 +16,7 @@ import '../api/api_urls.dart';
 import '../auth/auth_repository.dart';
 import '../background/location/background_location_permissions.dart';
 import '../debug/kill_cycle_debug_service.dart';
+import '../debug/session_debug_logger.dart';
 import '../motion/motion_activity_service.dart';
 import '../push/notifications/push_notification_preferences.dart';
 import 'android_permission_status_watch.dart';
@@ -56,8 +57,13 @@ class NativePermissionStatusService {
       'permission.ios_foreground_lasting_confirmed.v1';
   static const String _kLegacyKeychainCleared =
       'permission.location_history.legacy_keychain_cleared.v1';
+  static const String _kStickyKillReopenJson =
+      'permission.kill_reopen.sticky_timeline.v1';
   static const Duration _appCycleDebounce = Duration(milliseconds: 350);
   static const Duration _batteryMonitorInterval = Duration(minutes: 5);
+  /// Keep native kill queue briefly so iOS/Android backup can also POST
+  /// resumed+opened_at after Flutter succeeds (belt-and-suspenders).
+  static const Duration _clearNativeKillQueueDelay = Duration(seconds: 8);
 
   Future<SharedPreferences>? _prefsFuture;
   bool _legacyKeychainCleanupStarted = false;
@@ -93,6 +99,8 @@ class NativePermissionStatusService {
   /// Last successful kill→open pair. Kept on later sync/resume POSTs so a bare
   /// upload cannot wipe `opened_at` from the dashboard after we clear the queue.
   PermissionStatusTimeline? _stickyKillReopenTimeline;
+  bool _stickyKillReopenLoaded = false;
+  Timer? _delayedNativeKillClearTimer;
   Future<bool>? _appCycleUploadInFlight;
   Future<bool>? _killReopenUploadInFlight;
   Timer? _batteryMonitorTimer;
@@ -119,6 +127,10 @@ class NativePermissionStatusService {
     _pendingAppCycle = null;
     _pendingTimeline = null;
     _stickyKillReopenTimeline = null;
+    _stickyKillReopenLoaded = true;
+    _delayedNativeKillClearTimer?.cancel();
+    _delayedNativeKillClearTimer = null;
+    unawaited(_persistStickyKillReopen(null));
     _appCycleUploadInFlight = null;
     _killReopenUploadInFlight = null;
     _lastUploadedBatteryPercentage = null;
@@ -392,6 +404,7 @@ class NativePermissionStatusService {
         _stickyKillReopenTimeline != null &&
         _stickyKillReopenTimeline!.killedAt != timeline.killedAt) {
       _stickyKillReopenTimeline = null;
+      unawaited(_persistStickyKillReopen(null));
     }
 
     // Prepare should stamp opened_at; one retry if native was briefly late.
@@ -430,16 +443,6 @@ class NativePermissionStatusService {
             'flutter kill-reopen result uploaded=$uploaded',
           ),
         );
-        if (uploaded) {
-          // Keep attaching this pair on later POSTs after native queue is cleared.
-          _stickyKillReopenTimeline = reopenTimeline;
-          await _clearAppKillTimeline();
-          unawaited(
-            KillCycleDebugService.append(
-              'flutter kill-reopen sticky kept for follow-up syncs',
-            ),
-          );
-        }
         return uploaded;
       }();
 
@@ -497,6 +500,7 @@ class NativePermissionStatusService {
       payload[PermissionStatusApiContract.appCycle] =
           PermissionStatusApiContract.cycleResumed;
       payload.addAll(timeline.toPayloadFields());
+      _ensureResumedAppCycleForKillReopen(payload);
 
       _debugLog(
         'kill-reopen upload app_cycle=resumed '
@@ -508,11 +512,22 @@ class NativePermissionStatusService {
           'killed_at=${timeline.killedAt} opened_at=${timeline.openedAt}',
         ),
       );
-      uploaded = await _upload(payload);
+      uploaded = await _upload(payload, logResponseBody: true);
       if (uploaded) {
+        // Sticky BEFORE releasing the serial lock / clearing native queue.
+        _stickyKillReopenTimeline = timeline;
+        _stickyKillReopenLoaded = true;
+        await _persistStickyKillReopen(timeline);
         _lastAppCycle = PermissionStatusApiContract.cycleResumed;
         _lastPayloadFingerprint = _fingerprint(payload);
         unawaited(AndroidPermissionStatusWatch.arm(markSynced: true));
+        unawaited(
+          KillCycleDebugService.append(
+            'flutter kill-reopen sticky persisted for follow-up syncs',
+          ),
+        );
+        // Delay native clear so platform backup can also POST the pair.
+        _scheduleDelayedNativeKillClear();
       }
     });
     return uploaded;
@@ -650,6 +665,56 @@ class NativePermissionStatusService {
       await _settingsChannel.invokeMethod<dynamic>('clearAppKillTimeline');
     } catch (error) {
       _debugLog('clearAppKillTimeline failed: $error');
+    }
+  }
+
+  void _scheduleDelayedNativeKillClear() {
+    _delayedNativeKillClearTimer?.cancel();
+    _delayedNativeKillClearTimer = Timer(_clearNativeKillQueueDelay, () {
+      unawaited(() async {
+        await _clearAppKillTimeline();
+        unawaited(
+          KillCycleDebugService.append(
+            'flutter delayed native kill-queue clear '
+            '(after ${_clearNativeKillQueueDelay.inSeconds}s for backup POST)',
+          ),
+        );
+      }());
+    });
+  }
+
+  Future<void> _ensureStickyKillReopenLoaded() async {
+    if (_stickyKillReopenLoaded) return;
+    _stickyKillReopenLoaded = true;
+    try {
+      final prefs = await _prefs();
+      final raw = prefs.getString(_kStickyKillReopenJson);
+      if (raw == null || raw.isEmpty) return;
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) {
+        final timeline = PermissionStatusTimeline.fromMap(decoded);
+        if (timeline.isKillReopen) {
+          _stickyKillReopenTimeline = timeline;
+        }
+      }
+    } catch (error) {
+      _debugLog('load sticky kill-reopen failed: $error');
+    }
+  }
+
+  Future<void> _persistStickyKillReopen(PermissionStatusTimeline? timeline) async {
+    try {
+      final prefs = await _prefs();
+      if (timeline == null || !timeline.isKillReopen) {
+        await prefs.remove(_kStickyKillReopenJson);
+        return;
+      }
+      await prefs.setString(
+        _kStickyKillReopenJson,
+        jsonEncode(timeline.toPayloadFields()),
+      );
+    } catch (error) {
+      _debugLog('persist sticky kill-reopen failed: $error');
     }
   }
 
@@ -1334,12 +1399,31 @@ class NativePermissionStatusService {
   }
 
   void _debugLog(String message) {
+    // Always capture app_cycle traffic in session debug (permissions category).
+    // Other permission noise stays error-only via logIfErrorLike.
+    final isAppCycle = message.contains('app_cycle');
+    if (isAppCycle) {
+      SessionDebugLogger.instance.log(
+        SessionDebugCategory.permissions,
+        '[NativePermissionStatus] $message',
+      );
+    } else {
+      SessionDebugLogger.instance.logIfErrorLike(
+        SessionDebugCategory.permissions,
+        '[NativePermissionStatus] $message',
+      );
+    }
     if (!AppConfig.enablePermissionStatusDebugLog) return;
     if (!kDebugMode) return;
     debugPrint('[NativePermissionStatus] $message');
   }
 
-  Future<bool> _upload(Map<String, dynamic> payload) async {
+  Future<bool> _upload(
+    Map<String, dynamic> payload, {
+    bool logResponseBody = false,
+  }) async {
+    await _ensureStickyKillReopenLoaded();
+
     // Keep kill→open timeline on every POST so a bare resumed/sync cannot wipe
     // opened_at / app_cycle from the dashboard after the native queue is cleared.
     final pending = await _peekAppKillTimeline();
@@ -1379,22 +1463,49 @@ class NativePermissionStatusService {
           response.statusCode != null &&
           response.statusCode! >= 200 &&
           response.statusCode! < 300;
+      if (logResponseBody || !ok) {
+        final body = response.data?.toString() ?? '';
+        final preview =
+            body.length > 220 ? '${body.substring(0, 220)}…' : body;
+        unawaited(
+          KillCycleDebugService.append(
+            'flutter POST status=${response.statusCode} ok=$ok '
+            'app_cycle=${payload[PermissionStatusApiContract.appCycle]} '
+            'has_opened=${payload[PermissionStatusApiContract.openedAt] != null} '
+            'body=$preview',
+          ),
+        );
+      }
       if (ok) _rememberUploadedBattery(payload);
       return ok;
-    } catch (_) {
+    } catch (error) {
+      unawaited(
+        KillCycleDebugService.append(
+          'flutter POST failed: $error',
+        ),
+      );
       return false;
     }
   }
 
-  /// Kill→open pair on the wire always implies user reopen (`app_cycle=resumed`).
+  /// When a kill→open pair is attached, default missing/empty cycle to `resumed`.
+  ///
+  /// Do **not** overwrite an intentional Flutter lifecycle cycle (`paused`,
+  /// `inactive`, `hidden`, `detached`, `killed`). Sticky follow-up syncs used
+  /// to force `resumed` on every POST, which hid real background cycles on the
+  /// dashboard after a kill-reopen.
   void _ensureResumedAppCycleForKillReopen(Map<String, dynamic> payload) {
     final killed = payload[PermissionStatusApiContract.killedAt]?.toString().trim();
     final opened = payload[PermissionStatusApiContract.openedAt]?.toString().trim();
     if (killed == null || killed.isEmpty || opened == null || opened.isEmpty) {
       return;
     }
-    payload[PermissionStatusApiContract.appCycle] =
-        PermissionStatusApiContract.cycleResumed;
+    final cycle =
+        payload[PermissionStatusApiContract.appCycle]?.toString().trim() ?? '';
+    if (cycle.isEmpty || cycle == PermissionStatusApiContract.cycleResumed) {
+      payload[PermissionStatusApiContract.appCycle] =
+          PermissionStatusApiContract.cycleResumed;
+    }
   }
 
   void _rememberUploadedBattery(Map<String, dynamic> payload) {

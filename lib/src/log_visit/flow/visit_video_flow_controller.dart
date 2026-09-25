@@ -13,6 +13,7 @@ import 'visit_checkpoint.dart';
 import 'visit_media_draft_store.dart';
 import 'visit_media_geo.dart';
 import 'visit_patrol_context.dart';
+import 'visit_upload_queue.dart';
 
 enum VisitMediaType { photo, video }
 
@@ -269,6 +270,27 @@ class VisitVideoFlowController extends GetxController {
 
   bool get hasIncompleteCheckpoints => pendingCheckpointCount > 0;
 
+  int get capturedPhotoCount =>
+      visibleMediaItems.where((e) => e.isPhoto).length;
+
+  /// When [VisitPatrolContext.minimumPhotos] is set (> 0), only photos count
+  /// toward enabling Complete Report. Videos alone do not satisfy it.
+  bool get meetsMinimumPhotoRequirement {
+    final minimum = patrolContext.value?.minimumPhotos;
+    if (minimum == null || minimum <= 0) return true;
+    return capturedPhotoCount >= minimum;
+  }
+
+  bool get canCompleteReport {
+    if (isUploading.value) return false;
+    if (hasIncompleteCheckpoints) return false;
+    final minimum = patrolContext.value?.minimumPhotos;
+    if (minimum != null && minimum > 0) {
+      return meetsMinimumPhotoRequirement;
+    }
+    return visibleMediaItems.isNotEmpty;
+  }
+
   void beginCheckpointCapture(int checkpointId) {
     activeCheckpointId.value = checkpointId;
   }
@@ -287,9 +309,21 @@ class VisitVideoFlowController extends GetxController {
   Future<void> _restoreDraft() async {
     _restoring = true;
     try {
+      await VisitUploadQueue.instance.ensureStarted();
       var snapshot = await _store.loadDraftSnapshot();
+      if (snapshot.hasItems &&
+          VisitUploadQueue.instance.isQueued(snapshot.draftKey)) {
+        // Queued/in-flight drafts stay on disk for upload, but must not
+        // reappear as the editable active draft.
+        snapshot = const VisitMediaDraftSnapshot(
+          items: <VisitMediaItem>[],
+          draftKey: VisitDraftKey.unscoped,
+        );
+        await _store.setActiveKey(VisitDraftKey.unscoped, force: true);
+      }
       if (!snapshot.hasItems) {
-        final pending = await _store.listPendingDrafts();
+        final pending =
+            await VisitUploadQueue.instance.listEditablePendingDrafts();
         if (pending.isNotEmpty) {
           snapshot = pending.first;
           await _store.setActiveKey(snapshot.draftKey);
@@ -299,6 +333,30 @@ class VisitVideoFlowController extends GetxController {
     } finally {
       _restoring = false;
       isDraftReady.value = true;
+    }
+  }
+
+  /// Clears the in-memory editor after a draft was claimed by the upload queue.
+  /// Draft files on disk are left intact for upload / silent retry.
+  Future<void> releaseEditorAfterQueuedClaim() async {
+    await _flushPersistQueue();
+    _restoring = true;
+    try {
+      _thumbnailFutures.clear();
+      mediaItems.clear();
+      batchNote.value = const VisitBatchNote();
+      generalNote.value = const VisitBatchNote();
+      lastUploadIssue.value = null;
+      activeCheckpointId.value = null;
+      _startedAt = null;
+      draftSiteName.value = null;
+      draftRegionName.value = null;
+      patrolContext.value = null;
+      activeDraftKey.value = null;
+      await _store.setActiveKey(VisitDraftKey.unscoped, force: true);
+      isDraftReady.value = true;
+    } finally {
+      _restoring = false;
     }
   }
 
@@ -561,6 +619,8 @@ class VisitVideoFlowController extends GetxController {
       siteLatitude: incoming.siteLatitude ?? current?.siteLatitude,
       siteLongitude: incoming.siteLongitude ?? current?.siteLongitude,
       uploadUrl: incoming.uploadUrl ?? current?.uploadUrl,
+      minimumPhotos: incoming.minimumPhotos ??
+          (sameSite ? current?.minimumPhotos : null),
       checkpoints: mergedCheckpoints,
     );
 
@@ -584,10 +644,21 @@ class VisitVideoFlowController extends GetxController {
 
     _restoring = true;
     try {
+      await VisitUploadQueue.instance.ensureStarted();
       await _store.setActiveKey(targetKey);
       final snapshot = await _store.loadDraftSnapshot(key: targetKey);
       _thumbnailFutures.clear();
-      _applySnapshotToState(snapshot);
+      if (VisitUploadQueue.instance.isQueued(targetKey)) {
+        // Upload owns this draft folder; open a fresh editor session.
+        mediaItems.clear();
+        _startedAt = null;
+        batchNote.value = const VisitBatchNote();
+        generalNote.value = const VisitBatchNote();
+        lastUploadIssue.value = null;
+        activeDraftKey.value = VisitDraftKey.fromContext(merged);
+      } else {
+        _applySnapshotToState(snapshot);
+      }
     } finally {
       _restoring = false;
       isDraftReady.value = true;
@@ -674,6 +745,14 @@ class VisitVideoFlowController extends GetxController {
     final general = generalNote.value;
     final issue = lastUploadIssue.value;
     final key = activeDraftKey.value ?? VisitDraftKey.fromContext(context);
+    if (VisitUploadQueue.instance.isQueued(key)) {
+      if (kDebugMode) {
+        debugPrint(
+          '[VisitDraft] skip persist; draft queued for upload key=$key',
+        );
+      }
+      return;
+    }
     if (activeDraftKey.value != key) {
       activeDraftKey.value = key;
     }
@@ -708,6 +787,14 @@ class VisitVideoFlowController extends GetxController {
     final general = generalNote.value;
     final issue = lastUploadIssue.value;
     final key = activeDraftKey.value ?? VisitDraftKey.fromContext(context);
+    if (VisitUploadQueue.instance.isQueued(key)) {
+      if (kDebugMode) {
+        debugPrint(
+          '[VisitDraft] skip persist snapshot; draft queued for upload key=$key',
+        );
+      }
+      return;
+    }
     if (activeDraftKey.value != key) {
       activeDraftKey.value = key;
     }

@@ -36,6 +36,7 @@ import 'duty_status_snapshot.dart';
 import 'location_disclosure_consent.dart';
 import 'on_duty_permissions_prompt_service.dart';
 import '../../utilities/app_debug_log.dart';
+import '../../debug/session_debug_logger.dart';
 
 class DutyHeartbeatService {
   DutyHeartbeatService._() {
@@ -52,8 +53,10 @@ class DutyHeartbeatService {
       };
       IosSignificantLocationChangeService.setOnLocationWake(() async {
         await recoverAfterIosLocationWakeIfNeeded();
-        // true → native skips GPS fallback; false → native starts GPS on SLC wake.
-        return IosDutyLocationPinger.isRunning;
+        // false → keep native wake-ping backup. Returning true used to claim
+        // immediately and cancel native uploads while Geolocator was silent.
+        // Continuous native GPS still runs from optimistic start / SLC restore.
+        return false;
       });
     }
   }
@@ -235,6 +238,10 @@ class DutyHeartbeatService {
       dutyHeartbeatDebugLog(
         '[DutyHeartbeatService] iOS location wake; optimistic GPS from local on_duty',
       );
+      SessionDebugLogger.instance.log(
+        SessionDebugCategory.duty,
+        'ios location wake; optimistic GPS from local on_duty',
+      );
       _lastAppliedStatus = onDuty;
       await IosDutyLocationPinger.recoverIfNeeded(
         fromLocationWake: true,
@@ -242,25 +249,23 @@ class DutyHeartbeatService {
       );
       start();
 
+      // Do NOT claimWake here. Claiming cancels native DutyWakeUploader before
+      // the first Flutter ping — after kill relaunch Geolocator is often silent
+      // and we need the native one-shot ping as backup until ios_gps flows.
+      SessionDebugLogger.instance.log(
+        SessionDebugCategory.duty,
+        'location wake: flutter GPS recover done '
+        'running=${IosDutyLocationPinger.isRunning} (native wake ping kept)',
+      );
+
+      // Force an immediate poll — subscription alone often delivers nothing BG.
       if (IosDutyLocationPinger.isRunning) {
-        await IosSignificantLocationChangeService.claimWake();
+        unawaited(IosDutyLocationPinger.forceWakeLocationPing());
       }
 
-      // Background reconcile — stop only if API clearly says off_duty.
-      unawaited(() async {
-        final allowed = await confirmOnDutyFromApiForTracking(
-          stopIfNotOnDuty: true,
-        );
-        if (!allowed) {
-          dutyHeartbeatDebugLog(
-            '[DutyHeartbeatService] iOS location wake reconcile: not on_duty; stopped',
-          );
-        } else {
-          dutyHeartbeatDebugLog(
-            '[DutyHeartbeatService] iOS location wake reconcile: on_duty confirmed',
-          );
-        }
-      }());
+      // Background reconcile — stop ONLY on definitive off_duty / unpaid break.
+      // Ambiguous API/network failure must NOT disarm SLC/GPS after kill.
+      unawaited(_reconcileDutyAfterLocationWake());
       return;
     }
 
@@ -294,6 +299,89 @@ class DutyHeartbeatService {
       dutyAlreadyConfirmed: true,
     );
     start();
+  }
+
+  /// After post-kill SLC wake GPS is already running, confirm duty without
+  /// disarming on flaky/unknown API results.
+  Future<void> _reconcileDutyAfterLocationWake() async {
+    try {
+      final payload = await _fetchHeartbeat();
+      if (payload != null && payload.allowsLocationTracking) {
+        await DutyStatusSnapshot.markOnDuty();
+        await _setNativeUnpaidBreak(false);
+        _locationPausedForUnpaidBreak = false;
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] iOS location wake reconcile: on_duty confirmed',
+        );
+        SessionDebugLogger.instance.log(
+          SessionDebugCategory.duty,
+          'location wake reconcile: on_duty confirmed',
+        );
+        return;
+      }
+
+      if (payload != null && payload.isUnpaidBreak) {
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] iOS location wake reconcile: unpaid break',
+        );
+        SessionDebugLogger.instance.log(
+          SessionDebugCategory.duty,
+          'location wake reconcile: unpaid break — pause GPS',
+        );
+        await DutyStatusSnapshot.clear();
+        await _setNativeUnpaidBreak(true);
+        await _pauseLocationForUnpaidBreak(
+          payload: payload,
+          notify: !_locationPausedForUnpaidBreak,
+          source: 'location_wake',
+        );
+        return;
+      }
+
+      if (payload != null && payload.dutyStatus == offDuty) {
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] iOS location wake reconcile: off_duty — stop',
+        );
+        SessionDebugLogger.instance.log(
+          SessionDebugCategory.duty,
+          'location wake reconcile: off_duty — stop tracking',
+        );
+        await DutyStatusSnapshot.clear();
+        await _applyOffDuty();
+        return;
+      }
+
+      // Unknown / null / network — keep optimistic native+Flutter GPS/SLC.
+      if (await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) {
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] iOS location wake reconcile: '
+          'API unclear; offline snapshot keeps tracking',
+        );
+        SessionDebugLogger.instance.log(
+          SessionDebugCategory.duty,
+          'location wake reconcile: API unclear; snapshot keeps GPS',
+        );
+        return;
+      }
+
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] iOS location wake reconcile: '
+        'API unclear; keeping optimistic GPS/SLC armed',
+      );
+      SessionDebugLogger.instance.log(
+        SessionDebugCategory.duty,
+        'location wake reconcile: API unclear; keep optimistic GPS',
+      );
+    } catch (e) {
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] iOS location wake reconcile failed; '
+        'keeping optimistic GPS: $e',
+      );
+      SessionDebugLogger.instance.log(
+        SessionDebugCategory.duty,
+        'location wake reconcile failed; keep optimistic GPS',
+      );
+    }
   }
 
   static Future<void> _mirrorNativeAuthSession() async {

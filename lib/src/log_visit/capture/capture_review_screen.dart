@@ -147,7 +147,7 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
                           ),
                           Expanded(
                             child: Padding(
-                              padding: const EdgeInsets.fromLTRB(12, 0, 0, 8),
+                              padding: const EdgeInsets.fromLTRB(8, 0, 0, 8),
                               child: _PreviewBody(
                                 isLandscape: true,
                                 edgeToEdge: false,
@@ -157,18 +157,18 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
                         ],
                       ),
                     ),
-                    const SizedBox(width: 10),
+                    const SizedBox(width: 6),
                     Padding(
                       padding: EdgeInsets.fromLTRB(
                         0,
                         4,
-                        Platform.isAndroid ? 10 : 8,
+                        Platform.isAndroid ? 6 : 4,
                         8,
                       ),
                       child: SizedBox(
-                        width: (MediaQuery.sizeOf(context).width * 0.24).clamp(
-                          176.0,
-                          192.0,
+                        width: (MediaQuery.sizeOf(context).width * 0.20).clamp(
+                          148.0,
+                          164.0,
                         ),
                         child: _actionBar(context: context, isLandscape: true),
                       ),
@@ -184,7 +184,7 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
                     ),
                     Expanded(
                       child: Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                        padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
                         child: Column(
                           children: [
                             Expanded(
@@ -356,7 +356,7 @@ class _CaptureReviewActionBar extends StatelessWidget {
         Row(
           children: [
             Expanded(child: actions[0]),
-            const SizedBox(width: 8),
+            const SizedBox(width: 6),
             Expanded(child: actions[1]),
           ],
         ),
@@ -364,7 +364,7 @@ class _CaptureReviewActionBar extends StatelessWidget {
         Row(
           children: [
             Expanded(child: actions[2]),
-            const SizedBox(width: 8),
+            const SizedBox(width: 6),
             Expanded(child: actions[3]),
           ],
         ),
@@ -410,7 +410,7 @@ class _ReviewActionTile extends StatelessWidget {
         splashColor: _kReviewAccent.withValues(alpha: 0.18),
         child: Padding(
           padding: EdgeInsets.symmetric(
-            horizontal: isLandscape ? 14 : 20,
+            horizontal: isLandscape ? 8 : 10,
             vertical: isLandscape ? 6 : 8,
           ),
           child: Row(
@@ -429,16 +429,20 @@ class _ReviewActionTile extends StatelessWidget {
                 )
               else
                 Icon(icon, color: _kReviewAccent, size: isLandscape ? 27 : 31),
-              SizedBox(width: isLandscape ? 14 : 20),
+              SizedBox(width: 8),
               Expanded(
-                child: Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: onPressed == null ? Colors.white38 : Colors.white,
-                    fontSize: isLandscape ? 15 : 17,
-                    fontWeight: FontWeight.w700,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    softWrap: false,
+                    style: TextStyle(
+                      color: onPressed == null ? Colors.white38 : Colors.white,
+                      fontSize: isLandscape ? 15 : 16,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
               ),
@@ -467,11 +471,11 @@ class _ReviewAlertTile extends StatelessWidget {
   Widget build(BuildContext context) {
     const alertRed = Color(0xFFEF4444);
     final accent = value ? alertRed : _kReviewAccent;
-    final horizontalPad = isLandscape ? 10.0 : 10.0;
+    final horizontalPad = 6.0;
     final iconSize = isLandscape ? 27.0 : 26.0;
     final titleSize = isLandscape ? 16.0 : 16.0;
     const subtitleSize = 11.0;
-    final switchScale = isLandscape ? 0.72 : 0.70;
+    final switchScale = isLandscape ? 0.68 : 0.70;
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 180),
