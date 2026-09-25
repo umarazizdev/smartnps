@@ -10,6 +10,7 @@ internal object AndroidAppKillCycleStore {
   private const val KEY_OPENED_AT = "opened_at"
   private const val KEY_BACKGROUND_AT = "background_at"
   private const val KEY_DEBUG_LOGS = "debug_logs"
+  private const val KEY_KILL_CAPTURE = "kill_debug_capture_enabled"
   private const val KEY_WAKE_SERVICE = "wake_service"
   private const val KEY_WAKE_AT = "wake_at"
   private const val KEY_WAKE_DETAIL = "wake_detail"
@@ -93,6 +94,7 @@ internal object AndroidAppKillCycleStore {
   }
 
   fun appendDebugLog(context: Context, message: String) {
+    if (!isKillDebugCaptureEnabled(context)) return
     val prefs = context.applicationContext.getSharedPreferences(DEBUG_PREFS, Context.MODE_PRIVATE)
     val existing = prefs.getString(KEY_DEBUG_LOGS, "") ?: ""
     val lines = if (existing.isEmpty()) {
@@ -107,6 +109,20 @@ internal object AndroidAppKillCycleStore {
       lines
     }
     prefs.edit().putString(KEY_DEBUG_LOGS, trimmed.joinToString("\n")).commit()
+  }
+
+  fun setKillDebugCaptureEnabled(context: Context, enabled: Boolean) {
+    context.applicationContext
+      .getSharedPreferences(DEBUG_PREFS, Context.MODE_PRIVATE)
+      .edit()
+      .putBoolean(KEY_KILL_CAPTURE, enabled)
+      .commit()
+  }
+
+  fun isKillDebugCaptureEnabled(context: Context): Boolean {
+    return context.applicationContext
+      .getSharedPreferences(DEBUG_PREFS, Context.MODE_PRIVATE)
+      .getBoolean(KEY_KILL_CAPTURE, false)
   }
 
   fun debugLogs(context: Context): List<String> {

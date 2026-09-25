@@ -1,7 +1,7 @@
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
 
 import '../auth/auth_repository.dart';
+import '../debug/session_debug_logger.dart';
 
 class ApiClient {
   ApiClient._();
@@ -74,8 +74,11 @@ class ApiClient {
   }
 
   static void logHttpResult(String method, Uri uri, int? statusCode) {
-    if (!kDebugMode) return;
-
+    if (statusCode == null || statusCode < 400) return;
+    SessionDebugLogger.instance.log(
+      SessionDebugCategory.apiErrors,
+      '$method ${_safePath(uri)} status=$statusCode',
+    );
   }
 
   static void logHttpError(
@@ -84,7 +87,15 @@ class ApiClient {
     int statusCode,
     String error,
   ) {
-    if (!kDebugMode) return;
+    SessionDebugLogger.instance.log(
+      SessionDebugCategory.apiErrors,
+      '$method ${_safePath(uri)} status=$statusCode error=$error',
+    );
+  }
+
+  static String _safePath(Uri uri) {
+    final path = uri.path.isEmpty ? '/' : uri.path;
+    return path;
   }
 
   static String _errorMessage(DioException error) {

@@ -45,6 +45,7 @@ void main() {
       'site_name': 'Gate A',
       'site_patrol_window_id': 44,
       'schedule_id': null,
+      'minimum_photos': 2,
       'api_upload_url': 'https://example.com/api/visits',
       'checkpoints': [
         {
@@ -53,7 +54,13 @@ void main() {
           'sort_order': 1,
         },
       ],
-      'site': {'id': 123, 'name': 'Gate A', 'latitude': 31.5, 'longitude': 74.3},
+      'site': {
+        'id': 123,
+        'name': 'Gate A',
+        'latitude': 31.5,
+        'longitude': 74.3,
+        'minimum_photos': 2,
+      },
       'region': {'id': 7, 'name': 'Lahore North'},
     });
 
@@ -63,8 +70,30 @@ void main() {
     expect(ctx.sitePatrolWindowId, 44);
     expect(ctx.siteLatitude, 31.5);
     expect(ctx.uploadUrl, 'https://example.com/api/visits');
+    expect(ctx.minimumPhotos, 2);
+    expect(ctx.hasMinimumPhotoRequirement, isTrue);
     expect(ctx.checkpoints.length, 1);
     expect(ctx.toUploadMetaFields()['site_patrol_window_id'], 44);
+  });
+
+  test('VisitPatrolContext ignores missing or zero minimum_photos', () {
+    final missing = VisitPatrolContext.fromBridgePayload({
+      'action': 'open_patrol_draft',
+      'site_id': 1,
+      'region_id': 2,
+    });
+    expect(missing?.minimumPhotos, isNull);
+    expect(missing?.hasMinimumPhotoRequirement, isFalse);
+
+    final zero = VisitPatrolContext.fromBridgePayload({
+      'action': 'open_patrol_draft',
+      'site_id': 1,
+      'region_id': 2,
+      'minimum_photos': 0,
+      'site': {'id': 1, 'minimum_photos': 0},
+    });
+    expect(zero?.minimumPhotos, 0);
+    expect(zero?.hasMinimumPhotoRequirement, isFalse);
   });
 
   test('buildUploadMeta includes completed checkpoints with photo_client_index', () async {

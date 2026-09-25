@@ -274,6 +274,34 @@ void main() {
       expect(attempts, 1);
       expect(queue.isQueued(key), isFalse);
     });
+
+    test('releaseEditorAfterQueuedClaim clears UI but keeps draft files',
+        () async {
+      final key = await _seedDraft();
+      final queue = VisitUploadQueue.instance;
+      queue.debugResetForTest();
+
+      final flow = VisitVideoFlowController();
+      await flow.ensureDraftLoaded();
+      await flow.activateDraft(key);
+      expect(flow.mediaItems, isNotEmpty);
+
+      await queue.markInFlight(key);
+      await flow.releaseEditorAfterQueuedClaim();
+
+      expect(flow.mediaItems, isEmpty);
+      expect(flow.activeDraftKey.value, isNull);
+      expect(queue.isQueued(key), isTrue);
+
+      final onDisk = await VisitMediaDraftStore.instance.loadDraftSnapshot(
+        key: key,
+      );
+      expect(onDisk.hasItems, isTrue);
+
+      // Restore must not pull the in-flight draft back into the editor.
+      await flow.reloadForAccountChange();
+      expect(flow.mediaItems, isEmpty);
+    });
   });
 
   group('VisitUploadMeta', () {

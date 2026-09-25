@@ -272,7 +272,8 @@ internal object AndroidAppKillCycleReporter {
     markOpenedAfterKillIfNeeded(appContext)
     uploadExecutor.execute {
       try {
-        Thread.sleep(4_000L)
+        // Before Flutter delayed clear (~8s) so backup can POST resumed+opened_at.
+        Thread.sleep(2_500L)
       } catch (_: InterruptedException) {
         return@execute
       }
@@ -358,6 +359,13 @@ internal object AndroidAppKillCycleReporter {
     AndroidAppKillCycleStore.clearDebugLogs(context.applicationContext)
   }
 
+  fun setKillDebugCaptureEnabled(context: Context, enabled: Boolean) {
+    AndroidAppKillCycleStore.setKillDebugCaptureEnabled(
+      context.applicationContext,
+      enabled,
+    )
+  }
+
   fun appendFlutterDebugLog(context: Context, message: String) {
     debugLog(context, "flutter: $message")
   }
@@ -371,6 +379,7 @@ internal object AndroidAppKillCycleReporter {
   }
 
   private fun debugLog(context: Context, message: String) {
+    if (!AndroidAppKillCycleStore.isKillDebugCaptureEnabled(context)) return
     Log.i(TAG, message)
     AndroidAppKillCycleStore.appendDebugLog(
       context.applicationContext,

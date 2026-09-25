@@ -1,0 +1,20 @@
+{
+  "conditions": [],
+  "parameters": {
+    "debug_tools_enabled": {
+      "defaultValue": {
+        "value": "true"
+      },
+      "description": "Master switch for in-app developer tools (logging + endpoint overrides). Set false to revoke access without an app release.",
+      "valueType": "BOOLEAN"
+    },
+    "debug_tools_pin_sha256": {
+      "defaultValue": {
+        "value": "65e84be33532fb784c48129675f9eff3a682b27168c0ea744b2cf58ee02337c5"
+      },
+      "description": "Lowercase SHA-256 hex of the developer-tools PIN. Never store the plaintext PIN. Bootstrap hash is SHA-256 of the previous default; rotate immediately.",
+      "valueType": "STRING"
+    }
+  },
+  "parameterGroups": {}
+}

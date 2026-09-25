@@ -9,8 +9,8 @@ import '../app/app_navigator.dart';
 import '../app/native_theme_controller.dart';
 import '../utilities/app_config.dart';
 import '../widgets/dialogs/glass_action_dialog.dart';
-import 'debug_env_config.dart';
-import 'debug_env_screen.dart';
+import 'debug_env_access_service.dart';
+import 'debug_env_hub_screen.dart';
 
 /// True on Android/iOS for **debug, profile, release, and TestFlight**.
 /// Intentionally not gated by [kDebugMode].
@@ -19,12 +19,24 @@ bool get isDebugEnvSupported =>
 
 Future<void> openDebugEnvFromLogo(BuildContext context) async {
   if (!isDebugEnvSupported) return;
-  final unlocked = await showDebugEnvPinDialog(context);
-  if (!unlocked) return;
+  await DebugEnvAccessService.instance.ensureReady();
+  await DebugEnvAccessService.instance.refresh(force: true);
   final navContext = AppNavigator.key.currentContext;
   if (navContext == null || !navContext.mounted) return;
-  await Navigator.of(navContext, rootNavigator: true).push(
-    MaterialPageRoute<void>(builder: (_) => const DebugEnvScreen()),
+  if (!DebugEnvAccessService.instance.isEnabled) {
+    ScaffoldMessenger.of(navContext).showSnackBar(
+      const SnackBar(
+        content: Text('Developer tools are currently disabled.'),
+      ),
+    );
+    return;
+  }
+  final unlocked = await showDebugEnvPinDialog(navContext);
+  if (!unlocked) return;
+  final openContext = AppNavigator.key.currentContext;
+  if (openContext == null || !openContext.mounted) return;
+  await Navigator.of(openContext, rootNavigator: true).push(
+    MaterialPageRoute<void>(builder: (_) => const DebugEnvHubScreen()),
   );
 }
 
@@ -96,6 +108,8 @@ class _DebugEnvPinDialogState extends State<_DebugEnvPinDialog> {
   final FocusNode _focusNode = FocusNode();
   bool _error = false;
   bool _obscure = true;
+  bool _checking = false;
+  String? _errorText;
 
   @override
   void dispose() {
@@ -104,13 +118,37 @@ class _DebugEnvPinDialogState extends State<_DebugEnvPinDialog> {
     super.dispose();
   }
 
-  void _submit() {
-    if (_controller.text == DebugEnvConfig.accessPin) {
-      HapticFeedback.lightImpact();
-      Navigator.of(context).pop(true);
-    } else {
-      HapticFeedback.heavyImpact();
-      setState(() => _error = true);
+  Future<void> _submit() async {
+    if (_checking) return;
+    setState(() {
+      _checking = true;
+      _error = false;
+      _errorText = null;
+    });
+    try {
+      final result = await DebugEnvAccessService.instance.verifyPin(
+        _controller.text,
+      );
+      if (!mounted) return;
+      switch (result) {
+        case DebugEnvAccessResult.granted:
+          HapticFeedback.lightImpact();
+          Navigator.of(context).pop(true);
+        case DebugEnvAccessResult.disabled:
+          HapticFeedback.heavyImpact();
+          setState(() {
+            _error = true;
+            _errorText = 'Developer tools are disabled remotely';
+          });
+        case DebugEnvAccessResult.denied:
+          HapticFeedback.heavyImpact();
+          setState(() {
+            _error = true;
+            _errorText = 'Incorrect PIN';
+          });
+      }
+    } finally {
+      if (mounted) setState(() => _checking = false);
     }
   }
 
@@ -163,7 +201,7 @@ class _DebugEnvPinDialogState extends State<_DebugEnvPinDialog> {
             ),
             const SizedBox(height: 16),
             Text(
-              'Debug access',
+              'Developer access',
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: colors.title,
@@ -171,17 +209,6 @@ class _DebugEnvPinDialogState extends State<_DebugEnvPinDialog> {
                 fontWeight: FontWeight.w800,
                 letterSpacing: -0.3,
                 height: 1.2,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Enter PIN to open environment settings.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: colors.subtitle,
-                fontSize: 13.5,
-                height: 1.4,
-                fontWeight: FontWeight.w500,
               ),
             ),
             const SizedBox(height: 20),
@@ -192,6 +219,7 @@ class _DebugEnvPinDialogState extends State<_DebugEnvPinDialog> {
               autocorrect: false,
               enableSuggestions: false,
               autofocus: true,
+              enabled: !_checking,
               textInputAction: TextInputAction.done,
               style: TextStyle(
                 color: colors.title,
@@ -212,7 +240,7 @@ class _DebugEnvPinDialogState extends State<_DebugEnvPinDialog> {
                       : const Color(AppConfig.cPrimary),
                   fontWeight: FontWeight.w700,
                 ),
-                errorText: _error ? 'Incorrect PIN' : null,
+                errorText: _error ? (_errorText ?? 'Incorrect PIN') : null,
                 errorStyle: TextStyle(
                   color: colors.error,
                   fontWeight: FontWeight.w600,
@@ -221,7 +249,9 @@ class _DebugEnvPinDialogState extends State<_DebugEnvPinDialog> {
                 fillColor: colors.fieldBg,
                 contentPadding: const EdgeInsets.fromLTRB(16, 16, 12, 16),
                 suffixIcon: IconButton(
-                  onPressed: () => setState(() => _obscure = !_obscure),
+                  onPressed: _checking
+                      ? null
+                      : () => setState(() => _obscure = !_obscure),
                   icon: Icon(
                     _obscure
                         ? Icons.visibility_outlined
@@ -253,15 +283,22 @@ class _DebugEnvPinDialogState extends State<_DebugEnvPinDialog> {
                 ),
               ),
               onChanged: (_) {
-                if (_error) setState(() => _error = false);
+                if (_error) {
+                  setState(() {
+                    _error = false;
+                    _errorText = null;
+                  });
+                }
               },
-              onSubmitted: (_) => _submit(),
+              onSubmitted: (_) {
+                unawaited(_submit());
+              },
             ),
             const SizedBox(height: 20),
             SizedBox(
               height: 48,
               child: FilledButton(
-                onPressed: _submit,
+                onPressed: _checking ? null : () => unawaited(_submit()),
                 style: FilledButton.styleFrom(
                   backgroundColor: const Color(AppConfig.cPrimary),
                   foregroundColor: Colors.white,
@@ -274,7 +311,16 @@ class _DebugEnvPinDialogState extends State<_DebugEnvPinDialog> {
                     fontWeight: FontWeight.w700,
                   ),
                 ),
-                child: const Text('Unlock'),
+                child: _checking
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Text('Unlock'),
               ),
             ),
             const SizedBox(height: 6),

@@ -386,6 +386,17 @@ import flutter_background_service_ios
       case "clearAppKillCycleDebugLogs":
         IosAppKillCycleReporter.shared.clearDebugLogs()
         result(true)
+      case "setKillDebugCaptureEnabled":
+        let enabled: Bool
+        if let value = call.arguments as? Bool {
+          enabled = value
+        } else if let map = call.arguments as? [String: Any] {
+          enabled = (map["enabled"] as? Bool) ?? false
+        } else {
+          enabled = false
+        }
+        IosAppKillCycleReporter.shared.setKillDebugCaptureEnabled(enabled)
+        result(true)
       case "appendAppKillCycleDebugLog":
         if let message = call.arguments as? String, !message.isEmpty {
           IosAppKillCycleReporter.shared.appendDebugLog("flutter: \(message)")
@@ -645,16 +656,16 @@ import flutter_background_service_ios
     }
 
     if !launchedForLocation {
-      // Tap/open while still flagged on duty: keep SLC + GPS ring so a later
-      // swipe-kill can relaunch. Do not start duty GPS until duty is confirmed.
+      // Tap/open while still flagged on duty: keep SLC + start optimistic GPS
+      // so tracking resumes after kill even without an SLC wake first.
       // Without a stored session token, disarm — e.g. login screen / logged out.
       if wasOnDuty,
          wasArmed,
          CLLocationManager.authorizationStatus() == .authorizedAlways,
          DutyWakeUploader.shared.hasAccessToken
       {
-        NSLog("[SmartNPS360][SLC] cold launch on duty; keeping SLC/geofence armed")
-        restoreSlcAfterLocationWake(startNativePing: false)
+        NSLog("[SmartNPS360][SLC] cold launch on duty; keeping SLC + optimistic GPS")
+        restoreSlcAfterLocationWake(startNativePing: true)
         return
       }
       if wasOnDuty || wasArmed {
@@ -726,12 +737,14 @@ import flutter_background_service_ios
         NSLog("[SmartNPS360][SLC] optimistic GPS skipped; awaiting confirm")
       }
 
-      DutyWakeUploader.shared.beginLocationWake(flutterTimeout: 3)
+      // Start native wake ping immediately — do not wait for Flutter (Geolocator
+      // is often silent after kill relaunch; native ping is the reliable first hit).
+      DutyWakeUploader.shared.beginLocationWake(flutterTimeout: 0)
       // Location/SLC relaunch after swipe-kill — upload killed without waiting for user open.
       IosAppKillCycleReporter.shared.recoverKillFromBackgroundIfNeeded()
       IosAppKillCycleReporter.shared.uploadKilledEventIfNeeded(reason: "location_wake")
 
-      // Let Flutter attach pinger; only claims wake if its GPS is running.
+      // Let Flutter attach pinger; native ping already in flight.
       DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
         self?.notifyFlutterOfLocationWakeIfNeeded()
       }
@@ -781,15 +794,31 @@ import flutter_background_service_ios
   private func notifyFlutterOfLocationWakeIfNeeded() {
     guard isOnDuty() else { return }
     guard UserDefaults.standard.bool(forKey: slcEnabledKey) else { return }
-    guard launchedForLocation || awaitingFlutterDutyConfirm else { return }
+    // After optimistic GPS, awaitingFlutterDutyConfirm is false — still notify
+    // Flutter whenever this process was launched for location OR GPS is already live.
+    let gpsLive = dutyGpsLocationManager != nil
+    guard launchedForLocation || awaitingFlutterDutyConfirm || gpsLive else { return }
     guard let channel = slcMethodChannel else { return }
     channel.invokeMethod(
       "onLocationWake",
       arguments: slcStatusMap()
-    ) { result in
-      if (result as? Bool) == true {
+    ) { [weak self] result in
+      guard let self else { return }
+      // Never claim on location/SLC relaunch — that cancelled DutyWakeUploader
+      // before any ping left the device while Flutter Geolocator stayed silent.
+      if (result as? Bool) == true, !self.launchedForLocation {
         DutyWakeUploader.shared.claimByFlutter()
+      } else if self.launchedForLocation {
+        NSLog(
+          "[SmartNPS360][SLC] location wake: Flutter running=\(result as? Bool ?? false); "
+            + "keeping native wake ping"
+        )
+        IosAppKillCycleReporter.shared.appendDebugLog(
+          "location wake: keep native GPS ping (flutterClaim blocked)"
+        )
       }
+      self.startDutyGpsMonitoring()
+      self.startDutyMotionIfAllowed()
     }
   }
 
@@ -861,7 +890,12 @@ import flutter_background_service_ios
     }
 
     awaitingFlutterDutyConfirm = false
-    DutyWakeUploader.shared.claimByFlutter()
+    // On location/SLC relaunch, keep DutyWakeUploader alive as a one-shot ping
+    // backup. Claiming here races Flutter recover and cancelled native uploads
+    // before any GPS ping left the device.
+    if !launchedForLocation {
+      DutyWakeUploader.shared.claimByFlutter()
+    }
     if isUnpaidBreak() {
       stopDutyGpsMonitoring()
     } else {
@@ -1265,6 +1299,18 @@ import flutter_background_service_ios
 
   func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
     slcEventSink = events
+    // Flush any GPS fixes that arrived before Flutter attached the event channel
+    // (common right after kill/SLC relaunch while optimistic GPS is already live).
+    let pending = drainPendingSlcLocations()
+    for payload in pending {
+      events(payload)
+    }
+    if !pending.isEmpty {
+      NSLog("[SmartNPS360][SLC] flushed \(pending.count) pending GPS events to Flutter")
+      IosAppKillCycleReporter.shared.appendDebugLog(
+        "flushed \(pending.count) pending GPS events to Flutter"
+      )
+    }
     return nil
   }
 
@@ -1288,6 +1334,9 @@ import flutter_background_service_ios
     if DutyWakeUploader.shared.consumeWakeGps(location) {
       lastNativeGpsAt = Date()
       updateDutyGeofenceIfNeeded(from: location, force: true)
+      // Still emit to Flutter so continuous tracking continues after the
+      // one-shot native wake ping — previously this return dropped ios_gps.
+      emitLocation(location, source: "ios_gps")
       return
     }
 

@@ -137,6 +137,15 @@ class MainActivity : FlutterActivity() {
           AndroidAppKillCycleReporter.clearDebugLogs(this)
           result.success(true)
         }
+        "setKillDebugCaptureEnabled" -> {
+          val enabled = when (val args = call.arguments) {
+            is Boolean -> args
+            is Map<*, *> -> args["enabled"] == true
+            else -> false
+          }
+          AndroidAppKillCycleReporter.setKillDebugCaptureEnabled(this, enabled)
+          result.success(true)
+        }
         "appendAppKillCycleDebugLog" -> {
           val message = when (val args = call.arguments) {
             is String -> args
