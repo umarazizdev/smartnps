@@ -8,7 +8,6 @@ class DebugEnvConfig {
   static const String defaultApiOrigin = 'https://smartnps360.com';
   static const String defaultWebBaseUrl = 'https://smartnps360.com/';
   static const String apiPathSuffix = '/api';
-  static const String accessPin = 'qwerty';
 
   static const String _prefsApiKey = 'debug_env_api_base_url';
   static const String _prefsWebKey = 'debug_env_web_base_url';

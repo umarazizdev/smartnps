@@ -6,6 +6,7 @@ import 'package:flutter/widgets.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../../auth/auth_repository.dart';
+import '../../debug/session_debug_logger.dart';
 import '../../location/adaptive_gps_stream_controller.dart';
 import '../../location/duty_location_upload_gate.dart';
 import '../../location/mock_location_detection.dart';
@@ -260,9 +261,9 @@ class IosDutyLocationPinger {
       return;
     }
 
-    if (_subscription != null) {
-      return;
-    }
+    // After kill relaunch the Geolocator subscription is often alive but silent.
+    // Never skip polling just because `_subscription != null` — that produced
+    // running=true with zero uploads. Poll when forced, or when uploads are quiet.
     if (onlyIfQuiet) {
       final last = _lastUploadAt;
       final quietFor = _streamController.pollInterval;
@@ -273,18 +274,32 @@ class IosDutyLocationPinger {
     _precisePollInFlight = true;
     locationDebugLog(
       '[IosDutyLocationPinger] precise_poll START '
-      'why=flutter_stream_not_subscribed '
+      'why=${_subscription == null ? 'no_stream' : 'stream_quiet_or_force'} '
       'pollEvery=${_streamController.pollInterval.inSeconds}s '
-      'onlyIfQuiet=$onlyIfQuiet',
+      'onlyIfQuiet=$onlyIfQuiet lastUpload=${_lastUploadAt?.toIso8601String()}',
     );
     try {
       final pos = await _fetchPrecisePosition();
       if (pos != null) {
         await _onPosition(pos, source: 'precise_poll');
+      } else {
+        locationDebugLog('[IosDutyLocationPinger] precise_poll got null position');
       }
     } finally {
       _precisePollInFlight = false;
     }
+  }
+
+  /// Immediate GPS poll after SLC/kill wake (bypass quiet gate).
+  static Future<void> forceWakeLocationPing() async {
+    if (!Platform.isIOS || !_running) return;
+    SessionDebugLogger.instance.log(
+      SessionDebugCategory.duty,
+      'force wake GPS poll (subscription=${_subscription != null})',
+    );
+    // Allow first post-wake upload even if a stale gate window remains.
+    _uploadGate.reset();
+    await _pollCurrentPosition(onlyIfQuiet: false);
   }
 
   static Future<Position?> _fetchPrecisePosition({
@@ -358,18 +373,30 @@ class IosDutyLocationPinger {
         'polling latest GPS (wake coords not uploaded)',
       );
       if (!isRunning) {
-
         unawaited(recoverIfNeeded(fromLocationWake: true));
         return;
       }
 
-      if (_subscription != null) return;
-      unawaited(_pollCurrentPosition(onlyIfQuiet: true));
+      // After kill relaunch, Geolocator can stay subscribed but silent.
+      // Don't assume a live subscription means uploads are flowing.
+      final last = _lastUploadAt;
+      final streamQuiet = last == null ||
+          DateTime.now().difference(last) > const Duration(seconds: 15);
+      if (_subscription != null && !streamQuiet) return;
+      unawaited(_pollCurrentPosition(onlyIfQuiet: false));
       return;
     }
 
-    if (source == 'ios_gps' && isRunning) {
-
+    // Native keep-alive GPS (dutyGpsLocationManager) is the reliable path after
+    // swipe-kill / SLC relaunch. Geolocator alone often delivers nothing while
+    // backgrounded. Previously we dropped ios_gps whenever isRunning — that
+    // produced "GPS started" logs with zero pings.
+    if (source == 'ios_gps') {
+      if (!isRunning) {
+        unawaited(recoverIfNeeded(fromLocationWake: true));
+        return;
+      }
+      await _onPosition(pos, source: source);
       return;
     }
 
@@ -533,7 +560,7 @@ class IosDutyLocationPinger {
       'flutter_stream' =>
         'speed_gate_ok(captureEvery=${captureEvery.inSeconds}s)',
       'precise_poll' => 'quiet_timer_or_wake_gap_fill',
-      'ios_gps' => 'native_keepalive_while_flutter_not_running',
+      'ios_gps' => 'native_keepalive_gps',
       _ => 'native_$source',
     };
 
@@ -550,6 +577,12 @@ class IosDutyLocationPinger {
       'curveBoost=${_streamController.isCurveBoosting} '
       'mocked=${mockFlags.isMocked}',
     );
+    if (source == 'ios_gps' || source == 'precise_poll') {
+      SessionDebugLogger.instance.log(
+        SessionDebugCategory.duty,
+        'gps queue source=$source acc=${pos.accuracy.toStringAsFixed(1)}m',
+      );
+    }
     _noteStreamQueueRate(source, queued: true);
 
     final uploader = _uploader;

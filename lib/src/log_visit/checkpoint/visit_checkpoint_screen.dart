@@ -943,7 +943,7 @@ class _CheckpointLandscapeSidebar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final primary = _cpPrimaryColor(isDark);
-    final rightPad = Platform.isAndroid ? 14.0 : 10.0;
+    final rightPad = Platform.isAndroid ? 8.0 : 6.0;
     final panelBg = isDark
         ? const Color(0xFF151E2F)
         : const Color(0xFFE7EEF7);
@@ -957,15 +957,15 @@ class _CheckpointLandscapeSidebar extends StatelessWidget {
         border: Border(left: BorderSide(color: panelBorder)),
       ),
       child: Padding(
-        padding: EdgeInsets.fromLTRB(10, 10, rightPad, 10),
+        padding: EdgeInsets.fromLTRB(8, 8, rightPad, 8),
         child: SizedBox(
-          width: 152,
+          width: 128,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               SizedBox(
-                height: 118,
+                height: 96,
                 child: _CheckpointLandscapeRailButton(
                   isDark: isDark,
                   filled: false,
@@ -975,9 +975,9 @@ class _CheckpointLandscapeSidebar extends StatelessWidget {
                   onPressed: onCapture,
                 ),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 8),
               SizedBox(
-                height: 118,
+                height: 96,
                 child: _CheckpointLandscapeRailButton(
                   isDark: isDark,
                   filled: true,
@@ -1060,25 +1060,25 @@ class _CheckpointLandscapeRailButton extends StatelessWidget {
 
     return Material(
       color: bg,
-      elevation: filled && enabled ? 2 : 0,
+      elevation: filled && enabled ? 1.5 : 0,
       shadowColor: accent.withValues(alpha: isDark ? 0.35 : 0.22),
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-        side: BorderSide(color: border, width: 1.2),
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: border, width: 1),
       ),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onPressed,
         child: Center(
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Container(
-                  width: 44,
-                  height: 44,
+                  width: 34,
+                  height: 34,
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
                     color: iconBg,
@@ -1087,10 +1087,10 @@ class _CheckpointLandscapeRailButton extends StatelessWidget {
                   child: Icon(
                     icon,
                     color: iconFg,
-                    size: 24,
+                    size: 18,
                   ),
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 6),
                 Text(
                   label,
                   textAlign: TextAlign.center,
@@ -1098,10 +1098,10 @@ class _CheckpointLandscapeRailButton extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: labelColor,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w800,
-                    height: 1.2,
-                    letterSpacing: -0.15,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    height: 1.15,
+                    letterSpacing: -0.1,
                   ),
                 ),
               ],

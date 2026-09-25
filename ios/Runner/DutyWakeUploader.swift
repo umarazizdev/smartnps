@@ -17,7 +17,7 @@ final class DutyWakeUploader {
   private let deviceIdDefaultsKey = "smartnps360.ios_duty.device_id"
   private let onDutyDefaultsKey = "smartnps360.ios_duty.on_duty"
   private let slcEnabledDefaultsKey = "smartnps360.ios_slc.enabled"
-  private let maxAccuracyMeters: CLLocationAccuracy = 50
+  private let maxAccuracyMeters: CLLocationAccuracy = 100
 
   private let session: URLSession = {
     let config = URLSessionConfiguration.ephemeral
@@ -367,6 +367,11 @@ final class DutyWakeUploader {
 
     authorizedRequest(url: pingURL, method: "POST", body: body) { [weak self] _, statusCode in
       NSLog("[SmartNPS360][WakeUpload] ping status=\(statusCode)")
+      IosAppKillCycleReporter.shared.appendDebugLog(
+        "native wake GPS ping status=\(statusCode) "
+          + "lat=\(String(format: "%.5f", location.coordinate.latitude)) "
+          + "lon=\(String(format: "%.5f", location.coordinate.longitude))"
+      )
       self?.finish()
     }
   }

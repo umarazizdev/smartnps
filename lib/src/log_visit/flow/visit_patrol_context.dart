@@ -15,6 +15,7 @@ class VisitPatrolContext {
     this.siteLatitude,
     this.siteLongitude,
     this.uploadUrl,
+    this.minimumPhotos,
     this.checkpoints = const <VisitCheckpoint>[],
   });
 
@@ -29,10 +30,13 @@ class VisitPatrolContext {
   final double? siteLatitude;
   final double? siteLongitude;
   final String? uploadUrl;
+  final int? minimumPhotos;
   final List<VisitCheckpoint> checkpoints;
 
   bool get hasSiteOrRegionId => regionId != null || siteId != null;
   bool get hasCheckpoints => checkpoints.isNotEmpty;
+  bool get hasMinimumPhotoRequirement =>
+      minimumPhotos != null && minimumPhotos! > 0;
 
   String? get displayPlaceName {
     final site = siteName?.trim();
@@ -90,6 +94,7 @@ class VisitPatrolContext {
     double? siteLatitude,
     double? siteLongitude,
     String? uploadUrl,
+    int? minimumPhotos,
     List<VisitCheckpoint>? checkpoints,
     bool clearClientDraftId = false,
     bool clearRegionId = false,
@@ -102,6 +107,7 @@ class VisitPatrolContext {
     bool clearSiteLatitude = false,
     bool clearSiteLongitude = false,
     bool clearUploadUrl = false,
+    bool clearMinimumPhotos = false,
   }) {
     return VisitPatrolContext(
       clientDraftId: clearClientDraftId
@@ -123,6 +129,9 @@ class VisitPatrolContext {
           ? null
           : (siteLongitude ?? this.siteLongitude),
       uploadUrl: clearUploadUrl ? null : (uploadUrl ?? this.uploadUrl),
+      minimumPhotos: clearMinimumPhotos
+          ? null
+          : (minimumPhotos ?? this.minimumPhotos),
       checkpoints: checkpoints ?? this.checkpoints,
     );
   }
@@ -140,6 +149,7 @@ class VisitPatrolContext {
       'siteLatitude': siteLatitude,
       'siteLongitude': siteLongitude,
       'uploadUrl': uploadUrl,
+      if (minimumPhotos != null) 'minimumPhotos': minimumPhotos,
       'checkpoints': checkpoints.map((e) => e.toJson()).toList(),
     };
   }
@@ -196,9 +206,7 @@ class VisitPatrolContext {
           nestedSite?['name'],
     );
     final scheduleId = _int(
-      json['scheduleId'] ??
-          json['schedule_id'] ??
-          nestedPatrol?['schedule_id'],
+      json['scheduleId'] ?? json['schedule_id'] ?? nestedPatrol?['schedule_id'],
     );
     final sitePatrolWindowId = _int(
       json['sitePatrolWindowId'] ??
@@ -207,9 +215,7 @@ class VisitPatrolContext {
     );
     final requestId = _string(json['requestId'] ?? json['request_id']);
     final siteLatitude = _double(
-      json['siteLatitude'] ??
-          json['site_latitude'] ??
-          nestedSite?['latitude'],
+      json['siteLatitude'] ?? json['site_latitude'] ?? nestedSite?['latitude'],
     );
     final siteLongitude = _double(
       json['siteLongitude'] ??
@@ -221,6 +227,12 @@ class VisitPatrolContext {
           json['upload_url'] ??
           json['uploadUrl'] ??
           json['apiUploadUrl'],
+    );
+    final minimumPhotos = _int(
+      json['minimumPhotos'] ??
+          json['minimum_photos'] ??
+          nestedSite?['minimum_photos'] ??
+          nestedSite?['minimumPhotos'],
     );
     final checkpoints = VisitCheckpoint.listFromJson(
       json['checkpoints'],
@@ -235,6 +247,7 @@ class VisitPatrolContext {
         scheduleId == null &&
         sitePatrolWindowId == null &&
         requestId == null &&
+        minimumPhotos == null &&
         checkpoints.isEmpty) {
       return null;
     }
@@ -251,6 +264,7 @@ class VisitPatrolContext {
       siteLatitude: siteLatitude,
       siteLongitude: siteLongitude,
       uploadUrl: uploadUrl,
+      minimumPhotos: minimumPhotos,
       checkpoints: checkpoints,
     );
   }

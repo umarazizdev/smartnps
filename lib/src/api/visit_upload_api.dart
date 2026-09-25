@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http_parser/http_parser.dart';
 import 'package:path/path.dart' as p;
 
+import '../debug/session_debug_logger.dart';
 import '../log_visit/flow/visit_video_flow_controller.dart';
 import 'api_client.dart';
 import 'api_urls.dart';
@@ -296,23 +297,26 @@ class VisitUploadApi {
   }
 
   void _logResult(VisitUploadResult result, {dynamic responseBody}) {
+    if (!result.success) {
+      SessionDebugLogger.instance.log(
+        SessionDebugCategory.uploads,
+        'FAIL status=${result.statusCode} '
+        'message=${result.displayMessage} errors=${result.errors}',
+      );
+    }
     if (!kDebugMode) return;
     if (result.success) {
-      if (kDebugMode) {
-        debugPrint(
-          '[VisitUploadApi] SUCCESS status=${result.statusCode} '
-          'visitId=${result.visitId} clientDraftId=${result.clientDraftId} '
-          'itemsSaved=${result.itemsSaved} message=${result.displayMessage}',
-        );
-      }
+      debugPrint(
+        '[VisitUploadApi] SUCCESS status=${result.statusCode} '
+        'visitId=${result.visitId} clientDraftId=${result.clientDraftId} '
+        'itemsSaved=${result.itemsSaved} message=${result.displayMessage}',
+      );
     } else {
-      if (kDebugMode) {
-        debugPrint(
-          '[VisitUploadApi] FAIL status=${result.statusCode} '
-          'message=${result.displayMessage} errors=${result.errors} '
-          'body=$responseBody',
-        );
-      }
+      debugPrint(
+        '[VisitUploadApi] FAIL status=${result.statusCode} '
+        'message=${result.displayMessage} errors=${result.errors} '
+        'body=$responseBody',
+      );
     }
   }
 
