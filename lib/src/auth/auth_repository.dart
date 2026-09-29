@@ -461,7 +461,6 @@ class AuthRepository {
     await getAccessToken();
     await getRefreshToken();
     await isOfficerLoggedIn();
-    unawaited(CrashlyticsIdentity.syncFromStoredSession());
   }
 
   Future<String?> ensureValidAccessToken() async {

@@ -25,7 +25,8 @@ typedef VisitQueuedUploadFailureHandler =
       required VisitMediaDraftSnapshot snapshot,
     });
 
-typedef VisitQueuedUploadSuccessHandler = Future<void> Function();
+typedef VisitQueuedUploadSuccessHandler =
+    Future<void> Function({required bool isSiteCheck});
 
 class VisitUploadQueue {
   VisitUploadQueue._({
@@ -244,7 +245,10 @@ class VisitUploadQueue {
         await _handleNonNetworkFailure(
           key: key,
           snapshot: snapshot,
-          presentation: VisitUploadFailure.presentUnexpected(error),
+          presentation: VisitUploadFailure.presentUnexpected(
+            error,
+            isSiteCheck: snapshot.context?.isSiteCheck == true,
+          ),
         );
         continue;
       }
@@ -353,7 +357,9 @@ class VisitUploadQueue {
 
     final successHandler = onUploadSucceeded;
     if (successHandler != null) {
-      await successHandler();
+      await successHandler(
+        isSiteCheck: snapshot.context?.isSiteCheck == true,
+      );
     }
   }
 

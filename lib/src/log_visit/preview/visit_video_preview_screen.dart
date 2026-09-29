@@ -15,6 +15,7 @@ import '../../widgets/dialogs/glass_action_dialog.dart';
 import '../checkpoint/visit_checkpoint_screen.dart';
 import '../flow/cam_perf.dart';
 import '../flow/visit_checkpoint.dart';
+import '../flow/visit_flow_copy.dart';
 import '../flow/visit_gps_session.dart';
 import '../flow/visit_media_draft_store.dart';
 import '../flow/visit_media_geo.dart';
@@ -100,13 +101,16 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
   static String deleteMediaMessage({
     required bool isPhoto,
     required bool hasNotes,
+    bool isSiteCheck = false,
   }) {
-    final media = isPhoto ? 'photo' : 'video';
-    if (hasNotes) {
-      return 'This $media and its note will be removed from your patrol round report. This cannot be undone.';
-    }
-    return 'This $media will be removed from your patrol round report. This cannot be undone.';
+    return VisitFlowCopy(isSiteCheck: isSiteCheck).deleteMediaMessage(
+      isPhoto: isPhoto,
+      hasNotes: hasNotes,
+    );
   }
+
+  VisitFlowCopy get _copy =>
+      VisitFlowCopy.fromContext(controller.patrolContext.value);
 
   Future<void> _removeMedia(int index) async {
     await controller.removeAt(index);
@@ -126,6 +130,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       message: deleteMediaMessage(
         isPhoto: item.isPhoto,
         hasNotes: item.hasNotes,
+        isSiteCheck: controller.patrolContext.value?.isSiteCheck == true,
       ),
       secondaryLabel: 'Cancel',
       primaryLabel: 'Delete',
@@ -381,7 +386,10 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
           key: draftKey,
         );
         unawaited(VisitGpsSession.instance.stop());
-        await _showUploadSuccessFeedback(isDark: isDark);
+        await _showUploadSuccessFeedback(
+          isDark: isDark,
+          isSiteCheck: snapshot.context?.isSiteCheck == true,
+        );
         if (!movedToDashboard) {
           onSuccess?.call();
         }
@@ -432,7 +440,10 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       }
       _clearUploadProgress(flow);
       await VisitUploadQueue.instance.remove(draftKey);
-      final presentation = VisitUploadFailure.presentUnexpected(error);
+      final presentation = VisitUploadFailure.presentUnexpected(
+        error,
+        isSiteCheck: snapshot.context?.isSiteCheck == true,
+      );
       await flow.activateDraft(draftKey);
       await flow.recordLastUploadIssue(presentation.toDraftIssue());
       await _showUploadFailureDialog(
@@ -538,6 +549,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     if (dialogContext == null || !dialogContext.mounted) return false;
 
     final place = _resolvePatrolLocationLabel(flow);
+    final copy = VisitFlowCopy.fromContext(flow.patrolContext.value);
     final accent = isDark ? const Color(0xFF93C5FD) : const Color(0xFF4F46E5);
     final viewport = MediaQuery.sizeOf(dialogContext);
     final isLandscape = viewport.width > viewport.height;
@@ -546,7 +558,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       context: dialogContext,
       icon: Icons.fact_check_outlined,
       iconColor: accent,
-      title: 'Patrol Round completed?',
+      title: copy.completionTitle,
       titleColor: const Color(0xFFDC2626),
       barrierDismissible: true,
       showCloseButton: true,
@@ -557,7 +569,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
           ? const EdgeInsets.symmetric(horizontal: 24, vertical: 12)
           : const EdgeInsets.symmetric(horizontal: 28),
       content: _PatrolCompleteDialogBody(
-        message: 'Have you done your patrol round at $place',
+        message: copy.completionMessage(place),
         flow: flow,
         isDark: isDark,
       ),
@@ -568,7 +580,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
           tone: GlassDialogActionTone.neutral,
         ),
         GlassDialogAction(
-          label: 'Yes, patrol completed upload report',
+          label: copy.yesUploadLabel,
           value: true,
           tone: GlassDialogActionTone.primary,
           beforePop: () {
@@ -652,17 +664,27 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     );
   }
 
-  static Future<void> showQueuedUploadSuccessFeedback({required bool isDark}) {
-    return _showUploadSuccessFeedback(isDark: isDark);
+  static Future<void> showQueuedUploadSuccessFeedback({
+    required bool isDark,
+    bool isSiteCheck = false,
+  }) {
+    return _showUploadSuccessFeedback(
+      isDark: isDark,
+      isSiteCheck: isSiteCheck,
+    );
   }
 
-  static Future<void> _showUploadSuccessFeedback({required bool isDark}) async {
+  static Future<void> _showUploadSuccessFeedback({
+    required bool isDark,
+    bool isSiteCheck = false,
+  }) async {
     if (Get.isSnackbarOpen) {
       Get.closeAllSnackbars();
     }
 
     final bg = isDark ? const Color(0xFF059669) : const Color(0xFF047857);
     const duration = Duration(seconds: 3);
+    final successTitle = VisitFlowCopy(isSiteCheck: isSiteCheck).successTitle;
 
     Get.rawSnackbar(
       snackPosition: SnackPosition.TOP,
@@ -690,24 +712,24 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
             ),
           ),
           const SizedBox(width: 10),
-          const Expanded(
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  'Site Patrol Done',
+                  successTitle,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
+                  style: const TextStyle(
                     color: Colors.white,
                     fontSize: 14,
                     fontWeight: FontWeight.w700,
                     height: 1.2,
                   ),
                 ),
-                SizedBox(height: 2),
-                Text(
+                const SizedBox(height: 2),
+                const Text(
                   'Your report was sent successfully.',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -898,6 +920,11 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                                 showMediaFilters:
                                     !hasCheckpoints ||
                                     additionalMedia.isNotEmpty,
+                                isSiteCheck: controller
+                                        .patrolContext
+                                        .value
+                                        ?.isSiteCheck ==
+                                    true,
                               ),
                               Expanded(
                                 child: Column(
@@ -973,6 +1000,9 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                           checkpointTotal: checkpoints.length,
                           showMediaFilters:
                               !hasCheckpoints || additionalMedia.isNotEmpty,
+                          isSiteCheck:
+                              controller.patrolContext.value?.isSiteCheck ==
+                              true,
                         ),
                         Expanded(
                           child: hasCheckpoints
@@ -1084,7 +1114,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                   ),
                   SizedBox(height: isLandscape ? 12 : 18),
                   Text(
-                    'Ready to start patrol',
+                    _copy.readyToStart,
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                       fontWeight: FontWeight.w700,
@@ -1105,7 +1135,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                   ],
                   SizedBox(height: isLandscape ? 6 : 8),
                   Text(
-                    'Capture a clear photo or hold the capture button to record a patrol round video.',
+                    _copy.emptyCaptureHint,
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       height: 1.45,
@@ -1163,7 +1193,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       ),
       children: [
         Text(
-          'Patrol Checkpoints',
+          _copy.checkpointsTitle,
           style: TextStyle(
             color: _visitTitleColor(isDark),
             fontSize: isLandscape ? 13 : 14,
@@ -1205,6 +1235,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
           _AdditionalMediaEmptyCard(
             isDark: isDark,
             isLandscape: isLandscape,
+            isSiteCheck: controller.patrolContext.value?.isSiteCheck == true,
             onCapture: _openCaptureScreen,
           )
         else if (visibleMedia.isEmpty)
@@ -1443,6 +1474,9 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
               controller.patrolContext.value;
               controller.isUploading.value;
               final canComplete = controller.canCompleteReport;
+              final copy = VisitFlowCopy.fromContext(
+                controller.patrolContext.value,
+              );
               final completeAccent = _visitPrimaryActionColor(isDark);
               return ElevatedButton.icon(
                 onPressed: canComplete ? () => _uploadAllMedia(context) : null,
@@ -1473,7 +1507,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                 ),
                 icon: const Icon(Icons.cloud_upload_rounded, size: 18),
                 label: Text(
-                  'Complete Report',
+                  copy.completeReportButton,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
@@ -1848,11 +1882,13 @@ class _AdditionalMediaEmptyCard extends StatelessWidget {
     required this.isDark,
     required this.onCapture,
     this.isLandscape = false,
+    this.isSiteCheck = false,
   });
 
   final bool isDark;
   final VoidCallback onCapture;
   final bool isLandscape;
+  final bool isSiteCheck;
 
   @override
   Widget build(BuildContext context) {
@@ -1911,7 +1947,9 @@ class _AdditionalMediaEmptyCard extends StatelessWidget {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        'Optional photos or videos for this patrol',
+                        VisitFlowCopy(
+                          isSiteCheck: isSiteCheck,
+                        ).additionalMediaSubtitle,
                         style: TextStyle(
                           color: _visitBodyColor(isDark),
                           fontSize: 12,
@@ -2045,7 +2083,9 @@ class _DraftLandscapeSidebar extends StatelessWidget {
                     filled: true,
                     accent: primary,
                     icon: Icons.check_rounded,
-                    label: 'Complete report',
+                    label: VisitFlowCopy.fromContext(
+                      controller.patrolContext.value,
+                    ).completeReportButtonShort,
                     onPressed: canComplete ? onComplete : null,
                   ),
                 ),
@@ -2184,6 +2224,7 @@ class _VisitHeader extends StatelessWidget {
     this.checkpointCompleted = 0,
     this.checkpointTotal = 0,
     this.showMediaFilters = true,
+    this.isSiteCheck = false,
   });
 
   final bool isDark;
@@ -2200,12 +2241,14 @@ class _VisitHeader extends StatelessWidget {
   final int checkpointCompleted;
   final int checkpointTotal;
   final bool showMediaFilters;
+  final bool isSiteCheck;
 
   @override
   Widget build(BuildContext context) {
     final location = locationLabel?.trim();
     final hasLocation = location != null && location.isNotEmpty;
     final titleColor = _visitTitleColor(isDark);
+    final copy = VisitFlowCopy(isSiteCheck: isSiteCheck);
 
     return Padding(
       padding: EdgeInsets.fromLTRB(
@@ -2231,7 +2274,7 @@ class _VisitHeader extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Patrol Draft',
+                      copy.draftTitle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -2253,7 +2296,7 @@ class _VisitHeader extends StatelessWidget {
                           const SizedBox(width: 4),
                           Expanded(
                             child: Text(
-                              hasLocation ? location : 'No patrol location',
+                              hasLocation ? location : copy.noLocation,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
@@ -2318,7 +2361,7 @@ class _VisitHeader extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          hasLocation ? location : 'No patrol location',
+                          hasLocation ? location : copy.noLocation,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
@@ -2342,6 +2385,7 @@ class _VisitHeader extends StatelessWidget {
               compact: isLandscape,
               minimumPhotos: minimumPhotos,
               embedded: true,
+              isSiteCheck: isSiteCheck,
             ),
           ],
           if (!hasCheckpoints) ...[
@@ -3141,6 +3185,12 @@ class VisitPhotoViewer extends StatelessWidget {
       message: VisitVideoPreviewScreen.deleteMediaMessage(
         isPhoto: true,
         hasNotes: hasNotes,
+        isSiteCheck: Get.isRegistered<VisitVideoFlowController>() &&
+            Get.find<VisitVideoFlowController>()
+                    .patrolContext
+                    .value
+                    ?.isSiteCheck ==
+                true,
       ),
       secondaryLabel: 'Cancel',
       primaryLabel: 'Delete',
@@ -3465,6 +3515,12 @@ class VisitVideoPlayerDialog extends GetView<VisitVideoPlayerController> {
       message: VisitVideoPreviewScreen.deleteMediaMessage(
         isPhoto: false,
         hasNotes: hasNotes,
+        isSiteCheck: Get.isRegistered<VisitVideoFlowController>() &&
+            Get.find<VisitVideoFlowController>()
+                    .patrolContext
+                    .value
+                    ?.isSiteCheck ==
+                true,
       ),
       secondaryLabel: 'Cancel',
       primaryLabel: 'Delete',
@@ -3863,12 +3919,14 @@ class _MinimumPhotosNotice extends StatelessWidget {
     required this.minimumPhotos,
     this.compact = false,
     this.embedded = false,
+    this.isSiteCheck = false,
   });
 
   final bool isDark;
   final int? minimumPhotos;
   final bool compact;
   final bool embedded;
+  final bool isSiteCheck;
 
   @override
   Widget build(BuildContext context) {
@@ -3891,6 +3949,9 @@ class _MinimumPhotosNotice extends StatelessWidget {
     final bodyColor = isDark
         ? Colors.white.withValues(alpha: 0.75)
         : const Color(0xFF9A3412);
+    final bodyText = VisitFlowCopy(
+      isSiteCheck: isSiteCheck,
+    ).minimumPhotosBody(count, photoLabel);
 
     final card = DecoratedBox(
       decoration: BoxDecoration(
@@ -3933,7 +3994,7 @@ class _MinimumPhotosNotice extends StatelessWidget {
                   ),
                   SizedBox(height: compact ? 2 : 3),
                   Text(
-                    'This site requires $count $photoLabel for the patrol report.',
+                    bodyText,
                     style: TextStyle(
                       color: bodyColor,
                       fontSize: compact ? 11 : 12,

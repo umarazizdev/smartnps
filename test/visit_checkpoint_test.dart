@@ -76,6 +76,25 @@ void main() {
     expect(ctx.toUploadMetaFields()['site_patrol_window_id'], 44);
   });
 
+  test('VisitPatrolContext parses site_check visit_type from bridge payload', () {
+    final ctx = VisitPatrolContext.fromBridgePayload({
+      'action': 'open_patrol_draft',
+      'site_check_time_sheet_id': 20693,
+      'visit_type': 'site_check',
+      'site_id': 1,
+      'region_id': 2,
+      'site_name': "hamid's house",
+      'region_name': 'East Bay',
+    });
+
+    expect(ctx, isNotNull);
+    expect(ctx!.visitType, 'site_check');
+    expect(ctx.isSiteCheck, isTrue);
+    expect(ctx.siteCheckTimeSheetId, 20693);
+    expect(ctx.toUploadMetaFields()['visit_type'], 'site_check');
+    expect(ctx.toUploadMetaFields()['site_check_time_sheet_id'], 20693);
+  });
+
   test('VisitPatrolContext ignores missing or zero minimum_photos', () {
     final missing = VisitPatrolContext.fromBridgePayload({
       'action': 'open_patrol_draft',

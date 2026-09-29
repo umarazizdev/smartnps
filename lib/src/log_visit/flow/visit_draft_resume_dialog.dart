@@ -6,6 +6,7 @@ import '../../utilities/overlay_prompt_guard.dart';
 import '../../widgets/dialogs/glass_action_dialog.dart';
 import '../notes/visit_batch_notes_panel.dart';
 import '../notes/visit_media_notes_sheet.dart';
+import 'visit_flow_copy.dart';
 import 'visit_media_draft_store.dart';
 import 'visit_video_flow_controller.dart';
 
@@ -160,7 +161,7 @@ class VisitDraftResumeDialog {
       context: context,
       icon: Icons.assignment_late_outlined,
       iconColor: const Color(0xFF3B82F6),
-      title: 'Unfinished patrol reports',
+      title: VisitFlowCopy.unfinishedMixedReportsTitle,
       barrierDismissible: true,
       showCloseButton: true,
       closeButtonTooltip: 'Keep drafts for later',
@@ -193,9 +194,10 @@ class VisitDraftResumeDialog {
         ? Colors.white.withValues(alpha: 0.78)
         : const Color(0xFF475467);
 
+    final copy = VisitFlowCopy.fromDraft(draft);
     final title = canSubmitReport
-        ? 'Patrol Round completed?'
-        : 'Continue patrol report?';
+        ? copy.completionTitle
+        : copy.continueReportTitle;
     final titleColor = isDark ? Colors.white : const Color(0xFF0F172A);
     final icon = canSubmitReport
         ? Icons.fact_check_outlined
@@ -205,8 +207,12 @@ class VisitDraftResumeDialog {
         : const Color(0xFF2563EB);
 
     final message = canSubmitReport
-        ? 'Have you done your patrol round at $place'
-        : _continueReportMessage(flow: activeFlow, location: place);
+        ? copy.completionMessage(place)
+        : _continueReportMessage(
+            flow: activeFlow,
+            location: place,
+            isSiteCheck: copy.isSiteCheck,
+          );
 
     Future<bool> confirmDiscard() async {
       if (!context.mounted) return false;
@@ -214,7 +220,7 @@ class VisitDraftResumeDialog {
         context: context,
         icon: Icons.delete_forever_outlined,
         iconColor: const Color(0xFFE53935),
-        title: 'Discard patrol report?',
+        title: copy.discardTitle,
         message:
             'This will permanently delete this draft and all captured photos, videos, and notes. This cannot be undone.',
         secondaryLabel: 'Keep report',
@@ -242,7 +248,7 @@ class VisitDraftResumeDialog {
               height: 34,
               fit: BoxFit.contain,
               filterQuality: FilterQuality.high,
-              semanticLabel: 'Completed patrol checklist',
+              semanticLabel: copy.completedChecklistSemanticLabel,
             )
           : null,
       title: title,
@@ -300,8 +306,8 @@ class VisitDraftResumeDialog {
             tone: GlassDialogActionTone.neutral,
             icon: Icons.arrow_back_rounded,
           ),
-          const GlassDialogAction(
-            label: 'Yes, patrol completed upload report',
+          GlassDialogAction(
+            label: copy.yesUploadLabel,
             value: VisitDraftResumeAction.submitReport,
             tone: GlassDialogActionTone.primary,
             icon: Icons.cloud_upload_outlined,
@@ -335,23 +341,13 @@ class VisitDraftResumeDialog {
   static String _continueReportMessage({
     required VisitVideoFlowController flow,
     String? location,
+    bool isSiteCheck = false,
   }) {
-    final place = location?.trim();
-    final atPlace = (place != null && place.isNotEmpty) ? ' at $place' : '';
-    final total = flow.checkpoints.length;
-    final completed = flow.completedCheckpointCount;
-    if (total > 0) {
-      final remaining = total - completed;
-      if (completed <= 0) {
-        return 'Your patrol report$atPlace is still in progress. '
-            'Continue to capture the $total checkpoint${total == 1 ? '' : 's'}.';
-      }
-      return 'Your patrol report$atPlace is still in progress. '
-          '$completed of $total checkpoint${total == 1 ? '' : 's'} done — '
-          '$remaining remaining. Continue to finish capturing.';
-    }
-    return 'Your patrol report$atPlace is still in progress. '
-        'Continue to finish capturing media.';
+    return VisitFlowCopy(isSiteCheck: isSiteCheck).continueReportMessage(
+      location: location,
+      checkpointTotal: flow.checkpoints.length,
+      checkpointCompleted: flow.completedCheckpointCount,
+    );
   }
 
   static Future<VisitDraftResumeAction?> show({
@@ -653,8 +649,7 @@ class _PendingSitesList extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
-          'You left unfinished patrols on ${drafts.length} sites. '
-          'Choose a site to continue.',
+          VisitFlowCopy.unfinishedMixedSitesMessage(drafts.length),
           textAlign: TextAlign.center,
           style: TextStyle(
             color: bodyColor,
@@ -689,12 +684,28 @@ class _PendingSitesList extends StatelessWidget {
   }) {
     final title = draft.locationLabel ?? 'Unknown site';
     final subtitle = VisitDraftResumeDialog.siteTileSubtitle(draft);
+    final copy = VisitFlowCopy.fromDraft(draft);
+    final isSiteCheck = copy.isSiteCheck;
     final issue = draft.lastUploadIssue;
     final issueColor = issue == null
         ? null
         : (issue.isGeofence
               ? const Color(0xFFD97706)
               : const Color(0xFFDC2626));
+    final typeAccent = isSiteCheck
+        ? (isDark ? const Color(0xFF34D399) : const Color(0xFF059669))
+        : (isDark ? const Color(0xFF93C5FD) : const Color(0xFF2563EB));
+    final typeBg = isSiteCheck
+        ? (isDark
+              ? const Color(0xFF064E3B).withValues(alpha: 0.55)
+              : const Color(0xFFECFDF5))
+        : (isDark
+              ? const Color(0xFF1E3A5F).withValues(alpha: 0.7)
+              : const Color(0xFFEFF6FF));
+    final typeIcon = isSiteCheck
+        ? Icons.fact_check_outlined
+        : Icons.route_outlined;
+
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -715,17 +726,16 @@ class _PendingSitesList extends StatelessWidget {
                 width: 38,
                 height: 38,
                 decoration: BoxDecoration(
-                  color: (issueColor ?? const Color(0xFF3B82F6))
-                      .withValues(alpha: 0.14),
+                  color: (issueColor ?? typeAccent).withValues(alpha: 0.14),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Icon(
                   issue == null
-                      ? Icons.location_on_outlined
+                      ? typeIcon
                       : (issue.isGeofence
                             ? Icons.location_off_rounded
                             : Icons.error_outline_rounded),
-                  color: issueColor ?? const Color(0xFF3B82F6),
+                  color: issueColor ?? typeAccent,
                   size: 20,
                 ),
               ),
@@ -745,7 +755,40 @@ class _PendingSitesList extends StatelessWidget {
                         height: 1.25,
                       ),
                     ),
-                    const SizedBox(height: 3),
+                    const SizedBox(height: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3.5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: typeBg,
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(
+                          color: typeAccent.withValues(
+                            alpha: isDark ? 0.35 : 0.18,
+                          ),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(typeIcon, size: 12, color: typeAccent),
+                          const SizedBox(width: 4),
+                          Text(
+                            copy.typeBadgeLabel,
+                            style: TextStyle(
+                              color: typeAccent,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              height: 1.1,
+                              letterSpacing: 0.15,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 5),
                     Text(
                       subtitle,
                       maxLines: 2,

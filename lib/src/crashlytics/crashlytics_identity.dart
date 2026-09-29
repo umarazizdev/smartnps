@@ -1,3 +1,4 @@
+import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:flutter/foundation.dart';
 
@@ -6,8 +7,12 @@ import '../auth/auth_repository.dart';
 class CrashlyticsIdentity {
   CrashlyticsIdentity._();
 
+  /// Background isolates (e.g. Android duty FGS) may warm auth without Firebase.
+  static bool get _firebaseReady => Firebase.apps.isNotEmpty;
+
   static Future<void> setFromUser(Map<String, dynamic>? user) async {
     try {
+      if (!_firebaseReady) return;
       final id = user == null
           ? ''
           : (AuthRepository.extractOfficerAccountId(user) ?? '');

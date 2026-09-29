@@ -3453,10 +3453,11 @@ class _WebViewShellState extends State<WebViewShell>
     queue.onQueueChanged = () {
       unawaited(_notifyWebPendingDraftsChanged());
     };
-    queue.onUploadSucceeded = () async {
+    queue.onUploadSucceeded = ({required isSiteCheck}) async {
       final isDark = _ui.webPrefersDark.value;
       await VisitVideoPreviewScreen.showQueuedUploadSuccessFeedback(
         isDark: isDark,
+        isSiteCheck: isSiteCheck,
       );
       unawaited(_notifyWebPendingDraftsChanged());
     };
@@ -6438,7 +6439,9 @@ class _WebViewShellState extends State<WebViewShell>
     final controller = _controller;
     if (controller == null) return;
 
+    final currentPath = AppConfig.normalizeWebPath(_ui.currentUri.value);
     if (_ui.selectedBottomTabIndex.value == item.index &&
+        currentPath == item.normalizedPath &&
         !_ui.isNavigating.value &&
         !_ui.showingLogVisit.value) {
       return;

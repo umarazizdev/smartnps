@@ -33,6 +33,7 @@ class AppRoutes {
 
   static const bottomBarWebPaths = <String>[
     '/officer/dashboard',
+    '/officer/site-checks',
     '/officer/timesheet/monthly',
     '/officer/profile',
   ];

@@ -621,6 +621,10 @@ class VisitVideoFlowController extends GetxController {
       uploadUrl: incoming.uploadUrl ?? current?.uploadUrl,
       minimumPhotos: incoming.minimumPhotos ??
           (sameSite ? current?.minimumPhotos : null),
+      visitType: incoming.visitType ??
+          (sameSite ? current?.visitType : null),
+      siteCheckTimeSheetId: incoming.siteCheckTimeSheetId ??
+          (sameSite ? current?.siteCheckTimeSheetId : null),
       checkpoints: mergedCheckpoints,
     );
 

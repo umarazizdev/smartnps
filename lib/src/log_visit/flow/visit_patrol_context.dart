@@ -16,6 +16,8 @@ class VisitPatrolContext {
     this.siteLongitude,
     this.uploadUrl,
     this.minimumPhotos,
+    this.visitType,
+    this.siteCheckTimeSheetId,
     this.checkpoints = const <VisitCheckpoint>[],
   });
 
@@ -31,12 +33,16 @@ class VisitPatrolContext {
   final double? siteLongitude;
   final String? uploadUrl;
   final int? minimumPhotos;
+  final String? visitType;
+  final int? siteCheckTimeSheetId;
   final List<VisitCheckpoint> checkpoints;
 
   bool get hasSiteOrRegionId => regionId != null || siteId != null;
   bool get hasCheckpoints => checkpoints.isNotEmpty;
   bool get hasMinimumPhotoRequirement =>
       minimumPhotos != null && minimumPhotos! > 0;
+  bool get isSiteCheck =>
+      visitType != null && visitType!.trim().toLowerCase() == 'site_check';
 
   String? get displayPlaceName {
     final site = siteName?.trim();
@@ -95,6 +101,8 @@ class VisitPatrolContext {
     double? siteLongitude,
     String? uploadUrl,
     int? minimumPhotos,
+    String? visitType,
+    int? siteCheckTimeSheetId,
     List<VisitCheckpoint>? checkpoints,
     bool clearClientDraftId = false,
     bool clearRegionId = false,
@@ -108,6 +116,8 @@ class VisitPatrolContext {
     bool clearSiteLongitude = false,
     bool clearUploadUrl = false,
     bool clearMinimumPhotos = false,
+    bool clearVisitType = false,
+    bool clearSiteCheckTimeSheetId = false,
   }) {
     return VisitPatrolContext(
       clientDraftId: clearClientDraftId
@@ -132,6 +142,10 @@ class VisitPatrolContext {
       minimumPhotos: clearMinimumPhotos
           ? null
           : (minimumPhotos ?? this.minimumPhotos),
+      visitType: clearVisitType ? null : (visitType ?? this.visitType),
+      siteCheckTimeSheetId: clearSiteCheckTimeSheetId
+          ? null
+          : (siteCheckTimeSheetId ?? this.siteCheckTimeSheetId),
       checkpoints: checkpoints ?? this.checkpoints,
     );
   }
@@ -150,6 +164,9 @@ class VisitPatrolContext {
       'siteLongitude': siteLongitude,
       'uploadUrl': uploadUrl,
       if (minimumPhotos != null) 'minimumPhotos': minimumPhotos,
+      if (visitType != null) 'visitType': visitType,
+      if (siteCheckTimeSheetId != null)
+        'siteCheckTimeSheetId': siteCheckTimeSheetId,
       'checkpoints': checkpoints.map((e) => e.toJson()).toList(),
     };
   }
@@ -168,6 +185,10 @@ class VisitPatrolContext {
       if (scheduleId != null) 'schedule_id': scheduleId,
       if (sitePatrolWindowId != null)
         'site_patrol_window_id': sitePatrolWindowId,
+      if (visitType != null && visitType!.trim().isNotEmpty)
+        'visit_type': visitType!.trim(),
+      if (siteCheckTimeSheetId != null)
+        'site_check_time_sheet_id': siteCheckTimeSheetId,
     };
   }
 
@@ -234,6 +255,12 @@ class VisitPatrolContext {
           nestedSite?['minimum_photos'] ??
           nestedSite?['minimumPhotos'],
     );
+    final visitType = _string(json['visitType'] ?? json['visit_type']);
+    final siteCheckTimeSheetId = _int(
+      json['siteCheckTimeSheetId'] ??
+          json['site_check_time_sheet_id'] ??
+          nestedPatrol?['site_check_time_sheet_id'],
+    );
     final checkpoints = VisitCheckpoint.listFromJson(
       json['checkpoints'],
       baseUrl: uploadUrl,
@@ -248,6 +275,8 @@ class VisitPatrolContext {
         sitePatrolWindowId == null &&
         requestId == null &&
         minimumPhotos == null &&
+        visitType == null &&
+        siteCheckTimeSheetId == null &&
         checkpoints.isEmpty) {
       return null;
     }
@@ -265,6 +294,8 @@ class VisitPatrolContext {
       siteLongitude: siteLongitude,
       uploadUrl: uploadUrl,
       minimumPhotos: minimumPhotos,
+      visitType: visitType,
+      siteCheckTimeSheetId: siteCheckTimeSheetId,
       checkpoints: checkpoints,
     );
   }

@@ -1,5 +1,6 @@
 import '../../api/visit_upload_api.dart';
 import 'visit_checkpoint.dart';
+import 'visit_flow_copy.dart';
 import 'visit_media_draft_store.dart';
 import 'visit_video_flow_controller.dart';
 
@@ -133,10 +134,13 @@ class VisitUploadFailure {
     );
   }
 
-  static VisitUploadFailurePresentation presentUnexpected(Object _) {
-    return const VisitUploadFailurePresentation(
+  static VisitUploadFailurePresentation presentUnexpected(
+    Object _, {
+    bool isSiteCheck = false,
+  }) {
+    return VisitUploadFailurePresentation(
       title: 'Upload failed',
-      summary: 'Something went wrong while uploading this patrol report.',
+      summary: VisitFlowCopy(isSiteCheck: isSiteCheck).uploadFailureSummary,
       guidance: 'Please review your report and try again.',
     );
   }
