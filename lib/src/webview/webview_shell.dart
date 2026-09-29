@@ -224,6 +224,36 @@ class _WebViewShellState extends State<WebViewShell>
     _nativeGeoWatches.clear();
   }
 
+  /// evaluateJavascript after webview dispose throws MissingPluginException and
+  /// was recorded as a fatal Crashlytics spam from background geo watches.
+  Future<dynamic> _safeEvaluateJavascript(
+    InAppWebViewController controller, {
+    required String source,
+    String? debugLabel,
+  }) async {
+    if (!mounted || !identical(controller, _controller)) return null;
+    try {
+      return await controller.evaluateJavascript(source: source);
+    } on MissingPluginException catch (e) {
+      _cancelNativeGeoWatches();
+      if (kDebugMode) {
+        debugPrint(
+          '[SmartNPS360] evaluateJavascript skipped'
+          '${debugLabel != null ? ' ($debugLabel)' : ''}: $e',
+        );
+      }
+      return null;
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint(
+          '[SmartNPS360] evaluateJavascript failed'
+          '${debugLabel != null ? ' ($debugLabel)' : ''}: $e',
+        );
+      }
+      return null;
+    }
+  }
+
   void _releaseUiLocationOnLogout() {
     _cancelNativeGeoWatches();
     unawaited(VisitGpsSession.instance.stop());
@@ -2653,10 +2683,12 @@ class _WebViewShellState extends State<WebViewShell>
 
     if (Platform.isAndroid || Platform.isIOS) {
       if (Platform.isIOS && state == AppLifecycleState.inactive) {
+        _cancelNativeGeoWatches();
         unawaited(BackgroundLocationController.notifyAppBackgrounded());
       } else if (state == AppLifecycleState.paused ||
           state == AppLifecycleState.hidden) {
         _lastBackgroundedAt = DateTime.now();
+        _cancelNativeGeoWatches();
         unawaited(BackgroundLocationController.notifyAppBackgrounded());
       } else if (state == AppLifecycleState.resumed) {
         unawaited(BackgroundLocationController.notifyAppForegrounded());
@@ -3854,7 +3886,7 @@ class _WebViewShellState extends State<WebViewShell>
             '[SmartNPS360] $handlerName enriched checkpoint photos '
             'from getPatrolCheckpoints count=${fromWeb.length}',
           );
-          _logRawCheckpoints(payload!['checkpoints']);
+          _logRawCheckpoints(payload['checkpoints']);
         }
       }
     }
@@ -4390,7 +4422,8 @@ class _WebViewShellState extends State<WebViewShell>
           .listEditablePendingDrafts();
       final payload = <String, dynamic>{'ok': true, 'count': pending.length};
       final json = jsonEncode(payload);
-      await controller.evaluateJavascript(
+      await _safeEvaluateJavascript(
+        controller,
         source:
             '''
 (function () {
@@ -4408,6 +4441,7 @@ class _WebViewShellState extends State<WebViewShell>
   } catch (_) {}
 })();
 ''',
+        debugLabel: 'pending-drafts',
       );
     } catch (e) {
       if (kDebugMode) {
@@ -4509,7 +4543,11 @@ class _WebViewShellState extends State<WebViewShell>
           );
           final js =
               'window.__smartnps_native_geo_emit($watchId, ${jsonEncode(initialPayload)});';
-          await controller.evaluateJavascript(source: js);
+          await _safeEvaluateJavascript(
+            controller,
+            source: js,
+            debugLabel: 'geo-initial-$watchId',
+          );
         }
 
         final Map? options = payload['options'] is Map
@@ -4549,16 +4587,32 @@ class _WebViewShellState extends State<WebViewShell>
             if (!position.latitude.isFinite || !position.longitude.isFinite) {
               return;
             }
+            if (!mounted || !identical(controller, _controller)) {
+              _cancelNativeGeoWatches();
+              return;
+            }
             final payload = _toWebGeolocationPayloadFromPosition(position);
             final js =
                 'window.__smartnps_native_geo_emit($watchId, ${jsonEncode(payload)});';
-            await controller.evaluateJavascript(source: js);
+            await _safeEvaluateJavascript(
+              controller,
+              source: js,
+              debugLabel: 'geo-emit-$watchId',
+            );
           },
           onError: (Object error) async {
+            if (!mounted || !identical(controller, _controller)) {
+              _cancelNativeGeoWatches();
+              return;
+            }
             final err = {'code': 2, 'message': error.toString()};
             final js =
                 'window.__smartnps_native_geo_error($watchId, ${jsonEncode(err)});';
-            await controller.evaluateJavascript(source: js);
+            await _safeEvaluateJavascript(
+              controller,
+              source: js,
+              debugLabel: 'geo-error-$watchId',
+            );
           },
         );
         _nativeGeoWatches[watchId] = sub;

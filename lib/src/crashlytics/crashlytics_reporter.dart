@@ -57,7 +57,10 @@ class CrashlyticsReporter {
   static bool shouldIgnoreError(Object error) {
     if (SecureStorageAccess.isRecoverableKeychainError(error)) return true;
     final text = error.toString();
-    return _looksLikeNetworkNoise(text);
+    if (_looksLikeNetworkNoise(text)) return true;
+    // Geo watches / draft notify can race webview dispose in background.
+    if (_looksLikeDisposedWebViewChannel(text)) return true;
+    return false;
   }
 
   /// True for recoverable noise that should not count as a crash.
@@ -74,6 +77,10 @@ class CrashlyticsReporter {
 
     final text = error.toString();
     if (_looksLikeLayoutOverflow(text)) {
+      return true;
+    }
+    // OEM/emulator WebView quirk; patched native plugin also swallows this.
+    if (_looksLikeWebSettingsClassCast(text)) {
       return true;
     }
     return false;
@@ -116,6 +123,19 @@ class CrashlyticsReporter {
         lower.contains('overflowed by') ||
         lower.contains('a renderflex overflowed') ||
         lower.contains('cannot hit test a render box with no size');
+  }
+
+  static bool _looksLikeDisposedWebViewChannel(String text) {
+    final lower = text.toLowerCase();
+    return lower.contains('missingpluginexception') &&
+        lower.contains('evaluatejavascript') &&
+        lower.contains('flutter_inappwebview');
+  }
+
+  static bool _looksLikeWebSettingsClassCast(String text) {
+    final lower = text.toLowerCase();
+    return lower.contains('websettingswrapper') &&
+        lower.contains('contentsettingsadapter');
   }
 
   static Future<void> _recordFlutterError(FlutterErrorDetails details) async {

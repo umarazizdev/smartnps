@@ -90,6 +90,9 @@ dependency_overrides:
   # Softens multi-engine stop logs when UI + FGS both use Geolocator.
   geolocator_android:
     path: packages/geolocator_android_patched
+  # Catch WebSettings ClassCastException on setForceDarkStrategy (build 148 crashes).
+  flutter_inappwebview_android:
+    path: packages/flutter_inappwebview_android_patched
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
