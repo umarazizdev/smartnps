@@ -28,6 +28,8 @@ final class IosAppKillCycleReporter {
   private let cachedPermissionsKey = "smartnps360.ios_app_cycle.cached_permissions"
   /// Full Flutter permission snapshot for kill/wake lightweight POSTs.
   private let fullCachedPermissionsKey = "smartnps360.ios_app_cycle.full_cached_permissions"
+  private let cachedBatteryPercentageKey = "smartnps360.ios_app_cycle.cached_battery_percentage"
+  private let cachedLowPowerModeKey = "smartnps360.ios_app_cycle.cached_low_power_mode"
   private let killSecurityNotificationId = "smartnps360.kill_security.pending"
   private let suppressOpenedAtKey = "smartnps360.ios_app_cycle.suppress_opened_at"
   private let maxDebugLogs = 100
@@ -552,8 +554,7 @@ final class IosAppKillCycleReporter {
       "app_cycle": appCycle,
       "killed_at": killedAt,
       "checkedAt": Date().toISO8601UTC(),
-      "low_power_mode": ProcessInfo.processInfo.isLowPowerModeEnabled
-        ? "enabled" : "disabled",
+      "low_power_mode": cachedOrLiveLowPowerMode(),
       "permissions": lightweight
         ? cachedOrMinimalPermissionsSnapshot()
         : lightPermissionsSnapshot(),
@@ -562,6 +563,9 @@ final class IosAppKillCycleReporter {
     payload["deviceId"] = deviceId.isEmpty ? "unknown-ios-device" : deviceId
     if let openedAt, !openedAt.isEmpty {
       payload["opened_at"] = openedAt
+    }
+    if let battery = cachedOrLiveBatteryPercentage() {
+      payload["battery_percentage"] = battery
     }
     let deviceName = UIDevice.current.name
     if !deviceName.isEmpty {
@@ -575,11 +579,52 @@ final class IosAppKillCycleReporter {
   }
 
   /// Called from Flutter whenever a full permission payload is built while alive.
-  func cacheFullPermissionsSnapshot(_ permissions: [String: String]) {
+  func cacheFullPermissionsSnapshot(
+    _ permissions: [String: String],
+    batteryPercentage: Int? = nil,
+    lowPowerMode: String? = nil
+  ) {
     guard !permissions.isEmpty else { return }
     UserDefaults.standard.set(sanitizePermissions(permissions), forKey: fullCachedPermissionsKey)
+    if let batteryPercentage, (0...100).contains(batteryPercentage) {
+      UserDefaults.standard.set(batteryPercentage, forKey: cachedBatteryPercentageKey)
+    }
+    if let lowPowerMode {
+      let trimmed = lowPowerMode.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !trimmed.isEmpty {
+        UserDefaults.standard.set(trimmed, forKey: cachedLowPowerModeKey)
+      }
+    }
     UserDefaults.standard.synchronize()
-    appendDebugLog("cached full permission snapshot (\(permissions.count) keys)")
+    appendDebugLog(
+      "cached full permission snapshot (\(permissions.count) keys)"
+        + " battery=\(batteryPercentage.map(String.init) ?? "nil")"
+        + " low_power_mode=\(lowPowerMode ?? "nil")"
+    )
+  }
+
+  private func cachedOrLiveBatteryPercentage() -> Int? {
+    if UserDefaults.standard.object(forKey: cachedBatteryPercentageKey) != nil {
+      let cached = UserDefaults.standard.integer(forKey: cachedBatteryPercentageKey)
+      if (0...100).contains(cached) {
+        return cached
+      }
+    }
+    UIDevice.current.isBatteryMonitoringEnabled = true
+    let level = UIDevice.current.batteryLevel
+    guard level >= 0 else { return nil }
+    let percent = Int((level * 100).rounded())
+    return max(0, min(100, percent))
+  }
+
+  private func cachedOrLiveLowPowerMode() -> String {
+    if let cached = UserDefaults.standard.string(forKey: cachedLowPowerModeKey)?
+      .trimmingCharacters(in: .whitespacesAndNewlines),
+      !cached.isEmpty
+    {
+      return cached
+    }
+    return ProcessInfo.processInfo.isLowPowerModeEnabled ? "enabled" : "disabled"
   }
 
   private func cachedOrMinimalPermissionsSnapshot() -> [String: String] {

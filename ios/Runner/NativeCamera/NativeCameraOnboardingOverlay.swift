@@ -36,6 +36,7 @@ final class NativeCameraOnboardingOverlay: UIView {
 
   private let dimLayer = CAShapeLayer()
   private let holeStroke = CAShapeLayer()
+  private let connectorLayer = CAShapeLayer()
   private let arrowLayer = CAShapeLayer()
 
   private let card = UIView()
@@ -48,6 +49,12 @@ final class NativeCameraOnboardingOverlay: UIView {
   private var cardLeadingConstraint: NSLayoutConstraint?
   private var cardTopConstraint: NSLayoutConstraint?
   private var cardWidthConstraint: NSLayoutConstraint?
+  private let accent = UIColor(
+    red: 228 / 255,
+    green: 142 / 255,
+    blue: 21 / 255,
+    alpha: 1
+  )
 
   override init(frame: CGRect) {
     super.init(frame: frame)
@@ -61,16 +68,17 @@ final class NativeCameraOnboardingOverlay: UIView {
     layer.addSublayer(dimLayer)
 
     holeStroke.fillColor = UIColor.clear.cgColor
-    holeStroke.strokeColor = UIColor(
-      red: 228 / 255,
-      green: 142 / 255,
-      blue: 21 / 255,
-      alpha: 1
-    ).cgColor
+    holeStroke.strokeColor = accent.cgColor
     holeStroke.lineWidth = 2.5
     layer.addSublayer(holeStroke)
 
-    arrowLayer.fillColor = UIColor.white.cgColor
+    connectorLayer.fillColor = UIColor.clear.cgColor
+    connectorLayer.strokeColor = accent.withAlphaComponent(0.9).cgColor
+    connectorLayer.lineWidth = 2.25
+    connectorLayer.lineCap = .round
+    layer.addSublayer(connectorLayer)
+
+    arrowLayer.fillColor = accent.cgColor
     layer.addSublayer(arrowLayer)
 
     card.backgroundColor = UIColor(red: 26 / 255, green: 35 / 255, blue: 50 / 255, alpha: 0.95)
@@ -84,6 +92,8 @@ final class NativeCameraOnboardingOverlay: UIView {
     // Never mix frame layout with Auto Layout on this view (avoids width/height == 0 fights).
     card.translatesAutoresizingMaskIntoConstraints = false
     addSubview(card)
+    // Pointer must sit above the tip card (same bug as Android z-order).
+    raisePointerAboveCard()
 
     stepLabel.font = .systemFont(ofSize: 11, weight: .bold)
     stepLabel.textColor = UIColor(red: 148 / 255, green: 163 / 255, blue: 184 / 255, alpha: 1)
@@ -286,8 +296,8 @@ final class NativeCameraOnboardingOverlay: UIView {
       verticalFittingPriority: .fittingSizeLevel
     )
     let margin: CGFloat = 20
+    let gap: CGFloat = 36
     let holeCx = holeRect.midX
-    let holeCy = holeRect.midY
 
     let preferred: String = {
       switch preferredArrow.lowercased() {
@@ -298,42 +308,100 @@ final class NativeCameraOnboardingOverlay: UIView {
       }
     }()
 
-    var cardOrigin = CGPoint.zero
-    switch preferred {
-    case "left":
-      cardOrigin.x = max(margin, holeRect.minX - cardSize.width - 28)
-      cardOrigin.y = min(
-        max(margin, holeCy - cardSize.height / 2),
-        max(margin, bounds.height - cardSize.height - margin)
-      )
-    case "right":
-      cardOrigin.x = min(
-        max(margin, holeRect.maxX + 28),
-        max(margin, bounds.width - cardSize.width - margin)
-      )
-      cardOrigin.y = min(
-        max(margin, holeCy - cardSize.height / 2),
-        max(margin, bounds.height - cardSize.height - margin)
-      )
-    case "up":
-      cardOrigin.x = min(
-        max(margin, holeCx - cardSize.width / 2),
-        max(margin, bounds.width - cardSize.width - margin)
-      )
-      cardOrigin.y = max(margin, holeRect.minY - cardSize.height - 28)
-    default:
-      cardOrigin.x = min(
-        max(margin, holeCx - cardSize.width / 2),
-        max(margin, bounds.width - cardSize.width - margin)
-      )
-      cardOrigin.y = min(
-        max(margin, holeRect.maxY + 28),
-        max(margin, bounds.height - cardSize.height - margin)
-      )
-    }
+    let (cardOrigin, resolved) = placeCard(
+      preferred: preferred,
+      cardSize: cardSize,
+      margin: margin,
+      gap: gap
+    )
     cardLeadingConstraint?.constant = cardOrigin.x
     cardTopConstraint?.constant = cardOrigin.y
-    rebuildMask(preferred: preferred)
+    layoutIfNeeded()
+    rebuildMask(preferred: resolved)
+  }
+
+  /// Prefer catalog side, but never cover the spotlight — try alternates.
+  private func placeCard(
+    preferred: String,
+    cardSize: CGSize,
+    margin: CGFloat,
+    gap: CGFloat
+  ) -> (CGPoint, String) {
+    let order = [preferred, "down", "up", "left", "right"]
+    var seen = Set<String>()
+    var bestOrigin = CGPoint(x: margin, y: margin)
+    var bestDir = preferred
+    var bestScore = -CGFloat.greatestFiniteMagnitude
+
+    for dir in order where seen.insert(dir).inserted {
+      let origin = cardOrigin(for: dir, cardSize: cardSize, margin: margin, gap: gap)
+      let candidate = CGRect(origin: origin, size: cardSize)
+      let inflatedHole = holeRect.insetBy(dx: -8, dy: -8)
+      let overlaps = candidate.intersects(inflatedHole)
+      var score: CGFloat = overlaps ? -1_000 : (dir == preferred ? 100 : 50)
+      score += clearanceScore(candidate: candidate)
+      if score > bestScore {
+        bestScore = score
+        bestOrigin = origin
+        bestDir = dir
+      }
+      if !overlaps, dir == preferred { break }
+    }
+    return (bestOrigin, bestDir)
+  }
+
+  private func cardOrigin(
+    for dir: String,
+    cardSize: CGSize,
+    margin: CGFloat,
+    gap: CGFloat
+  ) -> CGPoint {
+    let holeCx = holeRect.midX
+    let holeCy = holeRect.midY
+    let maxX = max(margin, bounds.width - cardSize.width - margin)
+    let maxY = max(margin, bounds.height - cardSize.height - margin)
+    switch dir {
+    case "left":
+      return CGPoint(
+        x: min(max(margin, holeRect.minX - cardSize.width - gap), maxX),
+        y: min(max(margin, holeCy - cardSize.height / 2), maxY)
+      )
+    case "right":
+      return CGPoint(
+        x: min(max(margin, holeRect.maxX + gap), maxX),
+        y: min(max(margin, holeCy - cardSize.height / 2), maxY)
+      )
+    case "up":
+      return CGPoint(
+        x: min(max(margin, holeCx - cardSize.width / 2), maxX),
+        y: min(max(margin, holeRect.minY - cardSize.height - gap), maxY)
+      )
+    default:
+      return CGPoint(
+        x: min(max(margin, holeCx - cardSize.width / 2), maxX),
+        y: min(max(margin, holeRect.maxY + gap), maxY)
+      )
+    }
+  }
+
+  private func clearanceScore(candidate: CGRect) -> CGFloat {
+    let dx: CGFloat
+    if candidate.maxX < holeRect.minX {
+      dx = holeRect.minX - candidate.maxX
+    } else if candidate.minX > holeRect.maxX {
+      dx = candidate.minX - holeRect.maxX
+    } else {
+      dx = 0
+    }
+    let dy: CGFloat
+    if candidate.maxY < holeRect.minY {
+      dy = holeRect.minY - candidate.maxY
+    } else if candidate.minY > holeRect.maxY {
+      dy = candidate.minY - holeRect.maxY
+    } else {
+      dy = 0
+    }
+    return min(dx + dy, 80)
   }
 
   private func rebuildMask(preferred: String) {
@@ -352,43 +420,76 @@ final class NativeCameraOnboardingOverlay: UIView {
       holeStroke.isHidden = true
     }
 
-    arrowPath = UIBezierPath()
-    let tipSize: CGFloat = 12
+    buildPointer(preferred: preferred)
+    raisePointerAboveCard()
+  }
+
+  private func buildPointer(preferred: String) {
+    let caret: CGFloat = 11
+    let nest: CGFloat = 1.5
+    let holeCx = holeRect.midX
+    let holeCy = holeRect.midY
+    let cardFrame = card.frame
+
+    let arrow = UIBezierPath()
+    let connector = UIBezierPath()
+
     switch preferred {
     case "left":
-      let tip = CGPoint(x: holeRect.minX - 4, y: holeRect.midY)
-      let baseX = card.frame.maxX
-      let baseY = min(max(card.frame.midY, card.frame.minY + tipSize), card.frame.maxY - tipSize)
-      arrowPath.move(to: tip)
-      arrowPath.addLine(to: CGPoint(x: baseX, y: baseY - tipSize))
-      arrowPath.addLine(to: CGPoint(x: baseX, y: baseY + tipSize))
-      arrowPath.close()
+      let baseX = cardFrame.maxX - nest
+      let baseY = min(max(holeCy, cardFrame.minY + caret), cardFrame.maxY - caret)
+      let tip = CGPoint(x: cardFrame.maxX + caret, y: baseY)
+      arrow.move(to: tip)
+      arrow.addLine(to: CGPoint(x: baseX, y: baseY - caret))
+      arrow.addLine(to: CGPoint(x: baseX, y: baseY + caret))
+      arrow.close()
+      connector.move(to: tip)
+      connector.addLine(to: CGPoint(x: holeRect.minX - 2, y: holeCy))
     case "right":
-      let tip = CGPoint(x: holeRect.maxX + 4, y: holeRect.midY)
-      let baseX = card.frame.minX
-      let baseY = min(max(card.frame.midY, card.frame.minY + tipSize), card.frame.maxY - tipSize)
-      arrowPath.move(to: tip)
-      arrowPath.addLine(to: CGPoint(x: baseX, y: baseY - tipSize))
-      arrowPath.addLine(to: CGPoint(x: baseX, y: baseY + tipSize))
-      arrowPath.close()
+      let baseX = cardFrame.minX + nest
+      let baseY = min(max(holeCy, cardFrame.minY + caret), cardFrame.maxY - caret)
+      let tip = CGPoint(x: cardFrame.minX - caret, y: baseY)
+      arrow.move(to: tip)
+      arrow.addLine(to: CGPoint(x: baseX, y: baseY - caret))
+      arrow.addLine(to: CGPoint(x: baseX, y: baseY + caret))
+      arrow.close()
+      connector.move(to: tip)
+      connector.addLine(to: CGPoint(x: holeRect.maxX + 2, y: holeCy))
     case "up":
-      let tip = CGPoint(x: holeRect.midX, y: holeRect.minY - 4)
-      let baseY = card.frame.maxY
-      let baseX = min(max(card.frame.midX, card.frame.minX + tipSize), card.frame.maxX - tipSize)
-      arrowPath.move(to: tip)
-      arrowPath.addLine(to: CGPoint(x: baseX - tipSize, y: baseY))
-      arrowPath.addLine(to: CGPoint(x: baseX + tipSize, y: baseY))
-      arrowPath.close()
+      let baseY = cardFrame.maxY - nest
+      let baseX = min(max(holeCx, cardFrame.minX + caret), cardFrame.maxX - caret)
+      let tip = CGPoint(x: baseX, y: cardFrame.maxY + caret)
+      arrow.move(to: tip)
+      arrow.addLine(to: CGPoint(x: baseX - caret, y: baseY))
+      arrow.addLine(to: CGPoint(x: baseX + caret, y: baseY))
+      arrow.close()
+      connector.move(to: tip)
+      connector.addLine(to: CGPoint(x: holeCx, y: holeRect.minY - 2))
     default:
-      let tip = CGPoint(x: holeRect.midX, y: holeRect.maxY + 4)
-      let baseY = card.frame.minY
-      let baseX = min(max(card.frame.midX, card.frame.minX + tipSize), card.frame.maxX - tipSize)
-      arrowPath.move(to: tip)
-      arrowPath.addLine(to: CGPoint(x: baseX - tipSize, y: baseY))
-      arrowPath.addLine(to: CGPoint(x: baseX + tipSize, y: baseY))
-      arrowPath.close()
+      let baseY = cardFrame.minY + nest
+      let baseX = min(max(holeCx, cardFrame.minX + caret), cardFrame.maxX - caret)
+      let tip = CGPoint(x: baseX, y: cardFrame.minY - caret)
+      arrow.move(to: tip)
+      arrow.addLine(to: CGPoint(x: baseX - caret, y: baseY))
+      arrow.addLine(to: CGPoint(x: baseX + caret, y: baseY))
+      arrow.close()
+      connector.move(to: tip)
+      connector.addLine(to: CGPoint(x: holeCx, y: holeRect.maxY + 2))
     }
-    arrowLayer.path = arrowPath.cgPath
+
+    arrowPath = arrow
+    arrowLayer.path = arrow.cgPath
     arrowLayer.frame = bounds
+    connectorLayer.path = connector.cgPath
+    connectorLayer.frame = bounds
+  }
+
+  /// Keep dim/hole under content; float connector + caret above the tip card.
+  private func raisePointerAboveCard() {
+    dimLayer.zPosition = 0
+    holeStroke.zPosition = 1
+    card.layer.zPosition = 2
+    connectorLayer.zPosition = 10_000
+    arrowLayer.zPosition = 10_001
   }
 }

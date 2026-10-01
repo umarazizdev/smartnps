@@ -20,6 +20,7 @@
     <string name="native_camera_exposure_sun">☀</string>
     <string name="native_camera_hint_idle">Tap photo · Hold video\nSlide to zoom</string>
     <string name="native_camera_hint_recording">Slide shutter\nto zoom</string>
+    <string name="native_camera_recording_duration">Recording duration</string>
     <string name="native_camera_busy_capturing">Capturing…</string>
     <string name="native_camera_busy_starting">Starting…</string>
     <string name="native_camera_busy_saving">Saving…</string>

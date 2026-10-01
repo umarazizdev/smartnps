@@ -262,6 +262,14 @@ final class NativeCameraViewController: UIViewController {
       blue: 38 / 255,
       alpha: 1
     )
+    /// Deep red glass for the live recording duration badge (matches Android).
+    static let recordingBadgeFill = UIColor(
+      red: 185 / 255,
+      green: 28 / 255,
+      blue: 28 / 255,
+      alpha: 0.80
+    )
+    static let recordingBadgeBorder = UIColor(white: 1, alpha: 0.40)
     static let primary = UIColor(
       red: 2 / 255,
       green: 42 / 255,
@@ -348,6 +356,7 @@ final class NativeCameraViewController: UIViewController {
   private var isPortraitBlocked = false
   private var recordingTimer: Timer?
   private var recordingStartedAt: Date?
+  private let recordingDotPulseKey = "nativeCamera.recordingDotPulse"
   private var currentZoomFactor: CGFloat = 1
   private var pinchStartZoom: CGFloat = 1
   private var verticalExposureStart: Float = 0
@@ -391,6 +400,7 @@ final class NativeCameraViewController: UIViewController {
 
   deinit {
     recordingTimer?.invalidate()
+    stopRecordingDotPulse()
     focusDismissWorkItem?.cancel()
     photoCaptureTimeoutWorkItem?.cancel()
     NotificationCenter.default.removeObserver(self)
@@ -881,6 +891,7 @@ final class NativeCameraViewController: UIViewController {
     // Landscape: 5pt before shutter rail. Portrait: 0 (full-bleed, no inset).
     updatePreviewTrailingPadding(portrait: portrait)
     updateCloseChromePosition(portrait: portrait)
+    syncRecordingDurationBadgeForPortrait()
     if portrait {
       zoomWheel.layer.removeAllAnimations()
       zoomWheel.alpha = 0
@@ -1060,12 +1071,15 @@ final class NativeCameraViewController: UIViewController {
 
   private func buildRecordingBadge() {
     recordingBadge.translatesAutoresizingMaskIntoConstraints = false
-    recordingBadge.backgroundColor = Chrome.glassFill
+    recordingBadge.backgroundColor = Chrome.recordingBadgeFill
     recordingBadge.layer.cornerRadius = 999
     recordingBadge.layer.borderWidth = 1
-    recordingBadge.layer.borderColor = Chrome.glassBorder.cgColor
+    recordingBadge.layer.borderColor = Chrome.recordingBadgeBorder.cgColor
     recordingBadge.clipsToBounds = true
     recordingBadge.isHidden = true
+    recordingBadge.alpha = 0
+    recordingBadge.isAccessibilityElement = true
+    recordingBadge.accessibilityLabel = "Recording duration"
 
     recordingDot.translatesAutoresizingMaskIntoConstraints = false
     recordingDot.backgroundColor = Chrome.red
@@ -1076,20 +1090,25 @@ final class NativeCameraViewController: UIViewController {
     timerLabel.font = .monospacedDigitSystemFont(ofSize: 14, weight: .bold)
     timerLabel.textAlignment = .center
     timerLabel.text = "00:00"
+    timerLabel.layer.shadowColor = UIColor.black.cgColor
+    timerLabel.layer.shadowOpacity = 0.4
+    timerLabel.layer.shadowRadius = 2
+    timerLabel.layer.shadowOffset = CGSize(width: 0, height: 1)
 
     recordingBadge.addSubview(recordingDot)
     recordingBadge.addSubview(timerLabel)
 
     NSLayoutConstraint.activate([
-      recordingDot.leadingAnchor.constraint(equalTo: recordingBadge.leadingAnchor, constant: 14),
+      recordingDot.leadingAnchor.constraint(equalTo: recordingBadge.leadingAnchor, constant: 12),
       recordingDot.centerYAnchor.constraint(equalTo: recordingBadge.centerYAnchor),
       recordingDot.widthAnchor.constraint(equalToConstant: 8),
       recordingDot.heightAnchor.constraint(equalToConstant: 8),
 
       timerLabel.leadingAnchor.constraint(equalTo: recordingDot.trailingAnchor, constant: 8),
       timerLabel.trailingAnchor.constraint(equalTo: recordingBadge.trailingAnchor, constant: -14),
-      timerLabel.topAnchor.constraint(equalTo: recordingBadge.topAnchor, constant: 8),
-      timerLabel.bottomAnchor.constraint(equalTo: recordingBadge.bottomAnchor, constant: -8),
+      timerLabel.topAnchor.constraint(equalTo: recordingBadge.topAnchor, constant: 7),
+      timerLabel.bottomAnchor.constraint(equalTo: recordingBadge.bottomAnchor, constant: -7),
+      recordingBadge.heightAnchor.constraint(greaterThanOrEqualToConstant: 34),
     ])
   }
 
@@ -2113,7 +2132,6 @@ final class NativeCameraViewController: UIViewController {
 
   private func startRecordingTimer() {
     recordingStartedAt = Date()
-    recordingBadge.isHidden = false
     timerLabel.text = "00:00"
     recordingTimer?.invalidate()
     recordingTimer = Timer.scheduledTimer(
@@ -2126,13 +2144,102 @@ final class NativeCameraViewController: UIViewController {
       let seconds = elapsed % 60
       self.timerLabel.text = String(format: "%02d:%02d", minutes, seconds)
     }
+    // Video-only duration badge: never show under the portrait rotate prompt.
+    guard !isPortraitBlocked else {
+      hideRecordingDurationBadge(animated: false)
+      return
+    }
+    showRecordingDurationBadge()
   }
 
   private func stopRecordingTimer() {
     recordingTimer?.invalidate()
     recordingTimer = nil
     recordingStartedAt = nil
-    recordingBadge.isHidden = true
+    hideRecordingDurationBadge(animated: !recordingBadge.isHidden)
+  }
+
+  private func showRecordingDurationBadge() {
+    recordingBadge.layer.removeAllAnimations()
+    if !recordingBadge.isHidden, recordingBadge.alpha >= 0.99 {
+      startRecordingDotPulse()
+      return
+    }
+    recordingBadge.isHidden = false
+    recordingBadge.alpha = 0
+    recordingBadge.transform = CGAffineTransform(scaleX: 0.92, y: 0.92)
+    UIView.animate(
+      withDuration: 0.22,
+      delay: 0,
+      options: [.curveEaseOut, .allowUserInteraction]
+    ) {
+      self.recordingBadge.alpha = 1
+      self.recordingBadge.transform = .identity
+    } completion: { finished in
+      guard finished else { return }
+      self.startRecordingDotPulse()
+    }
+  }
+
+  private func hideRecordingDurationBadge(animated: Bool) {
+    stopRecordingDotPulse()
+    recordingBadge.layer.removeAllAnimations()
+    guard animated, !recordingBadge.isHidden else {
+      recordingBadge.alpha = 0
+      recordingBadge.transform = .identity
+      recordingBadge.isHidden = true
+      return
+    }
+    UIView.animate(
+      withDuration: 0.16,
+      delay: 0,
+      options: [.curveEaseInOut, .beginFromCurrentState]
+    ) {
+      self.recordingBadge.alpha = 0
+      self.recordingBadge.transform = CGAffineTransform(scaleX: 0.94, y: 0.94)
+    } completion: { _ in
+      self.recordingBadge.isHidden = true
+      self.recordingBadge.transform = .identity
+    }
+  }
+
+  private func startRecordingDotPulse() {
+    guard recordingDot.layer.animation(forKey: recordingDotPulseKey) == nil else { return }
+    let fade = CABasicAnimation(keyPath: "opacity")
+    fade.fromValue = 1
+    fade.toValue = 0.28
+    fade.autoreverses = true
+    fade.duration = 0.5
+    fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+
+    let scale = CABasicAnimation(keyPath: "transform.scale")
+    scale.fromValue = 1
+    scale.toValue = 0.72
+    scale.autoreverses = true
+    scale.duration = 0.5
+    scale.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+
+    let group = CAAnimationGroup()
+    group.animations = [fade, scale]
+    group.duration = 1.0
+    group.repeatCount = .infinity
+    group.isRemovedOnCompletion = false
+    recordingDot.layer.add(group, forKey: recordingDotPulseKey)
+  }
+
+  private func stopRecordingDotPulse() {
+    recordingDot.layer.removeAnimation(forKey: recordingDotPulseKey)
+    recordingDot.layer.opacity = 1
+    recordingDot.transform = .identity
+  }
+
+  private func syncRecordingDurationBadgeForPortrait() {
+    let show = cameraSession.isRecording && !isPortraitBlocked
+    if show {
+      showRecordingDurationBadge()
+    } else if !recordingBadge.isHidden {
+      hideRecordingDurationBadge(animated: true)
+    }
   }
 
   private func presentPortraitAlert(isPhoto: Bool) {

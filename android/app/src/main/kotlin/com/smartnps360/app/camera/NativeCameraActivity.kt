@@ -1,6 +1,7 @@
 package com.smartnps360.app.camera
 
 import android.Manifest
+import android.animation.AnimatorSet
 import android.animation.Keyframe
 import android.animation.ObjectAnimator
 import android.animation.PropertyValuesHolder
@@ -20,6 +21,8 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.view.animation.AccelerateDecelerateInterpolator
+import android.view.animation.DecelerateInterpolator
 import android.view.animation.PathInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageButton
@@ -67,8 +70,10 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
   private lateinit var exposureSlider: SeekBar
   private lateinit var exposureValue: TextView
   private lateinit var recordingTimer: LinearLayout
+  private lateinit var recordingTimerDot: View
   private lateinit var recordingTimerText: TextView
   private lateinit var captureHint: TextView
+  private var recordingDotPulse: AnimatorSet? = null
   private lateinit var busyOverlay: View
   private lateinit var busyLabel: TextView
   private lateinit var statusToast: TextView
@@ -114,9 +119,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     override fun run() {
       val elapsed = SystemClock.elapsedRealtime() - recordStartElapsed
       val totalSec = (elapsed / 1000L).toInt()
-      val min = totalSec / 60
-      val sec = totalSec % 60
-      recordingTimerText.text = String.format("%d:%02d", min, sec)
+      recordingTimerText.text = formatRecordingDuration(totalSec)
       mainHandler.postDelayed(this, 250L)
     }
   }
@@ -204,6 +207,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     exposureSlider = findViewById(R.id.exposure_slider)
     exposureValue = findViewById(R.id.exposure_value)
     recordingTimer = findViewById(R.id.recording_timer)
+    recordingTimerDot = findViewById(R.id.recording_timer_dot)
     recordingTimerText = findViewById(R.id.recording_timer_text)
     captureHint = findViewById(R.id.capture_hint)
     busyOverlay = findViewById(R.id.busy_overlay)
@@ -321,6 +325,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
 
   override fun onDestroy() {
     mainHandler.removeCallbacksAndMessages(null)
+    stopRecordingDurationBadge(animate = false)
     stopRotateHintAnimation()
     session?.release()
     session = null
@@ -465,6 +470,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     // Landscape: close on shutter rail. Portrait: top-leading (outside hidden rail).
     updateCloseChromePosition(portrait)
     updateAuxChromeVisibility()
+    updateRecordingDurationBadge()
     if (portrait) {
       startRotateHintAnimation()
       pauseOnboardingForPortrait()
@@ -510,13 +516,17 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     if (!::btnFlash.isInitialized) return
     val density = resources.displayMetrics.density
     val leading = ((if (portrait) 18 else 28) * density).toInt()
-    val trayLeading = leading + (42 * density).toInt() + (8 * density).toInt()
+    val flashIconSize = (42 * density).toInt()
+    val flashLabelWidth = (72 * density).toInt()
+    // Keep the label centered under the circular flash icon (label is wider).
+    val labelLeading = leading + (flashIconSize - flashLabelWidth) / 2
+    val trayLeading = leading + flashIconSize + (8 * density).toInt()
     (btnFlash.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
       lp.marginStart = leading
       btnFlash.layoutParams = lp
     }
     (flashLabel.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
-      lp.marginStart = leading
+      lp.marginStart = labelLeading
       flashLabel.layoutParams = lp
     }
     (flashModeTray.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
@@ -642,7 +652,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     if (isRecording) {
       hideBusy()
       recordStartElapsed = SystemClock.elapsedRealtime()
-      recordingTimerText.text = "0:00"
+      recordingTimerText.text = formatRecordingDuration(0)
       mainHandler.removeCallbacks(timerRunnable)
       mainHandler.post(timerRunnable)
       updateCaptureChrome()
@@ -1111,7 +1121,8 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
       pendingStartRecording = true
       sessionReady = false
       mode = NativeCameraSession.Mode.VIDEO
-      torchOn = active.isTorchEnabledPreference()
+      // Session switchMode maps photo Off/Auto/On → video torch Off/Off/On.
+      torchOn = flashCycle == NativeCameraSession.FlashCycle.ON
       showBusy(R.string.native_camera_busy_starting)
       updateCaptureChrome()
       active.switchMode(NativeCameraSession.Mode.VIDEO)
@@ -1209,7 +1220,6 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     val active = session
     if (active == null || active.isRecording()) return
     mode = NativeCameraSession.Mode.PHOTO
-    torchOn = false
     sessionReady = false
     showBusy(R.string.native_camera_busy_starting)
     updateCaptureChrome()
@@ -1218,7 +1228,10 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
 
   private fun onFlashClicked() {
     session ?: return
-    if (busyVisible || isRecordingUi) return
+    // Photo flash tray is blocked while capture/rebind is busy.
+    // Video torch stays tappable before and during recording (CameraX live torch).
+    if (mode == NativeCameraSession.Mode.PHOTO && (busyVisible || isRecordingUi)) return
+    if (mode == NativeCameraSession.Mode.VIDEO && !sessionReady && !isRecordingUi) return
     val show = flashModeTray.visibility != View.VISIBLE
     updateFlashTraySelection()
     flashModeTray.visibility = if (show) View.VISIBLE else View.GONE
@@ -1232,12 +1245,13 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
 
   private fun selectFlashMode(selected: NativeCameraSession.FlashCycle) {
     val active = session ?: return
-    if (busyVisible || isRecordingUi) return
     if (mode == NativeCameraSession.Mode.PHOTO) {
+      if (busyVisible || isRecordingUi) return
       flashCycle = active.setFlashMode(selected)
     } else {
+      if (!sessionReady && !isRecordingUi) return
       val shouldEnable = selected == NativeCameraSession.FlashCycle.ON
-      if (torchOn != shouldEnable) torchOn = active.toggleTorch()
+      torchOn = active.setTorchEnabled(shouldEnable)
     }
     updateFlashIcon()
     flashModeTray.visibility = View.GONE
@@ -1278,21 +1292,123 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
       btnShutter.imageTintList = ColorStateList.valueOf(COLOR_WHITE)
       captureHint.setText(R.string.native_camera_hint_recording)
       captureHint.setTextColor(COLOR_ORANGE)
-      recordingTimer.visibility = View.VISIBLE
     } else {
       btnShutter.setBackgroundResource(R.drawable.native_camera_shutter)
       btnShutter.setImageResource(R.drawable.native_camera_ic_shutter)
       btnShutter.imageTintList = ColorStateList.valueOf(COLOR_PRIMARY)
       captureHint.setText(R.string.native_camera_hint_idle)
       captureHint.setTextColor(COLOR_HINT_IDLE)
-      recordingTimer.visibility = View.GONE
     }
+    updateRecordingDurationBadge()
 
     flashModeTray.visibility = View.GONE
     updateFlashIcon()
     updateFlipVisibility()
     updateZoomChipEnabledState()
     updateAuxChromeVisibility()
+  }
+
+  /**
+   * Top-center elapsed-time pill. Visible only while actively recording video
+   * (never in photo mode, and never under the portrait rotate prompt).
+   */
+  private fun updateRecordingDurationBadge() {
+    if (!::recordingTimer.isInitialized) return
+    val show = isRecordingUi &&
+      mode == NativeCameraSession.Mode.VIDEO &&
+      !isPortraitBlocked
+    if (show) {
+      showRecordingDurationBadge()
+    } else {
+      stopRecordingDurationBadge(animate = recordingTimer.visibility == View.VISIBLE)
+    }
+  }
+
+  private fun showRecordingDurationBadge() {
+    if (recordingTimer.visibility == View.VISIBLE && recordingTimer.alpha >= 0.99f) {
+      startRecordingDotPulse()
+      return
+    }
+    recordingTimer.animate().cancel()
+    recordingTimer.visibility = View.VISIBLE
+    recordingTimer.alpha = 0f
+    recordingTimer.scaleX = 0.92f
+    recordingTimer.scaleY = 0.92f
+    recordingTimer.animate()
+      .alpha(1f)
+      .scaleX(1f)
+      .scaleY(1f)
+      .setDuration(220L)
+      .setInterpolator(DecelerateInterpolator())
+      .withEndAction { startRecordingDotPulse() }
+      .start()
+  }
+
+  private fun stopRecordingDurationBadge(animate: Boolean) {
+    stopRecordingDotPulse()
+    recordingTimer.animate().cancel()
+    if (!animate || recordingTimer.visibility != View.VISIBLE) {
+      recordingTimer.visibility = View.GONE
+      recordingTimer.alpha = 1f
+      recordingTimer.scaleX = 1f
+      recordingTimer.scaleY = 1f
+      return
+    }
+    recordingTimer.animate()
+      .alpha(0f)
+      .scaleX(0.94f)
+      .scaleY(0.94f)
+      .setDuration(160L)
+      .setInterpolator(AccelerateDecelerateInterpolator())
+      .withEndAction {
+        recordingTimer.visibility = View.GONE
+        recordingTimer.alpha = 1f
+        recordingTimer.scaleX = 1f
+        recordingTimer.scaleY = 1f
+      }
+      .start()
+  }
+
+  private fun startRecordingDotPulse() {
+    if (!::recordingTimerDot.isInitialized) return
+    if (recordingDotPulse?.isRunning == true) return
+    stopRecordingDotPulse()
+    val fade = ObjectAnimator.ofFloat(recordingTimerDot, View.ALPHA, 1f, 0.28f, 1f).apply {
+      duration = 1000L
+      repeatCount = ObjectAnimator.INFINITE
+      interpolator = AccelerateDecelerateInterpolator()
+    }
+    val scaleX = ObjectAnimator.ofFloat(recordingTimerDot, View.SCALE_X, 1f, 0.72f, 1f).apply {
+      duration = 1000L
+      repeatCount = ObjectAnimator.INFINITE
+      interpolator = AccelerateDecelerateInterpolator()
+    }
+    val scaleY = ObjectAnimator.ofFloat(recordingTimerDot, View.SCALE_Y, 1f, 0.72f, 1f).apply {
+      duration = 1000L
+      repeatCount = ObjectAnimator.INFINITE
+      interpolator = AccelerateDecelerateInterpolator()
+    }
+    recordingDotPulse = AnimatorSet().apply {
+      playTogether(fade, scaleX, scaleY)
+      start()
+    }
+  }
+
+  private fun stopRecordingDotPulse() {
+    recordingDotPulse?.cancel()
+    recordingDotPulse = null
+    if (::recordingTimerDot.isInitialized) {
+      recordingTimerDot.alpha = 1f
+      recordingTimerDot.scaleX = 1f
+      recordingTimerDot.scaleY = 1f
+    }
+  }
+
+  private fun formatRecordingDuration(totalSec: Int): String {
+    val safe = totalSec.coerceAtLeast(0)
+    val min = safe / 60
+    val sec = safe % 60
+    return String.format("%02d:%02d", min, sec)
   }
 
   private fun updateFlashButtonVisibility(hasFlash: Boolean) {

@@ -206,6 +206,21 @@ internal object AndroidPermissionStatusUploader {
     AndroidPermissionStatusStore.deviceName(context)?.let {
       payload.put("deviceName", it)
     }
+    // Prefer last Flutter-cached battery; fall back to sticky OS battery intent.
+    val cachedBattery = AndroidPermissionStatusStore.readCachedBatteryPercentage(context)
+    val liveBattery = AndroidPermissionStatusReader.batteryPercentage(context)
+    val battery = when {
+      cachedBattery != null -> cachedBattery
+      liveBattery in 0..100 -> liveBattery
+      else -> null
+    }
+    if (battery != null) {
+      payload.put("battery_percentage", battery)
+    }
+    val cachedLowPower = AndroidPermissionStatusStore.readCachedLowPowerMode(context)
+    val lowPower = cachedLowPower
+      ?: AndroidPermissionStatusReader.lowPowerModeStatus(context)
+    payload.put("low_power_mode", lowPower)
     if (!killedAt.isNullOrEmpty()) {
       payload.put("killed_at", killedAt)
     }

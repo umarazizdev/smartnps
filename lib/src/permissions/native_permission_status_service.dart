@@ -144,25 +144,35 @@ class NativePermissionStatusService {
   Future<Map<String, dynamic>> buildPayload() async {
     final deviceName = await DeviceIdentity.getDeviceName();
     final permissions = await _readPermissions();
-    // Persist full snapshot for native kill/wake lightweight POSTs.
-    unawaited(_persistFullPermissionsCache(permissions));
+    final batteryPercentage = await _batteryPercentage();
+    final lowPowerMode = await _lowPowerModeStatus();
+    // Persist full snapshot + battery for native kill/wake lightweight POSTs.
+    unawaited(
+      _persistFullPermissionsCache(
+        permissions,
+        batteryPercentage: batteryPercentage,
+        lowPowerMode: lowPowerMode,
+      ),
+    );
     return {
       'platform': DeviceIdentity.platformName(),
       'deviceId': await DeviceIdentity.getDeviceId(),
       if (deviceName != null) 'deviceName': deviceName,
       'appVersion': AppVersionInfo.version,
       'build': AppVersionInfo.buildNumber,
-      'battery_percentage': await _batteryPercentage(),
-      'low_power_mode': await _lowPowerModeStatus(),
+      'battery_percentage': batteryPercentage,
+      'low_power_mode': lowPowerMode,
       'permissions': permissions,
       'checkedAt': isoUtcMicros(DateTime.now()),
     };
   }
 
-  /// Write last-known full permissions to native storage for kill uploads.
+  /// Write last-known full permissions + battery to native storage for kill uploads.
   Future<void> _persistFullPermissionsCache(
-    Map<String, dynamic> permissions,
-  ) async {
+    Map<String, dynamic> permissions, {
+    int? batteryPercentage,
+    String? lowPowerMode,
+  }) async {
     if (!Platform.isIOS && !Platform.isAndroid) return;
     try {
       final asStrings = <String, String>{};
@@ -172,9 +182,18 @@ class NativePermissionStatusService {
         asStrings[entry.key] = value;
       }
       if (asStrings.isEmpty) return;
+      final args = <String, dynamic>{
+        'permissions': asStrings,
+        if (batteryPercentage != null &&
+            batteryPercentage >= 0 &&
+            batteryPercentage <= 100)
+          'battery_percentage': batteryPercentage,
+        if (lowPowerMode != null && lowPowerMode.trim().isNotEmpty)
+          'low_power_mode': lowPowerMode.trim(),
+      };
       await _settingsChannel.invokeMethod<void>(
         'cacheFullPermissionSnapshot',
-        asStrings,
+        args,
       );
     } catch (error) {
       _debugLog('cacheFullPermissionSnapshot failed: $error');

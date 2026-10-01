@@ -163,14 +163,39 @@ class MainActivity : FlutterActivity() {
           if (raw == null) {
             result.error("bad_args", "cacheFullPermissionSnapshot expects a map", null)
           } else {
+            val permissionsRaw = raw["permissions"] as? Map<*, *>
             val asStrings = linkedMapOf<String, String>()
-            for ((key, value) in raw) {
-              val text = value?.toString()?.trim().orEmpty()
-              if (text.isNotEmpty() && text != "null") {
-                asStrings[key] = text
+            if (permissionsRaw != null) {
+              for ((key, value) in permissionsRaw) {
+                val text = value?.toString()?.trim().orEmpty()
+                if (key != null && text.isNotEmpty() && text != "null") {
+                  asStrings[key.toString()] = text
+                }
+              }
+            } else {
+              // Backward-compatible flat permission map.
+              for ((key, value) in raw) {
+                if (key == "battery_percentage" || key == "low_power_mode") continue
+                val text = value?.toString()?.trim().orEmpty()
+                if (text.isNotEmpty() && text != "null") {
+                  asStrings[key] = text
+                }
               }
             }
             AndroidPermissionStatusStore.writeFullPermissionsCache(this, asStrings)
+            val batteryRaw = raw["battery_percentage"]
+            val battery = when (batteryRaw) {
+              is Number -> batteryRaw.toInt()
+              is String -> batteryRaw.trim().toIntOrNull()
+              else -> null
+            }
+            val lowPower = raw["low_power_mode"]?.toString()?.trim()
+              ?.takeIf { it.isNotEmpty() && it != "null" }
+            AndroidPermissionStatusStore.writeBatteryCache(
+              this,
+              batteryPercentage = battery,
+              lowPowerMode = lowPower,
+            )
             result.success(true)
           }
         }

@@ -410,13 +410,36 @@ import flutter_background_service_ios
       case "cacheFullPermissionSnapshot":
         if let map = call.arguments as? [String: Any] {
           var asStrings: [String: String] = [:]
-          for (key, value) in map {
-            let text = String(describing: value).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !text.isEmpty, text != "null" {
-              asStrings[key] = text
+          if let permissions = map["permissions"] as? [String: Any] {
+            for (key, value) in permissions {
+              let text = String(describing: value).trimmingCharacters(in: .whitespacesAndNewlines)
+              if !text.isEmpty, text != "null" {
+                asStrings[key] = text
+              }
+            }
+          } else {
+            // Backward-compatible flat permission map.
+            for (key, value) in map {
+              if key == "battery_percentage" || key == "low_power_mode" { continue }
+              let text = String(describing: value).trimmingCharacters(in: .whitespacesAndNewlines)
+              if !text.isEmpty, text != "null" {
+                asStrings[key] = text
+              }
             }
           }
-          IosAppKillCycleReporter.shared.cacheFullPermissionsSnapshot(asStrings)
+          var batteryPercentage: Int? = nil
+          if let number = map["battery_percentage"] as? NSNumber {
+            batteryPercentage = number.intValue
+          } else if let text = map["battery_percentage"] as? String {
+            batteryPercentage = Int(text.trimmingCharacters(in: .whitespacesAndNewlines))
+          }
+          let lowPowerMode = (map["low_power_mode"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+          IosAppKillCycleReporter.shared.cacheFullPermissionsSnapshot(
+            asStrings,
+            batteryPercentage: batteryPercentage,
+            lowPowerMode: lowPowerMode
+          )
           result(true)
         } else {
           result(

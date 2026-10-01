@@ -64,8 +64,8 @@
         android:paddingEnd="5dp"
         android:paddingBottom="6dp" />
 
-    <!-- Top chrome: recording badge (center). Close is repositioned in code
-         (landscape → shutter rail bottom; portrait → top-leading). -->
+    <!-- Top chrome: video duration badge (center). Close is repositioned in code
+         (landscape → shutter rail top; portrait → top-leading). -->
     <FrameLayout
         android:id="@+id/top_bar"
         android:layout_width="match_parent"
@@ -77,21 +77,26 @@
         android:paddingEnd="18dp"
         android:paddingBottom="8dp">
 
+        <!-- Video-only duration badge (shown while recording). -->
         <LinearLayout
             android:id="@+id/recording_timer"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="center"
-            android:background="@drawable/native_camera_glass_pill"
+            android:background="@drawable/native_camera_timer_bg"
+            android:contentDescription="@string/native_camera_recording_duration"
+            android:elevation="14dp"
             android:gravity="center_vertical"
+            android:minHeight="34dp"
             android:orientation="horizontal"
-            android:paddingStart="14dp"
-            android:paddingTop="8dp"
+            android:paddingStart="12dp"
+            android:paddingTop="7dp"
             android:paddingEnd="14dp"
-            android:paddingBottom="8dp"
+            android:paddingBottom="7dp"
             android:visibility="gone">
 
             <View
+                android:id="@+id/recording_timer_dot"
                 android:layout_width="8dp"
                 android:layout_height="8dp"
                 android:background="@drawable/native_camera_rec_dot" />
@@ -102,8 +107,13 @@
                 android:layout_height="wrap_content"
                 android:layout_marginStart="8dp"
                 android:fontFamily="monospace"
-                android:letterSpacing="0.08"
-                android:text="0:00"
+                android:includeFontPadding="false"
+                android:letterSpacing="0.06"
+                android:shadowColor="#66000000"
+                android:shadowDx="0"
+                android:shadowDy="1"
+                android:shadowRadius="3"
+                android:text="00:00"
                 android:textColor="#FFFFFFFF"
                 android:textSize="14sp"
                 android:textStyle="bold" />
@@ -146,7 +156,7 @@
         android:layout_width="72dp"
         android:layout_height="16dp"
         android:layout_gravity="top|start"
-        android:layout_marginStart="28dp"
+        android:layout_marginStart="13dp"
         android:layout_marginTop="62dp"
         android:elevation="13dp"
         android:ellipsize="end"

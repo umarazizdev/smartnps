@@ -334,6 +334,7 @@ final class NativeCameraSession: NSObject {
     if let live = currentDevice?.videoZoomFactor, live > 0.01 {
       preferredZoomFactor = live
     }
+    val previousWasPhoto = !isVideoMode
     isVideoMode = video
     // Photos are always rear-only — snap back to the back camera.
     if !video {
@@ -341,6 +342,11 @@ final class NativeCameraSession: NSObject {
       flashMode = photoFlashMode
       setTorch(enabled: false)
     } else {
+      // Video torch is binary. Carry the photo decision: On → torch on;
+      // Off / Auto → torch off (Auto has no continuous-video equivalent).
+      if previousWasPhoto {
+        preferredTorchOn = photoFlashMode == .on
+      }
       flashMode = preferredTorchOn ? .on : .off
     }
     sessionQueue.async { [weak self] in

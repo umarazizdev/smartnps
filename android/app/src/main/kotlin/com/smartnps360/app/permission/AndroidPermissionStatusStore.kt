@@ -19,6 +19,8 @@ internal object AndroidPermissionStatusStore {
   private const val KEY_PUSH = "push_status"
   private const val KEY_FINGERPRINT = "last_fingerprint"
   private const val KEY_FULL_PERMISSIONS_JSON = "full_permissions_json"
+  private const val KEY_CACHED_BATTERY_PERCENTAGE = "cached_battery_percentage"
+  private const val KEY_CACHED_LOW_POWER_MODE = "cached_low_power_mode"
 
   fun arm(
     context: Context,
@@ -198,5 +200,39 @@ internal object AndroidPermissionStatusStore {
     } catch (_: Exception) {
       null
     }
+  }
+
+  /** Last-known battery fields from Flutter for kill/wake lightweight POSTs. */
+  fun writeBatteryCache(
+    context: Context,
+    batteryPercentage: Int?,
+    lowPowerMode: String?,
+  ) {
+    val editor = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+    if (batteryPercentage != null && batteryPercentage in 0..100) {
+      editor.putInt(KEY_CACHED_BATTERY_PERCENTAGE, batteryPercentage)
+    }
+    if (!lowPowerMode.isNullOrBlank()) {
+      editor.putString(KEY_CACHED_LOW_POWER_MODE, lowPowerMode.trim())
+    }
+    editor.apply()
+    android.util.Log.i(
+      "AndroidPermStatus",
+      "cached battery percentage=$batteryPercentage low_power_mode=$lowPowerMode",
+    )
+  }
+
+  fun readCachedBatteryPercentage(context: Context): Int? {
+    val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    if (!prefs.contains(KEY_CACHED_BATTERY_PERCENTAGE)) return null
+    val value = prefs.getInt(KEY_CACHED_BATTERY_PERCENTAGE, -1)
+    return value.takeIf { it in 0..100 }
+  }
+
+  fun readCachedLowPowerMode(context: Context): String? {
+    return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+      .getString(KEY_CACHED_LOW_POWER_MODE, null)
+      ?.trim()
+      ?.takeIf { it.isNotEmpty() }
   }
 }

@@ -235,9 +235,15 @@ class NativeCameraSession(
     // (often ultrawide / 0.x). Long-press video must keep the officer's 1x.
     desiredZoomRatio = currentZoomRatio()
     freezeDesiredZoom = true
+    val previousMode = mode
     mode = newMode
     if (newMode == Mode.PHOTO) {
       facingBack = true
+    } else if (previousMode == Mode.PHOTO) {
+      // Video torch is binary. Carry the photo decision: On → torch on;
+      // Off / Auto → torch off (Auto has no continuous-video equivalent).
+      torchOn = flashCycle == FlashCycle.ON
+      cameraPreferences.edit().putBoolean(PREFERENCE_VIDEO_TORCH, torchOn).apply()
     }
     requestRebind("switchMode=$newMode")
   }
@@ -269,9 +275,11 @@ class NativeCameraSession(
     return flashCycle
   }
 
-  fun toggleTorch(): Boolean {
+  fun toggleTorch(): Boolean = setTorchEnabled(!torchOn)
+
+  fun setTorchEnabled(enabled: Boolean): Boolean {
     if (!hasFlashUnit || mode != Mode.VIDEO) return torchOn
-    torchOn = !torchOn
+    torchOn = enabled
     cameraPreferences.edit().putBoolean(PREFERENCE_VIDEO_TORCH, torchOn).apply()
     camera?.cameraControl?.enableTorch(torchOn)
     return torchOn
@@ -732,6 +740,11 @@ class NativeCameraSession(
       return
     }
     Log.d(NativeCameraContract.LOG_TAG, "startRecording begin cameraId=$activeCameraId")
+    // Re-assert preferred torch after the photo→video rebind; CameraX may drop
+    // continuous light when ImageCapture unbinds.
+    if (torchOn && hasFlashUnit) {
+      camera?.cameraControl?.enableTorch(true)
+    }
     if (!hasEnoughStorage()) {
       onFinal(
         Result.failure(

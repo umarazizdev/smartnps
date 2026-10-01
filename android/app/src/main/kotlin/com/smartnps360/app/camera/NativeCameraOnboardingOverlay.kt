@@ -2,7 +2,6 @@ package com.smartnps360.app.camera
 
 import android.content.Context
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PorterDuff
@@ -63,12 +62,20 @@ class NativeCameraOnboardingOverlay @JvmOverloads constructor(
   }
   private val arrowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
     style = Paint.Style.FILL
-    color = Color.WHITE
+    color = "#FFE48E15".toColorInt()
+  }
+  private val connectorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    style = Paint.Style.STROKE
+    strokeWidth = 2.25f * density
+    strokeCap = Paint.Cap.ROUND
+    color = "#E6E48E15".toColorInt()
   }
 
   private val holeRect = RectF()
   private val cardRect = RectF()
   private val arrowPath = Path()
+  private val connectorPath = Path()
+  private val overlapScratch = RectF()
 
   private val card = LinearLayout(context).apply {
     orientation = LinearLayout.VERTICAL
@@ -192,11 +199,15 @@ class NativeCameraOnboardingOverlay @JvmOverloads constructor(
       canvas.drawRoundRect(holeRect, radius, radius, clearPaint)
       canvas.drawRoundRect(holeRect, radius, radius, holeStrokePaint)
     }
+    canvas.restoreToCount(checkpoint)
+    // Card first, then connector + caret on top so the pointer is never buried.
+    super.dispatchDraw(canvas)
+    if (!connectorPath.isEmpty) {
+      canvas.drawPath(connectorPath, connectorPaint)
+    }
     if (!arrowPath.isEmpty) {
       canvas.drawPath(arrowPath, arrowPaint)
     }
-    canvas.restoreToCount(checkpoint)
-    super.dispatchDraw(canvas)
   }
 
   private fun advance() {
@@ -302,8 +313,8 @@ class NativeCameraOnboardingOverlay @JvmOverloads constructor(
     val cardW = card.measuredWidth
     val cardH = card.measuredHeight
     val margin = dp(20)
+    val gap = dp(36)
     val holeCx = holeRect.centerX()
-    val holeCy = holeRect.centerY()
 
     val preferred = when (arrowDirection.lowercase()) {
       "left" -> "left"
@@ -313,34 +324,13 @@ class NativeCameraOnboardingOverlay @JvmOverloads constructor(
       else -> if (holeCx > width * 0.55f) "left" else "right"
     }
 
-    var cardLeft: Int
-    var cardTop: Int
-    when (preferred) {
-      "left" -> {
-        cardLeft = (holeRect.left - cardW - dp(28)).toInt().coerceAtLeast(margin)
-        cardTop = (holeCy - cardH / 2f).toInt()
-          .coerceIn(margin, (height - cardH - margin).coerceAtLeast(margin))
-      }
-      "right" -> {
-        cardLeft = (holeRect.right + dp(28)).toInt()
-          .coerceAtMost(width - cardW - margin)
-          .coerceAtLeast(margin)
-        cardTop = (holeCy - cardH / 2f).toInt()
-          .coerceIn(margin, (height - cardH - margin).coerceAtLeast(margin))
-      }
-      "up" -> {
-        cardLeft = (holeCx - cardW / 2f).toInt()
-          .coerceIn(margin, (width - cardW - margin).coerceAtLeast(margin))
-        cardTop = (holeRect.top - cardH - dp(28)).toInt().coerceAtLeast(margin)
-      }
-      else -> {
-        cardLeft = (holeCx - cardW / 2f).toInt()
-          .coerceIn(margin, (width - cardW - margin).coerceAtLeast(margin))
-        cardTop = (holeRect.bottom + dp(28)).toInt()
-          .coerceAtMost(height - cardH - margin)
-          .coerceAtLeast(margin)
-      }
-    }
+    val (cardLeft, cardTop, resolved) = placeCard(
+      preferred = preferred,
+      cardW = cardW,
+      cardH = cardH,
+      margin = margin,
+      gap = gap,
+    )
 
     card.layout(cardLeft, cardTop, cardLeft + cardW, cardTop + cardH)
     cardRect.set(
@@ -349,54 +339,167 @@ class NativeCameraOnboardingOverlay @JvmOverloads constructor(
       (cardLeft + cardW).toFloat(),
       (cardTop + cardH).toFloat(),
     )
-    buildArrow(preferred)
+    buildPointer(resolved)
   }
 
-  private fun buildArrow(preferred: String) {
-    arrowPath.reset()
-    val tipSize = 12f * density
+  /**
+   * Prefer the catalog arrow side, but never let the tip card cover the
+   * spotlight — try alternates until the card clears the hole with a gap.
+   */
+  private fun placeCard(
+    preferred: String,
+    cardW: Int,
+    cardH: Int,
+    margin: Int,
+    gap: Int,
+  ): Triple<Int, Int, String> {
+    val order = linkedSetOf(preferred, "down", "up", "left", "right")
+    var bestLeft = margin
+    var bestTop = margin
+    var bestDir = preferred
+    var bestScore = Float.NEGATIVE_INFINITY
+    for (dir in order) {
+      val (left, top) = cardOriginFor(dir, cardW, cardH, margin, gap)
+      val candidate = RectF(
+        left.toFloat(),
+        top.toFloat(),
+        (left + cardW).toFloat(),
+        (top + cardH).toFloat(),
+      )
+      overlapScratch.set(holeRect)
+      overlapScratch.inset(-8f * density, -8f * density)
+      val overlaps = RectF.intersects(candidate, overlapScratch)
+      val score = when {
+        overlaps -> -1_000f
+        dir == preferred -> 100f
+        else -> 50f
+      } + clearanceScore(candidate)
+      if (score > bestScore) {
+        bestScore = score
+        bestLeft = left
+        bestTop = top
+        bestDir = dir
+      }
+      if (!overlaps && dir == preferred) break
+    }
+    return Triple(bestLeft, bestTop, bestDir)
+  }
+
+  private fun cardOriginFor(
+    dir: String,
+    cardW: Int,
+    cardH: Int,
+    margin: Int,
+    gap: Int,
+  ): Pair<Int, Int> {
     val holeCx = holeRect.centerX()
     val holeCy = holeRect.centerY()
-    when (preferred) {
+    val maxLeft = (width - cardW - margin).coerceAtLeast(margin)
+    val maxTop = (height - cardH - margin).coerceAtLeast(margin)
+    return when (dir) {
       "left" -> {
-        val tipX = holeRect.left - 4f * density
-        val tipY = holeCy
-        val baseX = cardRect.right
-        val baseY = cardRect.centerY().coerceIn(cardRect.top + tipSize, cardRect.bottom - tipSize)
-        arrowPath.moveTo(tipX, tipY)
-        arrowPath.lineTo(baseX, baseY - tipSize)
-        arrowPath.lineTo(baseX, baseY + tipSize)
-        arrowPath.close()
+        val left = (holeRect.left - cardW - gap).toInt().coerceIn(margin, maxLeft)
+        val top = (holeCy - cardH / 2f).toInt().coerceIn(margin, maxTop)
+        left to top
       }
       "right" -> {
-        val tipX = holeRect.right + 4f * density
-        val tipY = holeCy
-        val baseX = cardRect.left
-        val baseY = cardRect.centerY().coerceIn(cardRect.top + tipSize, cardRect.bottom - tipSize)
-        arrowPath.moveTo(tipX, tipY)
-        arrowPath.lineTo(baseX, baseY - tipSize)
-        arrowPath.lineTo(baseX, baseY + tipSize)
-        arrowPath.close()
+        val left = (holeRect.right + gap).toInt().coerceIn(margin, maxLeft)
+        val top = (holeCy - cardH / 2f).toInt().coerceIn(margin, maxTop)
+        left to top
       }
       "up" -> {
-        val tipX = holeCx
-        val tipY = holeRect.top - 4f * density
-        val baseY = cardRect.bottom
-        val baseX = cardRect.centerX().coerceIn(cardRect.left + tipSize, cardRect.right - tipSize)
-        arrowPath.moveTo(tipX, tipY)
-        arrowPath.lineTo(baseX - tipSize, baseY)
-        arrowPath.lineTo(baseX + tipSize, baseY)
-        arrowPath.close()
+        val left = (holeCx - cardW / 2f).toInt().coerceIn(margin, maxLeft)
+        val top = (holeRect.top - cardH - gap).toInt().coerceIn(margin, maxTop)
+        left to top
       }
       else -> {
-        val tipX = holeCx
-        val tipY = holeRect.bottom + 4f * density
-        val baseY = cardRect.top
-        val baseX = cardRect.centerX().coerceIn(cardRect.left + tipSize, cardRect.right - tipSize)
+        val left = (holeCx - cardW / 2f).toInt().coerceIn(margin, maxLeft)
+        val top = (holeRect.bottom + gap).toInt().coerceIn(margin, maxTop)
+        left to top
+      }
+    }
+  }
+
+  private fun clearanceScore(candidate: RectF): Float {
+    val dx = when {
+      candidate.right < holeRect.left -> holeRect.left - candidate.right
+      candidate.left > holeRect.right -> candidate.left - holeRect.right
+      else -> 0f
+    }
+    val dy = when {
+      candidate.bottom < holeRect.top -> holeRect.top - candidate.bottom
+      candidate.top > holeRect.bottom -> candidate.top - holeRect.bottom
+      else -> 0f
+    }
+    return minOf(dx + dy, 80f * density)
+  }
+
+  /**
+   * Speech-bubble caret on the card edge closest to the spotlight, plus a short
+   * connector into the cutout so the tip clearly names the control.
+   */
+  private fun buildPointer(preferred: String) {
+    arrowPath.reset()
+    connectorPath.reset()
+    val caret = 11f * density
+    val nest = 1.5f * density
+    val holeCx = holeRect.centerX()
+    val holeCy = holeRect.centerY()
+
+    val tipX: Float
+    val tipY: Float
+    val baseX: Float
+    val baseY: Float
+    when (preferred) {
+      "left" -> {
+        // Card left of target → caret on card's trailing edge, tip toward hole.
+        baseX = cardRect.right - nest
+        baseY = holeCy.coerceIn(cardRect.top + caret, cardRect.bottom - caret)
+        tipX = cardRect.right + caret
+        tipY = baseY
         arrowPath.moveTo(tipX, tipY)
-        arrowPath.lineTo(baseX - tipSize, baseY)
-        arrowPath.lineTo(baseX + tipSize, baseY)
+        arrowPath.lineTo(baseX, baseY - caret)
+        arrowPath.lineTo(baseX, baseY + caret)
         arrowPath.close()
+        connectorPath.moveTo(tipX, tipY)
+        connectorPath.lineTo(holeRect.left - 2f * density, holeCy)
+      }
+      "right" -> {
+        baseX = cardRect.left + nest
+        baseY = holeCy.coerceIn(cardRect.top + caret, cardRect.bottom - caret)
+        tipX = cardRect.left - caret
+        tipY = baseY
+        arrowPath.moveTo(tipX, tipY)
+        arrowPath.lineTo(baseX, baseY - caret)
+        arrowPath.lineTo(baseX, baseY + caret)
+        arrowPath.close()
+        connectorPath.moveTo(tipX, tipY)
+        connectorPath.lineTo(holeRect.right + 2f * density, holeCy)
+      }
+      "up" -> {
+        baseY = cardRect.bottom - nest
+        baseX = holeCx.coerceIn(cardRect.left + caret, cardRect.right - caret)
+        tipX = baseX
+        tipY = cardRect.bottom + caret
+        arrowPath.moveTo(tipX, tipY)
+        arrowPath.lineTo(baseX - caret, baseY)
+        arrowPath.lineTo(baseX + caret, baseY)
+        arrowPath.close()
+        connectorPath.moveTo(tipX, tipY)
+        connectorPath.lineTo(holeCx, holeRect.top - 2f * density)
+      }
+      else -> {
+        // Card below target → caret on card top, tip toward hole.
+        baseY = cardRect.top + nest
+        baseX = holeCx.coerceIn(cardRect.left + caret, cardRect.right - caret)
+        tipX = baseX
+        tipY = cardRect.top - caret
+        arrowPath.moveTo(tipX, tipY)
+        arrowPath.lineTo(baseX - caret, baseY)
+        arrowPath.lineTo(baseX + caret, baseY)
+        arrowPath.close()
+        connectorPath.moveTo(tipX, tipY)
+        connectorPath.lineTo(holeCx, holeRect.bottom + 2f * density)
       }
     }
   }
