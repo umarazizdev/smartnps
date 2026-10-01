@@ -8,7 +8,6 @@ import '../utilities/app_config.dart';
 import 'debug_env_config.dart';
 import 'debug_env_theme.dart';
 
-/// Override API and WebView base URLs for local / staging hosts.
 class DebugEnvUrlsScreen extends StatefulWidget {
   const DebugEnvUrlsScreen({super.key});
 

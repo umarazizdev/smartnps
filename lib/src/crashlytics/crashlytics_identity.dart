@@ -7,7 +7,6 @@ import '../auth/auth_repository.dart';
 class CrashlyticsIdentity {
   CrashlyticsIdentity._();
 
-  /// Background isolates (e.g. Android duty FGS) may warm auth without Firebase.
   static bool get _firebaseReady => Firebase.apps.isNotEmpty;
 
   static Future<void> setFromUser(Map<String, dynamic>? user) async {

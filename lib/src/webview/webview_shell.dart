@@ -201,8 +201,7 @@ class _WebViewShellState extends State<WebViewShell>
     _ui.setNativeAuthSession(active);
     if (_shouldUploadNativePermissionStatus) {
       NativePermissionStatusService.instance.startBatteryMonitoring();
-      // Cold open after kill often resumes before auth flags are restored.
-      // Retry kill→opened upload once the session is ready.
+
       if (!wasReady) {
         unawaited(
           NativePermissionStatusService.instance
@@ -224,8 +223,6 @@ class _WebViewShellState extends State<WebViewShell>
     _nativeGeoWatches.clear();
   }
 
-  /// evaluateJavascript after webview dispose throws MissingPluginException and
-  /// was recorded as a fatal Crashlytics spam from background geo watches.
   Future<dynamic> _safeEvaluateJavascript(
     InAppWebViewController controller, {
     required String source,
@@ -2427,8 +2424,6 @@ class _WebViewShellState extends State<WebViewShell>
     DutyHeartbeatService.instance.backgroundLocationPermissionMissing
         .addListener(_onBackgroundLocationPermissionChanged);
 
-    // Flutter resumed is the primary kill→open upload signal. Always run prepare
-    // on mobile even before auth flags are restored (upload may wait for token).
     if (Platform.isIOS || Platform.isAndroid) {
       unawaited(
         NativePermissionStatusService.instance
@@ -2668,7 +2663,7 @@ class _WebViewShellState extends State<WebViewShell>
 
     if ((Platform.isIOS || Platform.isAndroid) &&
         state == AppLifecycleState.resumed) {
-      // Primary reopen upload path — not gated on auth (prepare stamps opened_at).
+
       unawaited(
         NativePermissionStatusService.instance
             .uploadAppCycleWithKillTimelineIfNeeded(appCycle: state.name),
@@ -3385,9 +3380,6 @@ class _WebViewShellState extends State<WebViewShell>
       liveUri = (await controller.getUrl())?.uriValue;
     } catch (_) {}
 
-    // Shift Log is intentionally not a bottom-bar route (bar hidden). Android
-    // history after tab loadUrl often fails to reselect Dashboard on goBack,
-    // so leaving the Shift Log landing page always returns to Dashboard.
     if (_isShiftLogLandingUri(_ui.currentUri.value) ||
         _isShiftLogLandingUri(liveUri)) {
       await _popFromShiftLogToDashboard(controller);
@@ -3432,8 +3424,7 @@ class _WebViewShellState extends State<WebViewShell>
   Future<void> _syncChromeAfterWebHistoryBack(
     InAppWebViewController controller,
   ) async {
-    // Android WebView often still reports the previous URL immediately after
-    // goBack(); give history a moment to commit before reading it.
+
     if (Platform.isAndroid) {
       await Future<void>.delayed(const Duration(milliseconds: 120));
     }

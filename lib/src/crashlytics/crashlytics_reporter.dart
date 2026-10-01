@@ -8,14 +8,6 @@ import 'package:flutter/widgets.dart';
 
 import '../utilities/secure_storage_access.dart';
 
-/// Crashlytics helpers focused on maximizing delivery for real users.
-///
-/// Hard process kills still upload on the *next* launch (SDK limitation).
-/// Caught Flutter errors can flush immediately while the app is still alive.
-///
-/// Recoverable noise (network blips, keychain locked, layout overflow) is
-/// ignored or recorded as non-fatal so Crashlytics stays useful for real
-/// crashes.
 class CrashlyticsReporter {
   CrashlyticsReporter._();
 
@@ -53,17 +45,15 @@ class CrashlyticsReporter {
     }
   }
 
-  /// Recoverable conditions we should not spam into Crashlytics.
   static bool shouldIgnoreError(Object error) {
     if (SecureStorageAccess.isRecoverableKeychainError(error)) return true;
     final text = error.toString();
     if (_looksLikeNetworkNoise(text)) return true;
-    // Geo watches / draft notify can race webview dispose in background.
+
     if (_looksLikeDisposedWebViewChannel(text)) return true;
     return false;
   }
 
-  /// True for recoverable noise that should not count as a crash.
   static bool isNonFatalError(Object error) {
     if (shouldIgnoreError(error)) return true;
     if (error is SocketException ||
@@ -79,7 +69,7 @@ class CrashlyticsReporter {
     if (_looksLikeLayoutOverflow(text)) {
       return true;
     }
-    // OEM/emulator WebView quirk; patched native plugin also swallows this.
+
     if (_looksLikeWebSettingsClassCast(text)) {
       return true;
     }
@@ -176,8 +166,6 @@ class CrashlyticsReporter {
     }
   }
 
-  /// Flush whenever the app returns to foreground (covers "user opens again"
-  /// without needing them to understand Crashlytics).
   static void _installLifecycleFlush() {
     if (_lifecycleInstalled) return;
     _lifecycleInstalled = true;

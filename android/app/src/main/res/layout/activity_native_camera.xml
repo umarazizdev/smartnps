@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Landscape chrome matching iOS NativeCameraViewController (OS Camera style). -->
+
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/native_camera_root"
@@ -21,7 +21,7 @@
         android:background="@drawable/native_camera_focus_reticle"
         android:visibility="gone" />
 
-    <!-- Contextual exposure control shown beside the tap-to-focus reticle. -->
+    
     <FrameLayout
         android:id="@+id/focus_exposure_control"
         android:layout_width="40dp"
@@ -48,7 +48,7 @@
             android:textSize="17sp" />
     </FrameLayout>
 
-    <!-- Zoom pills sit on the live preview, trailing edge near the shutter rail. -->
+    
     <LinearLayout
         android:id="@+id/zoom_row"
         android:layout_width="wrap_content"
@@ -64,8 +64,7 @@
         android:paddingEnd="5dp"
         android:paddingBottom="6dp" />
 
-    <!-- Top chrome: video duration badge (center). Close is repositioned in code
-         (landscape → shutter rail top; portrait → top-leading). -->
+    
     <FrameLayout
         android:id="@+id/top_bar"
         android:layout_width="match_parent"
@@ -77,7 +76,7 @@
         android:paddingEnd="18dp"
         android:paddingBottom="8dp">
 
-        <!-- Video-only duration badge (shown while recording). -->
+        
         <LinearLayout
             android:id="@+id/recording_timer"
             android:layout_width="wrap_content"
@@ -135,7 +134,7 @@
             android:visibility="gone" />
     </FrameLayout>
 
-    <!-- Flash lives on the leading black gutter (not on the shutter rail). -->
+    
     <ImageButton
         android:id="@+id/btn_flash"
         android:layout_width="42dp"
@@ -221,8 +220,7 @@
             android:textStyle="bold" />
     </LinearLayout>
 
-    <!-- Extension mode chips (STD / AUTO / HDR / NIGHT). Populated in code
-         from the modes the device actually advertises. -->
+    
     <LinearLayout
         android:id="@+id/extension_row"
         android:layout_width="wrap_content"
@@ -240,7 +238,7 @@
         android:paddingBottom="5dp"
         android:visibility="gone" />
 
-    <!-- Compact exposure compensation slider, matching modern camera apps. -->
+    
     <LinearLayout
         android:id="@+id/exposure_row"
         android:layout_width="wrap_content"
@@ -282,7 +280,7 @@
             android:thumbTint="#FFFFD60A" />
     </LinearLayout>
 
-    <!-- Black trailing shutter rail: close (top) / flip / hint / shutter. -->
+    
     <FrameLayout
         android:id="@+id/right_chrome"
         android:layout_width="112dp"
@@ -353,7 +351,7 @@
             android:src="@drawable/native_camera_ic_shutter"
             android:tint="#FF022A67" />
 
-        <!-- Kept for Activity code compatibility; unused in this chrome. -->
+        
         <ImageButton
             android:id="@+id/btn_stop"
             android:layout_width="1dp"
@@ -361,7 +359,7 @@
             android:visibility="gone" />
     </FrameLayout>
 
-    <!-- Hidden legacy controls kept so Activity findViewById stays stable. -->
+    
     <TextView
         android:id="@+id/btn_mode_photo"
         android:layout_width="0dp"
@@ -425,7 +423,7 @@
         android:textSize="14sp"
         android:visibility="gone" />
 
-    <!-- Same prompt as Flutter VisitOrientationPromptOverlay -->
+    
     <FrameLayout
         android:id="@+id/portrait_block_overlay"
         android:layout_width="match_parent"

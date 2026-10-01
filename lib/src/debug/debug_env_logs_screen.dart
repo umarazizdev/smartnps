@@ -9,7 +9,6 @@ import 'debug_env_theme.dart';
 import 'kill_cycle_debug_service.dart';
 import 'session_debug_logger.dart';
 
-/// Timed diagnostic capture and kill-cycle timeline viewer.
 class DebugEnvLogsScreen extends StatefulWidget {
   const DebugEnvLogsScreen({super.key});
 

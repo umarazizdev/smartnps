@@ -4,10 +4,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Temporary, button-gated debug capture for the Debug Env screen.
-///
-/// Default OFF. Writes only while [isRunning], only for selected categories,
-/// with a hard line cap and rate limit so it stays light.
 class SessionDebugLogger extends ChangeNotifier {
   SessionDebugLogger._();
 
@@ -21,7 +17,6 @@ class SessionDebugLogger extends ChangeNotifier {
   static const String _prefsEndsAtKey = 'session_debug_ends_at_ms_v1';
   static const String _prefsCategoriesKey = 'session_debug_categories_v1';
 
-  /// Read by Flutter prefs; native gate uses MethodChannel sync instead.
   static const String killCapturePrefsKey = 'session_debug_kill_capture_v1';
 
   static const MethodChannel _settingsChannel = MethodChannel(
@@ -57,7 +52,6 @@ class SessionDebugLogger extends ChangeNotifier {
 
   List<String> get logs => List<String>.unmodifiable(_logs);
 
-  /// True only while Run is active and [category] is selected.
   bool isCategoryActive(SessionDebugCategory category) {
     _syncExpired();
     return isRunning && _categories.contains(category);
@@ -145,7 +139,6 @@ class SessionDebugLogger extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// No-op unless a session is running and [category] is selected.
   void log(SessionDebugCategory category, String message) {
     if (!_ready) {
       unawaited(_ensureReadyThenLog(category, message));
@@ -162,7 +155,6 @@ class SessionDebugLogger extends ChangeNotifier {
     unawaited(_appendLine(line, persist: true));
   }
 
-  /// Forwards noisy helpers only when the message looks like a failure.
   void logIfErrorLike(SessionDebugCategory category, String message) {
     if (!_looksLikeError(message)) return;
     log(category, message);
@@ -353,7 +345,6 @@ enum SessionDebugCategory {
   }
 }
 
-/// Preset run durations for the Debug Env screen.
 enum SessionDebugDuration {
   oneMinute(Duration(minutes: 1), '1 min'),
   fiveMinutes(Duration(minutes: 5), '5 min'),

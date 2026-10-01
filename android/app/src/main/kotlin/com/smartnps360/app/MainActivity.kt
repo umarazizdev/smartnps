@@ -49,8 +49,7 @@ class MainActivity : FlutterActivity() {
         NotificationManager.IMPORTANCE_HIGH
       )
       pushChannel.description = "SmartNPS360 notifications"
-      // Channel sound is fixed at first creation; must match res/raw/alert_sound.mp3
-      // and flutter_local_notifications RawResourceAndroidNotificationSound('alert_sound').
+
       pushChannel.setSound(
         Uri.parse("android.resource://$packageName/${R.raw.alert_sound}"),
         AudioAttributes.Builder()
@@ -173,7 +172,7 @@ class MainActivity : FlutterActivity() {
                 }
               }
             } else {
-              // Backward-compatible flat permission map.
+
               for ((key, value) in raw) {
                 if (key == "battery_percentage" || key == "low_power_mode") continue
                 val text = value?.toString()?.trim().orEmpty()
@@ -208,9 +207,9 @@ class MainActivity : FlutterActivity() {
     AndroidDutyUiState.noteResumed()
     super.onResume()
     notifyLowPowerModeChanged()
-    // Keep tracker alive while on duty so onTaskRemoved can fire on swipe-kill.
+
     AndroidAppKillCycleReporter.ensureTrackingService(this)
-    // Stamp opened_at only; Flutter owns the reopen POST (avoids racing a bare resumed).
+
     AndroidAppKillCycleReporter.markOpenedAfterKillIfNeeded(this)
     AndroidAppKillCycleReporter.scheduleReopenFlushBackup(this)
   }
@@ -226,7 +225,7 @@ class MainActivity : FlutterActivity() {
   }
 
   override fun onDestroy() {
-    // Backup when service onTaskRemoved is missed (still sync; may be cut short).
+
     if (!isChangingConfigurations) {
       AndroidAppKillCycleReporter.handleTerminateWhileOnDuty(this)
     }
@@ -273,10 +272,8 @@ class MainActivity : FlutterActivity() {
       PackageManager.PERMISSION_GRANTED
   }
 
-  /// True when OS granted location only for this session ("Allow only this time").
   private fun hasOneTimeLocationPermission(): Boolean {
-    // API 30+ (R). Use numeric flag — compileSdk stubs may lack
-    // PackageManager.FLAG_PERMISSION_ONE_TIME / getPermissionFlags symbols.
+
     if (Build.VERSION.SDK_INT < 30) {
       return false
     }
@@ -289,7 +286,7 @@ class MainActivity : FlutterActivity() {
     if (!fineGranted && !coarseGranted) {
       return false
     }
-    // PackageManager.FLAG_PERMISSION_ONE_TIME == 1 << 16
+
     val oneTimeFlag = 0x00010000
     val fineOneTime =
       (permissionFlags(Manifest.permission.ACCESS_FINE_LOCATION) and oneTimeFlag) != 0
@@ -298,7 +295,6 @@ class MainActivity : FlutterActivity() {
     return fineOneTime || coarseOneTime
   }
 
-  /** Reflective read of PackageManager.getPermissionFlags (API 23+). */
   private fun permissionFlags(permission: String): Int {
     return try {
       val method = PackageManager::class.java.getMethod(
@@ -336,7 +332,7 @@ class MainActivity : FlutterActivity() {
       if (isIgnoringBatteryOptimizations()) {
         "granted"
       } else {
-        // Default optimized state — not an explicit officer denial.
+
         "unknown"
       }
     } catch (_: Exception) {
@@ -344,9 +340,6 @@ class MainActivity : FlutterActivity() {
     }
   }
 
-  /// System Battery Saver only ([PowerManager.isPowerSaveMode]).
-  /// Do not scan OEM Settings keys — on Vivo/etc those often read as on
-  /// even when the user-facing Battery Saver toggle is off.
   private fun lowPowerModeStatus(): String {
     return try {
       val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -367,11 +360,6 @@ class MainActivity : FlutterActivity() {
     )
   }
 
-  /**
-   * Closest Android parallel to iOS Background App Refresh:
-   * [ActivityManager.isBackgroundRestricted] (API 28+) — user put the app under
-   * restricted battery / background usage so background work is blocked.
-   */
   private fun backgroundAppRefreshStatus(): String {
     return try {
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -383,7 +371,7 @@ class MainActivity : FlutterActivity() {
           "enabled"
         }
       } else {
-        // No per-app background-restriction API below P.
+
         "enabled"
       }
     } catch (_: Exception) {

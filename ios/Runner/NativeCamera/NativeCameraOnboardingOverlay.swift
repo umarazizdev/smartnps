@@ -1,7 +1,5 @@
 import UIKit
 
-/// First-launch Capture coachmarks: dark scrim with a cutout around the active
-/// control, short copy, and Next / Skip actions. Step content comes from Flutter.
 final class NativeCameraOnboardingOverlay: UIView {
   struct Step {
     let id: String
@@ -60,7 +58,7 @@ final class NativeCameraOnboardingOverlay: UIView {
     super.init(frame: frame)
     isUserInteractionEnabled = true
     backgroundColor = .clear
-    // Keep coachmarks above camera chrome if sibling z-order drifts.
+
     layer.zPosition = 10_000
 
     dimLayer.fillColor = UIColor(white: 0, alpha: 0.72).cgColor
@@ -88,11 +86,10 @@ final class NativeCameraOnboardingOverlay: UIView {
     card.layer.shadowRadius = 12
     card.layer.shadowOffset = CGSize(width: 0, height: 4)
     card.isHidden = true
-    // Positioned via leading/top/width; height comes from stack content.
-    // Never mix frame layout with Auto Layout on this view (avoids width/height == 0 fights).
+
     card.translatesAutoresizingMaskIntoConstraints = false
     addSubview(card)
-    // Pointer must sit above the tip card (same bug as Android z-order).
+
     raisePointerAboveCard()
 
     stepLabel.font = .systemFont(ofSize: 11, weight: .bold)
@@ -287,7 +284,7 @@ final class NativeCameraOnboardingOverlay: UIView {
 
     let cardWidth: CGFloat = min(300, max(220, bounds.width - 40))
     cardWidthConstraint?.constant = cardWidth
-    // Force a layout pass so intrinsic height reflects current copy + width.
+
     card.setNeedsLayout()
     layoutIfNeeded()
     let cardSize = card.systemLayoutSizeFitting(
@@ -320,7 +317,6 @@ final class NativeCameraOnboardingOverlay: UIView {
     rebuildMask(preferred: resolved)
   }
 
-  /// Prefer catalog side, but never cover the spotlight — try alternates.
   private func placeCard(
     preferred: String,
     cardSize: CGSize,
@@ -484,7 +480,6 @@ final class NativeCameraOnboardingOverlay: UIView {
     connectorLayer.frame = bounds
   }
 
-  /// Keep dim/hole under content; float connector + caret above the tip card.
   private func raisePointerAboveCard() {
     dimLayer.zPosition = 0
     holeStroke.zPosition = 1

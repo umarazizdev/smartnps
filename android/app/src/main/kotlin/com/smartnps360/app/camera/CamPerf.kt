@@ -2,11 +2,6 @@ package com.smartnps360.app.camera
 
 import android.util.Log
 
-/**
- * Lightweight shutter/bind timing breadcrumbs. Always logs to Logcat under
- * [NativeCameraContract.LOG_TAG] so Android capture regressions are visible
- * without a separate debug flag.
- */
 object CamPerf {
   @Volatile
   private var debuggable: Boolean = true

@@ -40,11 +40,6 @@ import kotlin.math.abs
 import kotlin.math.pow
 import kotlin.math.roundToInt
 
-/**
- * Landscape-locked fullscreen CameraX capture UI.
- * Chrome matches iOS NativeCameraViewController (flash leading, zoom on
- * preview, black trailing shutter rail with flip / shutter / close).
- */
 class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
   private lateinit var previewView: PreviewView
   private lateinit var focusReticle: View
@@ -173,8 +168,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
 
     previewView = findViewById(R.id.preview_view)
     previewView.implementationMode = PreviewView.ImplementationMode.PERFORMANCE
-    // Fit (not fill): never crop sensor FOV to the screen. Letterboxing matches
-    // stock Camera Photo framing so 0.5x is as wide as the OS camera.
+
     previewView.scaleType = PreviewView.ScaleType.FIT_CENTER
     previewView.previewStreamState.observe(this) { state ->
       if (state == PreviewView.StreamState.STREAMING) {
@@ -242,7 +236,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
         android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
       ),
     )
-    // Tip tour must sit above elevated chrome (zoom pills, shutter rail, flash).
+
     onboardingOverlay.bringToFront()
 
     allowModeSwitch = intent.getBooleanExtra(
@@ -288,7 +282,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
       object : OnBackPressedCallback(true) {
         override fun handleOnBackPressed() {
           if (onboardingOverlay.isActive()) {
-            // Dismiss for this session only; do not persist completion.
+
             clearOnboardingFocusDemo()
             onboardingOverlay.visibility = View.GONE
             return
@@ -306,7 +300,6 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
       startSession()
     }
 
-    // Show the guide as soon as Capture opens (do not wait for shutter use).
     btnShutter.post { maybeStartOnboarding() }
   }
 
@@ -371,8 +364,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
         )
         return
       }
-      // Long-press was interrupted by the permission dialog; stay ready for
-      // the next hold-to-record gesture.
+
       if (session == null) {
         startSession()
       }
@@ -427,8 +419,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
   override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
     super.onConfigurationChanged(newConfig)
     syncPortraitBlock()
-    // Activity handles configChanges — refresh rotation + ViewPort so portrait
-    // and landscape both stay upright. FIT_CENTER ViewPort keeps full FOV.
+
     syncCameraTargetRotation(rebindViewport = true)
   }
 
@@ -438,7 +429,6 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     syncCameraTargetRotation(rebindViewport = false)
   }
 
-  /** Same rule as previous Flutter capture UI: height >= width ⇒ portrait blocked. */
   private fun syncPortraitBlock() {
     if (!landscapeOnly) {
       isPortraitBlocked = false
@@ -462,12 +452,12 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     }
     isPortraitBlocked = portrait
     portraitBlockOverlay.visibility = if (portrait) View.VISIBLE else View.GONE
-    // Keep the live camera preview visible under the dialog; only hide capture chrome.
+
     rightChrome.visibility = if (portrait) View.INVISIBLE else View.VISIBLE
     syncZoomRowOrientationVisibility(portrait)
     if (portrait) flashModeTray.visibility = View.GONE
     updateFlashButtonVisibility(deviceHasFlash)
-    // Landscape: close on shutter rail. Portrait: top-leading (outside hidden rail).
+
     updateCloseChromePosition(portrait)
     updateAuxChromeVisibility()
     updateRecordingDurationBadge()
@@ -476,7 +466,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
       pauseOnboardingForPortrait()
     } else {
       stopRotateHintAnimation()
-      // Tour is landscape-only; start once the officer rotates.
+
       maybeStartOnboarding()
     }
     if (portrait && isRecordingUi) {
@@ -484,7 +474,6 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     }
   }
 
-  /** Landscape: Close on black shutter chrome (top). Portrait: top-leading. */
   private fun updateCloseChromePosition(portrait: Boolean) {
     if (!::btnClose.isInitialized || !::topBar.isInitialized || !::rightChrome.isInitialized) {
       return
@@ -518,7 +507,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     val leading = ((if (portrait) 18 else 28) * density).toInt()
     val flashIconSize = (42 * density).toInt()
     val flashLabelWidth = (72 * density).toInt()
-    // Keep the label centered under the circular flash icon (label is wider).
+
     val labelLeading = leading + (flashIconSize - flashLabelWidth) / 2
     val trayLeading = leading + flashIconSize + (8 * density).toInt()
     (btnFlash.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
@@ -551,17 +540,12 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     }
     clearOnboardingFocusDemo()
     onboardingOverlay.visibility = View.GONE
-    // Let the tour start again after rotate, unless they already finished/skipped.
+
     if (!onboardingCompleted) {
       onboardingStarted = false
     }
   }
 
-  /**
-   * Align Preview / ImageCapture / VideoCapture with the current display
-   * rotation in both portrait and landscape so the live preview stays upright
-   * behind the landscape dialog and after rotating into landscape.
-   */
   private fun syncCameraTargetRotation(rebindViewport: Boolean = false) {
     previewView.post {
       val active = session ?: return@post
@@ -573,7 +557,6 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     }
   }
 
-  /** Matches Flutter [VisitAnimatedOrientationHintIcon] toward-landscape loop. */
   private fun startRotateHintAnimation() {
     if (rotateHintAnimator?.isRunning == true) return
     portraitBlockIcon.post {
@@ -606,11 +589,6 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     }
   }
 
-  /**
-   * Capture is impossible while the preview is portrait-blocked, an overlay is
-   * up, the session has not reported ready, or a serialized rebind is running
-   * (the session would reject the request with a hard capture error).
-   */
   private fun isCaptureBlocked(): Boolean {
     return isPortraitBlocked ||
       busyVisible ||
@@ -694,9 +672,8 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     }
     btnStop.setOnClickListener { session?.stopRecording() }
 
-    // Mode chips are hidden in the landscape chrome; keep listeners harmless.
-    btnModePhoto.setOnClickListener { /* no-op */ }
-    btnModeVideo.setOnClickListener { /* no-op */ }
+    btnModePhoto.setOnClickListener {  }
+    btnModeVideo.setOnClickListener {  }
     btnModePhoto.visibility = View.GONE
     btnModeVideo.visibility = View.GONE
 
@@ -748,8 +725,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
               }
             }
             if (shutterDragActive) {
-              // While switching photo→video (or busy rebind), keep the selected
-              // zoom frozen — vertical wobble on a long-press must not jump to 0.x.
+
               if (!pendingStartRecording && sessionReady && !(session?.isRebinding() == true)) {
                 applyVerticalZoom(shutterZoomStart, dragY)
               }
@@ -804,7 +780,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
           verticalExposureRejected = false
         }
         MotionEvent.ACTION_POINTER_DOWN -> {
-          // A second finger belongs to pinch-to-zoom, never EV adjustment.
+
           gestureMoved = true
           verticalExposureActive = false
           verticalExposureRejected = true
@@ -888,10 +864,6 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     return null
   }
 
-  /**
-   * Same idea as iOS focus-ignore chrome: never run tap-to-focus when the
-   * touch landed on flash / zoom / shutter / close controls.
-   */
   private fun isTouchOnFocusBlockingChrome(rawX: Float, rawY: Float): Boolean {
     if (isPointInsideVisibleView(rawX, rawY, btnFlash)) return true
     if (isPointInsideVisibleView(rawX, rawY, flashLabel)) return true
@@ -934,10 +906,6 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     shutterGestureBlocked = false
   }
 
-  /**
-   * Short tap always takes a photo. Video is long-press only
-   * ([shutterLongPressRunnable] → [onLongPressStartVideo]).
-   */
   private fun onShutterClicked() {
     CamPerf.markShutterTap()
     if (shutterLongPressActive) {
@@ -1000,7 +968,6 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     }
   }
 
-  /** Swipe up to zoom in and down to zoom out across the camera's real range. */
   private fun applyVerticalZoom(startZoom: Float, dragY: Float) {
     val active = session ?: return
     val (minZoom, maxZoom) = active.zoomRange()
@@ -1012,7 +979,6 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     active.setZoomRatio(startZoom * multiplier)
   }
 
-  /** Player-style vertical brightness gesture, applied as camera EV. */
   private fun applyVerticalExposure(startIndex: Int, dragY: Float) {
     val range = exposureMax - exposureMin
     if (range <= 0 || previewView.height <= 0) return
@@ -1103,7 +1069,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     val active = session ?: return
     if (active.isCapturing()) return
     if (!allowModeSwitch && mode == NativeCameraSession.Mode.PHOTO) {
-      // Photo-only launch: hold-to-record is disabled.
+
       return
     }
 
@@ -1121,7 +1087,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
       pendingStartRecording = true
       sessionReady = false
       mode = NativeCameraSession.Mode.VIDEO
-      // Session switchMode maps photo Off/Auto/On → video torch Off/Off/On.
+
       torchOn = flashCycle == NativeCameraSession.FlashCycle.ON
       showBusy(R.string.native_camera_busy_starting)
       updateCaptureChrome()
@@ -1134,7 +1100,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
 
   private fun onLongPressEndVideo() {
     if (pendingStartRecording) {
-      // Mode switch still in flight; cancel the pending start and return to photo.
+
       pendingStartRecording = false
       hideBusy()
       if (!isRecordingUi && !finishingWithResult) {
@@ -1191,10 +1157,10 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
               if (!finishingWithResult) returnToPhotoMode()
             }
             code == NativeCameraContract.ErrorCode.INTERRUPTED && finishingWithResult -> {
-              // Already finishing (close / activity stop).
+
             }
             code == NativeCameraContract.ErrorCode.INTERRUPTED && !finishingWithResult -> {
-              // Recording cancelled without leaving the activity.
+
               if (!finishingWithResult) returnToPhotoMode()
             }
             else -> {
@@ -1228,8 +1194,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
 
   private fun onFlashClicked() {
     session ?: return
-    // Photo flash tray is blocked while capture/rebind is busy.
-    // Video torch stays tappable before and during recording (CameraX live torch).
+
     if (mode == NativeCameraSession.Mode.PHOTO && (busyVisible || isRecordingUi)) return
     if (mode == NativeCameraSession.Mode.VIDEO && !sessionReady && !isRecordingUi) return
     val show = flashModeTray.visibility != View.VISIBLE
@@ -1237,7 +1202,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     flashModeTray.visibility = if (show) View.VISIBLE else View.GONE
     if (show) {
       flashModeTray.alpha = 0f
-      // Tray opens to the trailing side of leading-gutter flash.
+
       flashModeTray.translationX = -12f * resources.displayMetrics.density
       flashModeTray.animate().alpha(1f).translationX(0f).setDuration(180L).start()
     }
@@ -1278,7 +1243,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
       view.setTextColor(if (active) COLOR_FLASH_YELLOW else COLOR_WHITE)
       view.isSelected = active
     }
-    // CameraX exposes a binary live torch for video; Auto remains a photo option.
+
     flashModeAuto.visibility = if (mode == NativeCameraSession.Mode.PHOTO) View.VISIBLE else View.GONE
   }
 
@@ -1308,10 +1273,6 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     updateAuxChromeVisibility()
   }
 
-  /**
-   * Top-center elapsed-time pill. Visible only while actively recording video
-   * (never in photo mode, and never under the portrait rotate prompt).
-   */
   private fun updateRecordingDurationBadge() {
     if (!::recordingTimer.isInitialized) return
     val show = isRecordingUi &&
@@ -1455,7 +1416,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
   }
 
   private fun updateFlipVisibility() {
-    // Match iOS: flip on the shutter rail in video mode when front camera is allowed.
+
     val show = !rearCameraOnly &&
       mode == NativeCameraSession.Mode.VIDEO &&
       !isRecordingUi &&
@@ -1478,10 +1439,6 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     }
   }
 
-  /**
-   * Build one chip per selectable capture mode: Std plus every extension the
-   * device advertises (auto / hdr / night). Hidden when nothing is selectable.
-   */
   private fun rebuildExtensionChips(availableExtensions: List<String>) {
     val labels = mutableListOf<String>()
     if (availableExtensions.isNotEmpty()) {
@@ -1538,8 +1495,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     if (isCaptureBlocked() || isRecordingUi) return
     val active = session ?: return
     if (label == activeCaptureModeLabel()) return
-    // Busy first: the session schedules a serialized rebind and reports the
-    // bound mode back through onSessionReady, which clears the overlay.
+
     showBusy(R.string.native_camera_busy_switching)
     val accepted = active.setPreferredExtension(label)
     if (!accepted) {
@@ -1548,10 +1504,9 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
       highlightExtensionChip()
       return
     }
-    // The bound mode is only known once the rebind lands; onSessionReady
-    // re-highlights the row. Busy + isRebinding() gate capture until then.
+
     highlightExtensionChip()
-    // Safety net so the pill can never stay stuck if no callback arrives.
+
     mainHandler.postDelayed(
       {
         if (busyVisible && !isRecordingUi && !finishingWithResult) hideBusy()
@@ -1560,7 +1515,6 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     )
   }
 
-  /** The mode actually bound right now, which may be a ladder fallback. */
   private fun activeCaptureModeLabel(): String {
     return session?.currentExtensionLabel()
       ?: NativeCameraContract.ExtensionModeLabel.STANDARD
@@ -1616,7 +1570,6 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     updateExposureControls(exposureMin, exposureMax, applied)
   }
 
-  /** Extension chips + EV stepper follow the portrait-block / mode rules. */
   private fun updateAuxChromeVisibility() {
     if (!::extensionRow.isInitialized || !::exposureRow.isInitialized) return
     extensionRow.visibility = when {
@@ -1625,7 +1578,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
         View.VISIBLE
       else -> View.GONE
     }
-    // Exposure follows the tap-to-focus reticle, like the native camera apps.
+
     exposureRow.visibility = View.GONE
   }
 
@@ -1732,7 +1685,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     focusReticle.visibility = View.VISIBLE
     focusReticle.x = x - focusReticle.width / 2f
     focusReticle.y = y - focusReticle.height / 2f
-    // Width may be 0 before layout; use expected size.
+
     if (focusReticle.width == 0) {
       val size = (64 * resources.displayMetrics.density)
       focusReticle.x = x - size / 2f
@@ -1839,7 +1792,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
   private fun finishWithCapture(output: NativeCameraSession.CaptureOutput) {
     if (finishingWithResult) return
     CamPerf.stage(output.captureId, "NATIVE_RESULT_PREPARE", "activity")
-    // FAIL CLOSED: a rear-only photo request must never return a front capture.
+
     if (rearCameraOnly &&
       output.type == NativeCameraContract.TYPE_PHOTO &&
       output.cameraPosition != "back"
@@ -1853,8 +1806,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
       return
     }
     if (landscapeOnly) {
-      // Prefer dimensions already validated by the session (avoid a second
-      // full EXIF/MediaMetadata decode on the critical shutter path).
+
       val landscape = when {
         output.width != null && output.height != null ->
           output.width!! > output.height!!
@@ -1909,14 +1861,14 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
 
   private fun maybeStartOnboarding() {
     if (!showOnboarding || onboardingStarted || onboardingSteps.isEmpty()) return
-    // Landscape only — wait until the officer rotates the phone.
+
     if (isPortraitBlocked) return
     if (!::btnShutter.isInitialized || btnShutter.width <= 0) {
       btnShutter.post { maybeStartOnboarding() }
       return
     }
     onboardingStarted = true
-    // Short delay only so landscape chrome settles; do not wait for a capture.
+
     mainHandler.postDelayed({
       if (isFinishing || finishingWithResult) return@postDelayed
       if (isPortraitBlocked) {
@@ -1936,7 +1888,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     when (id.lowercase()) {
       "focus", "brightness", "pinch" -> showOnboardingFocusDemo()
       else -> if (onboardingFocusDemo) {
-        // Keep demo visible only for focus-related tips.
+
         clearOnboardingFocusDemo()
       }
     }
@@ -1993,7 +1945,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
 
   private fun sanitizeMessage(message: String?, fallback: String): String {
     if (message.isNullOrBlank()) return fallback
-    // Never surface raw stack traces or multi-line exception dumps in UI/results.
+
     val firstLine = message.lineSequence().firstOrNull()?.trim().orEmpty()
     if (firstLine.isEmpty()) return fallback
     if (firstLine.contains('\t') ||
@@ -2048,8 +2000,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
 
   private fun formatZoomChip(level: Double): String {
     return when {
-      // Hardware UW min is often exactly 0.5; allow tiny OEM drift and still
-      // label Camera-style "0.5x".
+
       abs(level - 0.5) < 0.08 -> "0.5x"
       level < 1.0 -> String.format("%.1fx", level)
       abs(level - level.toInt()) < 0.05 -> "${level.toInt()}x"

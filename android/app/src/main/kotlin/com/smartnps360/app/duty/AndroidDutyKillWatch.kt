@@ -14,12 +14,6 @@ import id.flutter.flutter_background_service.BackgroundService
 import id.flutter.flutter_background_service.Config
 import id.flutter.flutter_background_service.WatchdogReceiver
 
-/**
- * Kill-state keep-alive only.
- *
- * While the Flutter UI is resumed, Flutter owns starting/stopping the location FGS.
- * This watch only restarts/stops that same FGS after the UI is gone.
- */
 internal object AndroidDutyKillWatch {
   private const val TAG = "AndroidDutyKill"
   private const val REQUEST_CODE = 3601
@@ -32,14 +26,13 @@ internal object AndroidDutyKillWatch {
     val alreadyArmed = AndroidDutyKillStore.isArmed(context)
     Config(context).setManuallyStopped(false)
     if (alreadyArmed) {
-      // Quiet token refresh — no log spam, no FGS start.
+
       AndroidDutyKillStore.syncSession(context, accessToken, refreshToken, apiBaseUrl)
       AndroidAppKillCycleReporter.ensureTrackingService(context)
       return
     }
     AndroidDutyKillStore.arm(context, accessToken, refreshToken, apiBaseUrl)
-    // Never start FGS from arm — Flutter owns start while UI is open.
-    // After a real kill, tick() starts FGS once the UI has been away ≥45s.
+
     schedule(context, 15_000L)
     AndroidAppKillCycleReporter.ensureTrackingService(context)
     Log.i(TAG, "armed native kill-watch uiResumed=${AndroidDutyUiState.isUiResumed}")
@@ -108,7 +101,6 @@ internal object AndroidDutyKillWatch {
       return
     }
 
-    // UI alive or only briefly paused (Settings): Flutter owns FGS.
     if (AndroidDutyUiState.isUiResumed ||
       !AndroidDutyUiState.isAwayLongEnoughForNativeFgs()
     ) {
@@ -186,7 +178,6 @@ internal object AndroidDutyKillWatch {
     )
   }
 
-  /** True only when the location BackgroundService process is actually running. */
   private fun isLocationServiceRunning(context: Context): Boolean {
     val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
     @Suppress("DEPRECATION")

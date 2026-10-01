@@ -6,7 +6,6 @@ import 'debug_env_logs_screen.dart';
 import 'debug_env_theme.dart';
 import 'debug_env_urls_screen.dart';
 
-/// Post-PIN landing: choose Diagnostic Logging or Environment Endpoints.
 class DebugEnvHubScreen extends StatelessWidget {
   const DebugEnvHubScreen({super.key});
 

@@ -3,10 +3,6 @@ package com.smartnps360.motion_activity
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.BinaryMessenger
 
-/**
- * Registers Motion Activity Recognition channels on every FlutterEngine,
- * including the flutter_background_service background isolate.
- */
 class SmartnpsMotionActivityPlugin : FlutterPlugin {
   private var manager: MotionActivityManager? = null
 
@@ -26,7 +22,7 @@ class SmartnpsMotionActivityPlugin : FlutterPlugin {
   }
 
   companion object {
-    /** Optional helper for manual registration (e.g. tests). */
+
     fun registerWith(messenger: BinaryMessenger, manager: MotionActivityManager) {
       manager.register(messenger)
     }

@@ -1,14 +1,10 @@
 package com.smartnps360.app.camera
 
-/**
- * Shared Intent extras / result keys and MethodChannel error codes for the
- * native CameraX capture flow.
- */
 object NativeCameraContract {
   const val CHANNEL = "com.smartnps360.app/native_camera"
   const val LOG_TAG = "SmartNPS360Camera"
 
-  const val REQUEST_CAPTURE = 0x4E43 // 'NC'
+  const val REQUEST_CAPTURE = 0x4E43
 
   const val EXTRA_TYPE = "type"
   const val EXTRA_ALLOW_MODE_SWITCH = "allowModeSwitch"
@@ -57,7 +53,7 @@ object NativeCameraContract {
     const val STANDARD_MAX = "standard_max"
     const val STANDARD_16_9 = "standard_16_9"
     const val LAST_RESORT_BASIC = "last_resort_basic"
-    /** @deprecated Prefer [LAST_RESORT_BASIC]; kept for older log readers. */
+
     const val BASIC = LAST_RESORT_BASIC
   }
 

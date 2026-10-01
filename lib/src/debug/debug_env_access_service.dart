@@ -5,13 +5,6 @@ import 'package:firebase_remote_config/firebase_remote_config.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Production-style debug-tools access via Firebase Remote Config.
-///
-/// Firebase console → Remote Config parameters:
-/// - [keyEnabled] (`bool`) — master switch; `false` revokes access without a release
-/// - [keyPinSha256] (`String`) — lowercase SHA-256 hex of the PIN (never plaintext)
-///
-/// Last good values are cached locally for short offline use after a fetch.
 class DebugEnvAccessService {
   DebugEnvAccessService._();
 
@@ -23,8 +16,6 @@ class DebugEnvAccessService {
   static const String _prefsEnabled = 'debug_tools_rc_enabled_v1';
   static const String _prefsPinHash = 'debug_tools_rc_pin_sha256_v1';
 
-  /// Bootstrap hash = SHA-256("qwerty") until Remote Config overrides it.
-  /// Rotate the PIN in Firebase as soon as possible.
   static const String bootstrapPinSha256 =
       '65e84be33532fb784c48129675f9eff3a682b27168c0ea744b2cf58ee02337c5';
 
@@ -39,8 +30,7 @@ class DebugEnvAccessService {
     if (_ready) return;
     await _loadCache();
     _ready = true;
-    // Best-effort; do not block app start on network.
-    // ignore: unawaited_futures
+
     refresh(force: false);
   }
 
@@ -78,7 +68,6 @@ class DebugEnvAccessService {
     }
   }
 
-  /// True when tools are enabled and [pin] matches the configured hash.
   Future<DebugEnvAccessResult> verifyPin(String pin) async {
     await ensureReady();
     await refresh(force: true);

@@ -1,7 +1,6 @@
 import 'visit_media_draft_store.dart';
 import 'visit_patrol_context.dart';
 
-/// User-facing visit copy that swaps "patrol" wording for site checks.
 class VisitFlowCopy {
   const VisitFlowCopy({this.isSiteCheck = false});
 
@@ -71,7 +70,6 @@ class VisitFlowCopy {
       ? 'Unfinished site check reports'
       : 'Unfinished patrol reports';
 
-  /// Neutral title for the multi-draft site picker.
   static const String unfinishedMixedReportsTitle = 'Unfinished reports';
 
   String get discardTitle =>
@@ -93,7 +91,6 @@ class VisitFlowCopy {
       : 'You left unfinished patrols on $count sites. '
           'Choose a site to continue.';
 
-  /// Neutral picker copy when more than one draft may mix visit types.
   static String unfinishedMixedSitesMessage(int count) =>
       'You left unfinished reports on $count sites. '
       'Choose a site to continue.';

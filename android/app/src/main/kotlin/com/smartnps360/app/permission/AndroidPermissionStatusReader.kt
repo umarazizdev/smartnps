@@ -11,11 +11,6 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import org.json.JSONObject
 
-/**
- * Reads Android permission snapshot for killed-app sync.
- * Mirrors Flutter [NativePermissionStatusService] Android mapping as closely
- * as possible using OS APIs + Flutter SharedPreferences history flags.
- */
 internal object AndroidPermissionStatusReader {
   private const val FLUTTER_PREFS = "FlutterSharedPreferences"
   private const val FG_EVER =

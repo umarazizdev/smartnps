@@ -9,10 +9,6 @@ import android.os.SystemClock
 import android.util.Log
 import com.smartnps360.app.duty.AndroidDutyUiState
 
-/**
- * Periodic permission-status sync while the Flutter UI is gone / process killed.
- * Never starts location FGS or any other duty service.
- */
 internal object AndroidPermissionStatusWatch {
   private const val TAG = "AndroidPermStatus"
   private const val REQUEST_CODE = 3602
@@ -68,11 +64,6 @@ internal object AndroidPermissionStatusWatch {
     )
   }
 
-  /**
-   * After Flutter successfully POSTs permission-status, mark the current OS
-   * snapshot as already uploaded so a killed-app tick won't re-POST the same
-   * state (fingerprint formats differ between Dart and native).
-   */
   fun noteCurrentSynced(context: Context) {
     if (!AndroidPermissionStatusStore.isArmed(context)) return
     try {
@@ -136,7 +127,6 @@ internal object AndroidPermissionStatusWatch {
       return
     }
 
-    // Flutter UI owns uploads while visible / briefly in Settings.
     if (AndroidDutyUiState.isUiResumed ||
       !AndroidDutyUiState.isAwayLongEnoughForNativeFgs()
     ) {

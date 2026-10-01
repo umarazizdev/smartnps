@@ -2,7 +2,6 @@ import DeviceCheck
 import Flutter
 import Foundation
 
-/// Generates Apple DeviceCheck tokens for backend fraud / device-block validation.
 final class DeviceCheckManager {
   static let methodChannelName = "com.smartnps360.app/device_check"
 

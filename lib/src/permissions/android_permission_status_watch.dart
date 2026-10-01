@@ -9,9 +9,6 @@ import '../utilities/app_debug_log.dart';
 import '../utilities/app_version_info.dart';
 import '../utilities/device_identity.dart';
 
-/// Arms a lightweight Android AlarmManager watch that, after process death,
-/// re-reads OS permissions and POSTs `/native-app/permission-status` only when
-/// the snapshot changed. Never starts location FGS.
 class AndroidPermissionStatusWatch {
   AndroidPermissionStatusWatch._();
 

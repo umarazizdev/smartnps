@@ -6,10 +6,6 @@ import android.content.Intent
 import com.google.android.gms.location.ActivityRecognitionResult
 import com.google.android.gms.location.DetectedActivity
 
-/**
- * Receives Play Services activity updates and forwards the best activity
- * (preferring specific motion types over ON_FOOT / UNKNOWN) to Flutter.
- */
 class MotionActivityReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context?, intent: Intent?) {
     if (intent == null) return
@@ -47,10 +43,6 @@ class MotionActivityReceiver : BroadcastReceiver() {
     MotionActivityManager.emit(payload)
   }
 
-  /**
-   * Prefer actionable motion labels over coarse ON_FOOT / UNKNOWN / TILTING
-   * when confidence is within a small margin of the most-probable result.
-   */
   private fun pickBestActivity(result: ActivityRecognitionResult): DetectedActivity? {
     val activities = result.probableActivities
     if (activities.isEmpty()) return result.mostProbableActivity
@@ -67,7 +59,6 @@ class MotionActivityReceiver : BroadcastReceiver() {
     val top = preferred.firstOrNull() ?: result.mostProbableActivity ?: return null
     val most = result.mostProbableActivity
 
-    // If most-probable is TILTING/UNKNOWN but we have a specific alternative, use it.
     if (most != null &&
       (most.type == DetectedActivity.TILTING || most.type == DetectedActivity.UNKNOWN) &&
       top.type != most.type
@@ -75,7 +66,6 @@ class MotionActivityReceiver : BroadcastReceiver() {
       return top
     }
 
-    // Prefer WALKING/RUNNING over ON_FOOT when close in confidence.
     if (most != null && most.type == DetectedActivity.ON_FOOT) {
       val specific =
         preferred.firstOrNull {
@@ -86,7 +76,6 @@ class MotionActivityReceiver : BroadcastReceiver() {
       }
     }
 
-    // Prefer IN_VEHICLE when it's nearly as confident as STILL (red-light noise).
     if (most != null && most.type == DetectedActivity.STILL) {
       val vehicle =
         preferred.firstOrNull { it.type == DetectedActivity.IN_VEHICLE }

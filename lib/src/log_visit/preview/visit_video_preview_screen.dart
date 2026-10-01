@@ -289,10 +289,6 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       onUploadStarted?.call();
     }
 
-    // Move draft → queue as soon as upload is confirmed (Yes / skip confirm),
-    // so it leaves the editable drafts list before network check / API upload.
-    // Also detach the in-memory editor so reopening Log Visit looks fresh while
-    // the queued draft files remain on disk for upload.
     Future<void>? claimForQueueFuture;
     Future<void> claimDraftForQueue() {
       return claimForQueueFuture ??= () async {
@@ -470,7 +466,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     required VisitDraftKey draftKey,
   }) async {
     _clearUploadProgress(flow);
-    // Editor was already released; draft remains on disk for the queue worker.
+
     await VisitUploadQueue.instance.enqueue(draftKey);
     unawaited(VisitGpsSession.instance.stop());
     if (kDebugMode) {

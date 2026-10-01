@@ -17,13 +17,6 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.graphics.toColorInt
 
-/**
- * First-launch Capture coachmarks: dark scrim with a cutout around the active
- * control, short copy, and Next / Skip actions.
- *
- * Step content is supplied from Flutter; this view only resolves targets and
- * renders the spotlight UI.
- */
 class NativeCameraOnboardingOverlay @JvmOverloads constructor(
   context: Context,
   attrs: AttributeSet? = null,
@@ -132,12 +125,11 @@ class NativeCameraOnboardingOverlay @JvmOverloads constructor(
 
   init {
     setWillNotDraw(false)
-    // Needed for CLEAR cutouts.
+
     setLayerType(LAYER_TYPE_HARDWARE, null)
     isClickable = true
     isFocusable = true
-    // Camera chrome (zoom rail, shutter rail, flash) uses elevation up to ~13dp.
-    // Without a higher Z here, bringToFront() alone still leaves tips behind those views.
+
     elevation = OVERLAY_ELEVATION_DP * density
     translationZ = OVERLAY_ELEVATION_DP * density
 
@@ -169,11 +161,11 @@ class NativeCameraOnboardingOverlay @JvmOverloads constructor(
   ) {
     this.resolver = resolver
     this.preparer = preparer
-    // Keep the full list; missing targets are skipped per-step after prepare.
+
     this.steps = steps
     index = 0
     visibility = View.VISIBLE
-    // Re-assert stacking every start — siblings may have been elevated later.
+
     elevation = OVERLAY_ELEVATION_DP * density
     translationZ = OVERLAY_ELEVATION_DP * density
     bringToFront()
@@ -200,7 +192,7 @@ class NativeCameraOnboardingOverlay @JvmOverloads constructor(
       canvas.drawRoundRect(holeRect, radius, radius, holeStrokePaint)
     }
     canvas.restoreToCount(checkpoint)
-    // Card first, then connector + caret on top so the pointer is never buried.
+
     super.dispatchDraw(canvas)
     if (!connectorPath.isEmpty) {
       canvas.drawPath(connectorPath, connectorPaint)
@@ -284,7 +276,7 @@ class NativeCameraOnboardingOverlay @JvmOverloads constructor(
       preparer?.prepare(steps[i].id)
       isUsableTarget(resolver?.resolve(steps[i].id))
     }
-    // Restore current demo after the look-ahead.
+
     preparer?.prepare(step.id)
     currentTarget = resolver?.resolve(step.id)
     nextButton.text = if (hasMore) "Next" else "Done"
@@ -342,10 +334,6 @@ class NativeCameraOnboardingOverlay @JvmOverloads constructor(
     buildPointer(resolved)
   }
 
-  /**
-   * Prefer the catalog arrow side, but never let the tip card cover the
-   * spotlight — try alternates until the card clears the hole with a gap.
-   */
   private fun placeCard(
     preferred: String,
     cardW: Int,
@@ -434,10 +422,6 @@ class NativeCameraOnboardingOverlay @JvmOverloads constructor(
     return minOf(dx + dy, 80f * density)
   }
 
-  /**
-   * Speech-bubble caret on the card edge closest to the spotlight, plus a short
-   * connector into the cutout so the tip clearly names the control.
-   */
   private fun buildPointer(preferred: String) {
     arrowPath.reset()
     connectorPath.reset()
@@ -452,7 +436,7 @@ class NativeCameraOnboardingOverlay @JvmOverloads constructor(
     val baseY: Float
     when (preferred) {
       "left" -> {
-        // Card left of target → caret on card's trailing edge, tip toward hole.
+
         baseX = cardRect.right - nest
         baseY = holeCy.coerceIn(cardRect.top + caret, cardRect.bottom - caret)
         tipX = cardRect.right + caret
@@ -489,7 +473,7 @@ class NativeCameraOnboardingOverlay @JvmOverloads constructor(
         connectorPath.lineTo(holeCx, holeRect.top - 2f * density)
       }
       else -> {
-        // Card below target → caret on card top, tip toward hole.
+
         baseY = cardRect.top + nest
         baseX = holeCx.coerceIn(cardRect.left + caret, cardRect.right - caret)
         tipX = baseX
@@ -507,7 +491,7 @@ class NativeCameraOnboardingOverlay @JvmOverloads constructor(
   private fun dp(value: Int): Int = (value * density + 0.5f).toInt()
 
   companion object {
-    /** Above zoom (10), rails (12), and flash (13) in activity_native_camera.xml. */
+
     private const val OVERLAY_ELEVATION_DP = 32f
 
     fun parseSteps(json: String?): List<Step> {

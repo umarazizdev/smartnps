@@ -3,8 +3,6 @@ import Foundation
 import Security
 import UIKit
 
-/// Native heartbeat + GPS ping used after SLC/geofence relaunch.
-/// Never uploads unless the API confirms the officer is on duty.
 final class DutyWakeUploader {
   static let shared = DutyWakeUploader()
 
@@ -76,7 +74,6 @@ final class DutyWakeUploader {
     endBackgroundTask()
   }
 
-  /// Flutter is alive and will handle GPS. Native ping must not run.
   func claimByFlutter() {
     lock.lock()
     flutterOwnsWake = true
@@ -85,7 +82,6 @@ final class DutyWakeUploader {
     cancel()
   }
 
-  /// Prefer Flutter. Native ping runs only if Flutter does not claim in time.
   func beginLocationWake(flutterTimeout: TimeInterval = 3) {
     fallbackWorkItem?.cancel()
     lock.lock()
@@ -103,7 +99,6 @@ final class DutyWakeUploader {
     DispatchQueue.main.asyncAfter(deadline: .now() + flutterTimeout, execute: work)
   }
 
-  /// Called only after iOS relaunches for SLC/geofence and Flutter missed the window.
   func startAfterLocationWake() {
     lock.lock()
     let skip = flutterOwnsWake || cancelled
@@ -165,21 +160,19 @@ final class DutyWakeUploader {
           self.onNeedsGps?()
         }
       case .unknown:
-        // Keep optimistic local GPS if already running; do not disarm on flaky API.
+
         NSLog("[SmartNPS360][WakeUpload] duty unknown; leaving local GPS/SLC as-is")
         self.finish()
       }
     }
   }
 
-  /// True while the native wake ping is waiting for a GPS fix ≤50m.
   var wantsWakeGps: Bool {
     lock.lock()
     defer { lock.unlock() }
     return waitingForGps && inFlight && !flutterOwnsWake && !cancelled
   }
 
-  /// Returns true when this GPS fix was consumed for the native wake ping.
   func consumeWakeGps(_ location: CLLocation) -> Bool {
     lock.lock()
     let waiting = waitingForGps && inFlight && !flutterOwnsWake && !cancelled

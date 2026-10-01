@@ -12,10 +12,6 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry
 
-/**
- * MethodChannel bridge that launches [NativeCameraActivity] for a single
- * capture result, matching the Flutter [NativeCamera] contract.
- */
 class NativeCameraPlugin :
   FlutterPlugin,
   MethodChannel.MethodCallHandler,
@@ -75,7 +71,7 @@ class NativeCameraPlugin :
           result.success(emptyMap<String, Any?>())
           return
         }
-        // Probe off the platform thread; reply on main.
+
         Thread {
           val caps = NativeCameraCapabilitiesProbe.probe(host, type)
           mainHandler.post { result.success(caps) }
@@ -110,10 +106,10 @@ class NativeCameraPlugin :
     val rearCameraOnly = call.argument<Boolean>("rearCameraOnly") ?: true
     val quality = call.argument<String>("quality")
       ?: NativeCameraContract.QUALITY_MAXIMUM
-    // Android always outputs JPEG; preferHeic is ignored.
+
     @Suppress("UNUSED_VARIABLE")
     val preferHeic = call.argument<Boolean>("preferHeic") ?: false
-    // Optional initial extension mode: auto | hdr | night | standard.
+
     val preferredExtension = call.argument<String>("preferredExtension")
     val showOnboarding = call.argument<Boolean>("showOnboarding") ?: false
     @Suppress("UNCHECKED_CAST")
@@ -294,7 +290,7 @@ class NativeCameraPlugin :
     key: String,
   ) {
     if (!data.hasExtra(key)) return
-    // Width/height/orientation are ints.
+
     payload[key] = data.getIntExtra(key, 0)
   }
 

@@ -31,15 +31,13 @@ import flutter_background_service_ios
   private var slcMethodChannel: FlutterMethodChannel?
   private var launchedForLocation = false
   private var awaitingFlutterDutyConfirm = false
-  /// After a background location relaunch, ignore scene-active until the user
-  /// really brings the UI forward. Prevents false opened_at + Flutter resume
-  /// side-effects that can disarm SLC.
+
   private var suppressKillCycleForegroundUntilUserOpen = false
-  /// When suppress was armed (for brief false-active debounce after SLC wake).
+
   private var locationWakeSuppressStartedAt: Date?
-  /// Ignore false foreground for this long after a location relaunch.
+
   private let locationWakeForegroundDebounce: TimeInterval = 8
-  /// Avoid stacking many deferred foreground rechecks.
+
   private var pendingForegroundRecheck = false
   private var slcLocationManager: CLLocationManager?
   private var dutyGpsLocationManager: CLLocationManager?
@@ -48,7 +46,7 @@ import flutter_background_service_ios
   private var gpsPollTimer: Timer?
   private var lastNativeGpsAt: Date?
   private let dutyGpsDistanceFilter: CLLocationDistance = kCLDistanceFilterNone
-  /// Quiet-poll backup while native keep-alive stream is silent (matches Flutter stationary band).
+
   private let gpsPollInterval: TimeInterval = 30
   private var lastGeofenceCoordinate: CLLocationCoordinate2D?
   private var slcEventSink: FlutterEventSink?
@@ -64,8 +62,6 @@ import flutter_background_service_ios
       UNUserNotificationCenter.current().delegate = self
     }
 
-    // UIScene delivers the plugin's didFinishLaunching after launch has
-    // already finished, which crashes BGTaskScheduler. Register first.
     if #available(iOS 13.0, *) {
       SwiftFlutterBackgroundServicePlugin.registerTaskIdentifier(
         taskIdentifier: SwiftFlutterBackgroundServicePlugin.taskIdentifier
@@ -81,15 +77,14 @@ import flutter_background_service_ios
     notifyFlutterOfLocationWakeIfNeeded()
     application.registerForRemoteNotifications()
     IosAppKillCycleReporter.shared.recoverKillFromBackgroundIfNeeded()
-    // Near-realtime killed POST if terminate was missed (location wake / relaunch).
+
     IosAppKillCycleReporter.shared.uploadKilledEventIfNeeded(reason: "didFinishLaunching")
-    // Retry upload only if both timestamps already queued (never stamp opened_at here).
+
     IosAppKillCycleReporter.shared.flushPendingIfNeeded(reason: "didFinishLaunching")
 
     return didLaunch
   }
 
-  /// On-duty swipe/terminate: save local kill stamp, best-effort sync upload, local alert.
   override func applicationWillTerminate(_ application: UIApplication) {
     let onDuty = isOnDuty()
     let unpaidBreak = isUnpaidBreak()
@@ -114,20 +109,19 @@ import flutter_background_service_ios
   }
 
   override func applicationDidBecomeActive(_ application: UIApplication) {
-    // With UIScene, this often does not run — SceneDelegate.sceneDidBecomeActive owns it.
+
     onUserSceneBecameActive()
     super.applicationDidBecomeActive(application)
   }
 
   override func applicationDidEnterBackground(_ application: UIApplication) {
-    // With UIScene, this often does not run — SceneDelegate.sceneDidEnterBackground owns it.
+
     onUserSceneEnteredBackground()
     super.applicationDidEnterBackground(application)
   }
 
-  /// Shared by AppDelegate + SceneDelegate (UIScene no longer calls app-level active/background).
   func onUserSceneWillEnterForeground() {
-    // SLC relaunch often fires this without a real open. Don't clear suppress yet.
+
     if suppressKillCycleForegroundUntilUserOpen {
       if let started = locationWakeSuppressStartedAt,
          Date().timeIntervalSince(started) < locationWakeForegroundDebounce
@@ -156,7 +150,7 @@ import flutter_background_service_ios
       IosAppKillCycleReporter.shared.appendDebugLog(
         "skip foreground; applicationState=\(UIApplication.shared.applicationState.rawValue)"
       )
-      // Only retry after wake debounce — early inactive→active is common on SLC wake.
+
       if shouldScheduleForegroundRecheckWhileSuppressed() {
         scheduleForegroundRecheck(reason: "becameActive_inactive", after: 1.0)
       }
@@ -197,17 +191,16 @@ import flutter_background_service_ios
 
     registerPlatformChannelsIfNeeded()
     notifyFlutterOfLocationWakeIfNeeded()
-    // Same-process resume: drop background candidate (cold launch already recovered).
+
     UserDefaults.standard.removeObject(forKey: "smartnps360.ios_app_cycle.pending_background_at")
-    // User is visibly back — cancel pending kill alert (not on background location wake).
+
     IosAppKillCycleReporter.shared.cancelKillSecurityAlertOnForeground()
-    // Stamp opened_at; Flutter owns reopen POST (native backup if Flutter is late).
+
     IosAppKillCycleReporter.shared.markOpenedAfterKillIfNeeded(forceForReopenUpload: true)
     IosAppKillCycleReporter.shared.scheduleReopenFlushBackup()
     IosAppKillCycleReporter.shared.appendDebugLog("user foreground (scene/app active)")
   }
 
-  /// Called from Flutter prepare when UI is already active (covers missed scene callbacks).
   @discardableResult
   func claimRealUserForegroundIfActive() -> Bool {
     guard UIApplication.shared.applicationState == .active else { return false }
@@ -286,7 +279,6 @@ import flutter_background_service_ios
     }
   }
 
-  /// Registers custom channels on the active Flutter engine messenger.
   func registerPlatformChannels(with messenger: FlutterBinaryMessenger) {
     registerSettingsChannelIfNeeded(with: messenger)
     registerSlcChannelIfNeeded(with: messenger)
@@ -295,7 +287,6 @@ import flutter_background_service_ios
     registerNativeCameraChannelIfNeeded(with: messenger)
   }
 
-  /// Fallback for engines created before implicit-engine callback wiring.
   func registerPlatformChannelsIfNeeded() {
     if slcChannelRegistered
       && settingsChannelRegistered
@@ -418,7 +409,7 @@ import flutter_background_service_ios
               }
             }
           } else {
-            // Backward-compatible flat permission map.
+
             for (key, value) in map {
               if key == "battery_percentage" || key == "low_power_mode" { continue }
               let text = String(describing: value).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -457,10 +448,9 @@ import flutter_background_service_ios
     settingsChannelRegistered = true
   }
 
-  /// Mirrors Android ACCESS_FINE check: iOS 14+ Precise Location from Settings.
   private func hasPreciseLocationPermission() -> Bool {
     if #available(iOS 14.0, *) {
-      // Always use a fresh manager so Settings changes are not stale vs SLC.
+
       let manager = CLLocationManager()
       switch manager.authorizationStatus {
       case .authorizedAlways, .authorizedWhenInUse:
@@ -471,7 +461,7 @@ import flutter_background_service_ios
         return false
       }
     }
-    // Pre-iOS 14 has no Precise Location toggle.
+
     return true
   }
 
@@ -527,7 +517,6 @@ import flutter_background_service_ios
     }
   }
 
-  /// Settings → General → Background App Refresh (and Low Power Mode effects).
   private func backgroundAppRefreshStatus() -> String {
     switch UIApplication.shared.backgroundRefreshStatus {
     case .available:
@@ -638,18 +627,17 @@ import flutter_background_service_ios
     let backgroundLaunch = application.applicationState == .background
     launchedForLocation = locationKey || (backgroundLaunch && wasOnDuty && wasArmed)
     if launchedForLocation {
-      // Stay silent for kill-cycle "open" until the app is truly .active.
+
       suppressKillCycleForegroundUntilUserOpen = true
       locationWakeSuppressStartedAt = Date()
       IosAppKillCycleReporter.shared.setSuppressOpenedAtUntilUserForeground(true)
     } else {
-      // Fresh icon/cold open — never inherit a stale location-wake suppress.
+
       suppressKillCycleForegroundUntilUserOpen = false
       locationWakeSuppressStartedAt = nil
       IosAppKillCycleReporter.shared.setSuppressOpenedAtUntilUserForeground(false)
     }
 
-    // Classify what woke/relaunched the process after a kill (Debug Env panel).
     let hadKillCandidate =
       UserDefaults.standard.string(forKey: "smartnps360.ios_app_cycle.pending_killed_at") != nil
       || UserDefaults.standard.string(forKey: "smartnps360.ios_app_cycle.pending_background_at") != nil
@@ -679,9 +667,7 @@ import flutter_background_service_ios
     }
 
     if !launchedForLocation {
-      // Tap/open while still flagged on duty: keep SLC + start optimistic GPS
-      // so tracking resumes after kill even without an SLC wake first.
-      // Without a stored session token, disarm — e.g. login screen / logged out.
+
       if wasOnDuty,
          wasArmed,
          CLLocationManager.authorizationStatus() == .authorizedAlways,
@@ -727,9 +713,6 @@ import flutter_background_service_ios
     restoreSlcAfterLocationWake(startNativePing: true)
   }
 
-  /// Restores SLC + GPS ring without stopping existing iOS region monitoring.
-  /// On location wake: start duty GPS immediately from local on_duty (optimistic),
-  /// then reconcile via native/Flutter heartbeat (stop if API says off_duty).
   private func restoreSlcAfterLocationWake(startNativePing: Bool) {
     awaitingFlutterDutyConfirm = true
     UserDefaults.standard.set(true, forKey: onDutyKey)
@@ -751,7 +734,7 @@ import flutter_background_service_ios
     requestGpsFix(reason: "wake_restore")
 
     if startNativePing {
-      // Optimistic duty GPS from local storage — do not wait for API/UI.
+
       if startOptimisticDutyGpsIfArmed(reason: "location_wake") {
         IosAppKillCycleReporter.shared.appendDebugLog(
           "optimistic duty GPS started (local on_duty)"
@@ -760,21 +743,17 @@ import flutter_background_service_ios
         NSLog("[SmartNPS360][SLC] optimistic GPS skipped; awaiting confirm")
       }
 
-      // Start native wake ping immediately — do not wait for Flutter (Geolocator
-      // is often silent after kill relaunch; native ping is the reliable first hit).
       DutyWakeUploader.shared.beginLocationWake(flutterTimeout: 0)
-      // Location/SLC relaunch after swipe-kill — upload killed without waiting for user open.
+
       IosAppKillCycleReporter.shared.recoverKillFromBackgroundIfNeeded()
       IosAppKillCycleReporter.shared.uploadKilledEventIfNeeded(reason: "location_wake")
 
-      // Let Flutter attach pinger; native ping already in flight.
       DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
         self?.notifyFlutterOfLocationWakeIfNeeded()
       }
     }
   }
 
-  /// Start continuous duty GPS when native local on_duty is armed (post-kill wake).
   @discardableResult
   private func startOptimisticDutyGpsIfArmed(reason: String) -> Bool {
     guard isOnDuty() else { return false }
@@ -817,8 +796,7 @@ import flutter_background_service_ios
   private func notifyFlutterOfLocationWakeIfNeeded() {
     guard isOnDuty() else { return }
     guard UserDefaults.standard.bool(forKey: slcEnabledKey) else { return }
-    // After optimistic GPS, awaitingFlutterDutyConfirm is false — still notify
-    // Flutter whenever this process was launched for location OR GPS is already live.
+
     let gpsLive = dutyGpsLocationManager != nil
     guard launchedForLocation || awaitingFlutterDutyConfirm || gpsLive else { return }
     guard let channel = slcMethodChannel else { return }
@@ -827,8 +805,7 @@ import flutter_background_service_ios
       arguments: slcStatusMap()
     ) { [weak self] result in
       guard let self else { return }
-      // Never claim on location/SLC relaunch — that cancelled DutyWakeUploader
-      // before any ping left the device while Flutter Geolocator stayed silent.
+
       if (result as? Bool) == true, !self.launchedForLocation {
         DutyWakeUploader.shared.claimByFlutter()
       } else if self.launchedForLocation {
@@ -913,9 +890,7 @@ import flutter_background_service_ios
     }
 
     awaitingFlutterDutyConfirm = false
-    // On location/SLC relaunch, keep DutyWakeUploader alive as a one-shot ping
-    // backup. Claiming here races Flutter recover and cancelled native uploads
-    // before any GPS ping left the device.
+
     if !launchedForLocation {
       DutyWakeUploader.shared.claimByFlutter()
     }
@@ -1000,7 +975,6 @@ import flutter_background_service_ios
     gpsPollTimer = timer
   }
 
-  /// One-shot current GPS (not last-known). Used while stationary and on SLC wake.
   private func requestFreshGpsPoll(reason: String) {
     guard isOnDuty(), UserDefaults.standard.bool(forKey: slcEnabledKey) else { return }
     if isUnpaidBreak() { return }
@@ -1076,8 +1050,6 @@ import flutter_background_service_ios
     motionActivityManager?.stopDutyUpdates()
   }
 
-  // MARK: - Duty geofence ring (~100m overlapping circles around last GPS)
-
   private var dutyGeofenceRingSlots: [(id: String, north: CLLocationDistance, east: CLLocationDistance)] {
     let diagonal = dutyGeofenceRingOffset * 0.7071
     return [
@@ -1093,7 +1065,6 @@ import flutter_background_service_ios
     ]
   }
 
-  /// Adds/updates the 9-fence ring without dropping iOS monitoring unless the center moved.
   private func syncDutyGeofenceRing(around coordinate: CLLocationCoordinate2D, manager: CLLocationManager) {
     guard isOnDuty() else {
       stopDutyGeofence(using: slcLocationManager)
@@ -1322,8 +1293,7 @@ import flutter_background_service_ios
 
   func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
     slcEventSink = events
-    // Flush any GPS fixes that arrived before Flutter attached the event channel
-    // (common right after kill/SLC relaunch while optimistic GPS is already live).
+
     let pending = drainPendingSlcLocations()
     for payload in pending {
       events(payload)
@@ -1357,8 +1327,7 @@ import flutter_background_service_ios
     if DutyWakeUploader.shared.consumeWakeGps(location) {
       lastNativeGpsAt = Date()
       updateDutyGeofenceIfNeeded(from: location, force: true)
-      // Still emit to Flutter so continuous tracking continues after the
-      // one-shot native wake ping — previously this return dropped ios_gps.
+
       emitLocation(location, source: "ios_gps")
       return
     }
@@ -1407,8 +1376,7 @@ import flutter_background_service_ios
   func locationManager(_ manager: CLLocationManager, didDetermineState state: CLRegionState, for region: CLRegion) {
     guard isDutyGeofence(region) else { return }
     guard state == .outside else { return }
-    // After swipe-kill, iOS may already be outside the saved ring. Do not use
-    // this on live GPS recenter or it retriggers every time fences re-arm.
+
     guard awaitingFlutterDutyConfirm else { return }
     handleGeofenceWake(region: region, event: "outside")
   }
@@ -1442,7 +1410,6 @@ import flutter_background_service_ios
     }
   }
 
-  /// Apple-approved entry point: opens Settings > SmartNPS360 for this app.
   private func openAppSettings(result: @escaping FlutterResult) {
     guard let url = URL(string: UIApplication.openSettingsURLString) else {
       result(false)

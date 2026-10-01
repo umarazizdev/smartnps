@@ -15,10 +15,6 @@ import androidx.camera.extensions.ExtensionsManager
 import androidx.camera.lifecycle.ProcessCameraProvider
 import java.util.concurrent.TimeUnit
 
-/**
- * Probes rear-camera capabilities for [NativeCameraPlugin.getCapabilities]
- * without presenting UI.
- */
 object NativeCameraCapabilitiesProbe {
   @Volatile
   private var cachedPhoto: Map<String, Any?>? = null
@@ -57,8 +53,6 @@ object NativeCameraCapabilitiesProbe {
         return emptyCapabilities()
       }
 
-      // Probe every extension mode independently — HDR / NIGHT must never be
-      // inferred from AUTO availability.
       var hdr = false
       var night = false
       var auto = false
@@ -69,7 +63,7 @@ object NativeCameraCapabilitiesProbe {
         hdr = isExtensionAvailable(extensions, back, ExtensionMode.HDR)
         night = isExtensionAvailable(extensions, back, ExtensionMode.NIGHT)
         auto = isExtensionAvailable(extensions, back, ExtensionMode.AUTO)
-        // Share with session so camera open can skip a second extension probe.
+
         val labels = mutableListOf<String>()
         if (auto) labels.add("auto")
         if (hdr) labels.add("hdr")
@@ -117,7 +111,7 @@ object NativeCameraCapabilitiesProbe {
         "exposureStep" to exposure.step,
         "stabilization" to (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP),
         "heic" to false,
-        // Android has no public low-light-boost API; iOS-only capability.
+
         "lowLightBoost" to false,
         "virtualDeviceFusion" to logicalMultiCamera,
         "distortionCorrection" to false,
@@ -208,7 +202,6 @@ object NativeCameraCapabilitiesProbe {
     val uhd: Boolean,
   )
 
-  /** Best rear camera characteristics: prefer a logical multi-camera. */
   private fun rearCharacteristics(
     context: Context,
   ): Pair<String, CameraCharacteristics>? {
@@ -249,7 +242,6 @@ object NativeCameraCapabilitiesProbe {
     }
   }
 
-  /** Real AE compensation support — a [0, 0] range means unsupported. */
   private fun probeExposure(chars: CameraCharacteristics?): ExposureInfo {
     if (chars == null) return ExposureInfo(false, null, null, null)
     return try {
@@ -289,7 +281,6 @@ object NativeCameraCapabilitiesProbe {
     }
   }
 
-  /** Debug-only scene mode names for the bound rear camera. */
   private fun probeSceneModes(chars: CameraCharacteristics?): List<String> {
     if (chars == null) return emptyList()
     return try {
@@ -337,10 +328,6 @@ object NativeCameraCapabilitiesProbe {
     }
   }
 
-  /**
-   * Best-effort video quality probe via CamcorderProfile so no CameraX bind is
-   * required. Falls back to HD/FHD true for rear cameras.
-   */
   private fun probeVideoQualities(cameraId: String?): VideoQualityInfo {
     val numericId = cameraId?.toIntOrNull()
       ?: return VideoQualityInfo(hd = true, fhd = true, uhd = false)
@@ -368,8 +355,7 @@ object NativeCameraCapabilitiesProbe {
 
   fun probeZoom(context: Context): ZoomInfo {
     return try {
-      // Probe DEFAULT back logical camera only — do not merge every rear
-      // sensor id (that falsely advertises 0.5x when UW is a separate camera).
+
       val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
       val providerFuture = ProcessCameraProvider.getInstance(context)
       val provider = providerFuture.get(8, TimeUnit.SECONDS)
@@ -377,8 +363,6 @@ object NativeCameraCapabilitiesProbe {
         return ZoomInfo(1.0, 1.0, 1.0, listOf(1.0))
       }
 
-      // Prefer Camera2 zoom range of the first rear logical camera that looks
-      // like the primary multi-cam device (largest zoom span).
       var bestMin = 1.0
       var bestMax = 1.0
       var bestId: String? = null
@@ -387,7 +371,7 @@ object NativeCameraCapabilitiesProbe {
         val chars = manager.getCameraCharacteristics(id)
         val facing = chars.get(CameraCharacteristics.LENS_FACING)
         if (facing != CameraCharacteristics.LENS_FACING_BACK) continue
-        // Skip dedicated physical-only sensors when possible; prefer logical.
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
           val physical = chars.physicalCameraIds
           val isLogical = physical.isNotEmpty()
@@ -447,21 +431,19 @@ object NativeCameraCapabilitiesProbe {
 }
 
 object NativeCameraZoom {
-  /** Cap extreme digital zoom relative to 1x. */
+
   fun capMaxZoom(minZoom: Double, deviceMax: Double): Double {
     val relativeCap = 8.0
     return minOf(deviceMax, maxOf(minZoom, relativeCap))
   }
 
-  /** Standard zoom shortcuts supported by the bound camera's real zoom range. */
   fun usefulLevels(
     minZoom: Double,
     maxZoom: Double,
     opticalRatios: List<Double> = emptyList(),
   ): List<Double> {
     val levels = linkedSetOf<Double>()
-    // Ultra-wide chip = exact hardware minimum (full FOV). Never request 0.5
-    // when minZoom is lower — that would digitally zoom in past stock 0.5x.
+
     if (minZoom <= 0.55 && maxZoom >= minZoom) {
       levels.add(minZoom)
     }
@@ -480,10 +462,6 @@ object NativeCameraZoom {
     return levels.sorted()
   }
 
-  /**
-   * Optical zoom ratios for the active logical camera, relative to the
-   * primary wide lens (1x). Ultra-wide ratios are < 1; tele > 1.
-   */
   fun opticalZoomRatios(context: Context, cameraId: String?): List<Double> {
     if (cameraId.isNullOrBlank()) return emptyList()
     return try {
@@ -522,7 +500,6 @@ object NativeCameraZoom {
       if (focals.size < 2) return emptyList()
       focals.sort()
 
-      // Primary wide ≈ second-shortest focal when UW exists; otherwise shortest.
       val hasUltraWidePair = focals.size >= 2 && focals[0] / focals[1] <= 0.75
       val wideFocal = if (hasUltraWidePair) focals[1] else focals[0]
       if (wideFocal <= 0.0) return emptyList()

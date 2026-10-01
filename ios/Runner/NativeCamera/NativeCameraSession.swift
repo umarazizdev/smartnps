@@ -39,21 +39,19 @@ enum NativeCameraCaptureQuality: String {
 }
 
 struct NativeCameraZoomChip: Equatable {
-  /// Factor passed to AVCaptureDevice.videoZoomFactor.
+
   let deviceFactor: CGFloat
-  /// Factor shown in UI (Camera.app style: 0.5 / 1 / 2 / 3…).
+
   let displayFactor: CGFloat
   let label: String
 
-  /// Backward-compatible alias used by older call sites.
   var factor: CGFloat { deviceFactor }
 }
 
 struct NativeCameraCapabilitiesSnapshot {
   var rearCameraAvailable = false
   var logicalMultiCamera = false
-  /// iOS has no public HDR/Night extension API — these stay false so the UI
-  /// never renders extension chips that AVFoundation cannot honour.
+
   var hdrPhoto = false
   var nightPhoto = false
   var autoExtension = false
@@ -81,7 +79,7 @@ struct NativeCameraCapabilitiesSnapshot {
   var usefulZoomLevels: [Double] = [1]
   var minZoom: Double = 1
   var maxZoom: Double = 1
-  /// Always empty on iOS: CameraX-style selectable extensions do not exist here.
+
   var supportedExtensionModes: [String] = []
 
   func asDictionary() -> [String: Any] {
@@ -149,18 +147,16 @@ protocol NativeCameraSessionDelegate: AnyObject {
   func sessionInterruptionEnded(_ session: NativeCameraSession)
 }
 
-/// Owns AVCaptureSession, photo / movie outputs, zoom, focus, flash, and torch.
 final class NativeCameraSession: NSObject {
   static let logPrefix = "[SmartNPS360Camera]"
-  /// AVFoundation can advertise extreme digital factors (for example 64x).
-  /// Six-times display zoom is the maximum useful evidence-capture range.
+
   private static let maximumUserDisplayZoom: CGFloat = 6
 
   let session = AVCaptureSession()
   let previewLayer: AVCaptureVideoPreviewLayer
 
   private let sessionQueue = DispatchQueue(label: "com.smartnps360.app.native_camera.session")
-  /// Encode / disk write for stills — never block AVFoundation's photo callback queue.
+
   private let photoProcessingQueue = DispatchQueue(
     label: "com.smartnps360.app.native_camera.photo_processing",
     qos: .userInitiated
@@ -181,24 +177,24 @@ final class NativeCameraSession: NSObject {
   private var photoFlashMode: NativeCameraFlashMode = .auto
   private var preferredTorchOn = false
   private(set) var zoomChips: [NativeCameraZoomChip] = []
-  /// Device zoom that maps to Camera.app "1x".
+
   private(set) var wideDeviceZoomFactor: CGFloat = 1
-  /// Survives configureLocked so photo↔video keeps the officer's zoom (e.g. 1x).
+
   private var preferredZoomFactor: CGFloat?
   private(set) var isConfigured = false
   private(set) var isInterrupted = false
-  /// Applied EV bias; survives camera / mode switches (re-clamped per device).
+
   private(set) var exposureTargetBias: Float = 0
   private(set) var lowLightBoostEnabled = false
   private(set) var distortionCorrectionEnabled = false
-  /// Largest photo dimensions negotiated with the photo output (iOS 16+).
+
   private(set) var activeMaxPhotoDimensions: CMVideoDimensions?
 
   private var videoStartDate: Date?
   private var pendingVideoURL: URL?
   private var focusResetWorkItem: DispatchWorkItem?
   private var videoOrientation: AVCaptureVideoOrientation = .landscapeRight
-  /// Ordered tokens describing every quality fallback taken during configure.
+
   private var fallbackTokens: [String] = []
 
   weak var delegate: NativeCameraSessionDelegate?
@@ -207,12 +203,8 @@ final class NativeCameraSession: NSObject {
     isUsingFrontCamera ? "front" : "back"
   }
 
-  /// Wire label for the capture path in use — always `.quality` prioritization.
-  /// Responsive / zero-shutter-lag (iOS 17+) may be enabled for latency only;
-  /// they do not switch to a speed or fast-capture-prioritization path.
   var captureModeWireName: String { "avfoundation_quality" }
 
-  /// `nil` when no fallback was needed.
   var fallbackLevelWireName: String? {
     fallbackTokens.isEmpty ? nil : fallbackTokens.joined(separator: "+")
   }
@@ -231,14 +223,11 @@ final class NativeCameraSession: NSObject {
 
   override init() {
     previewLayer = AVCaptureVideoPreviewLayer(session: session)
-    // Fit (not fill): never crop the sensor FOV to the screen. Letterboxing
-    // matches Camera.app Photo framing so 0.5x looks as wide as stock.
+
     previewLayer.videoGravity = .resizeAspect
     super.init()
     previewLayer.session = session
-    // A new evidence-camera session always starts from predictable, safe
-    // lighting defaults. Mode switches within this session still preserve the
-    // user's separate photo and video selections.
+
     photoFlashMode = .auto
     preferredTorchOn = false
     flashMode = photoFlashMode
@@ -248,8 +237,6 @@ final class NativeCameraSession: NSObject {
     focusResetWorkItem?.cancel()
     NotificationCenter.default.removeObserver(self)
   }
-
-  // MARK: - Lifecycle
 
   func configure(
     isVideoMode: Bool,
@@ -322,28 +309,26 @@ final class NativeCameraSession: NSObject {
 
   func setVideoMode(_ video: Bool) {
     guard isVideoMode != video else {
-      // Already in the requested mode — still notify so pending shutter
-      // actions (photo after mode switch) are not left spinning forever.
+
       DispatchQueue.main.async { [weak self] in
         guard let self else { return }
         self.delegate?.sessionDidFinishConfiguration(self)
       }
       return
     }
-    // Snapshot zoom before configure resets hardware to min (often 0.5x).
+
     if let live = currentDevice?.videoZoomFactor, live > 0.01 {
       preferredZoomFactor = live
     }
     val previousWasPhoto = !isVideoMode
     isVideoMode = video
-    // Photos are always rear-only — snap back to the back camera.
+
     if !video {
       isUsingFrontCamera = false
       flashMode = photoFlashMode
       setTorch(enabled: false)
     } else {
-      // Video torch is binary. Carry the photo decision: On → torch on;
-      // Off / Auto → torch off (Auto has no continuous-video equivalent).
+
       if previousWasPhoto {
         preferredTorchOn = photoFlashMode == .on
       }
@@ -352,8 +337,7 @@ final class NativeCameraSession: NSObject {
     sessionQueue.async { [weak self] in
       guard let self else { return }
       do {
-        // Full reconfigure; photo and video share the same photo FOV framing so
-        // long-press video does not change on-screen zoom/frame size.
+
         try self.configureLocked()
         let lightOn = video ? self.preferredTorchOn : self.photoFlashMode == .on
         self.setTorch(enabled: !self.isUsingFrontCamera && lightOn)
@@ -373,7 +357,6 @@ final class NativeCameraSession: NSObject {
     }
   }
 
-  /// Switches between rear and front cameras (video only, when allowed).
   func flipCamera() {
     guard !rearCameraOnly, isVideoMode, !movieOutput.isRecording else { return }
     isUsingFrontCamera.toggle()
@@ -440,7 +423,7 @@ final class NativeCameraSession: NSObject {
 
   private func applyPreferredStabilization(on connection: AVCaptureConnection) {
     guard connection.isVideoStabilizationSupported else { return }
-    // Prefer cinematic when available; fall back to auto then standard.
+
     connection.preferredVideoStabilizationMode = .cinematic
     if connection.activeVideoStabilizationMode == .off {
       connection.preferredVideoStabilizationMode = .auto
@@ -449,8 +432,6 @@ final class NativeCameraSession: NSObject {
       connection.preferredVideoStabilizationMode = .standard
     }
   }
-
-  // MARK: - Capture
 
   func capturePhoto() {
     sessionQueue.async { [weak self] in
@@ -478,8 +459,7 @@ final class NativeCameraSession: NSObject {
       }
 
       if #available(iOS 17.0, *) {
-        // Accept captures while briefly not-ready; only hard-block when the
-        // session itself is down. Readiness is logged for Pro Max diagnostics.
+
         let readiness = self.photoOutput.captureReadiness
         NSLog("\(Self.logPrefix) captureReadiness=\(readiness.rawValue)")
       }
@@ -509,7 +489,7 @@ final class NativeCameraSession: NSObject {
       }
 
       if #available(iOS 13.0, *) {
-        // Best public computational photography path (no private Night Mode).
+
         settings.photoQualityPrioritization = .quality
       }
 
@@ -607,7 +587,7 @@ final class NativeCameraSession: NSObject {
         }
 
         if let device = self.currentDevice, device.hasTorch, device.isTorchAvailable {
-          // Torch follows flash "on" while recording.
+
           self.setTorch(enabled: self.flashMode == .on)
         }
 
@@ -631,8 +611,6 @@ final class NativeCameraSession: NSObject {
   var isRecording: Bool {
     movieOutput.isRecording
   }
-
-  // MARK: - Zoom / focus / flash
 
   func setZoomFactor(_ factor: CGFloat, animated: Bool) {
     sessionQueue.async { [weak self] in
@@ -696,8 +674,7 @@ final class NativeCameraSession: NSObject {
         }
         if device.isExposurePointOfInterestSupported {
           device.exposurePointOfInterest = devicePoint
-          // Keep metering the selected area as lighting changes. `.autoExpose`
-          // performs only one adjustment and can leave a night scene too dark.
+
           if device.isExposureModeSupported(.continuousAutoExposure) {
             device.exposureMode = .continuousAutoExposure
           } else if device.isExposureModeSupported(.autoExpose) {
@@ -715,8 +692,6 @@ final class NativeCameraSession: NSObject {
     }
   }
 
-  /// Tap-to-focus is temporary. Like Camera.app, return to continuous center
-  /// autofocus automatically so the officer never has to manage focus.
   private func scheduleContinuousAutoFocusRestore(for device: AVCaptureDevice) {
     let work = DispatchWorkItem { [weak self, weak device] in
       guard let self, let device, self.currentDevice === device else { return }
@@ -755,8 +730,6 @@ final class NativeCameraSession: NSObject {
     }
   }
 
-  /// Applies EV compensation clamped to the active device range.
-  /// Returns the value that will actually be applied.
   @discardableResult
   func setExposureTargetBias(_ bias: Float) -> Float {
     guard let device = currentDevice, supportsExposureCompensation else { return 0 }
@@ -788,22 +761,19 @@ final class NativeCameraSession: NSObject {
   func cycleFlashMode() -> NativeCameraFlashMode {
     guard supportsFlashOrTorch else { return flashMode }
     if isVideoMode {
-      // Torch is binary on/off (no auto).
+
       flashMode = flashMode == .on ? .off : .on
       preferredTorchOn = flashMode == .on
       setTorch(enabled: flashMode == .on)
     } else {
       flashMode = flashMode.next
       photoFlashMode = flashMode
-      // "On" illuminates the preview immediately; Auto still lets the camera
-      // decide whether a capture-time flash is needed.
+
       setTorch(enabled: flashMode == .on)
     }
     return flashMode
   }
 
-  /// Applies an explicit flash choice from the camera chrome and persists it.
-  /// Photo supports Off / On / Auto; video torch is intentionally binary.
   @discardableResult
   func setFlashMode(_ mode: NativeCameraFlashMode) -> NativeCameraFlashMode {
     guard supportsFlashOrTorch else { return flashMode }
@@ -814,7 +784,7 @@ final class NativeCameraSession: NSObject {
     } else {
       flashMode = mode
       photoFlashMode = mode
-      // On lights the preview immediately; Auto remains capture-time flash.
+
       setTorch(enabled: mode == .on)
     }
     return flashMode
@@ -867,10 +837,6 @@ final class NativeCameraSession: NSObject {
     caps.ultraWide = builtChips.contains(where: { $0.displayFactor < 0.85 })
     caps.telephoto = builtChips.contains(where: { $0.displayFactor >= 1.9 })
 
-    // iOS exposes no public HDR / Night extension API. Reporting them as
-    // available would surface capture chips AVFoundation cannot honour, so both
-    // stay false and the extension list stays empty. `autoExtension` only
-    // reflects the real virtual multi-cam fusion path.
     caps.hdrPhoto = false
     caps.nightPhoto = false
     caps.supportedExtensionModes = []
@@ -898,7 +864,6 @@ final class NativeCameraSession: NSObject {
     return caps
   }
 
-  /// Best-effort scan of the device's formats for HD / FHD / UHD video support.
   static func videoResolutionSupport(
     for device: AVCaptureDevice
   ) -> (hd: Bool, fhd: Bool, uhd: Bool) {
@@ -915,8 +880,6 @@ final class NativeCameraSession: NSObject {
     return (hd, fhd, uhd)
   }
 
-  /// Largest still size across every format — used when the session has not
-  /// negotiated dimensions yet (capability probe path).
   static func largestPhotoDimensions(for device: AVCaptureDevice) -> CMVideoDimensions? {
     if #available(iOS 16.0, *) {
       let all = device.formats.flatMap(\.supportedMaxPhotoDimensions)
@@ -926,8 +889,6 @@ final class NativeCameraSession: NSObject {
       .map { CMVideoFormatDescriptionGetDimensions($0.formatDescription) }
       .max { Int64($0.width) * Int64($0.height) < Int64($1.width) * Int64($1.height) }
   }
-
-  // MARK: - Private configuration
 
   private func configureLocked() throws {
     let t0 = CFAbsoluteTimeGetCurrent()
@@ -982,13 +943,10 @@ final class NativeCameraSession: NSObject {
     NSLog("\(Self.logPrefix) INPUT_READY +\(ms())ms")
 
     if !isUsingFrontCamera, device.deviceType == .builtInWideAngleCamera {
-      // Single physical lens: no virtual multi-cam fusion available.
+
       noteFallback("single_lens")
     }
 
-    // Photo and video share Camera.app Photo FOV (.photo preset) so long-press
-    // video does not widen/narrow the on-screen frame vs photo mode.
-    // Video still records via movieOutput; quality may follow the photo pipeline.
     if session.canSetSessionPreset(.photo) {
       session.sessionPreset = .photo
       NSLog(
@@ -997,7 +955,7 @@ final class NativeCameraSession: NSObject {
       )
     } else {
       session.sessionPreset = .inputPriority
-      // Match photo FOV even in video mode when .photo preset is unavailable.
+
       try applyPreferredFormat(on: device, forcePhotoFov: true)
       noteFallback("photo_preset_unavailable")
     }
@@ -1016,8 +974,6 @@ final class NativeCameraSession: NSObject {
     NSLog("\(Self.logPrefix) SESSION_CONFIG_END +\(ms())ms")
   }
 
-  /// Applies every per-device quality knob in a single configuration lock:
-  /// low-light boost, distortion correction, virtual-device switching, EV bias.
   private func applyDeviceEnhancements(on device: AVCaptureDevice) {
     do {
       try device.lockForConfiguration()
@@ -1036,7 +992,6 @@ final class NativeCameraSession: NSObject {
         distortionCorrectionEnabled = true
       }
 
-      // Keep virtual multi-cam fusion ON — never force a single physical lens.
       if device.isVirtualDevice,
          device.activePrimaryConstituentDeviceSwitchingBehavior != .unsupported
       {
@@ -1105,7 +1060,6 @@ final class NativeCameraSession: NSObject {
     )
   }
 
-  /// Re-applies the officer's last zoom after configure resets the device to min.
   private func restorePreferredZoom(on device: AVCaptureDevice) {
     let minZ = device.minAvailableVideoZoomFactor
     let hardwareMax = min(
@@ -1113,7 +1067,7 @@ final class NativeCameraSession: NSObject {
       device.activeFormat.videoMaxZoomFactor
     )
     let maxZ = min(hardwareMax, wideDeviceZoomFactor * Self.maximumUserDisplayZoom)
-    // Prefer the remembered selection; fall back to Camera.app-style 1x (wide).
+
     let target = preferredZoomFactor ?? wideDeviceZoomFactor
     let clamped = max(minZ, min(maxZ, target))
     preferredZoomFactor = clamped
@@ -1179,8 +1133,7 @@ final class NativeCameraSession: NSObject {
         throw Self.error(code: "init_failed", message: "Unable to add photo output")
       }
       session.addOutput(photoOutput)
-      // Quality prioritization must be raised before dimensions are negotiated:
-      // the largest still sizes are only offered on the quality path.
+
       if #available(iOS 13.0, *) {
         photoOutput.maxPhotoQualityPrioritization = .quality
       }
@@ -1200,8 +1153,6 @@ final class NativeCameraSession: NSObject {
     }
   }
 
-  /// Latency-only path for Pro-class stills. Keeps `.quality` prioritization and
-  /// does **not** enable fast-capture prioritization (which can soften quality).
   private func applyResponsiveCaptureIfSupported() {
     guard #available(iOS 17.0, *) else { return }
     if photoOutput.isZeroShutterLagSupported {
@@ -1211,11 +1162,10 @@ final class NativeCameraSession: NSObject {
       photoOutput.isResponsiveCaptureEnabled = true
     }
     if photoOutput.isFastCapturePrioritizationSupported {
-      // Keep full `.quality` stills even under rapid taps.
+
       photoOutput.isFastCapturePrioritizationEnabled = false
     }
-    // Explicitly leave fastCapturePrioritizationEnabled off so
-    // burst softening never trades quality for shot-to-shot speed.
+
     NSLog(
       "\(Self.logPrefix) responsive capture zsl=\(photoOutput.isZeroShutterLagEnabled) "
         + "responsive=\(photoOutput.isResponsiveCaptureEnabled) "
@@ -1234,7 +1184,7 @@ final class NativeCameraSession: NSObject {
 
     let best: AVCaptureDevice.Format
     if forcePhotoFov || !isVideoMode {
-      // Photo FOV (widest) — also used for video when matching photo framing.
+
       best = Self.preferredPhotoFormat(from: formats)
     } else {
       best = Self.preferredVideoFormat(from: formats, quality: quality)
@@ -1243,7 +1193,7 @@ final class NativeCameraSession: NSObject {
     try device.lockForConfiguration()
     device.activeFormat = best
     let dims = CMVideoFormatDescriptionGetDimensions(best.formatDescription)
-    // Prefer 30 fps for stability; bump only when format supports it cleanly.
+
     if let range = best.videoSupportedFrameRateRanges.first(where: {
       $0.minFrameRate <= 30 && $0.maxFrameRate >= 30
     }) {
@@ -1259,7 +1209,6 @@ final class NativeCameraSession: NSObject {
     )
   }
 
-  /// Video: prefer 4K / 1080p, then wider FOV among equals.
   private static func preferredVideoFormat(
     from formats: [AVCaptureDevice.Format],
     quality: NativeCameraCaptureQuality
@@ -1279,7 +1228,7 @@ final class NativeCameraSession: NSObject {
       else if ok1080 { tier = 1 }
       else if height <= targetHeight { tier = 2 }
       else { tier = 3 }
-      // Negate FOV so larger FOV sorts earlier within the same tier.
+
       return (tier, -height, -width, -format.videoFieldOfView)
     }
 
@@ -1293,8 +1242,6 @@ final class NativeCameraSession: NSObject {
     }.first!
   }
 
-  /// Photo: maximize *effective* FOV after GDC, then still resolution.
-  /// Ranking by uncorrected FOV can pick a format that GDC crops more tightly.
   private static func preferredPhotoFormat(
     from formats: [AVCaptureDevice.Format]
   ) -> AVCaptureDevice.Format {
@@ -1312,7 +1259,7 @@ final class NativeCameraSession: NSObject {
     }
 
     func effectiveFOV(_ format: AVCaptureDevice.Format) -> Float {
-      // GDC is enabled to match Camera.app; use the corrected FOV for ranking.
+
       let gdc = format.geometricDistortionCorrectedVideoFieldOfView
       return gdc > 0 ? gdc : format.videoFieldOfView
     }
@@ -1342,19 +1289,6 @@ final class NativeCameraSession: NSObject {
     fallbackTokens.append(token)
   }
 
-  /// Chooses a high-quality still size without blindly maximizing megapixels.
-  ///
-  /// AVFoundation does not expose an API that says "best computational photo
-  /// resolution." Apple's processed stills are commonly in a mid/high range
-  /// (roughly ≤ ~12 MP), while the absolute largest supportedMaxPhotoDimensions
-  /// entry can be a specialized full-sensor mode that trades processing for
-  /// pixel count. Strategy (public APIs only, no device model hardcoding):
-  /// 1. Prefer ~4:3 (Camera.app Photo) so we never save a 16:9 center-crop.
-  /// 2. Prefer the largest supported size whose pixel count is ≤ ~12.5 MP.
-  /// 3. Else prefer the smallest size that is still ≥ ~8 MP (useful evidence).
-  /// 4. Else use the median supported size (conservative middle).
-  /// 5. Else the sole available size.
-  /// Quality prioritization (.quality) is applied before this negotiation.
   private func applyMaxPhotoDimensions() {
     if #available(iOS 16.0, *) {
       let supported = (currentDevice?.activeFormat.supportedMaxPhotoDimensions ?? [])
@@ -1369,7 +1303,6 @@ final class NativeCameraSession: NSObject {
         Int64(d.width) * Int64(d.height)
       }
 
-      /// Absolute deviation from 4:3 — Camera.app Photo aspect (no wide crop).
       func fourThreeDelta(_ d: CMVideoDimensions) -> Double {
         let longSide = Double(max(d.width, d.height))
         let shortSide = Double(min(d.width, d.height))
@@ -1380,7 +1313,7 @@ final class NativeCameraSession: NSObject {
       let sorted = supported.sorted { pixels($0) < pixels($1) }
       let maxProcessed: Int64 = 12_500_000
       let minUseful: Int64 = 8_000_000
-      // Treat near-4:3 as Photo; reject clear 16:9 center-crops when 4:3 exists.
+
       let fourThree = sorted.filter { fourThreeDelta($0) <= 0.08 }
 
       let best: CMVideoDimensions
@@ -1413,7 +1346,6 @@ final class NativeCameraSession: NSObject {
       return
     }
 
-    // iOS 15: keep legacy high-resolution path (compatible with .quality).
     photoOutput.isHighResolutionCaptureEnabled = true
     activeMaxPhotoDimensions = nil
     noteFallback("legacy_high_resolution")
@@ -1542,8 +1474,6 @@ final class NativeCameraSession: NSObject {
     return capacity > minimumBytes
   }
 
-  // MARK: - Discovery helpers
-
   static func discoverBestBackCamera() -> AVCaptureDevice? {
     discoverBestCamera(front: false)
   }
@@ -1581,8 +1511,6 @@ final class NativeCameraSession: NSObject {
       .filter { $0 > minZ + 0.05 && $0 <= maxZ + 0.05 }
       .sorted()
 
-    // Camera.app display zoom = deviceZoom * displayVideoZoomFactorMultiplier (iOS 18+).
-    // wideDeviceFactor is the device zoom that maps to UI "1x".
     let wideDeviceFactor = Self.wideDeviceFactor(
       for: device,
       minZ: minZ,
@@ -1600,8 +1528,6 @@ final class NativeCameraSession: NSObject {
     let minDisplayZoom = minZ / max(wideDeviceFactor, 0.01)
     let maxDisplayZoom = maxZ / max(wideDeviceFactor, 0.01)
 
-    // 0.5x = exact hardware minimum zoom (full ultra-wide FOV). Never use a
-    // slightly higher ratio that would digitally crop past Camera.app 0.5x.
     if minDisplayZoom <= 0.55, maxDisplayZoom >= 0.5 {
       appendDevice(minZ)
     }
@@ -1627,7 +1553,6 @@ final class NativeCameraSession: NSObject {
     return (chips, wideDeviceFactor)
   }
 
-  /// Device zoom factor that Camera.app labels as 1x.
   private static func wideDeviceFactor(
     for device: AVCaptureDevice,
     minZ: CGFloat,
@@ -1636,14 +1561,11 @@ final class NativeCameraSession: NSObject {
     if #available(iOS 18.0, *) {
       let multiplier = device.displayVideoZoomFactorMultiplier
       if multiplier > 0.01 {
-        // displayZoom = deviceZoom * multiplier ⇒ deviceZoom@1x = 1 / multiplier
+
         return 1.0 / multiplier
       }
     }
 
-    // Pre-iOS 18 fallback: Match Camera.app labeling from virtual switchovers.
-    // Dual-wide / triple: device zoom 1 = UI 0.5x (UW), first switchover = UI 1x.
-    // Dual (wide+tele) / single wide: device zoom 1 = UI 1x.
     switch device.deviceType {
     case .builtInDualWideCamera, .builtInTripleCamera:
       return switchOvers.first ?? max(minZ, 1)
@@ -1679,7 +1601,6 @@ final class NativeCameraSession: NSObject {
     return String(format: "%.1fx", Double(display))
   }
 
-  /// Converts a device zoom factor into Camera.app-style display zoom.
   func displayZoomFactor(forDeviceZoom deviceZoom: CGFloat) -> CGFloat {
     deviceZoom / max(wideDeviceZoomFactor, 0.01)
   }
@@ -1719,10 +1640,10 @@ final class NativeCameraSession: NSObject {
       if switchOvers.count >= 2, zoom >= switchOvers[1] - 0.05 {
         return "telephoto"
       }
-      // Between first switchover and second → typically wide after UW, or tele on dual.
+
       if device.deviceType == .builtInDualCamera || device.deviceType == .builtInTripleCamera {
         if switchOvers.count == 1 || zoom >= first {
-          // Dual: switchover is tele; Triple: first is wide, second is tele.
+
           if device.deviceType == .builtInDualCamera {
             return "telephoto"
           }
@@ -1736,8 +1657,6 @@ final class NativeCameraSession: NSObject {
     return "wide"
   }
 }
-
-// MARK: - Photo delegate
 
 extension NativeCameraSession: AVCapturePhotoCaptureDelegate {
   func photoOutput(
@@ -1772,9 +1691,6 @@ extension NativeCameraSession: AVCapturePhotoCaptureDelegate {
       return
     }
 
-    // Pull bytes on the photo callback (AVCapturePhoto lifetime), then encode /
-    // write off this queue so the capture pipeline can recover quickly on
-    // Pro-class Fusion stills.
     CamPerf.stage("FILE_DATA_REPRESENTATION_START")
     guard let rawData = photo.fileDataRepresentation() else {
       DispatchQueue.main.async { [weak self] in
@@ -1881,7 +1797,6 @@ extension NativeCameraSession: AVCapturePhotoCaptureDelegate {
       return data
     }
 
-    // preferHeic=false (default): high-quality JPEG for server compatibility.
     if isHeicData(data) {
       return try convertImageDataToJPEG(data, quality: 0.97)
     }
@@ -1889,7 +1804,6 @@ extension NativeCameraSession: AVCapturePhotoCaptureDelegate {
     return data
   }
 
-  /// Converts HEIC/HEIF → JPEG while preserving EXIF orientation metadata.
   private func convertImageDataToJPEG(_ data: Data, quality: CGFloat) throws -> Data {
     guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
       throw Self.error(code: "capture_failed", message: "Unable to read image data")
@@ -1928,7 +1842,7 @@ extension NativeCameraSession: AVCapturePhotoCaptureDelegate {
   }
 
   private func isHeicData(_ data: Data) -> Bool {
-    // ftyp....heic / heif brand in ISO BMFF header
+
     guard data.count > 12 else { return false }
     let brand = data.subdata(in: 8..<12)
     if let ascii = String(data: brand, encoding: .ascii)?.lowercased() {
@@ -1937,8 +1851,6 @@ extension NativeCameraSession: AVCapturePhotoCaptureDelegate {
     return false
   }
 }
-
-// MARK: - Movie delegate
 
 extension NativeCameraSession: AVCaptureFileOutputRecordingDelegate {
   func fileOutput(

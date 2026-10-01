@@ -1,9 +1,6 @@
 import AVFoundation
 import UIKit
 
-/// Full-screen chrome host: empty (transparent) areas return `nil` from hit
-/// testing so touches reach the preview / zoom pills underneath. Subviews
-/// (flash, shutter, close, etc.) still receive taps normally.
 private final class NativeCameraControlsOverlayView: UIView {
   override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
     let hit = super.hitTest(point, with: event)
@@ -11,8 +8,6 @@ private final class NativeCameraControlsOverlayView: UIView {
   }
 }
 
-/// Camera.app-inspired continuous zoom dial. The dial is presentation-only;
-/// AVFoundation remains the single source of truth for the applied zoom.
 private final class NativeCameraZoomWheelView: UIView {
   private var minimumZoom: CGFloat = 1
   private var maximumZoom: CGFloat = 1
@@ -55,10 +50,6 @@ private final class NativeCameraZoomWheelView: UIView {
       return
     }
 
-    // In landscape the control follows the shutter rail: a vertical arc with
-    // larger values above the fixed marker and smaller values below it.
-    // Clip from the trailing edge only so the left/top/bottom arc silhouette
-    // stays intact while the dial clears the shutter.
     let trailingClip: CGFloat = 40
     let visibleWidth = max(rect.width - trailingClip, 1)
     context.saveGState()
@@ -69,8 +60,7 @@ private final class NativeCameraZoomWheelView: UIView {
     let startAngle = CGFloat.pi * 0.66
     let endAngle = CGFloat.pi * 1.34
     let arcSpan = endAngle - startAngle
-    // Keep the live selection near the low end of the dial (20% from the
-    // bottom) so 0.5x starts there instead of mid-arc (50%).
+
     let markerAngle = startAngle + arcSpan * 0.20
     let radiansPerZoomUnit: CGFloat = 0.42
 
@@ -107,9 +97,6 @@ private final class NativeCameraZoomWheelView: UIView {
     background.fill()
     context.restoreGState()
 
-    // Linear 0.1x divisions keep every zoom interval physically consistent.
-    // In particular, 4x–5x and 5x–6x no longer collapse together while the
-    // low end consumes most of the wheel.
     let minorStep: CGFloat = 0.1
     let minorCount = max(Int(ceil((maximumZoom - minimumZoom) / minorStep)), 1)
     for index in 0...minorCount {
@@ -127,8 +114,6 @@ private final class NativeCameraZoomWheelView: UIView {
       context.strokePath()
     }
 
-    // Draw only useful major levels. Up to 5x each whole factor is shown;
-    // larger cameras add 5x milestones plus their exact maximum endpoint.
     var majorLevels = stops.filter { $0 >= minimumZoom && $0 <= maximumZoom }
     if minimumZoom <= 0.5, maximumZoom >= 0.5 { majorLevels.append(0.5) }
     let wholeMaximum = Int(floor(maximumZoom))
@@ -140,7 +125,7 @@ private final class NativeCameraZoomWheelView: UIView {
         }
       }
     }
-    // Always expose the real endpoint (including the recommended 6x cap).
+
     if maximumZoom > 5 {
       majorLevels.append(maximumZoom)
     }
@@ -173,7 +158,6 @@ private final class NativeCameraZoomWheelView: UIView {
       )
     }
 
-    // Fixed selection mark and current value, matching the native iPhone dial.
     let markerStart = point(angle: markerAngle, radius: radius - 21)
     let markerEnd = point(angle: markerAngle, radius: radius + 5)
     let yellow = UIColor(red: 1, green: 214 / 255, blue: 10 / 255, alpha: 1)
@@ -202,7 +186,6 @@ private final class NativeCameraZoomWheelView: UIView {
   }
 }
 
-/// Full-screen landscape camera UI matching VisitVideoRecorderScreen chrome.
 final class NativeCameraViewController: UIViewController {
   static let logPrefix = "[SmartNPS360Camera]"
 
@@ -262,7 +245,7 @@ final class NativeCameraViewController: UIViewController {
       blue: 38 / 255,
       alpha: 1
     )
-    /// Deep red glass for the live recording duration badge (matches Android).
+
     static let recordingBadgeFill = UIColor(
       red: 185 / 255,
       green: 28 / 255,
@@ -290,28 +273,26 @@ final class NativeCameraViewController: UIViewController {
   private let cameraSession = NativeCameraSession()
 
   private let previewContainer = UIView()
-  /// Hosts zoom pills over the aspect-fit video (not letterbox / shutter chrome).
+
   private let videoContentGuide = UILayoutGuide()
   private var videoGuideLeading: NSLayoutConstraint?
   private var videoGuideTop: NSLayoutConstraint?
   private var videoGuideWidth: NSLayoutConstraint?
   private var videoGuideHeight: NSLayoutConstraint?
-  /// Avoid layout re-entrancy while updating video guide constraints from
-  /// `viewDidLayoutSubviews` (can crash inside `CALayer.setFrame`).
+
   private var isApplyingVideoContentGuide = false
   private var zoomTrailingToVideoConstraint: NSLayoutConstraint?
   private var flashLeadingConstraint: NSLayoutConstraint?
-  /// Landscape-only trailing inset before the shutter rail. Portrait uses 0.
+
   private let previewTrailingPaddingLandscape: CGFloat = 0
-  /// Landscape-only inset for flash from the leading safe edge.
+
   private let flashLeadingPaddingLandscape: CGFloat = 28
   private let flashLeadingPaddingPortrait: CGFloat = 18
   private var previewTrailingToRailConstraint: NSLayoutConstraint?
   private var previewTrailingToViewConstraint: NSLayoutConstraint?
   private var closeLandscapeConstraints: [NSLayoutConstraint] = []
   private var closePortraitConstraints: [NSLayoutConstraint] = []
-  /// Full-screen chrome host: transparent areas pass touches through to the
-  /// preview/zoom underneath; real controls still receive hits normally.
+
   private let controlsOverlay = NativeCameraControlsOverlayView()
   private let closeButton = UIButton(type: .system)
   private let flashButton = UIButton(type: .system)
@@ -378,10 +359,9 @@ final class NativeCameraViewController: UIViewController {
   private var shutterLongPressActive = false
   private var focusDismissWorkItem: DispatchWorkItem?
   private var photoCaptureTimeoutWorkItem: DispatchWorkItem?
-  /// Upper bound for computational stills on Pro Fusion devices (no quality drop).
+
   private static let photoCaptureTimeoutSeconds: TimeInterval = 25
-  /// Bumped on each shutter / timeout so late ISP callbacks cannot leave UI stuck
-  /// or finish after the officer already dismissed a timeout alert.
+
   private var photoCaptureEpoch: UInt64 = 0
   private var activePhotoCaptureEpoch: UInt64?
 
@@ -406,8 +386,6 @@ final class NativeCameraViewController: UIViewController {
     NotificationCenter.default.removeObserver(self)
   }
 
-  /// Allow portrait so we can show the same rotate-to-landscape prompt as before.
-  /// Capture itself remains landscape-only when `landscapeOnly` is true.
   override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
     [.portrait, .landscapeLeft, .landscapeRight]
   }
@@ -419,7 +397,7 @@ final class NativeCameraViewController: UIViewController {
     if NativeCameraOrientation.isInterfaceLandscape(current) {
       return current
     }
-    // Prefer staying in the current orientation so the landscape prompt can appear.
+
     return .portrait
   }
 
@@ -447,7 +425,7 @@ final class NativeCameraViewController: UIViewController {
       guard let self else { return }
       NSLog("\(Self.logPrefix) SESSION_CONFIG_END ok=\(ok) +\(ms())ms")
       if ok {
-        // Start preview ASAP; secondary chrome can refresh after.
+
         self.cameraSession.startRunning()
         NSLog("\(Self.logPrefix) SESSION_START_RUNNING_REQUESTED +\(ms())ms")
         self.applyVideoOrientationFromInterface()
@@ -465,8 +443,7 @@ final class NativeCameraViewController: UIViewController {
 
   override func viewDidLayoutSubviews() {
     super.viewDidLayoutSubviews()
-    // Skip nested passes triggered by guide-constraint updates inside
-    // `syncVideoContentGuide` — those re-entrancy loops crashed CALayer.
+
     guard !isApplyingVideoContentGuide else { return }
     syncVideoContentGuide()
     applyVideoOrientationFromInterface()
@@ -481,7 +458,7 @@ final class NativeCameraViewController: UIViewController {
 
   override func viewDidAppear(_ animated: Bool) {
     super.viewDidAppear(animated)
-    // Start the guide as soon as Capture is on screen (not after taking a photo).
+
     maybeStartOnboarding()
   }
 
@@ -506,8 +483,6 @@ final class NativeCameraViewController: UIViewController {
     })
   }
 
-  // MARK: - UI
-
   private func buildUI() {
     previewContainer.translatesAutoresizingMaskIntoConstraints = false
     previewContainer.backgroundColor = .black
@@ -525,7 +500,7 @@ final class NativeCameraViewController: UIViewController {
     NSLayoutConstraint.activate([
       previewContainer.topAnchor.constraint(equalTo: view.topAnchor),
       previewContainer.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-      // Flush to the left — no leading padding.
+
       previewContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
       controlsOverlay.topAnchor.constraint(equalTo: view.topAnchor),
       controlsOverlay.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -538,7 +513,7 @@ final class NativeCameraViewController: UIViewController {
       systemName: "xmark",
       accessibility: "Close"
     )
-    // Camera.app close on black chrome: soft fill, no harsh ring.
+
     closeButton.backgroundColor = UIColor(white: 1, alpha: 0.18)
     closeButton.layer.borderWidth = 0
     closeButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
@@ -558,7 +533,6 @@ final class NativeCameraViewController: UIViewController {
     flipButton.addTarget(self, action: #selector(flipTapped), for: .touchUpInside)
     flipButton.isHidden = true
 
-    // Kept for compatibility; hidden from primary chrome (tap/hold shutter instead).
     modeControl.translatesAutoresizingMaskIntoConstraints = false
     modeControl.selectedSegmentIndex = isVideoMode ? 1 : 0
     modeControl.isHidden = true
@@ -586,10 +560,10 @@ final class NativeCameraViewController: UIViewController {
 
     controlsOverlay.addSubview(recordingBadge)
     controlsOverlay.addSubview(shutterRail)
-    // Zoom controls on the preview so pills sit on the live video, not chrome.
+
     previewContainer.addSubview(zoomRail)
     previewContainer.addSubview(zoomWheel)
-    // Flash lives on the leading black gutter (Camera.app layout).
+
     controlsOverlay.addSubview(flashButton)
     controlsOverlay.addSubview(flashLabel)
     controlsOverlay.addSubview(flashModeTray)
@@ -598,7 +572,7 @@ final class NativeCameraViewController: UIViewController {
     controlsOverlay.addSubview(busyOverlay)
     buildPortraitBlockOverlay()
     controlsOverlay.addSubview(portraitBlockOverlay)
-    // Close on the trailing black chrome (sibling so it stays tappable in portrait).
+
     controlsOverlay.addSubview(closeButton)
     controlsOverlay.bringSubviewToFront(closeButton)
 
@@ -657,7 +631,6 @@ final class NativeCameraViewController: UIViewController {
     videoGuideWidth = videoWidth
     videoGuideHeight = videoHeight
 
-    // Landscape: Close on trailing black chrome — top of shutter rail.
     closeLandscapeConstraints = [
       closeButton.centerXAnchor.constraint(equalTo: shutterRail.centerXAnchor),
       closeButton.topAnchor.constraint(
@@ -667,7 +640,7 @@ final class NativeCameraViewController: UIViewController {
       closeButton.widthAnchor.constraint(equalToConstant: 44),
       closeButton.heightAnchor.constraint(equalToConstant: 44),
     ]
-    // Portrait: top-leading so Close stays reachable above the rotate prompt.
+
     closePortraitConstraints = [
       closeButton.topAnchor.constraint(equalTo: guide.topAnchor, constant: 16),
       closeButton.leadingAnchor.constraint(equalTo: guide.leadingAnchor, constant: 18),
@@ -697,13 +670,12 @@ final class NativeCameraViewController: UIViewController {
       videoTop,
       videoWidth,
       videoHeight,
-      // Extra trailing inset so hint text never clips on notched devices.
+
       shutterRail.trailingAnchor.constraint(equalTo: guide.trailingAnchor, constant: -6),
       shutterRail.topAnchor.constraint(equalTo: guide.topAnchor),
       shutterRail.bottomAnchor.constraint(equalTo: guide.bottomAnchor),
       shutterRail.widthAnchor.constraint(equalToConstant: 112),
 
-      // Flash on leading gutter — landscape uses extra leading inset.
       flashButton.topAnchor.constraint(equalTo: guide.topAnchor, constant: 16),
       flashLeading,
       flashButton.widthAnchor.constraint(equalToConstant: 42),
@@ -718,7 +690,6 @@ final class NativeCameraViewController: UIViewController {
       flashModeTray.centerYAnchor.constraint(equalTo: flashButton.centerYAnchor),
       flashModeTray.heightAnchor.constraint(equalToConstant: 42),
 
-      // Zoom pills on the live video rect (not letterbox / black chrome).
       zoomTrailing,
       zoomRail.centerYAnchor.constraint(equalTo: videoContentGuide.centerYAnchor),
 
@@ -748,7 +719,6 @@ final class NativeCameraViewController: UIViewController {
     ])
   }
 
-  /// Contextual exposure control shown beside the tap-to-focus reticle.
   private func buildFocusExposureControl() {
     focusExposureControl.frame = CGRect(x: 0, y: 0, width: 40, height: 132)
     focusExposureControl.alpha = 0
@@ -875,7 +845,7 @@ final class NativeCameraViewController: UIViewController {
     }
     isPortraitBlocked = portrait
     portraitBlockOverlay.isHidden = !portrait
-    // Keep live preview under the dialog; only hide capture chrome.
+
     zoomRail.alpha = portrait ? 0 : 1
     shutterRail.alpha = portrait ? 0 : 1
     exposureStack.alpha = portrait ? 0 : 1
@@ -888,7 +858,7 @@ final class NativeCameraViewController: UIViewController {
     shutterRail.isUserInteractionEnabled = !portrait
     exposureStack.isUserInteractionEnabled = !portrait
     flashButton.isUserInteractionEnabled = !portrait
-    // Landscape: 5pt before shutter rail. Portrait: 0 (full-bleed, no inset).
+
     updatePreviewTrailingPadding(portrait: portrait)
     updateCloseChromePosition(portrait: portrait)
     syncRecordingDurationBadgeForPortrait()
@@ -900,13 +870,13 @@ final class NativeCameraViewController: UIViewController {
       zoomRail.backgroundColor = Chrome.zoomRail
       hintLabel.alpha = 1
       startRotateHintAnimation()
-      // Portrait live preview behind the dialog must stay upright.
+
       applyVideoOrientationFromInterface()
       pauseOnboardingForPortrait()
     } else {
       stopRotateHintAnimation()
       applyVideoOrientationFromInterface()
-      // Tour is landscape-only; start once the officer rotates.
+
       maybeStartOnboarding()
     }
     if portrait, cameraSession.isRecording {
@@ -914,7 +884,6 @@ final class NativeCameraViewController: UIViewController {
     }
   }
 
-  /// Right-edge gap before the shutter rail — landscape only; portrait = 0.
   private func updatePreviewTrailingPadding(portrait: Bool) {
     guard let toRail = previewTrailingToRailConstraint,
           let toView = previewTrailingToViewConstraint
@@ -930,8 +899,6 @@ final class NativeCameraViewController: UIViewController {
     view.setNeedsLayout()
   }
 
-  /// Aspect-fit video, trail-aligned to the shutter chrome in landscape so zoom
-  /// sits next to capture without changing the control UI.
   private func syncVideoContentGuide() {
     guard let leading = videoGuideLeading,
           let top = videoGuideTop,
@@ -943,7 +910,7 @@ final class NativeCameraViewController: UIViewController {
     guard Self.isUsableSize(bounds.size) else { return }
 
     let layer = cameraSession.previewLayer
-    // Measure the aspect-fit size as if the layer filled the container.
+
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     layer.frame = bounds
@@ -959,22 +926,20 @@ final class NativeCameraViewController: UIViewController {
 
     let portrait = bounds.height >= bounds.width
     if portrait {
-      // Center behind the rotate prompt.
+
       videoRect.origin.x = (bounds.width - videoRect.width) / 2
     } else {
-      // Push the viewfinder against the black shutter rail — closes the gap
-      // between zoom pills and the capture button.
+
       videoRect.origin.x = bounds.width - videoRect.width
     }
     videoRect.origin.y = (bounds.height - videoRect.height) / 2
 
     guard Self.isUsableRect(videoRect) else { return }
-    // Keep the frame inside the container so CALayer never gets NaN / empty.
+
     let clamped = videoRect.intersection(bounds)
     guard Self.isUsableRect(clamped) else { return }
     videoRect = clamped
 
-    // Frame matches the fitted video exactly; resize fills without extra crop.
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     layer.frame = videoRect
@@ -993,8 +958,6 @@ final class NativeCameraViewController: UIViewController {
       || abs(height.constant - nextHeight) > epsilon
     guard constraintsChanged else { return }
 
-    // Updating Autolayout constants from layout triggers another layout pass.
-    // Gate nested `viewDidLayoutSubviews` until this runloop finishes.
     isApplyingVideoContentGuide = true
     leading.constant = nextLeading
     top.constant = nextTop
@@ -1019,7 +982,6 @@ final class NativeCameraViewController: UIViewController {
     return rect.width >= 8 && rect.height >= 8
   }
 
-  /// Landscape: Close on black shutter chrome (top). Portrait: top-leading.
   private func updateCloseChromePosition(portrait: Bool) {
     if portrait {
       NSLayoutConstraint.deactivate(closeLandscapeConstraints)
@@ -1047,7 +1009,6 @@ final class NativeCameraViewController: UIViewController {
     }
   }
 
-  /// Matches Flutter VisitAnimatedOrientationHintIcon (toward landscape).
   private func startRotateHintAnimation() {
     guard portraitIconView.layer.animation(forKey: rotateHintAnimationKey) == nil else { return }
     let anim = CAKeyframeAnimation(keyPath: "transform.rotation.z")
@@ -1141,7 +1102,7 @@ final class NativeCameraViewController: UIViewController {
   private func buildShutterRail() {
     shutterRail.translatesAutoresizingMaskIntoConstraints = false
     shutterRail.isMultipleTouchEnabled = true
-    // Solid black chrome (Camera.app right gutter).
+
     shutterRail.backgroundColor = .black
 
     flashLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -1177,14 +1138,12 @@ final class NativeCameraViewController: UIViewController {
 
     buildExposureControls()
 
-    // Right chrome: close (top) → flip (below close when shown) → hint → shutter.
-    // Flash is on the leading gutter, not here.
     shutterRail.addSubview(flipButton)
     shutterRail.addSubview(hintLabel)
     shutterRail.addSubview(shutterButton)
 
     NSLayoutConstraint.activate([
-      // Below landscape close (top + 16 + 44 + 10); independent of portrait close.
+
       flipButton.topAnchor.constraint(
         equalTo: shutterRail.safeAreaLayoutGuide.topAnchor,
         constant: 70
@@ -1245,7 +1204,6 @@ final class NativeCameraViewController: UIViewController {
     ])
   }
 
-  /// Compact continuous EV slider, shown only for supported camera devices.
   private func buildExposureControls() {
     exposureValueLabel.translatesAutoresizingMaskIntoConstraints = false
     exposureValueLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .bold)
@@ -1314,8 +1272,7 @@ final class NativeCameraViewController: UIViewController {
   }
 
   private func configureGestures() {
-    // Focus / pinch / EV live on the preview so chrome on the overlay is never
-    // stolen. Overlay pass-through lets zoom pills (under the overlay) receive taps.
+
     previewContainer.addGestureRecognizer(zoomWheelDismissTap)
 
     let tap = UITapGestureRecognizer(target: self, action: #selector(handleTapToFocus(_:)))
@@ -1393,11 +1350,9 @@ final class NativeCameraViewController: UIViewController {
     )
   }
 
-  // MARK: - Actions
-
   @objc private func closeTapped() {
     if onboardingOverlay.isActive {
-      // Dismiss for this session only; do not persist completion.
+
       clearOnboardingFocusDemo()
       clearOnboardingZoomWheel()
       onboardingOverlay.isHidden = true
@@ -1435,7 +1390,7 @@ final class NativeCameraViewController: UIViewController {
   }
 
   @objc private func modeChanged() {
-    // Segmented control is hidden; gestures drive mode via setVideoMode.
+
     guard configuration.allowModeSwitch else { return }
     guard !cameraSession.isRecording else {
       modeControl.selectedSegmentIndex = isVideoMode ? 1 : 0
@@ -1484,8 +1439,6 @@ final class NativeCameraViewController: UIViewController {
     highlightZoomChip(closestTo: chip.deviceFactor)
   }
 
-  /// A separate finger can scrub this dial while the shutter finger continues
-  /// holding the long-press that records video.
   @objc private func handleZoomWheel(_ gesture: UILongPressGestureRecognizer) {
     switch gesture.state {
     case .began:
@@ -1500,8 +1453,7 @@ final class NativeCameraViewController: UIViewController {
       guard range.upperBound > range.lowerBound else { return }
       let currentY = gesture.location(in: controlsOverlay).y
       let openingDrag = currentY - wheelTouchStartY
-      // Opening the precision wheel is a distinct action. Ignore the movement
-      // that triggered it; zoom begins only after the officer continues dragging.
+
       if !wheelZoomArmed {
         guard abs(openingDrag) >= 18 else { return }
         wheelZoomArmed = true
@@ -1512,7 +1464,7 @@ final class NativeCameraViewController: UIViewController {
       let dragY = currentY - wheelTouchStartY
       let usableHeight = max(zoomWheel.bounds.height * 0.82, 220)
       let zoomPerPoint = (range.upperBound - range.lowerBound) / usableHeight
-      // Follow the visible scale: upward increases zoom, downward decreases it.
+
       let target = max(
         range.lowerBound,
         min(range.upperBound, wheelZoomStart - dragY * zoomPerPoint)
@@ -1536,9 +1488,6 @@ final class NativeCameraViewController: UIViewController {
     }
   }
 
-  /// Allows the already-open photo wheel to be scrubbed directly. The opening
-  /// long press lives on the compact zoom rail; subsequent drags live here on
-  /// the full visible wheel surface.
   @objc private func handleOpenZoomWheelPan(_ gesture: UIPanGestureRecognizer) {
     guard !zoomWheel.isHidden else { return }
 
@@ -1576,8 +1525,7 @@ final class NativeCameraViewController: UIViewController {
   }
 
   @objc private func handleTapToFocus(_ gesture: UITapGestureRecognizer) {
-    // The first tap away from an open wheel dismisses it without also moving
-    // focus, matching a modal precision-control interaction.
+
     if !zoomWheel.isHidden { return }
     let point = gesture.location(in: previewContainer)
     let devicePoint = cameraSession.previewLayer.captureDevicePointConverted(fromLayerPoint: point)
@@ -1595,7 +1543,6 @@ final class NativeCameraViewController: UIViewController {
     highlightZoomChip(closestTo: target)
   }
 
-  /// After tap-to-focus, a vertical preview drag adjusts camera EV.
   @objc private func handleVerticalExposure(_ gesture: UIPanGestureRecognizer) {
     if gesture.state == .began {
       verticalExposureStart = cameraSession.exposureTargetBias
@@ -1620,8 +1567,6 @@ final class NativeCameraViewController: UIViewController {
     refreshExposureControls(bias: applied)
   }
 
-  /// During a held video recording, sliding left from the shutter reveals the
-  /// landscape wheel. The movement used to reveal it never changes zoom.
   @objc private func handleShutterZoom(_ gesture: UIPanGestureRecognizer) {
     switch gesture.state {
     case .began:
@@ -1632,8 +1577,7 @@ final class NativeCameraViewController: UIViewController {
       guard shutterLongPressActive || cameraSession.isRecording else { return }
       let translation = gesture.translation(in: previewContainer)
       if !shutterWheelActive {
-        // A deliberate left movement opens the wheel. Vertical jitter and the
-        // opening movement itself are ignored.
+
         guard translation.x <= -18, abs(translation.x) > abs(translation.y) else { return }
         shutterWheelActive = true
         shutterWheelStartX = translation.x
@@ -1649,9 +1593,7 @@ final class NativeCameraViewController: UIViewController {
       let dragX = translation.x - shutterWheelStartX
       let usableWidth = max(previewContainer.bounds.width * 0.42, 220)
       let zoomPerPoint = (range.upperBound - range.lowerBound) / usableWidth
-      // Keep the recording gesture continuous: after the initial reveal,
-      // continuing left zooms in and moving back right zooms out. Requiring a
-      // turn upward here makes a one-thumb recording gesture feel disjointed.
+
       let target = max(
         range.lowerBound,
         min(range.upperBound, shutterZoomStart - dragX * zoomPerPoint)
@@ -1686,8 +1628,6 @@ final class NativeCameraViewController: UIViewController {
     cameraSession.startRunning()
     applyVideoOrientationFromInterface()
   }
-
-  // MARK: - Mode / capture orchestration
 
   private func capturePhotoEnsuringMode() {
     if isVideoMode {
@@ -1756,7 +1696,6 @@ final class NativeCameraViewController: UIViewController {
     photoCaptureTimeoutWorkItem = nil
   }
 
-  /// Returns false when this result belongs to a timed-out / superseded shutter.
   @discardableResult
   private func completeActivePhotoCaptureIfCurrent() -> Bool {
     cancelPhotoCaptureTimeout()
@@ -1785,8 +1724,6 @@ final class NativeCameraViewController: UIViewController {
       }
     }
   }
-
-  // MARK: - Helpers
 
   private func applyVideoOrientationFromInterface() {
     let interface = NativeCameraOrientation.currentInterfaceOrientation()
@@ -1822,14 +1759,12 @@ final class NativeCameraViewController: UIViewController {
       zoomStack.addArrangedSubview(button)
       zoomButtons.append(button)
     }
-    // Do not overwrite currentZoomFactor here — callers that reconfigure
-    // (photo↔video) restore the officer's selection after refresh.
+
     let live = cameraSession.currentZoomFactor()
     configureZoomWheel(currentDeviceFactor: live)
     highlightZoomChip(closestTo: live)
   }
 
-  /// Photo opens at Camera.app-style 1x (wide). Video keeps the device default.
   private func applyDefaultPhotoZoomIfNeeded() {
     guard !isVideoMode else { return }
     let target = cameraSession.wideDeviceZoomFactor
@@ -1899,8 +1834,7 @@ final class NativeCameraViewController: UIViewController {
     setFlashModeTrayVisible(false, animated: false)
     zoomWheel.layer.removeAllAnimations()
     zoomWheel.isHidden = false
-    // Keep the transparent rail in the hierarchy so its active gesture keeps
-    // receiving touches, while the chip UI is fully replaced by the wheel.
+
     zoomStack.isHidden = true
     zoomRail.backgroundColor = .clear
     hintLabel.layer.removeAllAnimations()
@@ -1981,7 +1915,7 @@ final class NativeCameraViewController: UIViewController {
       button.backgroundColor = selected ? Chrome.zoomChipSelected : .clear
       button.setTitleColor(selected ? Chrome.zoomSelectedText : .white, for: .normal)
       button.accessibilityTraits = selected ? [.button, .selected] : .button
-      // Auto has no native continuous-video torch equivalent.
+
       button.isHidden = isVideoMode && button.tag == NativeCameraFlashMode.auto.rawValue
     }
   }
@@ -2017,7 +1951,7 @@ final class NativeCameraViewController: UIViewController {
 
   private func refreshExposureControls(bias: Float? = nil) {
     let supported = cameraSession.supportsExposureCompensation
-    // Exposure is contextual to tap-to-focus; keep the old persistent slider hidden.
+
     exposureStack.isHidden = true
     guard supported else { return }
 
@@ -2144,7 +2078,7 @@ final class NativeCameraViewController: UIViewController {
       let seconds = elapsed % 60
       self.timerLabel.text = String(format: "%02d:%02d", minutes, seconds)
     }
-    // Video-only duration badge: never show under the portrait rotate prompt.
+
     guard !isPortraitBlocked else {
       hideRecordingDurationBadge(animated: false)
       return
@@ -2293,8 +2227,6 @@ final class NativeCameraViewController: UIViewController {
     busyOverlay.stopAnimating()
     shutterButton.isEnabled = true
 
-    // Photos are contractually rear-camera captures. Fail closed rather than
-    // shipping an unverified / front capture to the visit record.
     let position = (metadata["cameraPosition"] as? String)?.lowercased()
     if isPhoto, configuration.rearCameraOnly {
       let isRear = position == "back" || position == "rear"
@@ -2333,7 +2265,7 @@ final class NativeCameraViewController: UIViewController {
     guard configuration.showOnboarding, !onboardingStarted else { return }
     let steps = NativeCameraOnboardingOverlay.Step.parse(configuration.onboardingSteps)
     guard !steps.isEmpty else { return }
-    // Landscape only — wait until the officer rotates the phone.
+
     guard !isPortraitBlocked else { return }
     guard shutterButton.bounds.width > 0 else {
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
@@ -2393,15 +2325,13 @@ final class NativeCameraViewController: UIViewController {
     focusExposureControl.alpha = 0
   }
 
-  /// Opens the precision zoom wheel so the coachmark can highlight it, the
-  /// same way focus/brightness demos surface their controls.
   private func showOnboardingZoomWheel() {
     guard !zoomRail.isHidden, zoomRail.alpha >= 0.01 else { return }
     onboardingZoomWheel = true
     zoomWheel.layer.removeAllAnimations()
     hintLabel.layer.removeAllAnimations()
     showZoomWheel()
-    // Coachmark needs the wheel fully visible immediately (no fade delay).
+
     zoomWheel.alpha = 1
     zoomWheel.isHidden = false
   }
@@ -2445,15 +2375,12 @@ final class NativeCameraViewController: UIViewController {
   }
 }
 
-// Only begin one-finger exposure adjustment after tap-to-focus and for a clearly
-// vertical gesture. Horizontal motion and the initial focus tap stay intact.
 extension NativeCameraViewController: UIGestureRecognizerDelegate {
   func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
     guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
     let velocity = pan.velocity(in: previewContainer)
     if pan.view === shutterButton {
-      // The landscape precision gesture intentionally starts toward the
-      // preview (left), never toward the screen edge or vertically.
+
       return velocity.x < 0 && abs(velocity.x) > abs(velocity.y) * 1.15
     }
     if pan.view === zoomWheel {
@@ -2478,15 +2405,14 @@ extension NativeCameraViewController: UIGestureRecognizerDelegate {
 
     if gestureRecognizer === zoomWheelDismissTap {
       guard !zoomWheel.isHidden else { return false }
-      // A touch on the zoom rail starts/restarts scrubbing; everything else
-      // closes the persistent wheel while allowing the tapped control to work.
+
       let touchedZoomControl = touchedView === zoomRail
         || touchedView.isDescendant(of: zoomRail)
         || touchedView === zoomWheel
         || touchedView.isDescendant(of: zoomWheel)
       return !touchedZoomControl
     }
-    // Preview / overlay gestures must never compete with camera chrome.
+
     let blockedRoots: [UIView] = [
       closeButton,
       shutterRail,
@@ -2511,15 +2437,13 @@ extension NativeCameraViewController: UIGestureRecognizerDelegate {
     {
       return true
     }
-    // Let a second finger transition naturally from vertical drag to pinch.
+
     if gestureRecognizer is UIPinchGestureRecognizer
       || otherGestureRecognizer is UIPinchGestureRecognizer
     {
       return true
     }
 
-    // These gestures live on separate controls and may be driven by separate
-    // fingers: holding the shutter records, while scrubbing the zoom rail zooms.
     let shutterAndWheel =
       (gestureRecognizer.view === shutterButton && otherGestureRecognizer.view === zoomRail)
       || (gestureRecognizer.view === zoomRail && otherGestureRecognizer.view === shutterButton)
@@ -2535,14 +2459,10 @@ extension NativeCameraViewController: UIGestureRecognizerDelegate {
   }
 }
 
-// MARK: - Session delegate
-
 extension NativeCameraViewController: NativeCameraSessionDelegate {
   func sessionDidFinishConfiguration(_ session: NativeCameraSession) {
     busyOverlay.stopAnimating()
-    // configureLocked resets hardware zoom to the device minimum (often 0.5x).
-    // Capture the UI selection BEFORE refreshZoomChips, which would otherwise
-    // overwrite currentZoomFactor with that reset value and "restore" 0.x.
+
     let zoomToRestore = currentZoomFactor
     refreshZoomChips()
     let range = session.zoomFactorRange()
@@ -2576,7 +2496,7 @@ extension NativeCameraViewController: NativeCameraSessionDelegate {
       finish(.failure(code: code, message: message))
       return
     }
-    // Timeout already unlocked UI — ignore a late ISP/encode failure for that shot.
+
     if !hadActivePhoto, code == "capture_failed" || code == "insufficient_storage" {
       NSLog("\(Self.logPrefix) ignoring late photo failure code=\(code)")
       return
@@ -2634,6 +2554,6 @@ extension NativeCameraViewController: NativeCameraSessionDelegate {
   }
 
   func sessionInterruptionEnded(_ session: NativeCameraSession) {
-    // Session restarts itself.
+
   }
 }

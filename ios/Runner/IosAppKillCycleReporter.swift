@@ -4,8 +4,6 @@ import Security
 import UIKit
 import UserNotifications
 
-/// Best-effort `app_cycle=killed` reporter for swipe/terminate while on duty.
-/// Always persists locally first; sync upload is optional and time-boxed.
 final class IosAppKillCycleReporter {
   static let shared = IosAppKillCycleReporter()
 
@@ -26,18 +24,18 @@ final class IosAppKillCycleReporter {
   private let lastWakeDetailKey = "smartnps360.ios_app_cycle.last_wake_detail"
   private let killedUploadedKey = "smartnps360.ios_app_cycle.killed_uploaded"
   private let cachedPermissionsKey = "smartnps360.ios_app_cycle.cached_permissions"
-  /// Full Flutter permission snapshot for kill/wake lightweight POSTs.
+
   private let fullCachedPermissionsKey = "smartnps360.ios_app_cycle.full_cached_permissions"
   private let cachedBatteryPercentageKey = "smartnps360.ios_app_cycle.cached_battery_percentage"
   private let cachedLowPowerModeKey = "smartnps360.ios_app_cycle.cached_low_power_mode"
   private let killSecurityNotificationId = "smartnps360.kill_security.pending"
   private let suppressOpenedAtKey = "smartnps360.ios_app_cycle.suppress_opened_at"
   private let maxDebugLogs = 100
-  /// Delay so willTerminate add can complete; terminate-only (not background).
+
   private let killSecurityAlertDelaySeconds: TimeInterval = 4
-  /// Terminate-time sync wait (iOS willTerminate ceiling).
+
   private let syncUploadTimeout: TimeInterval = 5
-  /// Location-wake / reopen attempt.
+
   private let reopenUploadTimeout: TimeInterval = 12
 
   private let session: URLSession = {
@@ -54,8 +52,6 @@ final class IosAppKillCycleReporter {
 
   private init() {}
 
-  /// Block opened_at stamping during background location relaunch until the user
-  /// really brings the UI forward (`sceneWillEnterForeground`).
   func setSuppressOpenedAtUntilUserForeground(_ suppress: Bool) {
     UserDefaults.standard.set(suppress, forKey: suppressOpenedAtKey)
     UserDefaults.standard.synchronize()
@@ -70,8 +66,6 @@ final class IosAppKillCycleReporter {
     UserDefaults.standard.bool(forKey: suppressOpenedAtKey)
   }
 
-  /// Persisted ring buffer for TestFlight Debug Env screen (survives swipe-kill).
-  /// Only writes while Flutter Session debug Run is active with Kill selected.
   func appendDebugLog(_ message: String) {
     guard isKillDebugCaptureEnabled() else { return }
     let line = "\(Date().toISO8601UTC()) \(message)"
@@ -84,7 +78,7 @@ final class IosAppKillCycleReporter {
     }
     UserDefaults.standard.set(logs, forKey: debugLogsKey)
     lock.unlock()
-    // synchronize outside lock — avoid nested lock if another log arrives.
+
     UserDefaults.standard.synchronize()
   }
 
@@ -102,7 +96,6 @@ final class IosAppKillCycleReporter {
     UserDefaults.standard.synchronize()
   }
 
-  /// Records which system/service relaunched the app after a kill (TestFlight debug).
   func recordWakeService(_ service: String, detail: String? = nil) {
     let trimmed = service.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return }
@@ -119,7 +112,6 @@ final class IosAppKillCycleReporter {
     appendDebugLog("app awoken by service=\(trimmed)\(suffix)")
   }
 
-  /// Snapshot for Debug Env screen (does not clear queue).
   func debugSnapshot(
     onDuty: Bool,
     unpaidBreak: Bool,
@@ -129,8 +121,7 @@ final class IosAppKillCycleReporter {
     let timeline = peekTimeline() ?? [:]
     let backgroundAt = UserDefaults.standard.string(forKey: pendingBackgroundAtKey) ?? ""
     let logs = UserDefaults.standard.stringArray(forKey: debugLogsKey) ?? []
-    // Do not call getNotificationSettings + wait here — Flutter method channel
-    // runs on the main thread and that would deadlock.
+
     let notificationAuth =
       UserDefaults.standard.string(forKey: "smartnps360.ios_app_cycle.notif_auth_cache")
       ?? "unknown"
@@ -153,12 +144,10 @@ final class IosAppKillCycleReporter {
     ]
   }
 
-  /// Call from `applicationWillTerminate` while on duty and not unpaid break.
   func handleTerminateWhileOnDuty() {
     let killedAtIso = UserDefaults.standard.string(forKey: pendingBackgroundAtKey)
       ?? Date().toISO8601UTC()
 
-    // Always refresh kill stamp for this swipe.
     UserDefaults.standard.set(killedAtIso, forKey: pendingKilledAtKey)
     UserDefaults.standard.removeObject(forKey: pendingOpenedAtKey)
     UserDefaults.standard.set(false, forKey: killedUploadedKey)
@@ -166,10 +155,8 @@ final class IosAppKillCycleReporter {
     UserDefaults.standard.synchronize()
     appendDebugLog("queued killed_at=\(killedAtIso) (willTerminate)")
 
-    // Only schedule kill alert on real terminate — never on plain background.
     scheduleKillSecurityAlertForTerminate()
 
-    // Lightweight sync POST — no full permission rebuild beyond cached/light snapshot.
     let uploaded = postAppCycleSync(
       appCycle: "killed",
       killedAt: killedAtIso,
@@ -187,36 +174,27 @@ final class IosAppKillCycleReporter {
     )
   }
 
-  /// Call from `applicationDidEnterBackground` while on duty.
-  /// Records kill-candidate timestamp only — do NOT schedule the kill
-  /// notification here (normal background would false-trigger in ~4s).
   func noteEnteredBackground() {
     let at = Date().toISO8601UTC()
     UserDefaults.standard.set(at, forKey: pendingBackgroundAtKey)
-    // Cache a light permission snapshot now so kill/wake POSTs stay fast.
+
     cachePermissionsSnapshot()
     UserDefaults.standard.synchronize()
     appendDebugLog("noted background_at=\(at)")
   }
 
-  /// Real process death only (willTerminate / recover) — never plain background.
   func scheduleKillSecurityAlertForTerminate() {
     scheduleKillSecurityAlert(forceReschedule: true)
   }
 
-  /// Call from `applicationDidBecomeActive` / sceneDidBecomeActive when the
-  /// user is visibly back. Do not call on background location wake.
-  /// Native stamps `opened_at`; Flutter `resumed` owns the primary reopen POST.
   func cancelKillSecurityAlertOnForeground() {
     cancelKillSecurityAlert(reason: "user_foreground")
   }
 
-  /// Drop a pending kill alert when duty is not armed (e.g. unpaid break).
   func cancelKillSecurityAlertNotArmed() {
     cancelKillSecurityAlert(reason: "not_armed")
   }
 
-  /// Cold launch: promote background_at → killed_at if process died without willTerminate.
   func recoverKillFromBackgroundIfNeeded() {
     guard pendingKilledAt() == nil else {
       UserDefaults.standard.removeObject(forKey: pendingBackgroundAtKey)
@@ -235,12 +213,10 @@ final class IosAppKillCycleReporter {
     UserDefaults.standard.removeObject(forKey: pendingBackgroundAtKey)
     UserDefaults.standard.synchronize()
     appendDebugLog("recovered killed_at from background_at=\(backgroundAt)")
-    // Process died without willTerminate — notify once on recovery wake.
+
     scheduleKillSecurityAlertForTerminate()
   }
 
-  /// Near-realtime kill POST when terminate was missed (location wake / cold launch).
-  /// Does not stamp opened_at and does not clear the kill queue.
   func uploadKilledEventIfNeeded(reason: String) {
     guard let killedAt = pendingKilledAt() else { return }
     if UserDefaults.standard.bool(forKey: killedUploadedKey) {
@@ -280,9 +256,6 @@ final class IosAppKillCycleReporter {
     }
   }
 
-  /// Only after a real kill queue exists.
-  /// - Blocks stamping during background location relaunch (suppress flag).
-  /// - Always requires `applicationState == .active` (even Flutter prepare).
   func markOpenedAfterKillIfNeeded(forceForReopenUpload: Bool = false) {
     guard pendingKilledAt() != nil else { return }
     guard pendingOpenedAt() == nil else { return }
@@ -290,7 +263,7 @@ final class IosAppKillCycleReporter {
       appendDebugLog("skip opened_at; location-wake suppress (awaiting user open)")
       return
     }
-    // forceForReopenUpload no longer bypasses active — prevents false open on SLC wake.
+
     guard UIApplication.shared.applicationState == .active else {
       appendDebugLog(
         "skip opened_at; app not active "
@@ -312,10 +285,8 @@ final class IosAppKillCycleReporter {
     )
   }
 
-  /// Stamp opened_at if needed and return full timeline for Flutter reopen upload.
   func prepareTimelineForReopen() -> [String: String]? {
-    // Flutter resume can run while UI is already active but after we missed the
-    // inactive→active scene callback — claim real foreground if safe.
+
     if let appDelegate = UIApplication.shared.delegate as? AppDelegate {
       _ = appDelegate.claimRealUserForegroundIfActive()
     }
@@ -325,11 +296,10 @@ final class IosAppKillCycleReporter {
     return timeline
   }
 
-  /// Backup if Flutter does not clear the kill-reopen queue in time.
   func scheduleReopenFlushBackup() {
     guard pendingKilledAt() != nil else { return }
     markOpenedAfterKillIfNeeded(forceForReopenUpload: true)
-    // Backup sooner so it still runs before Flutter delayed clear (~8s).
+
     DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2.5) { [weak self] in
       guard let self else { return }
       guard self.pendingKilledAt() != nil else {
@@ -341,7 +311,6 @@ final class IosAppKillCycleReporter {
     }
   }
 
-  /// Upload killed+opened only when both are queued.
   func flushPendingIfNeeded(reason: String) {
     guard let killedAt = pendingKilledAt() else { return }
     guard let openedAt = pendingOpenedAt() else {
@@ -383,7 +352,6 @@ final class IosAppKillCycleReporter {
     }
   }
 
-  /// Snapshot for Flutter permission-status reopen upload (does not clear).
   func peekTimeline() -> [String: String]? {
     guard let killedAt = pendingKilledAt() else { return nil }
     var map: [String: String] = [
@@ -395,7 +363,6 @@ final class IosAppKillCycleReporter {
     return map
   }
 
-  /// Called after Flutter successfully POSTs the kill/reopen timeline.
   func clearPendingAfterFlutterUpload() {
     clearPending()
     appendDebugLog("pending cleared by Flutter upload")
@@ -434,7 +401,6 @@ final class IosAppKillCycleReporter {
       content.interruptionLevel = .timeSensitive
     }
 
-    // Short delay so willTerminate async add can complete; not used for background.
     let trigger = UNTimeIntervalNotificationTrigger(
       timeInterval: killSecurityAlertDelaySeconds,
       repeats: false
@@ -559,7 +525,7 @@ final class IosAppKillCycleReporter {
         ? cachedOrMinimalPermissionsSnapshot()
         : lightPermissionsSnapshot(),
     ]
-    // deviceId is required by API — never omit.
+
     payload["deviceId"] = deviceId.isEmpty ? "unknown-ios-device" : deviceId
     if let openedAt, !openedAt.isEmpty {
       payload["opened_at"] = openedAt
@@ -578,7 +544,6 @@ final class IosAppKillCycleReporter {
     UserDefaults.standard.set(lightPermissionsSnapshot(), forKey: cachedPermissionsKey)
   }
 
-  /// Called from Flutter whenever a full permission payload is built while alive.
   func cacheFullPermissionsSnapshot(
     _ permissions: [String: String],
     batteryPercentage: Int? = nil,
@@ -628,7 +593,7 @@ final class IosAppKillCycleReporter {
   }
 
   private func cachedOrMinimalPermissionsSnapshot() -> [String: String] {
-    // Prefer last full Flutter snapshot (real denied/granted), then light, then minimal.
+
     if let full = UserDefaults.standard.dictionary(forKey: fullCachedPermissionsKey)
       as? [String: String],
       !full.isEmpty
@@ -644,7 +609,6 @@ final class IosAppKillCycleReporter {
     return sanitizePermissions(minimalPermissionsSnapshot())
   }
 
-  /// API accepts only documented enums — never `not_applicable` / push `unknown`.
   private func sanitizePermissions(_ raw: [String: String]) -> [String: String] {
     var permissions = raw
     let push = permissions["push"] ?? "enabled"
@@ -669,7 +633,7 @@ final class IosAppKillCycleReporter {
   }
 
   private func minimalPermissionsSnapshot() -> [String: String] {
-    // Fast fallback — location auth only (no notification / motion probes).
+
     var permissions: [String: String] = [
       "foregroundLocation": "unknown",
       "backgroundLocation": "unknown",
@@ -882,8 +846,7 @@ private extension Date {
     formatter.locale = Locale(identifier: "en_US_POSIX")
     formatter.timeZone = TimeZone(secondsFromGMT: 0)
     formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS"
-    // Millisecond-resolution clock; pad the microsecond part with 000 to match
-    // the 6-digit ISO-8601 used by updated_at (e.g. ...:00.123000Z).
+
     return formatter.string(from: self) + "000Z"
   }
 }

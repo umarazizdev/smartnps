@@ -258,7 +258,7 @@ class VisitVideoFlowController extends GetxController {
   }
 
   bool isCheckpointCompleted(int checkpointId) {
-    // Photo or video capture both complete the checkpoint.
+
     return mediaForCheckpoint(checkpointId).isNotEmpty;
   }
 
@@ -273,8 +273,6 @@ class VisitVideoFlowController extends GetxController {
   int get capturedPhotoCount =>
       visibleMediaItems.where((e) => e.isPhoto).length;
 
-  /// When [VisitPatrolContext.minimumPhotos] is set (> 0), only photos count
-  /// toward enabling Complete Report. Videos alone do not satisfy it.
   bool get meetsMinimumPhotoRequirement {
     final minimum = patrolContext.value?.minimumPhotos;
     if (minimum == null || minimum <= 0) return true;
@@ -313,8 +311,7 @@ class VisitVideoFlowController extends GetxController {
       var snapshot = await _store.loadDraftSnapshot();
       if (snapshot.hasItems &&
           VisitUploadQueue.instance.isQueued(snapshot.draftKey)) {
-        // Queued/in-flight drafts stay on disk for upload, but must not
-        // reappear as the editable active draft.
+
         snapshot = const VisitMediaDraftSnapshot(
           items: <VisitMediaItem>[],
           draftKey: VisitDraftKey.unscoped,
@@ -336,8 +333,6 @@ class VisitVideoFlowController extends GetxController {
     }
   }
 
-  /// Clears the in-memory editor after a draft was claimed by the upload queue.
-  /// Draft files on disk are left intact for upload / silent retry.
   Future<void> releaseEditorAfterQueuedClaim() async {
     await _flushPersistQueue();
     _restoring = true;
@@ -653,7 +648,7 @@ class VisitVideoFlowController extends GetxController {
       final snapshot = await _store.loadDraftSnapshot(key: targetKey);
       _thumbnailFutures.clear();
       if (VisitUploadQueue.instance.isQueued(targetKey)) {
-        // Upload owns this draft folder; open a fresh editor session.
+
         mediaItems.clear();
         _startedAt = null;
         batchNote.value = const VisitBatchNote();
@@ -1588,7 +1583,7 @@ class VisitUploadMeta {
             (e) => e.siteCheckpointId == checkpoint.id && !e.isPendingCapture,
           )
           .toList(growable: false);
-      // Prefer a photo when both exist; video alone also completes the checkpoint.
+
       var primaryIndex = mediaItems.indexWhere(
         (e) => e.siteCheckpointId == checkpoint.id && e.isPhoto,
       );

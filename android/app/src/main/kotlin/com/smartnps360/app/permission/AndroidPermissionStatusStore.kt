@@ -2,10 +2,6 @@ package com.smartnps360.app.permission
 
 import android.content.Context
 
-/**
- * Session for killed-app permission-status sync.
- * Independent from duty kill-watch so this never starts location FGS.
- */
 internal object AndroidPermissionStatusStore {
   private const val PREFS = "smartnps360_android_permission_status"
   private const val KEY_ARMED = "armed"
@@ -168,7 +164,6 @@ internal object AndroidPermissionStatusStore {
       .apply()
   }
 
-  /** Full Flutter permission map for kill/wake lightweight POSTs. */
   fun writeFullPermissionsCache(context: Context, permissions: Map<String, String>) {
     if (permissions.isEmpty()) return
     val obj = org.json.JSONObject()
@@ -202,7 +197,6 @@ internal object AndroidPermissionStatusStore {
     }
   }
 
-  /** Last-known battery fields from Flutter for kill/wake lightweight POSTs. */
   fun writeBatteryCache(
     context: Context,
     batteryPercentage: Int?,

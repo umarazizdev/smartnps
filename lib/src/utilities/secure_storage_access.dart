@@ -2,12 +2,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-/// Shared Keychain / secure-storage defaults for background-safe reads.
-///
-/// iOS notes:
-/// - `-25308` (`errSecInteractionNotAllowed`): device locked / no UI.
-/// - `-25299` (`errSecDuplicateItem`): item exists under different attrs
-///   (common after changing [KeychainAccessibility]). Delete + rewrite.
 class SecureStorageAccess {
   SecureStorageAccess._();
 
@@ -45,7 +39,6 @@ class SecureStorageAccess {
         (error.details?.toString().contains('-25299') ?? false);
   }
 
-  /// Keychain conditions that should never be treated as app crashes.
   static bool isRecoverableKeychainError(Object error) {
     return isInteractionNotAllowed(error) || isDuplicateItem(error);
   }
@@ -67,7 +60,6 @@ class SecureStorageAccess {
       if (isInteractionNotAllowed(e)) return false;
       if (!isDuplicateItem(e)) rethrow;
 
-      // Accessibility / attribute mismatch: replace the existing item.
       try {
         await storage.delete(key: key);
         await storage.write(key: key, value: value);
@@ -96,7 +88,7 @@ class SecureStorageAccess {
       return true;
     } on PlatformException catch (e) {
       if (isInteractionNotAllowed(e)) return false;
-      // Deleting a missing item is fine.
+
       if (isDuplicateItem(e)) return true;
       rethrow;
     }

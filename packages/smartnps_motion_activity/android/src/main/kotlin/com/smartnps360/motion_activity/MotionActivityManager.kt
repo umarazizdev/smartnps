@@ -17,13 +17,6 @@ import io.flutter.plugin.common.MethodChannel
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 
-/**
- * Bridges Google Play Services Activity Recognition to Flutter via
- * MethodChannel + EventChannel. Updates arrive through [MotionActivityReceiver].
- *
- * Start/stop is process-wide ref-counted so UI + FGS engines can both attach
- * without one engine tearing down recognition for the other.
- */
 class MotionActivityManager(
   private val context: Context,
 ) : EventChannel.StreamHandler {
@@ -31,11 +24,7 @@ class MotionActivityManager(
     const val METHOD_CHANNEL = "com.smartnps360.app/motion_activity"
     const val EVENT_CHANNEL = "com.smartnps360.app/motion_activity_events"
     const val ACTION_ACTIVITY_UPDATE = "com.smartnps360.app.ACTION_ACTIVITY_UPDATE"
-    /**
-     * Detection cadence for ActivityRecognitionClient.
-     * 0 = as fast as Play Services will deliver (snappier UI).
-     * OS still batches; expect ~1–3s in practice, not true 1Hz.
-     */
+
     private const val DETECTION_INTERVAL_MS = 0L
     private const val REQUEST_CODE = 3601
 
@@ -78,7 +67,7 @@ class MotionActivityManager(
         "isAvailable" -> result.success(true)
         "checkPermission" -> result.success(permissionStatus())
         "requestPermission" -> {
-          // Runtime prompt is owned by Flutter (permission_handler).
+
           result.success(permissionStatus())
         }
         "start" -> start(result)
@@ -121,15 +110,14 @@ class MotionActivityManager(
     if (events != null && !eventSinks.contains(events)) {
       eventSinks.add(events)
     }
-    // Replay last known so UI paints immediately on (re)subscribe.
+
     lastPayload?.let { payload ->
       mainHandler.post { events?.success(payload) }
     }
   }
 
   override fun onCancel(arguments: Any?) {
-    // Clear this engine's sink only — do NOT stop recognition. Duty GPS /
-    // fusion may still need updates; Flutter calls stop() explicitly.
+
     instanceSink?.let { eventSinks.remove(it) }
     instanceSink = null
   }
@@ -181,7 +169,6 @@ class MotionActivityManager(
       return
     }
 
-    // Another engine already holds the process-wide recognition session.
     if (startRefCount.get() > 0) {
       thisEngineStarted = true
       startRefCount.incrementAndGet()

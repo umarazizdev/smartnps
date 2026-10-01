@@ -52,11 +52,6 @@ private const val EXT_HDR = NativeCameraContract.ExtensionModeLabel.HDR
 private const val EXT_NIGHT = NativeCameraContract.ExtensionModeLabel.NIGHT
 private const val EXT_STANDARD = NativeCameraContract.ExtensionModeLabel.STANDARD
 
-/**
- * CameraX bind/unbind, still capture, video recording, zoom, focus, flash,
- * exposure compensation, and selectable Extensions (AUTO / HDR / NIGHT) with
- * a graceful per-mode fallback ladder.
- */
 @SuppressLint("UnsafeOptInUsageError")
 class NativeCameraSession(
   private val context: Context,
@@ -117,20 +112,15 @@ class NativeCameraSession(
   private var activeExtensionMode: Int = ExtensionMode.NONE
   private var activeExtensionLabel: String? = null
 
-  /** Camera2 id of the currently bound camera; diagnostics only. */
   private var activeCameraId: String? = null
 
-  /** Video ladder outcome for the current bind; diagnostics only. */
   private var activeVideoQuality: Quality? = null
   private var activeVideoStabilization: Boolean = false
 
-  /** User/host selected extension: auto | hdr | night | standard. */
   private var preferredExtension: String = EXT_STANDARD
 
-  /** Extension labels this device actually advertises, probed independently. */
   private var availableExtensionLabels: List<String> = emptyList()
 
-  /** Extension labels that failed to bind — disabled for this session only. */
   private val failedExtensionLabels = mutableSetOf<String>()
 
   private var fallbackLevel: String = NativeCameraContract.FallbackLevel.LAST_RESORT_BASIC
@@ -146,26 +136,18 @@ class NativeCameraSession(
   private var exposureIndex = 0
   private var exposureStep = 1f
 
-  /** Survives rebinds so EV is restored after an extension switch. */
   private var desiredExposureIndex = 0
 
-  /** Survives rebinds so zoom is restored after an extension switch. */
   private var desiredZoomRatio: Float = 1f
-  /**
-   * When true, [desiredZoomRatio] was snapshotted for a mode switch and must
-   * not be overwritten by live CameraX state or shutter-drag gestures until
-   * [restoreDesiredZoom] runs (keeps 1x → video as 1x, not 0.x).
-   */
+
   private var freezeDesiredZoom: Boolean = false
 
   private val capturing = AtomicBoolean(false)
   private val released = AtomicBoolean(false)
   private val recordingAborted = AtomicBoolean(false)
 
-  /** True between the start and the end of a bind pass; serializes rebinds. */
   private val isRebinding = AtomicBoolean(false)
 
-  /** A rebind was requested while one was already running. */
   private var pendingRebind = false
 
   private var scaleDetector: ScaleGestureDetector? = null
@@ -231,8 +213,7 @@ class NativeCameraSession(
 
   fun switchMode(newMode: Mode) {
     if (mode == newMode || isRecording()) return
-    // Snapshot before CameraX unbind resets zoom to the device default
-    // (often ultrawide / 0.x). Long-press video must keep the officer's 1x.
+
     desiredZoomRatio = currentZoomRatio()
     freezeDesiredZoom = true
     val previousMode = mode
@@ -240,8 +221,7 @@ class NativeCameraSession(
     if (newMode == Mode.PHOTO) {
       facingBack = true
     } else if (previousMode == Mode.PHOTO) {
-      // Video torch is binary. Carry the photo decision: On → torch on;
-      // Off / Auto → torch off (Auto has no continuous-video equivalent).
+
       torchOn = flashCycle == FlashCycle.ON
       cameraPreferences.edit().putBoolean(PREFERENCE_VIDEO_TORCH, torchOn).apply()
     }
@@ -291,9 +271,7 @@ class NativeCameraSession(
 
   fun setZoomRatio(ratio: Float) {
     val clamped = ratio.coerceIn(minZoom, maxZoom)
-    // Remember the intent even without a bound camera so a rebind restores it.
-    // Ignore gesture updates while a mode-switch freeze / rebind is in flight so
-    // shutter wobble during long-press→video cannot replace snapshotted 1x with 0.x.
+
     if (freezeDesiredZoom || isRebinding.get()) {
       Log.d(
         NativeCameraContract.LOG_TAG,
@@ -306,14 +284,8 @@ class NativeCameraSession(
     cam.cameraControl.setZoomRatio(clamped)
   }
 
-  /** Zoom limits for gesture-driven controls in the camera chrome. */
   fun zoomRange(): Pair<Float, Float> = minZoom to maxZoom
 
-  /**
-   * Keep Preview / ImageCapture / VideoCapture aligned with the current
-   * display rotation (portrait and landscape). Required because the activity
-   * handles configChanges without recreating.
-   */
   fun updateTargetRotation(rotation: Int = currentDisplayRotation()) {
     if (released.get()) return
     try {
@@ -330,14 +302,6 @@ class NativeCameraSession(
     }
   }
 
-  /**
-   * After portrait ↔ landscape (or landscape L↔R), update use-case target
-   * rotation in place. Do NOT tear down Preview/ImageCapture — a full rebind
-   * after FIRST_PREVIEW_FRAME is a major shutter/ready regression.
-   *
-   * ViewPort was sized at bind; FIT_CENTER PreviewView + setTargetRotation is
-   * sufficient for orientation while the Activity handles configChanges.
-   */
   fun refreshForDisplayChange() {
     if (released.get() || cameraProvider == null) return
     CamPerf.log(null, "REFRESH_FOR_DISPLAY_CHANGE", "in-place rotation only")
@@ -367,19 +331,10 @@ class NativeCameraSession(
 
   fun currentExtensionLabel(): String? = activeExtensionLabel
 
-  /** Extension labels this device advertises, probed one mode at a time. */
   fun availableExtensionModes(): List<String> = availableExtensionLabels
 
-  /** Currently requested extension (may differ from the bound one). */
   fun preferredExtensionMode(): String = preferredExtension
 
-  /**
-   * Switch extension mode with a safe rebind. Returns false when the request
-   * cannot be honoured (busy, released, or mode not advertised); the ladder in
-   * [bindUseCasesInternal] guarantees a live preview even when the mode fails
-   * to bind. The rebind is scheduled through [requestRebind], so acceptance is
-   * reported here and completion arrives on [Listener.onSessionReady].
-   */
   fun setPreferredExtension(label: String): Boolean {
     if (released.get() || cameraProvider == null) return false
     if (isCapturing()) return false
@@ -393,27 +348,21 @@ class NativeCameraSession(
       return false
     }
     preferredExtension = normalized
-    // Give a previously failed mode another chance when explicitly requested.
+
     failedExtensionLabels.remove(normalized)
     Log.d(
       NativeCameraContract.LOG_TAG,
       "setPreferredExtension=$normalized rebinding=${isRebinding.get()}",
     )
-    // Accepted either way: when a bind is in flight the request is queued and
-    // runs against the preference stored above.
+
     requestRebind("preferredExtension=$normalized")
     return true
   }
 
-  /** Supported EV index range; lower == upper when unsupported. */
   fun exposureRange(): Pair<Int, Int> = minExposureIndex to maxExposureIndex
 
   fun currentExposureIndex(): Int = exposureIndex
 
-  /**
-   * Apply an exposure compensation index, clamped to the device range.
-   * Returns the applied index (0 when unsupported).
-   */
   fun setExposureCompensationIndex(index: Int): Int {
     if (maxExposureIndex <= minExposureIndex) {
       desiredExposureIndex = 0
@@ -441,7 +390,6 @@ class NativeCameraSession(
 
   fun isCapturing(): Boolean = capturing.get() || isRecording()
 
-  /** True while a bind pass is scheduled or running; capture must wait. */
   fun isRebinding(): Boolean = isRebinding.get()
 
   fun takePicture(onResult: (Result<CaptureOutput>) -> Unit) {
@@ -578,7 +526,7 @@ class NativeCameraSession(
             if (size == null) "size=null" else "dim=${size.width}x${size.height} " +
               "orientation=${size.orientationDegrees}",
           )
-          // FAIL CLOSED: unverifiable dimensions are rejected like portrait.
+
           if (size == null || size.isPortrait) {
             file.delete()
             CamPerf.stage(
@@ -610,7 +558,7 @@ class NativeCameraSession(
             "ok landscape ${size.width}x${size.height}",
           )
           val position = if (facingBack) "back" else "front"
-          // FAIL CLOSED: rear-only evidence must never come from the front lens.
+
           if (rearCameraOnly && position != "back") {
             file.delete()
             CamPerf.stage(
@@ -740,8 +688,7 @@ class NativeCameraSession(
       return
     }
     Log.d(NativeCameraContract.LOG_TAG, "startRecording begin cameraId=$activeCameraId")
-    // Re-assert preferred torch after the photo→video rebind; CameraX may drop
-    // continuous light when ImageCapture unbinds.
+
     if (torchOn && hasFlashUnit) {
       camera?.cameraControl?.enableTorch(true)
     }
@@ -826,7 +773,7 @@ class NativeCameraSession(
               return@Consumer
             }
             val size = NativeCameraOrientation.readVideoSize(file)
-            // FAIL CLOSED: unverifiable video track is rejected like portrait.
+
             if (size == null || size.isPortrait) {
               file.delete()
               Log.d(
@@ -894,7 +841,6 @@ class NativeCameraSession(
     activeRecording?.stop()
   }
 
-  /** Stop recording without delivering a success path (interrupt / cancel). */
   fun abortRecording() {
     val recording = activeRecording ?: return
     recordingAborted.set(true)
@@ -919,11 +865,6 @@ class NativeCameraSession(
     cam.cameraControl.startFocusAndMetering(action)
   }
 
-  /**
-   * Clear any stale AF/AE regions after a bind. CameraX then resumes its
-   * repeating continuous autofocus/auto-exposure strategy at frame center.
-   * Tap-to-focus remains a temporary three-second override.
-   */
   private fun restoreContinuousAutoFocus(cam: Camera, reason: String) {
     val availableModes = try {
       Camera2CameraInfo.from(cam.cameraInfo).getCameraCharacteristic(
@@ -946,7 +887,7 @@ class NativeCameraSession(
             "continuous autofocus restored reason=$reason supported=$continuousSupported",
           )
         } catch (error: Exception) {
-          // Fixed-focus devices legitimately cannot run AF; capture remains usable.
+
           Log.d(
             NativeCameraContract.LOG_TAG,
             "autofocus restore unavailable reason=$reason: ${error.message}",
@@ -978,44 +919,28 @@ class NativeCameraSession(
   }
 
   private enum class BindProfile {
-    /**
-     * OEM extension bind: max still quality but NO forced aspect ratio, so the
-     * extension vendor picks the resolution combination it actually supports.
-     */
+
     EXTENSION_OEM_FLEX,
 
-    /** No extension; stock-like 4:3 photo / 16:9 video + max still quality. */
     STANDARD_MAX_QUALITY,
 
-    /** Align Preview + ImageCapture on 16:9; still max quality, JPEG 100. */
     ALIGNED_16_9,
 
-    /** Last resort: CameraX default resolutions but still MAXIMIZE_QUALITY. */
     MINIMAL,
 
-    /** Absolute last resort: CameraX defaults + MINIMIZE_LATENCY. */
     MINIMAL_LATENCY,
   }
 
   private data class BindAttempt(
     val profile: BindProfile,
-    /** Extension label to bind with, or null for a plain camera selector. */
+
     val extensionLabel: String?,
     val fallbackLevel: String,
-    /**
-     * Exact video quality this attempt demands (no CameraX fallback), so the
-     * ladder — not QualitySelector — decides the degradation order. Null lets
-     * [videoQualitySelector] use a lenient ordered list.
-     */
+
     val videoQuality: Quality? = null,
     val videoStabilization: Boolean = false,
   )
 
-  /**
-   * Extension ladder for the current preference, skipping modes the device
-   * does not advertise and modes that already failed to bind this session:
-   * AUTO → standard, HDR → AUTO → standard, NIGHT → AUTO → standard.
-   */
   private fun extensionCandidates(): List<String> {
     val ladder = when (preferredExtension) {
       EXT_AUTO -> listOf(EXT_AUTO)
@@ -1028,12 +953,6 @@ class NativeCameraSession(
     }
   }
 
-  /**
-   * Single entry point for every rebind (start, mode switch, facing toggle,
-   * extension switch, rotation). Runs the bind pass on the main thread and
-   * collapses concurrent requests into one trailing rebind, so an extension
-   * chip tapped mid-bind can never interleave two unbind/bind passes.
-   */
   private fun requestRebind(reason: String) {
     if (released.get()) return
     CamPerf.noteRebind(reason)
@@ -1060,20 +979,12 @@ class NativeCameraSession(
     }
   }
 
-  /**
-   * Photo ladder (preferred NIGHT example): NIGHT oem-flex → AUTO oem-flex →
-   * standard 4:3 max → standard 16:9 max → last-resort defaults max quality →
-   * last-resort defaults minimize-latency.
-   *
-   * Video ladder: UHD+stab → UHD → FHD+stab → FHD → HD → CameraX defaults.
-   */
   private fun bindUseCasesInternal() {
     if (released.get() || cameraProvider == null) return
 
     val attempts = mutableListOf<BindAttempt>()
     if (mode == Mode.PHOTO && facingBack) {
-      // Every advertised extension candidate gets exactly one OEM-flex attempt:
-      // forcing 4:3 on an extension bind is the most common OEM bind failure.
+
       extensionCandidates().forEachIndexed { index, label ->
         attempts.add(
           BindAttempt(
@@ -1106,8 +1017,7 @@ class NativeCameraSession(
         ),
       )
     }
-    // Keep max still quality even on the last resort; only drop to
-    // MINIMIZE_LATENCY when nothing else binds at all.
+
     attempts.add(
       BindAttempt(
         BindProfile.MINIMAL,
@@ -1140,9 +1050,7 @@ class NativeCameraSession(
             "stabilization=${attempt.videoStabilization} " +
             "error=${error.javaClass.simpleName}: ${error.message}",
         )
-        // OEM extension selectors often advertise support then fail the
-        // Preview+ImageCapture surface combination. Disable only the mode that
-        // failed so the other extension modes stay selectable this session.
+
         attempt.extensionLabel?.let { failedExtensionLabels.add(it) }
       }
     }
@@ -1157,10 +1065,6 @@ class NativeCameraSession(
     listener?.onSessionError(code, userFacingInitMessage(code, msg))
   }
 
-  /**
-   * Video rungs, highest quality first. Stabilization is intentionally off:
-   * EIS crops the FOV and looks like an automatic zoom-in vs photo mode.
-   */
   private fun videoBindAttempts(): List<BindAttempt> {
     val tiers = if (quality == NativeCameraContract.QUALITY_BALANCED) {
       listOf(Quality.FHD, Quality.HD)
@@ -1192,8 +1096,7 @@ class NativeCameraSession(
     if (released.get()) throw IllegalStateException("Session released")
 
     val profile = attempt.profile
-    // Capture live zoom before unbind unless a mode-switch freeze already
-    // snapshotted the officer's selection (e.g. 1x for long-press video).
+
     if (!freezeDesiredZoom) {
       camera?.let { desiredZoomRatio = currentZoomRatio() }
     }
@@ -1242,8 +1145,7 @@ class NativeCameraSession(
         .build()
       val videoBuilder = VideoCapture.Builder(recorder)
         .setTargetRotation(rotation)
-      // Stabilization is a ladder rung of its own: an UHD+stabilization bind
-      // failure retries UHD without it instead of losing the resolution.
+
       if (attempt.videoStabilization) {
         tryEnableVideoStabilization(videoBuilder)
       }
@@ -1253,10 +1155,6 @@ class NativeCameraSession(
       activeVideoStabilization = attempt.videoStabilization
     }
 
-    // Photo: shared ViewPort so Preview + ImageCapture stay WYSIWYG.
-    // Video: bind WITHOUT a shared ViewPort. A 4:3/screen ViewPort + 16:9
-    // VideoCapture center-crops the preview and looks like an automatic zoom-in
-    // vs photo. Preview keeps its 4:3 selector FOV; VideoCapture records alone.
     camera = if (mode == Mode.PHOTO) {
       val viewPort = previewView.getViewPort(rotation)
         ?: ViewPort.Builder(Rational(4, 3), rotation)
@@ -1299,10 +1197,6 @@ class NativeCameraSession(
     onBoundSuccessfully(profile)
   }
 
-  /**
-   * Prefer the rear logical camera with the widest zoom span so UW / tele
-   * chips match the stock Camera app when available.
-   */
   private fun preferStockLikeBackCamera(provider: ProcessCameraProvider): CameraSelector {
     return try {
       data class Ranked(val info: androidx.camera.core.CameraInfo, val id: String, val score: Double)
@@ -1351,10 +1245,7 @@ class NativeCameraSession(
     val builder = Preview.Builder().setTargetRotation(rotation)
     when (attempt.profile) {
       BindProfile.EXTENSION_OEM_FLEX -> {
-        // Extension binds get no forced aspect ratio: the OEM decides which
-        // Preview + ImageCapture resolution pair its pipeline supports.
-        // Prefer an efficient preview target when the OEM allows it — ImageCapture
-        // remains MAXIMIZE_QUALITY independently.
+
         builder.setResolutionSelector(efficientPreviewSelector())
       }
       BindProfile.ALIGNED_16_9 -> {
@@ -1363,7 +1254,7 @@ class NativeCameraSession(
       BindProfile.MINIMAL,
       BindProfile.MINIMAL_LATENCY,
       -> {
-        // Leave resolution selection to CameraX defaults.
+
       }
       BindProfile.STANDARD_MAX_QUALITY -> {
         builder.setResolutionSelector(efficientPreviewSelector())
@@ -1404,7 +1295,6 @@ class NativeCameraSession(
     return builder.build()
   }
 
-  /** Human-readable resolution strategy for bind diagnostics. */
   private fun resolutionStrategyLabel(profile: BindProfile): String = when (profile) {
     BindProfile.EXTENSION_OEM_FLEX -> "oem_flex_no_forced_aspect"
     BindProfile.STANDARD_MAX_QUALITY -> "aspect_4_3"
@@ -1421,10 +1311,6 @@ class NativeCameraSession(
     }
   }
 
-  /**
-   * Preview stays 4:3 in photo and video so the on-screen frame does not grow
-   * when long-press switches into video mode.
-   */
   private fun efficientPreviewSelector(): ResolutionSelector {
     return ResolutionSelector.Builder()
       .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
@@ -1497,7 +1383,6 @@ class NativeCameraSession(
       listener?.onZoomChanged(state.zoomRatio)
     }
 
-    // Diagnostics for field debugging of extension / fallback behaviour.
     Log.d(NativeCameraContract.LOG_TAG, "SESSION_BIND_END profile=$profile")
     Log.d(
       NativeCameraContract.LOG_TAG,
@@ -1519,8 +1404,6 @@ class NativeCameraSession(
         "flashCycle=$flashCycle torch=${mode == Mode.VIDEO && torchOn}",
     )
 
-    // Publish after the bind pass unwinds so the host observes a settled
-    // session (isRebinding() == false) and capture is allowed again.
     val readyFlash = hasFlashUnit
     val readyMinZoom = minZoom
     val readyMaxZoom = maxZoom
@@ -1533,7 +1416,7 @@ class NativeCameraSession(
     val readyEvStep = exposureStep
     mainExecutor.execute {
       if (released.get()) return@execute
-      // A queued rebind publishes its own state; drop the stale notification.
+
       if (isRebinding.get() || pendingRebind) return@execute
       listener?.onSessionReady(
         hasFlash = readyFlash,
@@ -1550,11 +1433,6 @@ class NativeCameraSession(
     }
   }
 
-  /**
-   * CameraX resets zoom to the default ratio on every bind, so re-apply the
-   * last user intent clamped to the newly bound camera's range. Flash is
-   * re-applied here too because the ImageCapture use case is brand new.
-   */
   private fun restoreDesiredZoom() {
     val clamped = desiredZoomRatio.coerceIn(minZoom, maxZoom)
     desiredZoomRatio = clamped
@@ -1571,7 +1449,6 @@ class NativeCameraSession(
     applyFlash()
   }
 
-  /** Read the bound camera's EV range and restore the desired index. */
   private fun readExposureState(cam: Camera) {
     try {
       val state = cam.cameraInfo.exposureState
@@ -1622,11 +1499,6 @@ class NativeCameraSession(
     val label: String,
   )
 
-  /**
-   * Resolve a single extension label into a CameraX selector. The preference
-   * ladder itself lives in [extensionCandidates] so every mode in the ladder
-   * gets its own bind attempt.
-   */
   private fun chooseExtension(base: CameraSelector, label: String): ChosenExtension? {
     val manager = extensionsManager ?: return null
     val extensionMode = extensionModeFor(label) ?: return null
@@ -1658,10 +1530,6 @@ class NativeCameraSession(
     else -> null
   }
 
-  /**
-   * Probe AUTO / HDR / NIGHT independently so the UI can offer real choices
-   * instead of inferring HDR / NIGHT from AUTO availability.
-   */
   private fun probeAvailableExtensions() {
     availableExtensionLabels = emptyList()
     val manager = extensionsManager
@@ -1671,7 +1539,6 @@ class NativeCameraSession(
       return
     }
 
-    // Process-scoped cache: reopen camera without re-probing every ExtensionMode.
     val cached = processExtensionCache
     if (cached != null) {
       availableExtensionLabels = cached
@@ -1737,17 +1604,14 @@ class NativeCameraSession(
     private const val PREFERENCE_PHOTO_FLASH = "photo_flash_mode"
     private const val PREFERENCE_VIDEO_TORCH = "video_torch_on"
 
-    /** Process-scoped extension availability; not an active camera resource. */
     @Volatile
     var processExtensionCache: List<String>? = null
   }
 
   private fun videoQualitySelector(attempt: BindAttempt): QualitySelector {
-    // A ladder rung pins one exact quality with no fallback so an unsupported
-    // tier fails the bind and the next rung (lower tier / no stabilization)
-    // gets its own attempt.
+
     attempt.videoQuality?.let { return QualitySelector.from(it) }
-    // Last-resort rungs stay lenient so a preview is guaranteed.
+
     val ordered = if (quality == NativeCameraContract.QUALITY_BALANCED) {
       listOf(Quality.FHD, Quality.HD, Quality.SD)
     } else {
@@ -1762,8 +1626,7 @@ class NativeCameraSession(
   private fun applyFlash() {
     val capture = imageCapture ?: return
     if (mode != Mode.PHOTO) return
-    // "On" is a continuous light so the officer can compose and focus before
-    // capture. Auto remains a capture-time flash decision by the camera stack.
+
     val continuousLight = hasFlashUnit && flashCycle == FlashCycle.ON
     camera?.cameraControl?.enableTorch(continuousLight)
     capture.flashMode = when {
@@ -1800,7 +1663,6 @@ class NativeCameraSession(
     )
   }
 
-  /** Forward touch events from Activity (so tap-to-focus reticle can coexist). */
   fun onPreviewTouch(event: MotionEvent): Boolean {
     val detector = scaleDetector ?: return false
     detector.onTouchEvent(event)
@@ -1837,7 +1699,7 @@ class NativeCameraSession(
     val captureMode: String = EXT_STANDARD,
     val fallbackLevel: String = NativeCameraContract.FallbackLevel.LAST_RESORT_BASIC,
   ) {
-    /** "WxH" telemetry string, null when dimensions are unknown. */
+
     val dimensions: String?
       get() = if (width != null && height != null) "${width}x$height" else null
 
@@ -1867,7 +1729,7 @@ class NativeCameraSession(
       val path = context.cacheDir.absolutePath
       val stat = StatFs(path)
       val available = stat.availableBlocksLong * stat.blockSizeLong
-      // Require at least 50 MB free.
+
       available > 50L * 1024L * 1024L
     } catch (_: Exception) {
       true

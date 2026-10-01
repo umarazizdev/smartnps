@@ -158,7 +158,6 @@ class _ClassicBottomBar extends StatelessWidget {
     );
   }
 
-  /// Flat edge-to-edge Android bar (no glass / no floating pill).
   Widget _buildAndroidBar(
     BuildContext context, {
     required bool effectiveIsDark,
@@ -171,7 +170,7 @@ class _ClassicBottomBar extends StatelessWidget {
     final topHairline = effectiveIsDark
         ? Colors.white.withValues(alpha: 0.10)
         : const Color(0x0D000000);
-    // Match web header: soft elevation edge (header casts down; bar casts up).
+
     final edgeShadow = effectiveIsDark
         ? Colors.black.withValues(alpha: 0.20)
         : Colors.black.withValues(alpha: 0.035);
@@ -245,7 +244,6 @@ class _ClassicBottomBar extends StatelessWidget {
     );
   }
 
-  /// Previous floating glass bar (non-Android platforms).
   Widget _buildLegacyFloatingBar(
     BuildContext context, {
     required bool effectiveIsDark,

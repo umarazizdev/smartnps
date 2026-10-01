@@ -2,7 +2,6 @@ import AVFoundation
 import Flutter
 import UIKit
 
-/// MethodChannel bridge for the native AVFoundation camera UI.
 final class NativeCameraPlugin: NSObject {
   static let methodChannelName = "com.smartnps360.app/native_camera"
   static let logPrefix = "[SmartNPS360Camera]"
@@ -62,7 +61,7 @@ final class NativeCameraPlugin: NSObject {
     let initialIsVideo = type == "video"
     let allowModeSwitch = args["allowModeSwitch"] as? Bool ?? true
     let landscapeOnly = args["landscapeOnly"] as? Bool ?? true
-    // Photos always capture on the rear camera; this flag only gates video flip.
+
     let rearCameraOnly = args["rearCameraOnly"] as? Bool ?? true
     let qualityRaw = (args["quality"] as? String)?.lowercased() ?? "maximum"
     let quality = NativeCameraCaptureQuality(rawValue: qualityRaw) ?? .maximum
@@ -148,15 +147,12 @@ final class NativeCameraPlugin: NSObject {
     presenter.present(camera, animated: true)
   }
 
-  /// Session metadata is already wire-shaped. Defaults for optional diagnostics
-  /// keys only — never fabricate `cameraPosition` (rear fail-closed depends on it).
   private static func mapResultPayload(_ payload: [String: Any]) -> [String: Any] {
     var mapped = payload
     if mapped["captureMode"] == nil {
       mapped["captureMode"] = "avfoundation_quality"
     }
-    // Do NOT invent cameraPosition = "back". Missing/unknown must stay missing
-    // so Flutter + native rear-only PHOTO validation can reject unverified media.
+
     if mapped["photoDimensions"] == nil,
        let width = mapped["width"] as? Int,
        let height = mapped["height"] as? Int,

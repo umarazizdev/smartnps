@@ -108,7 +108,7 @@ class AppConfig {
   static int? bottomTabIndexForUri(Uri? uri) {
     final path = normalizeWebPath(uri);
     if (path == null) return null;
-    // Site checks is a dashboard sub-route; keep Dashboard tab selected.
+
     if (path == '/officer/site-checks') return 0;
     for (var i = 0; i < AppRoutes.bottomTabWebPaths.length; i++) {
       if (AppRoutes.bottomTabWebPaths[i] == path) return i;

@@ -2,11 +2,9 @@ import AVFoundation
 import ImageIO
 import UIKit
 
-/// Landscape validation and EXIF / CGImage orientation helpers for visit captures.
 enum NativeCameraOrientation {
   static let logPrefix = "[SmartNPS360Camera]"
 
-  /// Degrees clockwise from upright portrait (0 / 90 / 180 / 270).
   static func degrees(from cgOrientation: CGImagePropertyOrientation) -> Int {
     switch cgOrientation {
     case .up, .upMirrored:
@@ -41,7 +39,7 @@ enum NativeCameraOrientation {
     case .portraitUpsideDown:
       return .left
     case .landscapeRight:
-      // Device home button / Dynamic Island on the right → landscape left content.
+
       return .down
     case .landscapeLeft:
       return .up
@@ -50,7 +48,6 @@ enum NativeCameraOrientation {
     }
   }
 
-  /// Maps interface orientation to the capture connection orientation.
   static func videoOrientation(
     from interfaceOrientation: UIInterfaceOrientation
   ) -> AVCaptureVideoOrientation {
@@ -89,7 +86,6 @@ enum NativeCameraOrientation {
     orientation == .landscapeLeft || orientation == .landscapeRight
   }
 
-  /// Effective display size after applying EXIF orientation metadata.
   static func orientedSize(pixelWidth: Int, pixelHeight: Int, orientationDegrees: Int) -> CGSize {
     let rotated = orientationDegrees == 90 || orientationDegrees == 270
     if rotated {
@@ -102,7 +98,6 @@ enum NativeCameraOrientation {
     size.width > size.height
   }
 
-  /// Reads EXIF orientation and pixel dimensions from still-image file data.
   static func readPhotoMetadata(at url: URL) -> (width: Int, height: Int, degrees: Int)? {
     guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
           let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
@@ -122,8 +117,6 @@ enum NativeCameraOrientation {
     return (width, height, degrees)
   }
 
-  /// Validates that a saved photo is landscape after EXIF rotation.
-  /// FAIL CLOSED: missing metadata rejects the capture.
   static func isLandscapePhoto(at url: URL) -> Bool {
     guard let meta = readPhotoMetadata(at: url) else {
       NSLog("\(logPrefix) photo metadata unavailable; fail-closed landscape")
@@ -143,8 +136,6 @@ enum NativeCameraOrientation {
     return landscape
   }
 
-  /// Validates video track preferred transform + natural size produce landscape.
-  /// FAIL CLOSED: missing track rejects the capture.
   static func isLandscapeVideo(at url: URL) -> Bool {
     let asset = AVURLAsset(url: url)
     guard let track = asset.tracks(withMediaType: .video).first else {

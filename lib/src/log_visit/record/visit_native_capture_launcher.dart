@@ -42,9 +42,7 @@ class VisitNativeCaptureLauncher {
     bool allowModeSwitch = true,
   }) async {
     if (_opening) return;
-    // Always open photo unless the caller explicitly requests a type (e.g. retake).
-    // Video is entered only via long-press inside the native camera — never
-    // remembered across reopen after a video capture.
+
     final requestedType = initialType ?? CaptureType.photo;
     _opening = true;
     final completion = Completer<void>();

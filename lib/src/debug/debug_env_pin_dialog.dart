@@ -12,8 +12,6 @@ import '../widgets/dialogs/glass_action_dialog.dart';
 import 'debug_env_access_service.dart';
 import 'debug_env_hub_screen.dart';
 
-/// True on Android/iOS for **debug, profile, release, and TestFlight**.
-/// Intentionally not gated by [kDebugMode].
 bool get isDebugEnvSupported =>
     !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
@@ -40,7 +38,6 @@ Future<void> openDebugEnvFromLogo(BuildContext context) async {
   );
 }
 
-/// Long-press NPS logo to open the PIN-gated debug env screen.
 class DebugEnvLogoHotspot extends StatelessWidget {
   const DebugEnvLogoHotspot({
     super.key,
