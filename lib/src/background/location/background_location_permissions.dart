@@ -174,9 +174,8 @@ class BackgroundLocationPermissions {
     );
 
     if (geoPermission == LocationPermission.denied) {
-      geoPermission = await OverlayPromptGuard.runDuringOsPermissionPrompt(
-        Geolocator.requestPermission,
-      );
+      geoPermission =
+          await PermissionSettingsHelper.requestGeolocatorPermission();
       locationDebugLog(
         '[BackgroundLocationPermissions] ios geolocator(after request)=$geoPermission',
       );

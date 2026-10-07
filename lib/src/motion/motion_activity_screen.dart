@@ -7,6 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../permissions/native_permission_status_service.dart';
 import '../utilities/app_config.dart';
+import '../utilities/permission_settings_helper.dart';
 import '../widgets/dialogs/motion_activity_settings_dialog.dart';
 import 'motion_activity_fusion_controller.dart';
 import 'motion_activity_service.dart';
@@ -178,7 +179,8 @@ class _MotionActivityScreenState extends State<MotionActivityScreen> {
       final permission = await Geolocator.checkPermission();
       var resolved = permission;
       if (permission == LocationPermission.denied) {
-        resolved = await Geolocator.requestPermission();
+        resolved =
+            await PermissionSettingsHelper.requestGeolocatorPermission();
       }
       if (resolved == LocationPermission.denied ||
           resolved == LocationPermission.deniedForever) {

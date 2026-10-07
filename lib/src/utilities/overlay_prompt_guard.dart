@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../app/app_navigator.dart';
@@ -12,6 +14,7 @@ class OverlayPromptGuard {
   static final ValueNotifier<bool> osPermissionPromptInFlight = ValueNotifier(
     false,
   );
+  static Future<void>? _osPromptChain;
 
   static Listenable get overlayVisibilityListenable =>
       Listenable.merge([_blockingOverlayCount, osPermissionPromptInFlight]);
@@ -31,14 +34,30 @@ class OverlayPromptGuard {
     }
   }
 
+  /// Runs [action] while marking an OS permission prompt as in-flight.
+  /// Concurrent callers wait so plugins like geolocator are not re-entered.
   static Future<T> runDuringOsPermissionPrompt<T>(
     Future<T> Function() action,
   ) async {
+    final previous = _osPromptChain;
+    final gate = Completer<void>();
+    _osPromptChain = gate.future;
+
+    if (previous != null) {
+      try {
+        await previous;
+      } catch (_) {}
+    }
+
     osPermissionPromptInFlight.value = true;
     try {
       return await action();
     } finally {
       osPermissionPromptInFlight.value = false;
+      if (!gate.isCompleted) gate.complete();
+      if (identical(_osPromptChain, gate.future)) {
+        _osPromptChain = null;
+      }
     }
   }
 
