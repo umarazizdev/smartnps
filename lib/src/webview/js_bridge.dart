@@ -19,7 +19,6 @@ import '../utilities/app_config.dart';
 import '../location/mock_location_detection.dart';
 import '../location/mock_location_guard.dart';
 import '../push/notifications/push_notification_service.dart';
-import '../utilities/overlay_prompt_guard.dart';
 import '../utilities/permission_settings_helper.dart';
 
 class JsBridge {
@@ -281,9 +280,8 @@ class JsBridge {
 
       if (permission == LocationPermission.denied &&
           !await BackgroundLocationPermissions.hasForegroundLocationAccess()) {
-        permission = await OverlayPromptGuard.runDuringOsPermissionPrompt(
-          Geolocator.requestPermission,
-        );
+        permission =
+            await PermissionSettingsHelper.requestGeolocatorPermission();
       }
 
       if (permission == LocationPermission.denied) {

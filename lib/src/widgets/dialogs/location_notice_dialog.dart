@@ -653,6 +653,16 @@ class _StepsPanel extends StatelessWidget {
             ),
             _StepDivider(color: colors.stepDivider),
             _NoticeStep(
+              icon: Icons.restaurant_rounded,
+              title: 'During An Unpaid Meal Break',
+              body:
+                  'Location tracking pauses during unpaid meal breaks and resumes when you return to duty.',
+              color: colors.leavingSiteColor,
+              iconBackground: colors.leavingSiteIconBg,
+              bodyColor: colors.stepBody,
+            ),
+            _StepDivider(color: colors.stepDivider),
+            _NoticeStep(
               icon: Icons.logout_rounded,
               title: 'When You Clock Out',
               body: 'Tracking stops when your shift ends and you clock out.',
