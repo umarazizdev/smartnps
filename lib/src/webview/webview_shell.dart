@@ -874,6 +874,26 @@ class _WebViewShellState extends State<WebViewShell>
         );
   }
 
+  static String _injectJsBridgeRoutes(String source) {
+    return source
+        .replaceAll(
+          '__JS_BRIDGE_OPEN_LOG_VISIT__',
+          AppRoutes.openLogVisit,
+        )
+        .replaceAll(
+          '__JS_BRIDGE_OPEN_ONSITE_LOG_VISIT__',
+          AppRoutes.openOnsiteLogVisit,
+        )
+        .replaceAll(
+          '__JS_BRIDGE_GET_PENDING_DRAFTS__',
+          AppRoutes.getPendingDrafts,
+        );
+  }
+
+  static String _injectBridgeScript(String source) {
+    return _injectJsBridgeRoutes(_injectPlatformLocationLabels(source));
+  }
+
   static final UserScript _smartNpsBridgeScript = UserScript(
     source: r'''
     (function () {
@@ -980,7 +1000,7 @@ class _WebViewShellState extends State<WebViewShell>
           return ensureFlutterBridge()
             .then(function () {
               return window.flutter_inappwebview.callHandler(
-                'openLogVisit',
+                '__JS_BRIDGE_OPEN_LOG_VISIT__',
                 payload == null ? {} : payload
               );
             });
@@ -989,7 +1009,7 @@ class _WebViewShellState extends State<WebViewShell>
           return ensureFlutterBridge()
             .then(function () {
               return window.flutter_inappwebview.callHandler(
-                'openOnsiteLogVisit',
+                '__JS_BRIDGE_OPEN_ONSITE_LOG_VISIT__',
                 payload == null ? {} : payload
               );
             });
@@ -997,7 +1017,9 @@ class _WebViewShellState extends State<WebViewShell>
         window.SmartNPS360.getPendingDrafts = function () {
           return ensureFlutterBridge()
             .then(function () {
-              return window.flutter_inappwebview.callHandler('getPendingDrafts');
+              return window.flutter_inappwebview.callHandler(
+                '__JS_BRIDGE_GET_PENDING_DRAFTS__'
+              );
             });
         };
         window.SmartNPS360.isNativeApp = function () {
@@ -1601,13 +1623,17 @@ class _WebViewShellState extends State<WebViewShell>
                   password: password
                 });
               })
-              .catch(function () {})
-              .then(function () {
+              .catch(function () { return null; })
+              .then(function (result) {
+                // Always continue to web form login so session cookies work,
+                // even when native Sanctum mint fails. Credentials are persisted
+                // by Flutter before the Sanctum call for silent renew.
                 try {
                   form.submit();
                 } catch (_) {
                   setLoginLoading(form, false);
                 }
+                return result;
               });
           });
         }
@@ -3808,7 +3834,7 @@ class _WebViewShellState extends State<WebViewShell>
     required String handlerName,
     required String uploadUrl,
   }) async {
-    final isOnsite = handlerName == 'openOnsiteLogVisit';
+    final isOnsite = handlerName == AppRoutes.openOnsiteLogVisit;
     patrolLogDebugLog(
       '[SmartNPS360][JS Bridge] ================================\n'
       '[SmartNPS360][JS Bridge] CALLED FROM WEB\n'
@@ -4885,28 +4911,29 @@ class _WebViewShellState extends State<WebViewShell>
       },
     );
     controller.addJavaScriptHandler(
-      handlerName: 'openLogVisit',
+      handlerName: AppRoutes.openLogVisit,
       callback: (args) => _handleOpenLogVisitBridge(
         args,
-        handlerName: 'openLogVisit',
+        handlerName: AppRoutes.openLogVisit,
         uploadUrl: ApiUrls.visitsUploadUrl,
       ),
     );
     controller.addJavaScriptHandler(
-      handlerName: 'openOnsiteLogVisit',
+      handlerName: AppRoutes.openOnsiteLogVisit,
       callback: (args) => _handleOpenLogVisitBridge(
         args,
-        handlerName: 'openOnsiteLogVisit',
+        handlerName: AppRoutes.openOnsiteLogVisit,
         uploadUrl: ApiUrls.onsitePatrolVisitsUploadUrl,
       ),
     );
     controller.addJavaScriptHandler(
-      handlerName: 'getPendingDrafts',
+      handlerName: AppRoutes.getPendingDrafts,
       callback: (args) async {
         final currentHost = _ui.currentUri.value?.host;
         if (!AppConfig.isAllowedHost(currentHost)) {
           patrolLogDebugLog(
-            '[SmartNPS360] denied getPendingDrafts from host=$currentHost',
+            '[SmartNPS360] denied ${AppRoutes.getPendingDrafts} '
+            'from host=$currentHost',
           );
           return {
             'ok': false,
@@ -4917,10 +4944,13 @@ class _WebViewShellState extends State<WebViewShell>
           };
         }
 
-        patrolLogDebugLog('[SmartNPS360] getPendingDrafts opening dialogs');
+        patrolLogDebugLog(
+          '[SmartNPS360] ${AppRoutes.getPendingDrafts} opening dialogs',
+        );
         final result = await _presentPendingDraftDialogs();
         patrolLogDebugLog(
-          '[SmartNPS360] getPendingDrafts ok=${result['ok']} '
+          '[SmartNPS360] ${AppRoutes.getPendingDrafts} '
+          'ok=${result['ok']} '
           'count=${result['count']} opened=${result['opened']} '
           'action=${result['action']} dismissed=${result['dismissed']}',
         );
@@ -4975,6 +5005,13 @@ class _WebViewShellState extends State<WebViewShell>
             '[SmartNPS360][Auth] loginWithSanctum request host=$currentHost',
           );
         }
+
+        // Persist before Sanctum so silent renew works even if mint fails
+        // but the subsequent web form login still establishes a session.
+        await AuthRepository.instance.saveCredentials(
+          employeeNo: username,
+          password: password,
+        );
 
         final ok = await _performSanctumLogin(
           username: username,
@@ -5149,6 +5186,13 @@ class _WebViewShellState extends State<WebViewShell>
     ApiClient.instance.ensureAuthInterceptorInstalled();
     final dio = ApiClient.instance.dio;
     try {
+      // Keep credentials available for silent renew even if this mint fails
+      // (e.g. transient network) and web session login still succeeds.
+      await AuthRepository.instance.saveCredentials(
+        employeeNo: username,
+        password: password,
+      );
+
       final deviceCheckExtras = await DeviceCheckService.authPayloadExtras();
       final response = await dio.postUri(
         Uri.parse(ApiUrls.sanctumLoginUrl),
@@ -5180,7 +5224,12 @@ class _WebViewShellState extends State<WebViewShell>
       final Map<String, dynamic>? map = body is Map
           ? Map<String, dynamic>.from(body)
           : null;
-      if (map == null || AuthRepository.extractAccessToken(map) == null) {
+      final accessToken = map == null
+          ? null
+          : AuthRepository.extractAccessToken(
+              AuthRepository.mergeAuthPayload(map),
+            );
+      if (map == null || accessToken == null || accessToken.isEmpty) {
         if (kDebugMode) {
           debugPrint(
             '[SmartNPS360][Auth] sanctum login missing token in response',
@@ -5686,7 +5735,7 @@ class _WebViewShellState extends State<WebViewShell>
   UnmodifiableListView<UserScript> _initialUserScripts() {
     final scripts = <UserScript>[
       UserScript(
-        source: _injectPlatformLocationLabels(_smartNpsBridgeScript.source),
+        source: _injectBridgeScript(_smartNpsBridgeScript.source),
         injectionTime: _smartNpsBridgeScript.injectionTime,
       ),
       UserScript(
@@ -6322,13 +6371,20 @@ class _WebViewShellState extends State<WebViewShell>
                                 return const SizedBox.shrink();
                               }
                               return Positioned.fill(
-                                child: VisitVideoPreviewScreen(
-                                  onBack: _dismissLogVisit,
-                                  onUploadSuccess: _finishLogVisitUploadSuccess,
-                                  onUploadStarted: _onPatrolUploadStarted,
-                                  onFailureOpenDraft:
-                                      _onPatrolUploadFailureOpenDraft,
-                                  bottomBarClearance: 0,
+                                child: Material(
+                                  color: Theme.of(context).brightness ==
+                                          Brightness.dark
+                                      ? const Color(0xFF0F1724)
+                                      : const Color(0xFFF4F7FB),
+                                  child: VisitVideoPreviewScreen(
+                                    onBack: _dismissLogVisit,
+                                    onUploadSuccess:
+                                        _finishLogVisitUploadSuccess,
+                                    onUploadStarted: _onPatrolUploadStarted,
+                                    onFailureOpenDraft:
+                                        _onPatrolUploadFailureOpenDraft,
+                                    bottomBarClearance: 0,
+                                  ),
                                 ),
                               );
                             }),

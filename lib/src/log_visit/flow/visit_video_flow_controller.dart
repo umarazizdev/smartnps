@@ -13,6 +13,7 @@ import 'visit_checkpoint.dart';
 import 'visit_media_draft_store.dart';
 import 'visit_media_geo.dart';
 import 'visit_patrol_context.dart';
+import 'visit_patrol_round.dart';
 import 'visit_upload_queue.dart';
 
 enum VisitMediaType { photo, video }
@@ -111,6 +112,8 @@ class VisitMediaItem {
     this.longitude,
     this.accuracyMeters,
     this.siteCheckpointId,
+    this.roundTag,
+    this.roundWindowId,
     this.attentionNeeded = false,
     this.isPendingCapture = false,
   });
@@ -126,6 +129,8 @@ class VisitMediaItem {
   final double? longitude;
   final double? accuracyMeters;
   final int? siteCheckpointId;
+  final String? roundTag;
+  final int? roundWindowId;
   final bool attentionNeeded;
 
   final bool isPendingCapture;
@@ -141,6 +146,12 @@ class VisitMediaItem {
   bool get hasNotes => hasTextNote || hasVoiceNote;
   bool get isCheckpointMedia => siteCheckpointId != null;
   bool get isAdditionalMedia => siteCheckpointId == null;
+
+  String? get resolvedRoundTag {
+    final tag = roundTag?.trim();
+    if (tag == null || tag.isEmpty) return null;
+    return tag;
+  }
 
   bool get hasStamp {
     return capturedAt != null || (latitude != null && longitude != null);
@@ -182,6 +193,10 @@ class VisitMediaItem {
     double? accuracyMeters,
     int? siteCheckpointId,
     bool clearSiteCheckpointId = false,
+    String? roundTag,
+    bool clearRoundTag = false,
+    int? roundWindowId,
+    bool clearRoundWindowId = false,
     bool? attentionNeeded,
     bool? isPendingCapture,
   }) {
@@ -200,6 +215,10 @@ class VisitMediaItem {
       siteCheckpointId: clearSiteCheckpointId
           ? null
           : (siteCheckpointId ?? this.siteCheckpointId),
+      roundTag: clearRoundTag ? null : (roundTag ?? this.roundTag),
+      roundWindowId: clearRoundWindowId
+          ? null
+          : (roundWindowId ?? this.roundWindowId),
       attentionNeeded: attentionNeeded ?? this.attentionNeeded,
       isPendingCapture: isPendingCapture ?? this.isPendingCapture,
     );
@@ -224,6 +243,7 @@ class VisitVideoFlowController extends GetxController {
   final batchNote = const VisitBatchNote().obs;
   final generalNote = const VisitBatchNote().obs;
   final activeCheckpointId = RxnInt();
+  final activeRound = Rxn<VisitPatrolRound>();
 
   final lastUploadIssue = Rxn<VisitDraftLastUploadIssue>();
 
@@ -251,6 +271,42 @@ class VisitVideoFlowController extends GetxController {
   List<VisitMediaItem> get visibleMediaItems =>
       mediaItems.where((e) => !e.isPendingCapture).toList(growable: false);
 
+  bool get supportsRoundTags => patrolContext.value?.supportsRoundTags == true;
+
+  List<VisitPatrolRound> get patrolRounds =>
+      patrolContext.value?.patrolWindows ?? const <VisitPatrolRound>[];
+
+  List<VisitMediaItem> mediaForRoundTag(String roundTag) {
+    final needle = roundTag.trim().toLowerCase();
+    return visibleMediaItems
+        .where((e) => e.resolvedRoundTag?.toLowerCase() == needle)
+        .toList(growable: false);
+  }
+
+  int mediaCountForRoundTag(String roundTag) =>
+      mediaForRoundTag(roundTag).length;
+
+  bool hasMediaForRound(VisitPatrolRound round) =>
+      mediaCountForRoundTag(round.roundTag) > 0;
+
+  bool get hasAllRequiredRoundTags {
+    if (!supportsRoundTags) return true;
+    for (final round in patrolRounds) {
+      if (!hasMediaForRound(round)) return false;
+    }
+    return true;
+  }
+
+  int get completedRoundTagCount =>
+      patrolRounds.where(hasMediaForRound).length;
+
+  List<VisitPatrolRound> get missingRoundTags {
+    if (!supportsRoundTags) return const <VisitPatrolRound>[];
+    return patrolRounds
+        .where((round) => !hasMediaForRound(round))
+        .toList(growable: false);
+  }
+
   List<VisitMediaItem> mediaForCheckpoint(int checkpointId) {
     return mediaItems
         .where((e) => e.siteCheckpointId == checkpointId && !e.isPendingCapture)
@@ -258,7 +314,6 @@ class VisitVideoFlowController extends GetxController {
   }
 
   bool isCheckpointCompleted(int checkpointId) {
-
     return mediaForCheckpoint(checkpointId).isNotEmpty;
   }
 
@@ -282,11 +337,16 @@ class VisitVideoFlowController extends GetxController {
   bool get canCompleteReport {
     if (isUploading.value) return false;
     if (hasIncompleteCheckpoints) return false;
+    if (!hasAllRequiredRoundTags) return false;
     final minimum = patrolContext.value?.minimumPhotos;
     if (minimum != null && minimum > 0) {
       return meetsMinimumPhotoRequirement;
     }
     return visibleMediaItems.isNotEmpty;
+  }
+
+  void setActiveRound(VisitPatrolRound? round) {
+    activeRound.value = round;
   }
 
   void beginCheckpointCapture(int checkpointId) {
@@ -295,6 +355,18 @@ class VisitVideoFlowController extends GetxController {
 
   void endCheckpointCapture() {
     activeCheckpointId.value = null;
+  }
+
+  VisitPatrolRound? _stampRoundForNewMedia(VisitMediaItem item) {
+    if (!supportsRoundTags) return null;
+    if (item.resolvedRoundTag != null) {
+      return patrolContext.value?.roundByTag(item.roundTag) ??
+          VisitPatrolRound(
+            roundTag: item.roundTag!,
+            sitePatrolWindowId: item.roundWindowId,
+          );
+    }
+    return activeRound.value;
   }
 
   @override
@@ -311,7 +383,6 @@ class VisitVideoFlowController extends GetxController {
       var snapshot = await _store.loadDraftSnapshot();
       if (snapshot.hasItems &&
           VisitUploadQueue.instance.isQueued(snapshot.draftKey)) {
-
         snapshot = const VisitMediaDraftSnapshot(
           items: <VisitMediaItem>[],
           draftKey: VisitDraftKey.unscoped,
@@ -319,8 +390,8 @@ class VisitVideoFlowController extends GetxController {
         await _store.setActiveKey(VisitDraftKey.unscoped, force: true);
       }
       if (!snapshot.hasItems) {
-        final pending =
-            await VisitUploadQueue.instance.listEditablePendingDrafts();
+        final pending = await VisitUploadQueue.instance
+            .listEditablePendingDrafts();
         if (pending.isNotEmpty) {
           snapshot = pending.first;
           await _store.setActiveKey(snapshot.draftKey);
@@ -343,6 +414,7 @@ class VisitVideoFlowController extends GetxController {
       generalNote.value = const VisitBatchNote();
       lastUploadIssue.value = null;
       activeCheckpointId.value = null;
+      activeRound.value = null;
       _startedAt = null;
       draftSiteName.value = null;
       draftRegionName.value = null;
@@ -485,10 +557,7 @@ class VisitVideoFlowController extends GetxController {
   }) async {
     final trimmed = textNote.trim();
     if (trimmed.isNotEmpty) {
-      current.value = current.value.copyWith(
-        enabled: true,
-        textNote: trimmed,
-      );
+      current.value = current.value.copyWith(enabled: true, textNote: trimmed);
     } else {
       current.value = current.value.copyWith(textNote: '');
     }
@@ -597,6 +666,22 @@ class VisitVideoFlowController extends GetxController {
     } else {
       mergedCheckpoints = const <VisitCheckpoint>[];
     }
+    final incomingHasWindows =
+        payload != null &&
+        (payload.containsKey('patrol_windows') ||
+            payload.containsKey('patrolWindows') ||
+            payload.containsKey('round_tag') ||
+            payload.containsKey('roundTag'));
+    final List<VisitPatrolRound> mergedWindows;
+    if (incoming.patrolWindows.isNotEmpty) {
+      mergedWindows = incoming.patrolWindows;
+    } else if (incomingHasWindows) {
+      mergedWindows = const <VisitPatrolRound>[];
+    } else if (sameSite) {
+      mergedWindows = current?.patrolWindows ?? const <VisitPatrolRound>[];
+    } else {
+      mergedWindows = const <VisitPatrolRound>[];
+    }
     final merged = VisitPatrolContext(
       clientDraftId: current?.clientDraftId?.isNotEmpty == true
           ? current!.clientDraftId
@@ -614,14 +699,21 @@ class VisitVideoFlowController extends GetxController {
       siteLatitude: incoming.siteLatitude ?? current?.siteLatitude,
       siteLongitude: incoming.siteLongitude ?? current?.siteLongitude,
       uploadUrl: incoming.uploadUrl ?? current?.uploadUrl,
-      minimumPhotos: incoming.minimumPhotos ??
-          (sameSite ? current?.minimumPhotos : null),
-      visitType: incoming.visitType ??
-          (sameSite ? current?.visitType : null),
-      siteCheckTimeSheetId: incoming.siteCheckTimeSheetId ??
+      minimumPhotos:
+          incoming.minimumPhotos ?? (sameSite ? current?.minimumPhotos : null),
+      visitType: incoming.visitType ?? (sameSite ? current?.visitType : null),
+      siteCheckTimeSheetId:
+          incoming.siteCheckTimeSheetId ??
           (sameSite ? current?.siteCheckTimeSheetId : null),
+      patrolWindows: mergedWindows,
       checkpoints: mergedCheckpoints,
     );
+    if (activeRound.value != null &&
+        merged.roundByTag(activeRound.value!.roundTag) == null) {
+      activeRound.value = merged.patrolWindows.isEmpty
+          ? null
+          : merged.patrolWindows.first;
+    }
 
     if (currentKey == targetKey && mediaItems.isNotEmpty) {
       activeDraftKey.value = VisitDraftKey.fromContext(merged);
@@ -648,7 +740,6 @@ class VisitVideoFlowController extends GetxController {
       final snapshot = await _store.loadDraftSnapshot(key: targetKey);
       _thumbnailFutures.clear();
       if (VisitUploadQueue.instance.isQueued(targetKey)) {
-
         mediaItems.clear();
         _startedAt = null;
         batchNote.value = const VisitBatchNote();
@@ -869,9 +960,12 @@ class VisitVideoFlowController extends GetxController {
       return null;
     }
 
+    final stampedRound = _stampRoundForNewMedia(item);
     final durableItem = item.copyWith(
       path: durablePath,
       siteCheckpointId: item.siteCheckpointId ?? activeCheckpointId.value,
+      roundTag: stampedRound?.roundTag ?? item.roundTag,
+      roundWindowId: stampedRound?.sitePatrolWindowId ?? item.roundWindowId,
     );
     _startedAt ??= durableItem.capturedAt ?? DateTime.now();
     if (patrolContext.value?.clientDraftId == null ||
@@ -1049,22 +1143,30 @@ class VisitVideoFlowController extends GetxController {
     }
     _txnLog('IMPORT_COMPLETE id=$id bytes=${await File(durablePath).length()}');
 
-    final updated =
-        (existing ??
-                VisitMediaItem(path: durablePath, type: type, captureId: id))
-            .copyWith(
-              path: durablePath,
-              captureId: id ?? existing?.captureId,
-              capturedAt: geo?.capturedAt ?? existing?.capturedAt,
-              latitude: geo?.latitude ?? existing?.latitude,
-              longitude: geo?.longitude ?? existing?.longitude,
-              accuracyMeters: geo?.accuracyMeters ?? existing?.accuracyMeters,
-              siteCheckpointId:
-                  existing?.siteCheckpointId ?? activeCheckpointId.value,
-              isPendingCapture: markAccepted
-                  ? false
-                  : (existing?.isPendingCapture ?? true),
-            );
+    final base =
+        existing ??
+        VisitMediaItem(path: durablePath, type: type, captureId: id);
+    final stampedRound = existing?.resolvedRoundTag != null
+        ? VisitPatrolRound(
+            roundTag: existing!.roundTag!,
+            sitePatrolWindowId: existing.roundWindowId,
+          )
+        : _stampRoundForNewMedia(base);
+    final updated = base.copyWith(
+      path: durablePath,
+      captureId: id ?? existing?.captureId,
+      capturedAt: geo?.capturedAt ?? existing?.capturedAt,
+      latitude: geo?.latitude ?? existing?.latitude,
+      longitude: geo?.longitude ?? existing?.longitude,
+      accuracyMeters: geo?.accuracyMeters ?? existing?.accuracyMeters,
+      siteCheckpointId: existing?.siteCheckpointId ?? activeCheckpointId.value,
+      roundTag: stampedRound?.roundTag ?? existing?.roundTag,
+      roundWindowId:
+          stampedRound?.sitePatrolWindowId ?? existing?.roundWindowId,
+      isPendingCapture: markAccepted
+          ? false
+          : (existing?.isPendingCapture ?? true),
+    );
 
     _txnLog(
       'FINALIZE_${markAccepted ? "COMPLETE" : "READY"} id=$id path=$durablePath',
@@ -1115,12 +1217,21 @@ class VisitVideoFlowController extends GetxController {
       'MARK_ACCEPTED_COPYWITH',
       usePhotoClock: true,
     );
-    final updated = mediaItems[index].copyWith(
+    final current = mediaItems[index];
+    final stampedRound = current.resolvedRoundTag != null
+        ? VisitPatrolRound(
+            roundTag: current.roundTag!,
+            sitePatrolWindowId: current.roundWindowId,
+          )
+        : _stampRoundForNewMedia(current);
+    final updated = current.copyWith(
       path: item.path,
       capturedAt: geo?.capturedAt ?? item.capturedAt,
       latitude: geo?.latitude ?? item.latitude,
       longitude: geo?.longitude ?? item.longitude,
       accuracyMeters: geo?.accuracyMeters ?? item.accuracyMeters,
+      roundTag: stampedRound?.roundTag ?? current.roundTag,
+      roundWindowId: stampedRound?.sitePatrolWindowId ?? current.roundWindowId,
       isPendingCapture: false,
     );
     final snapshot = mediaItems.toList(growable: false);
@@ -1421,9 +1532,7 @@ class VisitVideoFlowController extends GetxController {
   }) async {
     final index = mediaItems.indexWhere((e) => e.path == mediaPath);
     if (index < 0) return;
-    mediaItems[index] = mediaItems[index].copyWith(
-      textNote: textNote.trim(),
-    );
+    mediaItems[index] = mediaItems[index].copyWith(textNote: textNote.trim());
     await _persistDraft();
   }
 
@@ -1454,9 +1563,7 @@ class VisitVideoFlowController extends GetxController {
       await _persistDraft();
       return;
     }
-    mediaItems[index] = mediaItems[index].copyWith(
-      voiceNotePath: durableVoice,
-    );
+    mediaItems[index] = mediaItems[index].copyWith(voiceNotePath: durableVoice);
     await _persistDraft();
   }
 
@@ -1509,6 +1616,7 @@ class VisitVideoFlowController extends GetxController {
     generalNote.value = const VisitBatchNote();
     lastUploadIssue.value = null;
     activeCheckpointId.value = null;
+    activeRound.value = null;
     _startedAt = null;
     draftSiteName.value = null;
     draftRegionName.value = null;
@@ -1558,8 +1666,15 @@ class VisitUploadMeta {
     final submitted = (submittedAt ?? DateTime.now()).toUtc();
 
     final items = <Map<String, dynamic>>[];
+    final includeRoundTags =
+        context?.supportsRoundTags == true ||
+        mediaItems.any((e) => e.resolvedRoundTag != null);
     for (var i = 0; i < mediaItems.length; i++) {
       final item = mediaItems[i];
+      final roundTag = item.resolvedRoundTag;
+      final roundWindowId =
+          item.roundWindowId ??
+          context?.roundByTag(roundTag)?.sitePatrolWindowId;
       items.add(<String, dynamic>{
         'client_index': i,
         'type': item.type.name,
@@ -1571,6 +1686,9 @@ class VisitUploadMeta {
         'gps_missed': item.isGpsMissed ? 'yes' : 'no',
         'has_voice_note': item.hasVoiceNote,
         'attention_needed': item.attentionNeeded ? 'yes' : 'no',
+        if (includeRoundTags && roundTag != null) 'round_tag': roundTag,
+        if (includeRoundTags && roundWindowId != null)
+          'site_patrol_window_id': roundWindowId,
       });
     }
 
@@ -1617,8 +1735,9 @@ class VisitUploadMeta {
       checkpointsMeta.add(<String, dynamic>{
         'site_checkpoint_id': checkpoint.id,
         'status': 'completed',
-        'checked_at':
-            (primary.capturedAt ?? submitted).toUtc().toIso8601String(),
+        'checked_at': (primary.capturedAt ?? submitted)
+            .toUtc()
+            .toIso8601String(),
         'latitude': primary.latitude,
         'longitude': primary.longitude,
         'accuracy_meters': primary.accuracyMeters,
@@ -1641,9 +1760,7 @@ class VisitUploadMeta {
     };
     final contextFields =
         context?.toUploadMetaFields(officerId: resolvedOfficerId) ??
-        <String, dynamic>{
-          'officer_id': ?resolvedOfficerId,
-        };
+        <String, dynamic>{'officer_id': ?resolvedOfficerId};
     contextFields.remove('client_draft_id');
     meta.addAll(contextFields);
     return meta;

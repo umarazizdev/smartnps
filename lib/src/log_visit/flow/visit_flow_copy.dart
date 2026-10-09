@@ -27,8 +27,7 @@ class VisitFlowCopy {
   String get readyToStart =>
       isSiteCheck ? 'Update your site check' : 'Ready to start patrol';
 
-  String get completeReportButton =>
-      isSiteCheck ? 'Submit' : 'Complete Report';
+  String get completeReportButton => isSiteCheck ? 'Submit' : 'Complete Report';
 
   String get completeReportButtonShort =>
       isSiteCheck ? 'Submit' : 'Complete report';
@@ -36,6 +35,47 @@ class VisitFlowCopy {
   String get emptyCaptureHint => isSiteCheck
       ? 'Capture a clear photo or hold the capture button to record a site check video.'
       : 'Capture a clear photo or hold the capture button to record a patrol round video.';
+
+  String get roundTagCaptureTitle => 'Select patrol round';
+
+  String get roundTagCaptureMessage =>
+      'Choose which round this capture belongs to. '
+      'Capture media for every round before uploading.';
+
+  String get roundTagsRequiredTitle => 'All rounds required';
+
+  String get roundTagsProgressTitle => 'Patrol rounds';
+
+  String roundTagsProgressStatus({required int completed, required int total}) {
+    if (total <= 0) return '';
+    if (completed >= total) return 'All rounds captured';
+    if (completed <= 0) {
+      return 'Capture media for each round before completing';
+    }
+    return '$completed of $total rounds captured';
+  }
+
+  String roundTagsRequiredHint(Iterable<String> missingTags) {
+    final labels = missingTags.map((e) => e.trim()).where((e) => e.isNotEmpty);
+    if (labels.isEmpty) {
+      return 'Please capture photos or videos for every round, '
+          'then complete the report again.';
+    }
+    return 'Please capture media for: ${labels.join(', ')}.';
+  }
+
+  String get emptyRoundTagsHint =>
+      'Tap Capture and select a patrol round. '
+      'Finish every round before uploading your patrol report.';
+
+  String completionRoundsSummary(Iterable<MapEntry<String, int>> counts) {
+    final lines = counts
+        .map((e) => e.key)
+        .where((e) => e.trim().isNotEmpty)
+        .toList(growable: false);
+    if (lines.isEmpty) return '';
+    return lines.join('\n');
+  }
 
   String get noLocation =>
       isSiteCheck ? 'No site check location' : 'No patrol location';
@@ -81,15 +121,15 @@ class VisitFlowCopy {
 
   String get emptyDraftsBody => isSiteCheck
       ? 'There are no saved site check drafts on this device right now. '
-          'Start a new site check to begin capturing your report.'
+            'Start a new site check to begin capturing your report.'
       : 'There are no saved patrol drafts on this device right now. '
-          'Start a new patrol to begin capturing your report.';
+            'Start a new patrol to begin capturing your report.';
 
   String unfinishedSitesMessage(int count) => isSiteCheck
       ? 'You left unfinished site checks on $count sites. '
-          'Choose a site to continue.'
+            'Choose a site to continue.'
       : 'You left unfinished patrols on $count sites. '
-          'Choose a site to continue.';
+            'Choose a site to continue.';
 
   static String unfinishedMixedSitesMessage(int count) =>
       'You left unfinished reports on $count sites. '
@@ -103,13 +143,9 @@ class VisitFlowCopy {
       ? 'Completed site check checklist'
       : 'Completed patrol checklist';
 
-  String deleteMediaMessage({
-    required bool isPhoto,
-    required bool hasNotes,
-  }) {
+  String deleteMediaMessage({required bool isPhoto, required bool hasNotes}) {
     final media = isPhoto ? 'photo' : 'video';
-    final report =
-        isSiteCheck ? 'site check report' : 'patrol round report';
+    final report = isSiteCheck ? 'site check report' : 'patrol round report';
     if (hasNotes) {
       return 'This $media and its note will be removed from your $report. '
           'This cannot be undone.';

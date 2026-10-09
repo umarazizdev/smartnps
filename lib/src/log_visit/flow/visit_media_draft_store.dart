@@ -885,6 +885,8 @@ class VisitMediaDraftStore {
       'longitude': item.longitude,
       'accuracyMeters': item.accuracyMeters,
       'siteCheckpointId': item.siteCheckpointId,
+      if (item.roundTag != null) 'roundTag': item.roundTag,
+      if (item.roundWindowId != null) 'roundWindowId': item.roundWindowId,
       'attentionNeeded': item.attentionNeeded,
       'isPendingCapture': item.isPendingCapture,
     };
@@ -927,6 +929,27 @@ class VisitMediaDraftStore {
     final isPending =
         pendingRaw == true || pendingRaw == 1 || pendingRaw == 'true';
 
+    final roundTagRaw = json['roundTag'] ?? json['round_tag'] ?? json['patrolArea'] ?? json['patrol_area'];
+    final roundTag = roundTagRaw == null
+        ? null
+        : roundTagRaw.toString().trim().isEmpty
+        ? null
+        : roundTagRaw.toString().trim();
+
+    final windowRaw =
+        json['roundWindowId'] ??
+        json['round_window_id'] ??
+        json['sitePatrolWindowId'] ??
+        json['site_patrol_window_id'];
+    int? roundWindowId;
+    if (windowRaw is int) {
+      roundWindowId = windowRaw;
+    } else if (windowRaw is num) {
+      roundWindowId = windowRaw.toInt();
+    } else if (windowRaw != null) {
+      roundWindowId = int.tryParse(windowRaw.toString());
+    }
+
     return VisitMediaItem(
       path: path,
       type: type,
@@ -938,6 +961,8 @@ class VisitMediaDraftStore {
       longitude: (json['longitude'] as num?)?.toDouble(),
       accuracyMeters: (json['accuracyMeters'] as num?)?.toDouble(),
       siteCheckpointId: siteCheckpointId,
+      roundTag: roundTag,
+      roundWindowId: roundWindowId,
       attentionNeeded: attentionNeeded,
       isPendingCapture: isPending,
     );

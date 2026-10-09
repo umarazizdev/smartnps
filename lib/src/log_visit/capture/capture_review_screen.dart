@@ -30,9 +30,14 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
     return Get.off<T>(
       () => const CaptureReviewScreen(),
       routeName: AppRoutes.captureReview,
-      transition: Transition.fadeIn,
-      duration: const Duration(milliseconds: 160),
+      transition: Transition.noTransition,
+      duration: Duration.zero,
+      preventDuplicates: true,
+      opaque: true,
       binding: BindingsBuilder(() {
+        if (Get.isRegistered<CaptureReviewController>()) {
+          Get.delete<CaptureReviewController>(force: true);
+        }
         Get.put(
           CaptureReviewController(
             displayPath: filePath,
@@ -45,6 +50,21 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
         );
       }),
     );
+  }
+
+  static void closeIfOpen() {
+    final route = Get.currentRoute;
+    final onReview =
+        route == AppRoutes.captureReview ||
+        route.contains(AppRoutes.captureReview);
+    if (onReview && (Get.key.currentState?.canPop() ?? false)) {
+      Get.back<void>(closeOverlays: true);
+    }
+    scheduleMicrotask(() {
+      if (Get.isRegistered<CaptureReviewController>()) {
+        Get.delete<CaptureReviewController>(force: true);
+      }
+    });
   }
 
   Future<void> _openNotes(
