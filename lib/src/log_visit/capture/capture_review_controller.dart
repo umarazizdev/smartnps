@@ -5,6 +5,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:get/get.dart';
 import 'package:video_player/video_player.dart';
 
+import '../../app/app_routes.dart';
 import '../../native_camera/native_camera.dart';
 import '../flow/cam_perf.dart';
 import '../flow/capture_work_coordinator.dart';
@@ -157,7 +158,6 @@ class CaptureReviewController extends GetxController {
         );
       }
     } catch (_) {
-
     } finally {
       if (!isClosed) {
         isResolvingLocation.value = false;
@@ -224,7 +224,6 @@ class CaptureReviewController extends GetxController {
         );
       }
     } catch (_) {
-
     } finally {
       if (!isClosed) {
         isResolvingLocation.value = false;
@@ -305,10 +304,6 @@ class CaptureReviewController extends GetxController {
     _coordinator?.cancelCapture(reason: 'close');
     await _detachVideo();
 
-    if (!isClosed) {
-      Get.back();
-    }
-
     _coordinator?.disposeSession(reason: 'close');
 
     unawaited(
@@ -318,6 +313,8 @@ class CaptureReviewController extends GetxController {
         durablePath: _durablePath ?? _coordinator?.durablePath,
       ),
     );
+
+    _closeReviewRoute();
   }
 
   Future<void> retake() async {
@@ -335,9 +332,7 @@ class CaptureReviewController extends GetxController {
       durablePath: _durablePath ?? _coordinator?.durablePath,
     );
     unawaited(VisitOrientation.enableCaptureOrientations());
-    if (!isClosed) {
-      Get.back();
-    }
+    _closeReviewRoute();
     await VisitNativeCaptureLauncher.reopenForRetake(initialType: initialType);
   }
 
@@ -367,7 +362,6 @@ class CaptureReviewController extends GetxController {
 
       final coordinator = _coordinator;
       if (coordinator != null && !coordinator.isDisposed) {
-
         final waited = await coordinator.waitForAcceptRequirements(
           gpsRequired: resolveLocationInBackground,
           currentGeo: geo.value,
@@ -428,7 +422,7 @@ class CaptureReviewController extends GetxController {
 
       if (isClosed) return;
       CamPerf.stage(captureId, 'REVIEW_POP_START', usePhotoClock: true);
-      Get.back();
+      _closeReviewRoute();
       CamPerf.stage(captureId, 'REVIEW_POP_END', usePhotoClock: true);
       _flow.applyAcceptedMediaItem(durable);
       if (displayPath != durable.path) {
@@ -460,5 +454,20 @@ class CaptureReviewController extends GetxController {
       persistError.value = 'Could not save media. Please try again.';
       isBusy.value = false;
     }
+  }
+
+  void _closeReviewRoute() {
+    final route = Get.currentRoute;
+    final onReview =
+        route == AppRoutes.captureReview ||
+        route.contains(AppRoutes.captureReview);
+    if (onReview && (Get.key.currentState?.canPop() ?? false)) {
+      Get.back<void>(closeOverlays: true);
+    }
+    scheduleMicrotask(() {
+      if (Get.isRegistered<CaptureReviewController>()) {
+        Get.delete<CaptureReviewController>(force: true);
+      }
+    });
   }
 }

@@ -10,6 +10,10 @@ class AppRoutes {
   static const visitVideoPlayer = '/visit-video-player';
   static const visitCheckpoint = '/visit-checkpoint';
 
+  static const openLogVisit = 'openLogVisit';
+  static const openOnsiteLogVisit = 'openOnsiteLogVisit';
+  static const getPendingDrafts = 'getPendingDrafts';
+
   static String get webBaseUrl => DebugEnvConfig.instance.webBaseUrl;
 
   static String get webLoginUrl {
