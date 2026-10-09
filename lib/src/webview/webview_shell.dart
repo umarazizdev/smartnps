@@ -1625,9 +1625,6 @@ class _WebViewShellState extends State<WebViewShell>
               })
               .catch(function () { return null; })
               .then(function (result) {
-                // Always continue to web form login so session cookies work,
-                // even when native Sanctum mint fails. Credentials are persisted
-                // by Flutter before the Sanctum call for silent renew.
                 try {
                   form.submit();
                 } catch (_) {
@@ -5006,8 +5003,6 @@ class _WebViewShellState extends State<WebViewShell>
           );
         }
 
-        // Persist before Sanctum so silent renew works even if mint fails
-        // but the subsequent web form login still establishes a session.
         await AuthRepository.instance.saveCredentials(
           employeeNo: username,
           password: password,
@@ -5186,8 +5181,6 @@ class _WebViewShellState extends State<WebViewShell>
     ApiClient.instance.ensureAuthInterceptorInstalled();
     final dio = ApiClient.instance.dio;
     try {
-      // Keep credentials available for silent renew even if this mint fails
-      // (e.g. transient network) and web session login still succeeds.
       await AuthRepository.instance.saveCredentials(
         employeeNo: username,
         password: password,

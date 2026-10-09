@@ -652,9 +652,6 @@ class AuthRepository {
     int statusCode,
     dynamic responseData,
   ) async {
-    // Only wipe stored credentials when the server clearly rejects the
-    // password. Keep them on other 4xx (e.g. device-check / rate-limit)
-    // so a later renew can still succeed.
     if (statusCode != 401) {
       if (kDebugMode) {
         debugPrint(
@@ -715,8 +712,6 @@ class AuthRepository {
           '(tokens + duty state kept)',
         );
       }
-      // Handler owns markNeedsReauth + UX. Mark here only as fallback when
-      // WebViewShell (or another listener) is not registered yet.
       final handler = onRefreshSessionExpired;
       if (handler != null) {
         await handler();
