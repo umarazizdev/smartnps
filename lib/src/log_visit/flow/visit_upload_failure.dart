@@ -1,6 +1,7 @@
 import '../../api/visit_upload_api.dart';
 import 'visit_checkpoint.dart';
 import 'visit_flow_copy.dart';
+import 'visit_flow_kind.dart';
 import 'visit_media_draft_store.dart';
 import 'visit_video_flow_controller.dart';
 
@@ -136,11 +137,13 @@ class VisitUploadFailure {
 
   static VisitUploadFailurePresentation presentUnexpected(
     Object _, {
+    VisitFlowKind flowKind = VisitFlowKind.patrol,
     bool isSiteCheck = false,
   }) {
+    final kind = isSiteCheck ? VisitFlowKind.siteCheck : flowKind;
     return VisitUploadFailurePresentation(
       title: 'Upload failed',
-      summary: VisitFlowCopy(isSiteCheck: isSiteCheck).uploadFailureSummary,
+      summary: VisitFlowCopy(kind: kind).uploadFailureSummary,
       guidance: 'Please review your report and try again.',
     );
   }

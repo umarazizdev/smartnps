@@ -74,10 +74,18 @@ class ApiClient {
   }
 
   static void logHttpResult(String method, Uri uri, int? statusCode) {
-    if (statusCode == null || statusCode < 400) return;
-    SessionDebugLogger.instance.log(
-      SessionDebugCategory.apiErrors,
-      '$method ${_safePath(uri)} status=$statusCode',
+    if (statusCode == null) return;
+    if (statusCode >= 400) {
+      SessionDebugLogger.instance.log(
+        SessionDebugCategory.apiErrors,
+        '$method ${_safePath(uri)} status=$statusCode',
+      );
+      return;
+    }
+    SessionDebugLogger.instance.logApiSuccess(
+      method: method,
+      uri: uri,
+      statusCode: statusCode,
     );
   }
 

@@ -12,6 +12,8 @@ class AppRoutes {
 
   static const openLogVisit = 'openLogVisit';
   static const openOnsiteLogVisit = 'openOnsiteLogVisit';
+  static const createIssue = 'createIssue';
+  static const createIncident = 'createIncident';
   static const getPendingDrafts = 'getPendingDrafts';
 
   static String get webBaseUrl => DebugEnvConfig.instance.webBaseUrl;

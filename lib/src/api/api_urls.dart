@@ -12,8 +12,12 @@ class ApiUrls {
   static String get refreshTokenUrl => '$baseUrl/auth/refresh';
   static String get heartbeatUrl => '$baseUrl/heartbeat';
   static String get pushTokenUrl => '$baseUrl/push-token';
-  static String get permissionStatusUrl => '$baseUrl/native-app/permission-status';
+  static String get permissionStatusUrl =>
+      '$baseUrl/native-app/permission-status';
   static String get visitsUploadUrl => '$baseUrl/visits';
   static String get onsitePatrolVisitsUploadUrl =>
       '$baseUrl/onsite-patrol/visits';
+  static String get issueReportsUploadUrl => '$baseUrl/issue-reports';
+  static String get incidentReportsUploadUrl => '$baseUrl/incident-reports';
+  static String get reportContextsUrl => '$baseUrl/report-contexts';
 }

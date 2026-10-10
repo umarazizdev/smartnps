@@ -7,6 +7,7 @@ import '../../widgets/dialogs/glass_action_dialog.dart';
 import '../notes/visit_batch_notes_panel.dart';
 import '../notes/visit_media_notes_sheet.dart';
 import 'visit_flow_copy.dart';
+import 'visit_flow_kind.dart';
 import 'visit_media_draft_store.dart';
 import 'visit_video_flow_controller.dart';
 
@@ -110,6 +111,7 @@ class VisitDraftResumeDialog {
 
   static Future<VisitDraftResumeResult?> showPending({
     List<VisitMediaDraftSnapshot>? drafts,
+    bool forceSitePicker = false,
   }) async {
     if (_visible) return null;
 
@@ -128,7 +130,7 @@ class VisitDraftResumeDialog {
     _visible = true;
     try {
       VisitMediaDraftSnapshot? selected;
-      if (pending.length == 1) {
+      if (pending.length == 1 && !forceSitePicker) {
         selected = pending.first;
       } else {
         selected = await _showSitePicker(readyContext, pending);
@@ -157,11 +159,19 @@ class VisitDraftResumeDialog {
     List<VisitMediaDraftSnapshot> drafts,
   ) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final copy = VisitFlowCopy.fromDrafts(drafts);
+    final mixedKinds = drafts
+        .map((d) => d.context?.flowKind ?? VisitFlowKind.patrol)
+        .toSet()
+        .length >
+        1;
     return GlassActionDialog.showWithActions<VisitMediaDraftSnapshot?>(
       context: context,
       icon: Icons.assignment_late_outlined,
       iconColor: const Color(0xFF3B82F6),
-      title: VisitFlowCopy.unfinishedMixedReportsTitle,
+      title: mixedKinds
+          ? VisitFlowCopy.unfinishedMixedReportsTitle
+          : copy.unfinishedReportsTitle,
       barrierDismissible: true,
       showCloseButton: true,
       closeButtonTooltip: 'Keep drafts for later',
@@ -185,7 +195,10 @@ class VisitDraftResumeDialog {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final place = _resolveLocationLabel(draft: draft);
     final activeFlow = flow ?? ensureFlowController();
-    final canSubmitReport = !activeFlow.hasIncompleteCheckpoints;
+    final needsReportDetails =
+        activeFlow.isStructuredReport && !activeFlow.hasCompleteReportDetails;
+    final canSubmitReport =
+        !activeFlow.hasIncompleteCheckpoints && !needsReportDetails;
     final lastIssue =
         activeFlow.lastUploadIssue.value ?? draft.lastUploadIssue;
     final viewport = MediaQuery.sizeOf(context);
@@ -208,11 +221,13 @@ class VisitDraftResumeDialog {
 
     final message = canSubmitReport
         ? copy.completionMessage(place)
-        : _continueReportMessage(
-            flow: activeFlow,
-            location: place,
-            isSiteCheck: copy.isSiteCheck,
-          );
+        : (needsReportDetails
+              ? copy.incompleteReportDetailsMessage(place)
+              : _continueReportMessage(
+                  flow: activeFlow,
+                  location: place,
+                  kind: copy.kind,
+                ));
 
     Future<bool> confirmDiscard() async {
       if (!context.mounted) return false;
@@ -285,7 +300,7 @@ class VisitDraftResumeDialog {
           ],
           SizedBox(height: isLandscape ? 10 : 12),
           _DraftKeepHint(isDark: isDark, compact: isLandscape),
-          if (canSubmitReport) ...[
+          if (canSubmitReport && !copy.isStructuredReport) ...[
             SizedBox(height: isLandscape ? 10 : 14),
             VisitBatchNotesPanel(
               flow: activeFlow,
@@ -341,9 +356,9 @@ class VisitDraftResumeDialog {
   static String _continueReportMessage({
     required VisitVideoFlowController flow,
     String? location,
-    bool isSiteCheck = false,
+    VisitFlowKind kind = VisitFlowKind.patrol,
   }) {
-    return VisitFlowCopy(isSiteCheck: isSiteCheck).continueReportMessage(
+    return VisitFlowCopy(kind: kind).continueReportMessage(
       location: location,
       checkpointTotal: flow.checkpoints.length,
       checkpointCompleted: flow.completedCheckpointCount,
@@ -398,7 +413,7 @@ class VisitDraftResumeDialog {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              'No unfinished patrol reports',
+              'No unfinished reports',
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: isDark ? Colors.white : const Color(0xFF0F172A),
@@ -409,8 +424,8 @@ class VisitDraftResumeDialog {
             ),
             const SizedBox(height: 8),
             Text(
-              'There are no saved patrol drafts on this device right now. '
-              'Start a new patrol to begin capturing your report.',
+              'There are no saved patrol, onsite, issue, or incident drafts '
+              'on this device right now.',
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: bodyColor,
@@ -649,7 +664,7 @@ class _PendingSitesList extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
-          VisitFlowCopy.unfinishedMixedSitesMessage(drafts.length),
+          VisitFlowCopy.unfinishedMixedReportsMessage(drafts.length),
           textAlign: TextAlign.center,
           style: TextStyle(
             color: bodyColor,
@@ -685,26 +700,16 @@ class _PendingSitesList extends StatelessWidget {
     final title = draft.locationLabel ?? 'Unknown site';
     final subtitle = VisitDraftResumeDialog.siteTileSubtitle(draft);
     final copy = VisitFlowCopy.fromDraft(draft);
-    final isSiteCheck = copy.isSiteCheck;
+    final kind = copy.kind;
     final issue = draft.lastUploadIssue;
     final issueColor = issue == null
         ? null
         : (issue.isGeofence
               ? const Color(0xFFD97706)
               : const Color(0xFFDC2626));
-    final typeAccent = isSiteCheck
-        ? (isDark ? const Color(0xFF34D399) : const Color(0xFF059669))
-        : (isDark ? const Color(0xFF93C5FD) : const Color(0xFF2563EB));
-    final typeBg = isSiteCheck
-        ? (isDark
-              ? const Color(0xFF064E3B).withValues(alpha: 0.55)
-              : const Color(0xFFECFDF5))
-        : (isDark
-              ? const Color(0xFF1E3A5F).withValues(alpha: 0.7)
-              : const Color(0xFFEFF6FF));
-    final typeIcon = isSiteCheck
-        ? Icons.fact_check_outlined
-        : Icons.route_outlined;
+    final typeAccent = _typeAccentFor(kind, isDark: isDark);
+    final typeBg = _typeBackgroundFor(kind, isDark: isDark);
+    final typeIcon = _typeIconFor(kind);
 
     return Material(
       color: Colors.transparent,
@@ -823,5 +828,52 @@ class _PendingSitesList extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  static IconData _typeIconFor(VisitFlowKind kind) {
+    switch (kind) {
+      case VisitFlowKind.siteCheck:
+        return Icons.fact_check_outlined;
+      case VisitFlowKind.issueReport:
+        return Icons.flag_rounded;
+      case VisitFlowKind.incidentReport:
+        return Icons.warning_amber_rounded;
+      case VisitFlowKind.patrol:
+        return Icons.route_outlined;
+    }
+  }
+
+  static Color _typeAccentFor(VisitFlowKind kind, {required bool isDark}) {
+    switch (kind) {
+      case VisitFlowKind.siteCheck:
+        return isDark ? const Color(0xFF34D399) : const Color(0xFF059669);
+      case VisitFlowKind.issueReport:
+        return isDark ? const Color(0xFFC4B5FD) : const Color(0xFF7C3AED);
+      case VisitFlowKind.incidentReport:
+        return isDark ? const Color(0xFFFCA5A5) : const Color(0xFFDC2626);
+      case VisitFlowKind.patrol:
+        return isDark ? const Color(0xFF93C5FD) : const Color(0xFF2563EB);
+    }
+  }
+
+  static Color _typeBackgroundFor(VisitFlowKind kind, {required bool isDark}) {
+    switch (kind) {
+      case VisitFlowKind.siteCheck:
+        return isDark
+            ? const Color(0xFF064E3B).withValues(alpha: 0.55)
+            : const Color(0xFFECFDF5);
+      case VisitFlowKind.issueReport:
+        return isDark
+            ? const Color(0xFF4C1D95).withValues(alpha: 0.55)
+            : const Color(0xFFF5F3FF);
+      case VisitFlowKind.incidentReport:
+        return isDark
+            ? const Color(0xFF7F1D1D).withValues(alpha: 0.55)
+            : const Color(0xFFFEF2F2);
+      case VisitFlowKind.patrol:
+        return isDark
+            ? const Color(0xFF1E3A5F).withValues(alpha: 0.7)
+            : const Color(0xFFEFF6FF);
+    }
   }
 }

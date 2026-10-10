@@ -10,6 +10,7 @@ import 'package:get/get.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../api/visit_upload_api.dart';
+import 'visit_flow_kind.dart';
 import 'visit_gps_session.dart';
 import 'visit_media_draft_store.dart';
 import 'visit_upload_failure.dart';
@@ -26,7 +27,7 @@ typedef VisitQueuedUploadFailureHandler =
     });
 
 typedef VisitQueuedUploadSuccessHandler =
-    Future<void> Function({required bool isSiteCheck});
+    Future<void> Function({required VisitFlowKind flowKind});
 
 class VisitUploadQueue {
   VisitUploadQueue._({
@@ -206,7 +207,7 @@ class VisitUploadQueue {
       }
 
       final snapshot = await _store.loadDraftSnapshot(key: key);
-      if (!snapshot.hasItems) {
+      if (!snapshot.canUpload) {
         _queuedKeys.remove(folderName);
         await _persistQueue();
         continue;
@@ -222,15 +223,34 @@ class VisitUploadQueue {
       final flow = _ensureFlowController();
       _beginUploadBanner(flow, itemCount: snapshot.items.length);
 
+      var activeSnapshot = snapshot;
       VisitUploadResult result;
       try {
         result = await _runUpload(
-          snapshot,
+          activeSnapshot,
           onProgress: (current, total) {
             flow.uploadProgressCurrent.value = current;
             flow.uploadProgressTotal.value = total;
           },
         );
+        if (!result.success &&
+            !result.isNetworkFailure &&
+            result.isClientDraftReuseError) {
+          if (kDebugMode) {
+            debugPrint(
+              '[VisitUploadQueue] client_draft_id reuse; rotating and '
+              'retrying once draft=$folderName',
+            );
+          }
+          activeSnapshot = await _store.rotateClientDraftId(activeSnapshot);
+          result = await _runUpload(
+            activeSnapshot,
+            onProgress: (current, total) {
+              flow.uploadProgressCurrent.value = current;
+              flow.uploadProgressTotal.value = total;
+            },
+          );
+        }
       } catch (error, stack) {
         if (kDebugMode) {
           debugPrint('[VisitUploadQueue] unexpected error=$error');
@@ -244,10 +264,10 @@ class VisitUploadQueue {
         _clearUploadBanner(flow);
         await _handleNonNetworkFailure(
           key: key,
-          snapshot: snapshot,
+          snapshot: activeSnapshot,
           presentation: VisitUploadFailure.presentUnexpected(
             error,
-            isSiteCheck: snapshot.context?.isSiteCheck == true,
+            flowKind: activeSnapshot.context?.flowKind ?? VisitFlowKind.patrol,
           ),
         );
         continue;
@@ -255,7 +275,7 @@ class VisitUploadQueue {
 
       if (result.success) {
         _clearUploadBanner(flow);
-        await _handleSuccess(key: key, snapshot: snapshot);
+        await _handleSuccess(key: key, snapshot: activeSnapshot);
         continue;
       }
 
@@ -272,11 +292,11 @@ class VisitUploadQueue {
       _clearUploadBanner(flow);
       await _handleNonNetworkFailure(
         key: key,
-        snapshot: snapshot,
+        snapshot: activeSnapshot,
         presentation: VisitUploadFailure.present(
           result: result,
-          mediaItems: snapshot.items,
-          checkpoints: snapshot.context?.checkpoints ?? const [],
+          mediaItems: activeSnapshot.items,
+          checkpoints: activeSnapshot.context?.checkpoints ?? const [],
         ),
       );
     }
@@ -358,7 +378,7 @@ class VisitUploadQueue {
     final successHandler = onUploadSucceeded;
     if (successHandler != null) {
       await successHandler(
-        isSiteCheck: snapshot.context?.isSiteCheck == true,
+        flowKind: snapshot.context?.flowKind ?? VisitFlowKind.patrol,
       );
     }
   }

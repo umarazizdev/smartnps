@@ -5,39 +5,61 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'cam_perf.dart';
+import 'visit_flow_kind.dart';
 import 'visit_patrol_context.dart';
+import 'visit_report_details.dart';
 import 'visit_video_flow_controller.dart';
 
 class VisitDraftKey {
-  const VisitDraftKey({this.regionId, this.siteId});
+  const VisitDraftKey({this.regionId, this.siteId, this.flowKind});
 
   final int? regionId;
   final int? siteId;
+  final VisitFlowKind? flowKind;
 
   static const unscoped = VisitDraftKey();
 
   bool get isScoped => regionId != null || siteId != null;
 
   String get folderName {
-    if (!isScoped) return 'unscoped';
-    return 'r${regionId ?? 0}_s${siteId ?? 0}';
+    final base = !isScoped ? 'unscoped' : 'r${regionId ?? 0}_s${siteId ?? 0}';
+    final suffix = flowKind?.draftFolderSuffix;
+    if (suffix == null || suffix.isEmpty) return base;
+    if (!isScoped) return '${base}_$suffix';
+    return '${base}_$suffix';
   }
 
   static VisitDraftKey fromContext(VisitPatrolContext? context) {
     if (context == null) return unscoped;
     if (context.regionId == null && context.siteId == null) return unscoped;
-    return VisitDraftKey(regionId: context.regionId, siteId: context.siteId);
+    final kind = context.flowKind;
+    return VisitDraftKey(
+      regionId: context.regionId,
+      siteId: context.siteId,
+      flowKind: kind.isStructuredReport ? kind : null,
+    );
   }
 
   static VisitDraftKey? tryParse(String? raw) {
     if (raw == null || raw.trim().isEmpty) return null;
     final value = raw.trim();
     if (value == 'unscoped' || value == 'legacy') return unscoped;
-    final match = RegExp(r'^r(\d+)_s(\d+)$').firstMatch(value);
-    if (match == null) return null;
+    final match = RegExp(r'^r(\d+)_s(\d+)(?:_(issue|incident))?$').firstMatch(
+      value,
+    );
+    if (match == null) {
+      final unscopedMatch = RegExp(
+        r'^unscoped_(issue|incident)$',
+      ).firstMatch(value);
+      if (unscopedMatch == null) return null;
+      return VisitDraftKey(
+        flowKind: VisitFlowKind.tryParseDraftSuffix(unscopedMatch.group(1)),
+      );
+    }
     return VisitDraftKey(
       regionId: int.tryParse(match.group(1)!),
       siteId: int.tryParse(match.group(2)!),
+      flowKind: VisitFlowKind.tryParseDraftSuffix(match.group(3)),
     );
   }
 
@@ -45,11 +67,12 @@ class VisitDraftKey {
   bool operator ==(Object other) {
     return other is VisitDraftKey &&
         other.regionId == regionId &&
-        other.siteId == siteId;
+        other.siteId == siteId &&
+        other.flowKind == flowKind;
   }
 
   @override
-  int get hashCode => Object.hash(regionId, siteId);
+  int get hashCode => Object.hash(regionId, siteId, flowKind);
 
   @override
   String toString() => folderName;
@@ -65,6 +88,7 @@ class VisitMediaDraftSnapshot {
     this.savedAt,
     this.batchNote = const VisitBatchNote(),
     this.generalNote = const VisitBatchNote(),
+    this.reportDetails = const VisitReportDetails(),
     this.lastUploadIssue,
   });
 
@@ -76,9 +100,34 @@ class VisitMediaDraftSnapshot {
   final DateTime? savedAt;
   final VisitBatchNote batchNote;
   final VisitBatchNote generalNote;
+  final VisitReportDetails reportDetails;
   final VisitDraftLastUploadIssue? lastUploadIssue;
 
   bool get hasItems => items.isNotEmpty;
+
+  bool get isStructuredReport =>
+      context?.isStructuredReport == true ||
+      (draftKey.flowKind?.isStructuredReport ?? false);
+
+  /// Issue/incident reports may submit with zero media; patrol may not.
+  bool get canUpload =>
+      hasItems ||
+      (isStructuredReport &&
+          reportDetails.isCompleteFor(
+            context?.flowKind ??
+                draftKey.flowKind ??
+                VisitFlowKind.issueReport,
+          ));
+
+  /// Draft should appear in resume lists / be reopened from bridge.
+  bool get hasResumeContent =>
+      hasItems ||
+      batchNote.hasContent ||
+      generalNote.hasContent ||
+      lastUploadIssue != null ||
+      (isStructuredReport &&
+          (reportDetails.hasUserContent ||
+              context?.hasReportContext == true));
 
   String? get displaySiteName {
     final fromContext = context?.displayPlaceName;
@@ -96,6 +145,32 @@ class VisitMediaDraftSnapshot {
 
   int get photoCount => items.where((e) => e.isPhoto).length;
   int get videoCount => items.where((e) => e.isVideo).length;
+
+  VisitMediaDraftSnapshot copyWith({
+    List<VisitMediaItem>? items,
+    VisitDraftKey? draftKey,
+    DateTime? startedAt,
+    String? siteName,
+    VisitPatrolContext? context,
+    DateTime? savedAt,
+    VisitBatchNote? batchNote,
+    VisitBatchNote? generalNote,
+    VisitReportDetails? reportDetails,
+    VisitDraftLastUploadIssue? lastUploadIssue,
+  }) {
+    return VisitMediaDraftSnapshot(
+      items: items ?? this.items,
+      draftKey: draftKey ?? this.draftKey,
+      startedAt: startedAt ?? this.startedAt,
+      siteName: siteName ?? this.siteName,
+      context: context ?? this.context,
+      savedAt: savedAt ?? this.savedAt,
+      batchNote: batchNote ?? this.batchNote,
+      generalNote: generalNote ?? this.generalNote,
+      reportDetails: reportDetails ?? this.reportDetails,
+      lastUploadIssue: lastUploadIssue ?? this.lastUploadIssue,
+    );
+  }
 }
 
 class VisitDraftLastUploadIssue {
@@ -558,6 +633,28 @@ class VisitMediaDraftStore {
     }
   }
 
+  Future<VisitMediaDraftSnapshot> rotateClientDraftId(
+    VisitMediaDraftSnapshot snapshot,
+  ) async {
+    final newId = VisitPatrolContext.generateClientDraftId();
+    final context = (snapshot.context ?? const VisitPatrolContext()).copyWith(
+      clientDraftId: newId,
+    );
+    final updated = snapshot.copyWith(context: context);
+    await saveDraft(
+      updated.items,
+      key: updated.draftKey,
+      startedAt: updated.startedAt,
+      siteName: updated.siteName,
+      context: context,
+      batchNote: updated.batchNote,
+      generalNote: updated.generalNote,
+      reportDetails: updated.reportDetails,
+      lastUploadIssue: updated.lastUploadIssue,
+    );
+    return updated;
+  }
+
   Future<void> saveDraft(
     List<VisitMediaItem> items, {
     DateTime? startedAt,
@@ -566,11 +663,19 @@ class VisitMediaDraftStore {
     VisitDraftKey? key,
     VisitBatchNote batchNote = const VisitBatchNote(),
     VisitBatchNote generalNote = const VisitBatchNote(),
+    VisitReportDetails reportDetails = const VisitReportDetails(),
     VisitDraftLastUploadIssue? lastUploadIssue,
   }) async {
     final draftKey = key ?? VisitDraftKey.fromContext(context);
+    final structured =
+        context?.isStructuredReport == true ||
+        (draftKey.flowKind?.isStructuredReport ?? false);
+    final keepEmptyStructured =
+        items.isEmpty &&
+        structured &&
+        (reportDetails.hasUserContent || context?.hasReportContext == true);
 
-    if (items.isEmpty) {
+    if (items.isEmpty && !keepEmptyStructured) {
       await clearDraft(deleteFiles: true, key: draftKey);
       await setActiveKey(draftKey);
       return;
@@ -590,12 +695,13 @@ class VisitMediaDraftStore {
             if (best == null || value.isBefore(best)) return value;
             return best;
           },
-        );
+        ) ??
+        (keepEmptyStructured ? DateTime.now() : null);
     final effectiveSiteName = context?.siteName?.trim().isNotEmpty == true
         ? context!.siteName
         : siteName;
     final payload = <String, dynamic>{
-      'version': 8,
+      'version': 9,
       'draftKey': draftKey.folderName,
       'savedAt': DateTime.now().toIso8601String(),
       'startedAt': effectiveStartedAt?.toIso8601String(),
@@ -603,6 +709,7 @@ class VisitMediaDraftStore {
       'context': context?.toJson(),
       'attentionNeeded': batchNote.toJson(),
       'generalNote': generalNote.toJson(),
+      'reportDetails': reportDetails.toJson(),
       if (lastUploadIssue != null) 'lastUploadIssue': lastUploadIssue.toJson(),
       'items': items.map(_itemToJson).toList(),
     };
@@ -731,6 +838,22 @@ class VisitMediaDraftStore {
         context = context.copyWith(siteName: legacySiteName);
       }
 
+      // Folder suffix is authoritative for issue/incident drafts so multi-report
+      // pickers and resume flows keep the correct type even if context is stale.
+      final folderKind = draftKey.flowKind;
+      if (folderKind != null && folderKind.isStructuredReport) {
+        if (context == null) {
+          context = VisitPatrolContext(
+            regionId: draftKey.regionId,
+            siteId: draftKey.siteId,
+            siteName: legacySiteName,
+            visitType: folderKind.visitTypeValue,
+          );
+        } else if (context.flowKind != folderKind) {
+          context = context.copyWith(visitType: folderKind.visitTypeValue);
+        }
+      }
+
       final resolvedKey = VisitDraftKey.fromContext(context);
       final effectiveKey = draftKey.isScoped
           ? draftKey
@@ -760,6 +883,16 @@ class VisitMediaDraftStore {
         }
       }
 
+      VisitReportDetails reportDetails = const VisitReportDetails();
+      final reportRaw = map['reportDetails'] ?? map['report_details'];
+      if (reportRaw is Map) {
+        reportDetails =
+            VisitReportDetails.fromJson(Map<String, dynamic>.from(reportRaw)) ??
+            const VisitReportDetails();
+      } else if (context?.isStructuredReport == true) {
+        reportDetails = VisitReportDetails.defaultsFor(context!.flowKind);
+      }
+
       return VisitMediaDraftSnapshot(
         items: items,
         draftKey: effectiveKey,
@@ -771,6 +904,7 @@ class VisitMediaDraftStore {
         context: context,
         batchNote: batch,
         generalNote: general,
+        reportDetails: reportDetails,
         lastUploadIssue: VisitDraftLastUploadIssue.tryParse(
           map['lastUploadIssue'],
         ),
@@ -793,7 +927,7 @@ class VisitMediaDraftStore {
       final key = VisitDraftKey.tryParse(name);
       if (key == null) continue;
       final snapshot = await _loadSnapshotForKey(key);
-      if (!snapshot.hasItems) continue;
+      if (!snapshot.hasResumeContent) continue;
       pending.add(snapshot);
     }
 
@@ -819,7 +953,7 @@ class VisitMediaDraftStore {
 
   Future<bool> hasDraft({VisitDraftKey? key}) async {
     final snapshot = await loadDraftSnapshot(key: key);
-    return snapshot.hasItems;
+    return snapshot.hasResumeContent;
   }
 
   Future<void> clearDraft({bool deleteFiles = true, VisitDraftKey? key}) async {
