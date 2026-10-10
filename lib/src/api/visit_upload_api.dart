@@ -8,6 +8,7 @@ import 'package:http_parser/http_parser.dart';
 import 'package:path/path.dart' as p;
 
 import '../debug/session_debug_logger.dart';
+import '../log_visit/flow/visit_flow_kind.dart';
 import '../log_visit/flow/visit_video_flow_controller.dart';
 import 'api_client.dart';
 import 'api_urls.dart';
@@ -39,6 +40,40 @@ class VisitUploadResult {
     if (text != null && text.isNotEmpty) return text;
     if (success) return 'Patrol round report uploaded successfully';
     return 'Upload failed';
+  }
+
+  bool get isClientDraftReuseError {
+    if (success) return false;
+    final map = errors;
+    if (map != null) {
+      for (final entry in map.entries) {
+        final key = entry.key.toString().toLowerCase();
+        if (key != 'client_draft_id' && key != 'clientdraftid') continue;
+        for (final message in _errorMessages(entry.value)) {
+          if (_looksLikeDraftReuseMessage(message)) return true;
+        }
+      }
+    }
+    return _looksLikeDraftReuseMessage(displayMessage);
+  }
+
+  static List<String> _errorMessages(dynamic value) {
+    if (value is List) {
+      return value
+          .map((e) => e?.toString().trim() ?? '')
+          .where((e) => e.isNotEmpty)
+          .toList(growable: false);
+    }
+    final text = value?.toString().trim() ?? '';
+    if (text.isEmpty) return const <String>[];
+    return <String>[text];
+  }
+
+  static bool _looksLikeDraftReuseMessage(String? raw) {
+    final text = raw?.trim().toLowerCase() ?? '';
+    if (text.isEmpty) return false;
+    return text.contains('already used for a different visit') ||
+        (text.contains('client_draft_id') && text.contains('already used'));
   }
 
   static bool isNetworkDioException(DioException error) {
@@ -74,7 +109,11 @@ class VisitUploadApi {
     String? uploadUrl,
     void Function(int current, int total)? onProgress,
   }) async {
-    if (items.isEmpty) {
+    final visitType = meta['visit_type']?.toString().trim().toLowerCase();
+    final allowsEmptyMedia =
+        visitType == VisitFlowKind.issueReportVisitType ||
+        visitType == VisitFlowKind.incidentReportVisitType;
+    if (items.isEmpty && !allowsEmptyMedia) {
       const result = VisitUploadResult(
         success: false,
         message: 'Please capture at least one photo or video before upload.',
@@ -298,9 +337,16 @@ class VisitUploadApi {
 
   void _logResult(VisitUploadResult result, {dynamic responseBody}) {
     if (!result.success) {
+      final path = Uri.tryParse(ApiUrls.visitsUploadUrl)?.path ?? '/visits/upload';
+      final draftId = result.clientDraftId?.trim() ?? '';
+      final ids = <String>[
+        if (result.visitId != null) 'visitId=${result.visitId}',
+        if (draftId.isNotEmpty) 'clientDraftId=$draftId',
+      ].join(' ');
       SessionDebugLogger.instance.log(
         SessionDebugCategory.uploads,
-        'FAIL status=${result.statusCode} '
+        'FAIL POST $path status=${result.statusCode} '
+        '${ids.isEmpty ? '' : '$ids '}'
         'message=${result.displayMessage} errors=${result.errors}',
       );
     }
@@ -543,7 +589,12 @@ class VisitUploadApi {
     return VisitUploadResult(
       success: ok,
       statusCode: status,
-      visitId: _asInt(map?['visit_id'] ?? map?['visitId']),
+      visitId: _asInt(
+        map?['report_id'] ??
+            map?['reportId'] ??
+            map?['visit_id'] ??
+            map?['visitId'],
+      ),
       clientDraftId:
           map?['client_draft_id']?.toString() ??
           map?['clientDraftId']?.toString(),

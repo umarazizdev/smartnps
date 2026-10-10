@@ -14,11 +14,22 @@ class CrashlyticsReporter {
   static bool _lifecycleInstalled = false;
 
   static Future<void> init() async {
+    // Debug runs (e.g. VS Code F5) must not upload Crashlytics noise.
+    final collectionEnabled = !kDebugMode;
+    await FirebaseCrashlytics.instance
+        .setCrashlyticsCollectionEnabled(collectionEnabled);
+
+    if (!collectionEnabled) {
+      FlutterError.onError = FlutterError.presentError;
+      PlatformDispatcher.instance.onError = (error, stack) {
+        debugPrint('[CrashlyticsReporter] skipped (debug): $error');
+        return true;
+      };
+      return;
+    }
+
     FlutterError.onError = (errorDetails) {
       unawaited(_recordFlutterError(errorDetails));
-      if (kDebugMode) {
-        FlutterError.presentError(errorDetails);
-      }
     };
 
     PlatformDispatcher.instance.onError = (error, stack) {
@@ -30,18 +41,16 @@ class CrashlyticsReporter {
       return true;
     };
 
-    await FirebaseCrashlytics.instance.setCrashlyticsCollectionEnabled(true);
     await flushUnsent();
     _installLifecycleFlush();
   }
 
   static Future<void> flushUnsent() async {
+    if (kDebugMode) return;
     try {
       await FirebaseCrashlytics.instance.sendUnsentReports();
-    } catch (e, st) {
-      if (kDebugMode) {
-        debugPrint('[CrashlyticsReporter] sendUnsentReports failed: $e\n$st');
-      }
+    } catch (_) {
+      // Best-effort flush only.
     }
   }
 
@@ -129,6 +138,7 @@ class CrashlyticsReporter {
   }
 
   static Future<void> _recordFlutterError(FlutterErrorDetails details) async {
+    if (kDebugMode) return;
     try {
       if (shouldIgnoreFlutterError(details)) {
         return;
@@ -151,6 +161,7 @@ class CrashlyticsReporter {
     StackTrace stack, {
     required bool fatal,
   }) async {
+    if (kDebugMode) return;
     try {
       await FirebaseCrashlytics.instance.recordError(
         error,
@@ -176,6 +187,7 @@ class CrashlyticsReporter {
 class _CrashlyticsLifecycleObserver with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (kDebugMode) return;
     if (state == AppLifecycleState.resumed ||
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {

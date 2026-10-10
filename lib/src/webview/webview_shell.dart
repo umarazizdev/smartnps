@@ -49,6 +49,7 @@ import '../push/announcements/officer_announcement_coordinator.dart';
 import '../push/notifications/push_notification_service.dart';
 import '../permissions/native_permission_status_service.dart';
 import '../log_visit/flow/visit_draft_resume_dialog.dart';
+import '../log_visit/flow/visit_flow_kind.dart';
 import '../log_visit/flow/visit_gps_session.dart';
 import '../log_visit/flow/visit_media_draft_store.dart';
 import '../log_visit/flow/visit_upload_queue.dart';
@@ -876,13 +877,15 @@ class _WebViewShellState extends State<WebViewShell>
 
   static String _injectJsBridgeRoutes(String source) {
     return source
-        .replaceAll(
-          '__JS_BRIDGE_OPEN_LOG_VISIT__',
-          AppRoutes.openLogVisit,
-        )
+        .replaceAll('__JS_BRIDGE_OPEN_LOG_VISIT__', AppRoutes.openLogVisit)
         .replaceAll(
           '__JS_BRIDGE_OPEN_ONSITE_LOG_VISIT__',
           AppRoutes.openOnsiteLogVisit,
+        )
+        .replaceAll('__JS_BRIDGE_OPEN_REPORT_ISSUE__', AppRoutes.createIssue)
+        .replaceAll(
+          '__JS_BRIDGE_OPEN_INCIDENT_REPORT__',
+          AppRoutes.createIncident,
         )
         .replaceAll(
           '__JS_BRIDGE_GET_PENDING_DRAFTS__',
@@ -1010,6 +1013,24 @@ class _WebViewShellState extends State<WebViewShell>
             .then(function () {
               return window.flutter_inappwebview.callHandler(
                 '__JS_BRIDGE_OPEN_ONSITE_LOG_VISIT__',
+                payload == null ? {} : payload
+              );
+            });
+        };
+        window.SmartNPS360.createIssue = function (payload) {
+          return ensureFlutterBridge()
+            .then(function () {
+              return window.flutter_inappwebview.callHandler(
+                '__JS_BRIDGE_OPEN_REPORT_ISSUE__',
+                payload == null ? {} : payload
+              );
+            });
+        };
+        window.SmartNPS360.createIncident = function (payload) {
+          return ensureFlutterBridge()
+            .then(function () {
+              return window.flutter_inappwebview.callHandler(
+                '__JS_BRIDGE_OPEN_INCIDENT_REPORT__',
                 payload == null ? {} : payload
               );
             });
@@ -2686,7 +2707,6 @@ class _WebViewShellState extends State<WebViewShell>
 
     if ((Platform.isIOS || Platform.isAndroid) &&
         state == AppLifecycleState.resumed) {
-
       unawaited(
         NativePermissionStatusService.instance
             .uploadAppCycleWithKillTimelineIfNeeded(appCycle: state.name),
@@ -3447,7 +3467,6 @@ class _WebViewShellState extends State<WebViewShell>
   Future<void> _syncChromeAfterWebHistoryBack(
     InAppWebViewController controller,
   ) async {
-
     if (Platform.isAndroid) {
       await Future<void>.delayed(const Duration(milliseconds: 120));
     }
@@ -3499,11 +3518,11 @@ class _WebViewShellState extends State<WebViewShell>
     queue.onQueueChanged = () {
       unawaited(_notifyWebPendingDraftsChanged());
     };
-    queue.onUploadSucceeded = ({required isSiteCheck}) async {
+    queue.onUploadSucceeded = ({required flowKind}) async {
       final isDark = _ui.webPrefersDark.value;
       await VisitVideoPreviewScreen.showQueuedUploadSuccessFeedback(
         isDark: isDark,
-        isSiteCheck: isSiteCheck,
+        flowKind: flowKind,
       );
       unawaited(_notifyWebPendingDraftsChanged());
     };
@@ -3830,13 +3849,19 @@ class _WebViewShellState extends State<WebViewShell>
     List<dynamic> args, {
     required String handlerName,
     required String uploadUrl,
+    String? visitType,
   }) async {
-    final isOnsite = handlerName == AppRoutes.openOnsiteLogVisit;
+    final kindLabel = switch (handlerName) {
+      AppRoutes.openOnsiteLogVisit => 'onsite_patrol',
+      AppRoutes.createIssue => 'issue_report',
+      AppRoutes.createIncident => 'incident_report',
+      _ => 'standard_patrol',
+    };
     patrolLogDebugLog(
       '[SmartNPS360][JS Bridge] ================================\n'
       '[SmartNPS360][JS Bridge] CALLED FROM WEB\n'
       '[SmartNPS360][JS Bridge] route=$handlerName\n'
-      '[SmartNPS360][JS Bridge] kind=${isOnsite ? 'onsite_patrol' : 'standard_patrol'}\n'
+      '[SmartNPS360][JS Bridge] kind=$kindLabel\n'
       '[SmartNPS360][JS Bridge] uploadUrl=$uploadUrl\n'
       '[SmartNPS360][JS Bridge] argsCount=${args.length}\n'
       '[SmartNPS360][JS Bridge] ================================',
@@ -3936,6 +3961,12 @@ class _WebViewShellState extends State<WebViewShell>
       'uploadUrl=$uploadUrl',
     );
 
+    if (visitType != null && visitType.trim().isNotEmpty) {
+      // Dedicated issue/incident handlers own the visit type so drafts stay
+      // isolated from patrol/onsite even if the web payload omits or mismatches it.
+      payload = {...?payload, 'visit_type': visitType, 'visitType': visitType};
+    }
+
     final result = await _openLogVisitScreen(payload, uploadUrl: uploadUrl);
     patrolLogDebugLog(
       '[SmartNPS360] $handlerName ok=${result['ok']} '
@@ -3962,6 +3993,43 @@ class _WebViewShellState extends State<WebViewShell>
     await _captureWebResumePoint();
 
     final reopenedPending = await flow.applyBridgePatrolContext(normalized);
+
+    if (Get.currentRoute == AppRoutes.visitVideoPreview) {
+      Get.back();
+    }
+
+    // Open the draft UI first for issue/incident, then authorize in-place so
+    // the officer sees a preparing state instead of waiting on the dashboard.
+    final needsReportContextPrep =
+        flow.isStructuredReport &&
+        flow.patrolContext.value?.hasReportContext != true;
+    if (needsReportContextPrep) {
+      flow.isPreparingReport.value = true;
+    }
+    _openLogVisitTab();
+
+    final contextError = await flow.ensureOperationalReportContext();
+    flow.isPreparingReport.value = false;
+    if (contextError != null) {
+      patrolLogDebugLog(
+        '[SmartNPS360] report context failed: $contextError payload=$normalized',
+      );
+      await _closeLogVisit(openDashboard: true);
+      Get.closeAllSnackbars();
+      Get.snackbar(
+        'Cannot start report',
+        contextError,
+        snackPosition: SnackPosition.TOP,
+        duration: const Duration(seconds: 4),
+      );
+      return <String, dynamic>{
+        'ok': false,
+        'error': {
+          'code': 'report_context_required',
+          'message': contextError,
+        },
+      };
+    }
     final ctx = flow.patrolContext.value;
 
     patrolLogDebugLog(
@@ -3972,17 +4040,13 @@ class _WebViewShellState extends State<WebViewShell>
       'siteId=${ctx?.siteId} regionId=${ctx?.regionId} '
       'siteName=${ctx?.siteName} regionName=${ctx?.regionName} '
       'clientDraftId=${ctx?.clientDraftId} '
+      'reportContextId=${ctx?.reportContextId} '
       'sitePatrolWindowId=${ctx?.sitePatrolWindowId} '
       'uploadUrl=${ctx?.uploadUrl} '
       'resumeUri=$_uriBeforeLogVisit '
       'scrollY=$_scrollYBeforeLogVisit '
       'payload=$normalized',
     );
-
-    if (Get.currentRoute == AppRoutes.visitVideoPreview) {
-      Get.back();
-    }
-    _openLogVisitTab();
 
     return <String, dynamic>{
       'ok': true,
@@ -3993,6 +4057,7 @@ class _WebViewShellState extends State<WebViewShell>
       'siteName': ctx?.siteName,
       'regionName': ctx?.regionName,
       'clientDraftId': ctx?.clientDraftId,
+      'reportContextId': ctx?.reportContextId,
       'uploadUrl': ctx?.uploadUrl,
     };
   }
@@ -4370,7 +4435,7 @@ class _WebViewShellState extends State<WebViewShell>
       };
     }
 
-    final pending =
+    var pending =
         drafts ?? await VisitUploadQueue.instance.listEditablePendingDrafts();
     if (pending.isEmpty) {
       await VisitDraftResumeDialog.showEmptyState();
@@ -4385,47 +4450,104 @@ class _WebViewShellState extends State<WebViewShell>
     final flow = VisitDraftResumeDialog.ensureFlowController();
     await flow.ensureDraftLoaded();
 
-    final result = await VisitDraftResumeDialog.showPending(drafts: pending);
-    if (result == null) {
-      return <String, dynamic>{
-        'ok': true,
-        'count': pending.length,
-        'opened': true,
-        'dismissed': true,
-      };
+    var returnToSitePickerAfterDiscard = false;
+    while (true) {
+      final result = await VisitDraftResumeDialog.showPending(
+        drafts: pending,
+        forceSitePicker: returnToSitePickerAfterDiscard,
+      );
+      if (result == null) {
+        return <String, dynamic>{
+          'ok': true,
+          'count': pending.length,
+          'opened': true,
+          'dismissed': true,
+        };
+      }
+
+      await flow.activateDraft(result.draft.draftKey);
+
+      switch (result.action) {
+        case VisitDraftResumeAction.continueReport:
+        case VisitDraftResumeAction.submitReport:
+          final needsReportContextPrep =
+              flow.isStructuredReport &&
+              flow.patrolContext.value?.hasReportContext != true;
+          if (needsReportContextPrep) {
+            flow.isPreparingReport.value = true;
+          }
+          if (result.action == VisitDraftResumeAction.continueReport ||
+              needsReportContextPrep) {
+            _openLogVisitTab();
+          }
+          final resumeContextError = await flow.ensureOperationalReportContext();
+          flow.isPreparingReport.value = false;
+          if (resumeContextError != null) {
+            await _closeLogVisit(openDashboard: true);
+            Get.closeAllSnackbars();
+            Get.snackbar(
+              'Cannot continue report',
+              resumeContextError,
+              snackPosition: SnackPosition.TOP,
+              duration: const Duration(seconds: 4),
+            );
+            return <String, dynamic>{
+              'ok': false,
+              'count': pending.length,
+              'opened': true,
+              'error': {
+                'code': 'report_context_required',
+                'message': resumeContextError,
+              },
+            };
+          }
+          if (result.action == VisitDraftResumeAction.submitReport) {
+            unawaited(
+              VisitVideoPreviewScreen.uploadCurrentDraft(
+                onSuccess: _finishLogVisitUploadSuccess,
+                onUploadStarted: _onPatrolUploadStarted,
+                onFailureOpenDraft: _onPatrolUploadFailureOpenDraft,
+                skipCompletionConfirm: true,
+              ),
+            );
+          }
+          final ctx = result.draft.context;
+          return <String, dynamic>{
+            'ok': true,
+            'count': pending.length,
+            'opened': true,
+            'action': result.action.name,
+            'siteId': result.draft.draftKey.siteId ?? ctx?.siteId,
+            'regionId': result.draft.draftKey.regionId ?? ctx?.regionId,
+            'visitType': ctx?.visitType,
+            'draftKey': result.draft.draftKey.folderName,
+            'flowKind': (ctx?.flowKind ?? VisitFlowKind.patrol).name,
+          };
+        case VisitDraftResumeAction.discardReport:
+          final discarded = result.draft;
+          final discardedCtx = discarded.context;
+          await flow.clearAll();
+          unawaited(_notifyWebPendingDraftsChanged());
+          pending =
+              await VisitUploadQueue.instance.listEditablePendingDrafts();
+          if (pending.isEmpty) {
+            return <String, dynamic>{
+              'ok': true,
+              'count': 0,
+              'opened': true,
+              'action': result.action.name,
+              'siteId': discarded.draftKey.siteId ?? discardedCtx?.siteId,
+              'regionId': discarded.draftKey.regionId ?? discardedCtx?.regionId,
+              'visitType': discardedCtx?.visitType,
+              'draftKey': discarded.draftKey.folderName,
+              'flowKind':
+                  (discardedCtx?.flowKind ?? VisitFlowKind.patrol).name,
+            };
+          }
+          returnToSitePickerAfterDiscard = true;
+          continue;
+      }
     }
-
-    await flow.activateDraft(result.draft.draftKey);
-
-    switch (result.action) {
-      case VisitDraftResumeAction.continueReport:
-        _openLogVisitTab();
-        break;
-      case VisitDraftResumeAction.submitReport:
-        unawaited(
-          VisitVideoPreviewScreen.uploadCurrentDraft(
-            onSuccess: _finishLogVisitUploadSuccess,
-            onUploadStarted: _onPatrolUploadStarted,
-            onFailureOpenDraft: _onPatrolUploadFailureOpenDraft,
-            skipCompletionConfirm: true,
-          ),
-        );
-        break;
-      case VisitDraftResumeAction.discardReport:
-        await flow.clearAll();
-        unawaited(_notifyWebPendingDraftsChanged());
-        break;
-    }
-
-    final ctx = result.draft.context;
-    return <String, dynamic>{
-      'ok': true,
-      'count': pending.length,
-      'opened': true,
-      'action': result.action.name,
-      'siteId': result.draft.draftKey.siteId ?? ctx?.siteId,
-      'regionId': result.draft.draftKey.regionId ?? ctx?.regionId,
-    };
   }
 
   Future<void> _notifyWebPendingDraftsChanged() async {
@@ -4921,6 +5043,24 @@ class _WebViewShellState extends State<WebViewShell>
         args,
         handlerName: AppRoutes.openOnsiteLogVisit,
         uploadUrl: ApiUrls.onsitePatrolVisitsUploadUrl,
+      ),
+    );
+    controller.addJavaScriptHandler(
+      handlerName: AppRoutes.createIssue,
+      callback: (args) => _handleOpenLogVisitBridge(
+        args,
+        handlerName: AppRoutes.createIssue,
+        uploadUrl: ApiUrls.issueReportsUploadUrl,
+        visitType: VisitFlowKind.issueReportVisitType,
+      ),
+    );
+    controller.addJavaScriptHandler(
+      handlerName: AppRoutes.createIncident,
+      callback: (args) => _handleOpenLogVisitBridge(
+        args,
+        handlerName: AppRoutes.createIncident,
+        uploadUrl: ApiUrls.incidentReportsUploadUrl,
+        visitType: VisitFlowKind.incidentReportVisitType,
       ),
     );
     controller.addJavaScriptHandler(
@@ -6365,7 +6505,8 @@ class _WebViewShellState extends State<WebViewShell>
                               }
                               return Positioned.fill(
                                 child: Material(
-                                  color: Theme.of(context).brightness ==
+                                  color:
+                                      Theme.of(context).brightness ==
                                           Brightness.dark
                                       ? const Color(0xFF0F1724)
                                       : const Color(0xFFF4F7FB),

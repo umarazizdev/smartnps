@@ -2,6 +2,7 @@ import 'dart:math';
 
 import '../../api/api_urls.dart';
 import 'visit_checkpoint.dart';
+import 'visit_flow_kind.dart';
 import 'visit_patrol_round.dart';
 
 class VisitPatrolContext {
@@ -20,6 +21,9 @@ class VisitPatrolContext {
     this.minimumPhotos,
     this.visitType,
     this.siteCheckTimeSheetId,
+    this.reportContextId,
+    this.reportContextIssuedAt,
+    this.timeSheetId,
     this.patrolWindows = const <VisitPatrolRound>[],
     this.checkpoints = const <VisitCheckpoint>[],
   });
@@ -38,15 +42,33 @@ class VisitPatrolContext {
   final int? minimumPhotos;
   final String? visitType;
   final int? siteCheckTimeSheetId;
+  /// Server-issued authorization for issue/incident uploads.
+  final String? reportContextId;
+  /// Context `issued_at`; use as immutable draft `started_at`.
+  final DateTime? reportContextIssuedAt;
+  /// Timesheet from report-context (or bridge), when available.
+  final int? timeSheetId;
   final List<VisitPatrolRound> patrolWindows;
   final List<VisitCheckpoint> checkpoints;
+
+  bool get hasReportContext {
+    final id = reportContextId?.trim();
+    return id != null && id.isNotEmpty;
+  }
 
   bool get hasSiteOrRegionId => regionId != null || siteId != null;
   bool get hasCheckpoints => checkpoints.isNotEmpty;
   bool get hasMinimumPhotoRequirement =>
       minimumPhotos != null && minimumPhotos! > 0;
-  bool get isSiteCheck =>
-      visitType != null && visitType!.trim().toLowerCase() == 'site_check';
+  bool get isSiteCheck => flowKind == VisitFlowKind.siteCheck;
+
+  VisitFlowKind get flowKind => VisitFlowKind.fromVisitType(visitType);
+
+  bool get isIssueReport => flowKind == VisitFlowKind.issueReport;
+
+  bool get isIncidentReport => flowKind == VisitFlowKind.incidentReport;
+
+  bool get isStructuredReport => flowKind.isStructuredReport;
 
   bool get isOnsitePatrol {
     final url = uploadUrl?.trim().toLowerCase() ?? '';
@@ -57,7 +79,10 @@ class VisitPatrolContext {
   }
 
   bool get supportsRoundTags =>
-      !isOnsitePatrol && !isSiteCheck && patrolWindows.isNotEmpty;
+      !isOnsitePatrol &&
+      !isSiteCheck &&
+      !isStructuredReport &&
+      patrolWindows.isNotEmpty;
 
   VisitPatrolRound? roundByTag(String? tag) {
     final needle = tag?.trim().toLowerCase();
@@ -105,6 +130,77 @@ class VisitPatrolContext {
     return false;
   }
 
+  bool isSameVisitIdentityAs(VisitPatrolContext? other) {
+    if (other == null) return false;
+    if (!isSameSiteAs(other)) return false;
+    final thisType = visitType?.trim().toLowerCase();
+    final otherType = other.visitType?.trim().toLowerCase();
+    return scheduleId == other.scheduleId &&
+        sitePatrolWindowId == other.sitePatrolWindowId &&
+        requestId == other.requestId &&
+        siteCheckTimeSheetId == other.siteCheckTimeSheetId &&
+        thisType == otherType;
+  }
+
+  static String resolveClientDraftIdForMerge({
+    required bool sameSite,
+    required VisitPatrolContext? current,
+    required VisitPatrolContext incoming,
+    required VisitPatrolContext mergedVisit,
+    VisitPatrolContext? targetSnapshot,
+  }) {
+    final currentId = current?.clientDraftId?.trim();
+    final incomingId = incoming.clientDraftId?.trim();
+    final snapshotId = targetSnapshot?.clientDraftId?.trim();
+
+    // Issue/incident drafts ignore changing bridge request_id so reopen keeps
+    // the same client_draft_id for the site + report type.
+    if (mergedVisit.isStructuredReport) {
+      if (sameSite &&
+          current != null &&
+          current.isStructuredReport &&
+          current.flowKind == mergedVisit.flowKind &&
+          currentId != null &&
+          currentId.isNotEmpty) {
+        return currentId;
+      }
+      if (snapshotId != null &&
+          snapshotId.isNotEmpty &&
+          targetSnapshot != null &&
+          targetSnapshot.isStructuredReport &&
+          targetSnapshot.flowKind == mergedVisit.flowKind &&
+          targetSnapshot.isSameSiteAs(mergedVisit)) {
+        return snapshotId;
+      }
+    }
+
+    final sameVisit =
+        sameSite &&
+        (current == null || current.isSameVisitIdentityAs(mergedVisit));
+
+    if (sameVisit) {
+      if (currentId != null && currentId.isNotEmpty) return currentId;
+      if (snapshotId != null && snapshotId.isNotEmpty) return snapshotId;
+      if (incomingId != null && incomingId.isNotEmpty) return incomingId;
+      return generateClientDraftId();
+    }
+
+    if (snapshotId != null &&
+        snapshotId.isNotEmpty &&
+        targetSnapshot != null &&
+        targetSnapshot.isSameVisitIdentityAs(mergedVisit)) {
+      return snapshotId;
+    }
+
+    if (incomingId != null &&
+        incomingId.isNotEmpty &&
+        (currentId == null || incomingId != currentId)) {
+      return incomingId;
+    }
+
+    return generateClientDraftId();
+  }
+
   VisitCheckpoint? checkpointById(int id) {
     for (final checkpoint in checkpoints) {
       if (checkpoint.id == id) return checkpoint;
@@ -127,6 +223,9 @@ class VisitPatrolContext {
     int? minimumPhotos,
     String? visitType,
     int? siteCheckTimeSheetId,
+    String? reportContextId,
+    DateTime? reportContextIssuedAt,
+    int? timeSheetId,
     List<VisitPatrolRound>? patrolWindows,
     List<VisitCheckpoint>? checkpoints,
     bool clearClientDraftId = false,
@@ -143,6 +242,9 @@ class VisitPatrolContext {
     bool clearMinimumPhotos = false,
     bool clearVisitType = false,
     bool clearSiteCheckTimeSheetId = false,
+    bool clearReportContextId = false,
+    bool clearReportContextIssuedAt = false,
+    bool clearTimeSheetId = false,
   }) {
     return VisitPatrolContext(
       clientDraftId: clearClientDraftId
@@ -171,6 +273,13 @@ class VisitPatrolContext {
       siteCheckTimeSheetId: clearSiteCheckTimeSheetId
           ? null
           : (siteCheckTimeSheetId ?? this.siteCheckTimeSheetId),
+      reportContextId: clearReportContextId
+          ? null
+          : (reportContextId ?? this.reportContextId),
+      reportContextIssuedAt: clearReportContextIssuedAt
+          ? null
+          : (reportContextIssuedAt ?? this.reportContextIssuedAt),
+      timeSheetId: clearTimeSheetId ? null : (timeSheetId ?? this.timeSheetId),
       patrolWindows: patrolWindows ?? this.patrolWindows,
       checkpoints: checkpoints ?? this.checkpoints,
     );
@@ -193,6 +302,10 @@ class VisitPatrolContext {
       if (visitType != null) 'visitType': visitType,
       if (siteCheckTimeSheetId != null)
         'siteCheckTimeSheetId': siteCheckTimeSheetId,
+      if (reportContextId != null) 'reportContextId': reportContextId,
+      if (reportContextIssuedAt != null)
+        'reportContextIssuedAt': reportContextIssuedAt!.toUtc().toIso8601String(),
+      if (timeSheetId != null) 'timeSheetId': timeSheetId,
       'patrolWindows': patrolWindows.map((e) => e.toJson()).toList(),
       'checkpoints': checkpoints.map((e) => e.toJson()).toList(),
     };
@@ -216,6 +329,7 @@ class VisitPatrolContext {
         'visit_type': visitType!.trim(),
       if (siteCheckTimeSheetId != null)
         'site_check_time_sheet_id': siteCheckTimeSheetId,
+      if (hasReportContext) 'report_context_id': reportContextId!.trim(),
     };
   }
 
@@ -288,6 +402,23 @@ class VisitPatrolContext {
           json['site_check_time_sheet_id'] ??
           nestedPatrol?['site_check_time_sheet_id'],
     );
+    final reportContextId = _string(
+      json['reportContextId'] ?? json['report_context_id'],
+    );
+    DateTime? reportContextIssuedAt;
+    final issuedRaw =
+        json['reportContextIssuedAt'] ??
+        json['report_context_issued_at'] ??
+        json['issued_at'] ??
+        json['issuedAt'];
+    if (issuedRaw is String && issuedRaw.trim().isNotEmpty) {
+      reportContextIssuedAt = DateTime.tryParse(issuedRaw.trim());
+    }
+    final timeSheetId = _int(
+      json['timeSheetId'] ??
+          json['time_sheet_id'] ??
+          nestedPatrol?['time_sheet_id'],
+    );
     final patrolWindows = VisitPatrolRound.listFromPayload(json);
     final checkpoints = VisitCheckpoint.listFromJson(
       json['checkpoints'],
@@ -305,6 +436,9 @@ class VisitPatrolContext {
         minimumPhotos == null &&
         visitType == null &&
         siteCheckTimeSheetId == null &&
+        reportContextId == null &&
+        reportContextIssuedAt == null &&
+        timeSheetId == null &&
         patrolWindows.isEmpty &&
         checkpoints.isEmpty) {
       return null;
@@ -325,6 +459,9 @@ class VisitPatrolContext {
       minimumPhotos: minimumPhotos,
       visitType: visitType,
       siteCheckTimeSheetId: siteCheckTimeSheetId,
+      reportContextId: reportContextId,
+      reportContextIssuedAt: reportContextIssuedAt,
+      timeSheetId: timeSheetId,
       patrolWindows: patrolWindows,
       checkpoints: checkpoints,
     );
