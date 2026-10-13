@@ -119,7 +119,7 @@ class SessionDebugLogger extends ChangeNotifier {
     _ready = true;
     _syncExpired();
     _armExpireTimer();
-    notifyListeners();
+    _safeNotifyListeners();
   }
 
   Future<void> start({
@@ -161,7 +161,7 @@ class SessionDebugLogger extends ChangeNotifier {
         persist: true,
       ),
     );
-    notifyListeners();
+    _safeNotifyListeners();
   }
 
   Future<void> stop({String reason = 'stopped'}) async {
@@ -179,7 +179,7 @@ class SessionDebugLogger extends ChangeNotifier {
         persist: true,
       );
     }
-    notifyListeners();
+    _safeNotifyListeners();
   }
 
   void logApiSuccess({
@@ -204,7 +204,7 @@ class SessionDebugLogger extends ChangeNotifier {
     _logs.clear();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_prefsLogsKey);
-    notifyListeners();
+    _safeNotifyListeners();
   }
 
   void log(SessionDebugCategory category, String message) {
@@ -278,12 +278,12 @@ class SessionDebugLogger extends ChangeNotifier {
     final wait = ends.difference(DateTime.now());
     if (wait.isNegative) {
       _syncExpired();
-      notifyListeners();
+      _safeNotifyListeners();
       return;
     }
     _expireTimer = Timer(wait, () {
       _syncExpired();
-      notifyListeners();
+      _safeNotifyListeners();
     });
   }
 
@@ -303,12 +303,31 @@ class SessionDebugLogger extends ChangeNotifier {
     if (_logs.length > maxLogs) {
       _logs.removeRange(0, _logs.length - maxLogs);
     }
-    notifyListeners();
+    _safeNotifyListeners();
     if (!persist) return;
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setStringList(_prefsLogsKey, List<String>.from(_logs));
     } catch (_) {}
+  }
+
+  void _safeNotifyListeners() {
+    final previous = FlutterError.onError;
+    FlutterError.onError = (details) {
+      final text = details.exceptionAsString().toLowerCase();
+      if (text.contains('lookup failed:') ||
+          text.contains("is not a subtype of type 'state<") ||
+          text.contains('is not a subtype of type \'state<') ||
+          text.contains('ext.flutter.reassemble')) {
+        return;
+      }
+      previous?.call(details);
+    };
+    try {
+      notifyListeners();
+    } finally {
+      FlutterError.onError = previous;
+    }
   }
 
   Future<void> _persistMeta() async {

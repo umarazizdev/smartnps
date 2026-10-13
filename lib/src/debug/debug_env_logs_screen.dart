@@ -50,8 +50,10 @@ class DebugEnvLogsScreen extends StatelessWidget {
           controller.sessionBusy.value;
           controller.killCycleBusy.value;
           controller.killCycle.value;
+          controller.detailLogExpanded.value;
+          final bottomInset = MediaQuery.paddingOf(context).bottom;
           return ListView(
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+            padding: EdgeInsets.fromLTRB(20, 20, 20, 28 + bottomInset),
             children: [
               _sessionDebugCard(colors, controller),
               if (controller.showKillCycleTimeline) ...[
@@ -356,7 +358,12 @@ class DebugEnvLogsScreen extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 14),
-          _sessionLogSections(colors, session: session, running: running),
+          _sessionLogSections(
+            colors,
+            controller: controller,
+            session: session,
+            running: running,
+          ),
         ],
       ),
     );
@@ -364,6 +371,7 @@ class DebugEnvLogsScreen extends StatelessWidget {
 
   Widget _sessionLogSections(
     DebugEnvColors colors, {
+    required DebugEnvLogsController controller,
     required SessionDebugLogger session,
     required bool running,
   }) {
@@ -417,9 +425,113 @@ class DebugEnvLogsScreen extends StatelessWidget {
             emptyLabel: 'None',
             accent: colors.subtitle,
             entries: other.reversed,
+            onCopy: () => controller.copyLogLines(
+              other.map((e) => e.raw).toList(growable: false),
+              label: 'Activity logs',
+            ),
           ),
         ],
+        const SizedBox(height: 14),
+        _detailLogPanel(
+          colors,
+          controller: controller,
+          session: session,
+        ),
       ],
+    );
+  }
+
+  Widget _detailLogPanel(
+    DebugEnvColors colors, {
+    required DebugEnvLogsController controller,
+    required SessionDebugLogger session,
+  }) {
+    final expanded = controller.detailLogExpanded.value;
+    final logs = session.logs;
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: colors.background,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: colors.cardBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            onTap: controller.toggleDetailLogExpanded,
+            borderRadius: BorderRadius.circular(10),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(10, 10, 8, 10),
+              child: Row(
+                children: [
+                  Icon(
+                    expanded
+                        ? Icons.expand_less_rounded
+                        : Icons.expand_more_rounded,
+                    size: 20,
+                    color: colors.subtitle,
+                  ),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      'Detail log (${logs.length})',
+                      style: TextStyle(
+                        color: colors.title,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: logs.isEmpty ? null : controller.copyDetailLogs,
+                    style: TextButton.styleFrom(
+                      foregroundColor: colors.title,
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      minimumSize: const Size(0, 32),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      textStyle: const TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    child: const Text('Copy'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (expanded) ...[
+            Divider(height: 1, color: colors.cardBorder),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 420),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(10),
+                child: logs.isEmpty
+                    ? Text(
+                        'No detail entries yet',
+                        style: TextStyle(
+                          color: colors.subtitle,
+                          fontSize: 12,
+                          height: 1.35,
+                        ),
+                      )
+                    : SelectableText(
+                        logs.join('\n'),
+                        style: TextStyle(
+                          color: colors.title,
+                          fontSize: 11.5,
+                          height: 1.35,
+                          fontFamily: 'Courier',
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 
@@ -430,6 +542,7 @@ class DebugEnvLogsScreen extends StatelessWidget {
     required String emptyLabel,
     required Color accent,
     required Iterable<_SessionLogEntry> entries,
+    VoidCallback? onCopy,
   }) {
     final items = entries.toList(growable: false);
     return Column(
@@ -451,6 +564,23 @@ class DebugEnvLogsScreen extends StatelessWidget {
               foreground: accent,
               background: accent.withValues(alpha: 0.1),
             ),
+            const Spacer(),
+            if (onCopy != null)
+              TextButton(
+                onPressed: items.isEmpty ? null : onCopy,
+                style: TextButton.styleFrom(
+                  foregroundColor: colors.title,
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  minimumSize: const Size(0, 32),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  textStyle: const TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                child: const Text('Copy'),
+              ),
           ],
         ),
         const SizedBox(height: 8),

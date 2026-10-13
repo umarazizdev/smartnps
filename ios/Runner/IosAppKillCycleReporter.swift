@@ -34,6 +34,11 @@ final class IosAppKillCycleReporter {
 
   private let killSecurityAlertDelaySeconds: TimeInterval = 4
 
+  /// Max age for `pending_background_at` when recovering a kill after process death.
+  /// Older candidates are discarded so a location/cold wake hours later cannot
+  /// invent a fresh kill cycle (or a late "reopen" alert).
+  private let backgroundAtRecoverMaxAge: TimeInterval = 2 * 60 * 60
+
   private let syncUploadTimeout: TimeInterval = 5
 
   private let reopenUploadTimeout: TimeInterval = 12
@@ -195,7 +200,26 @@ final class IosAppKillCycleReporter {
     cancelKillSecurityAlert(reason: "not_armed")
   }
 
-  func recoverKillFromBackgroundIfNeeded() {
+  /// Clears a background kill candidate when the officer is no longer on duty.
+  func clearBackgroundKillCandidate(reason: String) {
+    let hadBackground =
+      !(UserDefaults.standard.string(forKey: pendingBackgroundAtKey) ?? "").isEmpty
+    if hadBackground {
+      UserDefaults.standard.removeObject(forKey: pendingBackgroundAtKey)
+      UserDefaults.standard.synchronize()
+      appendDebugLog("cleared background_at (\(reason))")
+    }
+    cancelKillSecurityAlert(reason: reason)
+  }
+
+  /// Recovers a kill timeline after process death (jetsam / swipe without
+  /// `willTerminate`). Queues `killed_at` for API upload only — does **not**
+  /// schedule the local "reopen immediately" alert (that is terminate-only),
+  /// so a location wake hours later cannot surprise the officer.
+  func recoverKillFromBackgroundIfNeeded(
+    onDuty: Bool,
+    unpaidBreak: Bool
+  ) {
     guard pendingKilledAt() == nil else {
       UserDefaults.standard.removeObject(forKey: pendingBackgroundAtKey)
       appendDebugLog("recover skip; killed_at already queued")
@@ -207,14 +231,37 @@ final class IosAppKillCycleReporter {
     else {
       return
     }
+
+    guard onDuty, !unpaidBreak else {
+      clearBackgroundKillCandidate(
+        reason: "recover_not_armed onDuty=\(onDuty) unpaid=\(unpaidBreak)"
+      )
+      appendDebugLog(
+        "recover skip background_at; onDuty=\(onDuty) unpaidBreak=\(unpaidBreak)"
+      )
+      return
+    }
+
+    if let age = ageSeconds(ofISO8601UTC: backgroundAt),
+       age > backgroundAtRecoverMaxAge
+    {
+      clearBackgroundKillCandidate(reason: "recover_stale_background_at")
+      appendDebugLog(
+        "recover skip stale background_at=\(backgroundAt) ageSec=\(Int(age)) "
+          + "maxSec=\(Int(backgroundAtRecoverMaxAge))"
+      )
+      return
+    }
+
     UserDefaults.standard.set(backgroundAt, forKey: pendingKilledAtKey)
     UserDefaults.standard.removeObject(forKey: pendingOpenedAtKey)
     UserDefaults.standard.set(false, forKey: killedUploadedKey)
     UserDefaults.standard.removeObject(forKey: pendingBackgroundAtKey)
     UserDefaults.standard.synchronize()
-    appendDebugLog("recovered killed_at from background_at=\(backgroundAt)")
-
-    scheduleKillSecurityAlertForTerminate()
+    appendDebugLog(
+      "recovered killed_at from background_at=\(backgroundAt) "
+        + "(upload only; no local reopen alert)"
+    )
   }
 
   func uploadKilledEventIfNeeded(reason: String) {
@@ -837,6 +884,24 @@ final class IosAppKillCycleReporter {
     let status = SecItemCopyMatching(query as CFDictionary, &result)
     guard status == errSecSuccess, let data = result as? Data else { return nil }
     return String(data: data, encoding: .utf8)
+  }
+}
+
+private extension IosAppKillCycleReporter {
+  func ageSeconds(ofISO8601UTC value: String) -> TimeInterval? {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone(secondsFromGMT: 0)
+    formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS'000Z'"
+
+    let parsed =
+      formatter.date(from: trimmed)
+      ?? ISO8601DateFormatter().date(from: trimmed)
+    guard let date = parsed else { return nil }
+    return Date().timeIntervalSince(date)
   }
 }
 

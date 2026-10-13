@@ -6,6 +6,8 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../api/visit_upload_api.dart';
@@ -33,6 +35,8 @@ import '../notes/voice/inline_voice_note_player.dart';
 import '../record/visit_native_capture_launcher.dart';
 import 'visit_report_details_panel.dart';
 import 'visit_video_player_controller.dart';
+
+enum _StructuredMediaSource { camera, gallery }
 
 Color _visitCardColor(bool isDark) {
   return isDark
@@ -247,11 +251,244 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
 
   Future<void> _openCaptureScreen(BuildContext context) async {
     controller.endCheckpointCapture();
+    if (controller.isStructuredReport) {
+      final permitted = await _ensureStructuredCapturePermissions(context);
+      if (!permitted || !context.mounted) return;
+      await _openStructuredMediaSource(context);
+      return;
+    }
     final opened = await pickRoundTagAndOpenCapture(
       context: context,
       flow: controller,
     );
     if (!opened) return;
+  }
+
+  Future<void> _openStructuredMediaSource(BuildContext context) async {
+    if (!context.mounted) return;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final accent = _visitPrimaryActionColor(isDark);
+    final reportLabel =
+        controller.flowKind == VisitFlowKind.incidentReport
+        ? 'incident report'
+        : 'issue report';
+
+    final source = await GlassActionDialog.showWithActions<_StructuredMediaSource>(
+      context: context,
+      icon: Icons.add_a_photo_outlined,
+      iconColor: accent,
+      title: 'Add media',
+      message: 'Use the camera, or open your gallery to pick photos and '
+          'videos for this $reportLabel.',
+      barrierDismissible: true,
+      showCloseButton: true,
+      useRootNavigator: true,
+      actions: const [
+        GlassDialogAction(
+          label: 'Camera',
+          value: _StructuredMediaSource.camera,
+          tone: GlassDialogActionTone.primary,
+        ),
+        GlassDialogAction(
+          label: 'Gallery',
+          value: _StructuredMediaSource.gallery,
+          tone: GlassDialogActionTone.neutral,
+        ),
+      ],
+    );
+    if (source == null || !context.mounted) return;
+
+    if (source == _StructuredMediaSource.camera) {
+      await VisitNativeCaptureLauncher.open();
+      return;
+    }
+
+    await _importGalleryMedia(context);
+  }
+
+  /// Requests camera, microphone, and gallery access up front for issue/incident.
+  Future<bool> _ensureStructuredCapturePermissions(BuildContext context) async {
+    final permissions = <Permission>[
+      Permission.camera,
+      Permission.microphone,
+      Permission.photos,
+      if (Platform.isAndroid) Permission.videos,
+    ];
+
+    Map<Permission, PermissionStatus> statuses;
+    try {
+      final pending = <Permission>[];
+      for (final permission in permissions) {
+        final status = await permission.status;
+        final ok = status.isGranted || status.isLimited;
+        if (!ok) pending.add(permission);
+      }
+      if (pending.isEmpty) return true;
+      statuses = await pending.request();
+    } on Exception catch (error) {
+      final message = error.toString();
+      if (message.contains('ALREADY_REQUESTING_PERMISSIONS')) {
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+        statuses = {
+          for (final permission in permissions)
+            permission: await permission.status,
+        };
+      } else {
+        rethrow;
+      }
+    }
+
+    Future<PermissionStatus> statusOf(Permission permission) async {
+      return statuses[permission] ?? await permission.status;
+    }
+
+    final camera = await statusOf(Permission.camera);
+    if (!camera.isGranted) {
+      if (!context.mounted) return false;
+      await _showStructuredPermissionDialog(
+        context: context,
+        icon: Icons.photo_camera_outlined,
+        title: 'Camera permission required',
+        message: camera.isPermanentlyDenied
+            ? 'Camera access is permanently denied. Enable it in Settings to '
+                'capture photos and videos for this report.'
+            : 'Camera access is required to capture photos and videos for this report.',
+      );
+      return false;
+    }
+
+    final mic = await statusOf(Permission.microphone);
+    if (!mic.isGranted) {
+      if (!context.mounted) return false;
+      await _showStructuredPermissionDialog(
+        context: context,
+        icon: Icons.mic_off_outlined,
+        title: 'Microphone permission required',
+        message: mic.isPermanentlyDenied
+            ? 'Microphone access is permanently denied. Enable it in Settings '
+                'to record video for this report.'
+            : 'Microphone access is required to record video for this report.',
+      );
+      return false;
+    }
+
+    final photos = await statusOf(Permission.photos);
+    // iOS Photos: full access (granted) or limited library both count as usable.
+    final photosOk = photos.isGranted || photos.isLimited;
+    var galleryOk = photosOk;
+    if (Platform.isAndroid) {
+      final videos = await statusOf(Permission.videos);
+      final videosOk = videos.isGranted || videos.isLimited;
+      // Either photos or videos access is enough to open the gallery picker.
+      galleryOk = photosOk || videosOk;
+    }
+    if (!galleryOk) {
+      if (!context.mounted) return false;
+      await _showStructuredPermissionDialog(
+        context: context,
+        icon: Icons.photo_library_outlined,
+        title: 'Gallery permission required',
+        message: photos.isPermanentlyDenied
+            ? 'Photo library access is permanently denied. Enable it in '
+                'Settings to attach gallery media to this report.'
+            : 'Photo library access is required to attach gallery media to this report.',
+      );
+      return false;
+    }
+
+    return true;
+  }
+
+  Future<void> _showStructuredPermissionDialog({
+    required BuildContext context,
+    required IconData icon,
+    required String title,
+    required String message,
+  }) async {
+    if (!context.mounted) return;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final openSettings = await GlassActionDialog.show(
+      context: context,
+      icon: icon,
+      iconColor: _visitPrimaryActionColor(isDark),
+      title: title,
+      message: message,
+      primaryLabel: 'Open Settings',
+      secondaryLabel: 'Cancel',
+      barrierDismissible: true,
+      useRootNavigator: true,
+    );
+    if (openSettings == true) {
+      await openAppSettings();
+    }
+  }
+
+  Future<void> _importGalleryMedia(BuildContext context) async {
+    if (!context.mounted) return;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    final picker = ImagePicker();
+    try {
+      // One system gallery UI for both photos and videos (no second app dialog).
+      final files = await picker.pickMultipleMedia(
+        imageQuality: 100,
+        requestFullMetadata: true,
+      );
+      if (files.isEmpty || !context.mounted) return;
+
+      final geo = await VisitMediaGeo.captureFast();
+      var imported = 0;
+      for (final file in files) {
+        final path = file.path.trim();
+        if (path.isEmpty || !File(path).existsSync()) continue;
+        final item = _isGalleryVideo(file)
+            ? await controller.addVideo(path, geo: geo)
+            : await controller.addPhoto(path, geo: geo);
+        if (item != null) imported++;
+      }
+
+      if (imported == 0 && context.mounted) {
+        _showTopSnack(
+          title: 'No media added',
+          message:
+              'Could not import the selected photos or videos. Please try again.',
+          isDark: isDark,
+          isError: true,
+        );
+      }
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint('[VisitPreview] gallery import failed: $error');
+      }
+      if (!context.mounted) return;
+      _showTopSnack(
+        title: 'Gallery unavailable',
+        message: 'Unable to open the gallery. Check permissions and try again.',
+        isDark: isDark,
+        isError: true,
+      );
+    }
+  }
+
+  bool _isGalleryVideo(XFile file) {
+    final mime = file.mimeType?.trim().toLowerCase() ?? '';
+    if (mime.startsWith('video/')) return true;
+    if (mime.startsWith('image/')) return false;
+    final name = file.name.trim().toLowerCase();
+    final path = file.path.trim().toLowerCase();
+    const videoExts = <String>[
+      '.mp4',
+      '.mov',
+      '.m4v',
+      '.avi',
+      '.mkv',
+      '.webm',
+      '.3gp',
+    ];
+    for (final ext in videoExts) {
+      if (name.endsWith(ext) || path.endsWith(ext)) return true;
+    }
+    return false;
   }
 
   static Future<bool> pickRoundTagAndOpenCapture({
@@ -304,19 +541,24 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     final accent = _visitPrimaryActionColor(isDark);
     final copy = VisitFlowCopy.fromContext(flow.patrolContext.value);
 
+    final promptMessage = copy.roundTagCaptureMessage.trim().isEmpty
+        ? 'Choose which round this capture belongs to. '
+            'Capture media for every round before uploading.'
+        : copy.roundTagCaptureMessage;
+
     return GlassActionDialog.showWithActions<VisitPatrolRound>(
       context: context,
       icon: Icons.route_outlined,
       iconColor: accent,
       title: copy.roundTagCaptureTitle,
-      message: copy.roundTagCaptureMessage,
+      message: promptMessage,
       barrierDismissible: true,
       showCloseButton: true,
       useRootNavigator: true,
       actions: const <GlassDialogAction<VisitPatrolRound>>[],
       content: _RoundTagChoicePanel(
         isDark: isDark,
-        message: copy.roundTagCaptureMessage,
+        message: promptMessage,
         rounds: rounds,
         colorPalette: VisitPatrolRoundColors.mapForTags(
           rounds.map((e) => e.roundTag),
@@ -890,7 +1132,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
 
     final bg = isDark ? const Color(0xFF059669) : const Color(0xFF047857);
     const duration = Duration(seconds: 3);
-    final successTitle = VisitFlowCopy(kind: flowKind).successTitle;
+    final copy = VisitFlowCopy(kind: flowKind);
 
     Get.rawSnackbar(
       snackPosition: SnackPosition.TOP,
@@ -924,7 +1166,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  successTitle,
+                  copy.successTitle,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
@@ -935,11 +1177,11 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                   ),
                 ),
                 const SizedBox(height: 2),
-                const Text(
-                  'Your report was sent successfully.',
+                Text(
+                  copy.successMessage,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
+                  style: const TextStyle(
                     color: Colors.white,
                     fontSize: 12,
                     fontWeight: FontWeight.w500,
@@ -1082,9 +1324,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     _noteDraftOrientation(orientation);
     final scaffoldBg = isDark ? cDarkBackground : cMainBg;
 
-    return Scaffold(
-      backgroundColor: scaffoldBg,
-      body: SafeArea(
+    final body = SafeArea(
         child: Stack(
           fit: StackFit.expand,
           children: [
@@ -1427,7 +1667,19 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
             }),
           ],
         ),
-      ),
+    );
+
+    final content = controller.isStructuredReport
+        ? GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
+            child: body,
+          )
+        : body;
+
+    return Scaffold(
+      backgroundColor: scaffoldBg,
+      body: content,
     );
   }
 
@@ -1438,6 +1690,9 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     if (leading == null) return child;
     return CustomScrollView(
       physics: const AlwaysScrollableScrollPhysics(),
+      keyboardDismissBehavior: controller.isStructuredReport
+          ? ScrollViewKeyboardDismissBehavior.onDrag
+          : ScrollViewKeyboardDismissBehavior.manual,
       slivers: [
         SliverToBoxAdapter(child: leading),
         SliverFillRemaining(
@@ -1550,10 +1805,14 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     if (leading == null) {
       return LayoutBuilder(
         builder: (context, constraints) {
+          final minHeight = constraints.hasBoundedHeight &&
+                  constraints.maxHeight.isFinite
+              ? constraints.maxHeight
+              : 0.0;
           return SingleChildScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
             child: ConstrainedBox(
-              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              constraints: BoxConstraints(minHeight: minHeight),
               child: Center(child: emptyContent),
             ),
           );
@@ -1563,6 +1822,9 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
 
     return CustomScrollView(
       physics: const AlwaysScrollableScrollPhysics(),
+      keyboardDismissBehavior: controller.isStructuredReport
+          ? ScrollViewKeyboardDismissBehavior.onDrag
+          : ScrollViewKeyboardDismissBehavior.manual,
       slivers: [
         SliverToBoxAdapter(child: leading),
         SliverFillRemaining(
@@ -1775,19 +2037,17 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
           }
           final leftIndex = rowIndex * 2;
           final rightIndex = leftIndex + 1;
-          return IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(child: cardFor(leftIndex)),
-                SizedBox(width: gap),
-                Expanded(
-                  child: rightIndex < media.length
-                      ? cardFor(rightIndex)
-                      : const SizedBox.shrink(),
-                ),
-              ],
-            ),
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: cardFor(leftIndex)),
+              SizedBox(width: gap),
+              Expanded(
+                child: rightIndex < media.length
+                    ? cardFor(rightIndex)
+                    : const SizedBox.shrink(),
+              ),
+            ],
           );
         }
 
@@ -1800,6 +2060,9 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                 : 'visit-media-scroll',
           ),
           physics: const AlwaysScrollableScrollPhysics(),
+          keyboardDismissBehavior: controller.isStructuredReport
+              ? ScrollViewKeyboardDismissBehavior.onDrag
+              : ScrollViewKeyboardDismissBehavior.manual,
           slivers: [
             if (leading != null) SliverToBoxAdapter(child: leading),
             SliverPadding(
@@ -1857,7 +2120,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final captureLabel = hasCheckpoints
         ? 'Add More'
-        : (hasMedia ? 'Capture More' : 'Capture');
+        : _copy.mediaActionLabel(hasMedia: hasMedia);
     return Container(
       padding: EdgeInsets.fromLTRB(
         isLandscape ? 16 : 18,
@@ -3320,7 +3583,7 @@ class _RoundTagChoicePanel extends StatelessWidget {
   });
 
   final bool isDark;
-  final String message;
+  final String? message;
   final List<VisitPatrolRound> rounds;
   final Map<String, Color> colorPalette;
 
@@ -3329,13 +3592,17 @@ class _RoundTagChoicePanel extends StatelessWidget {
     final bodyColor = isDark
         ? Colors.white.withValues(alpha: 0.72)
         : const Color(0xFF475467);
+    final raw = message?.trim() ?? '';
+    final body = raw.isEmpty
+        ? 'Choose which round this capture belongs to.'
+        : raw;
 
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
-          message,
+          body,
           textAlign: TextAlign.center,
           style: TextStyle(
             color: bodyColor,
@@ -3694,7 +3961,9 @@ class _MediaFilterChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final selectedColor = _visitPrimaryActionColor(isDark);
+    final selectedColor = isDark
+        ? const Color(0xFF93C5FD)
+        : _visitPrimaryActionColor(isDark);
     return Material(
       color: selected
           ? selectedColor
@@ -3711,7 +3980,9 @@ class _MediaFilterChip extends StatelessWidget {
             border: Border.all(
               color: selected
                   ? selectedColor
-                  : _visitBorderColor(isDark).withValues(alpha: 0.95),
+                  : (isDark
+                        ? const Color(0xFF60718B)
+                        : _visitBorderColor(false).withValues(alpha: 0.95)),
             ),
             boxShadow: selected
                 ? [
@@ -3729,7 +4000,9 @@ class _MediaFilterChip extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              color: selected ? Colors.white : _visitTitleColor(isDark),
+              color: selected
+                  ? (isDark ? const Color(0xFF111B2B) : Colors.white)
+                  : _visitTitleColor(isDark),
               fontSize: compact ? 11 : 12,
               fontWeight: FontWeight.w700,
             ),
@@ -4441,7 +4714,12 @@ class VisitPhotoViewer extends StatelessWidget {
           body: SafeArea(
             child: LayoutBuilder(
               builder: (context, constraints) {
-                if (constraints.maxWidth < 8 || constraints.maxHeight < 8) {
+                if (!constraints.hasBoundedWidth ||
+                    !constraints.hasBoundedHeight ||
+                    !constraints.maxWidth.isFinite ||
+                    !constraints.maxHeight.isFinite ||
+                    constraints.maxWidth < 8 ||
+                    constraints.maxHeight < 8) {
                   return const ColoredBox(color: Colors.black);
                 }
 
@@ -4687,7 +4965,12 @@ class VisitVideoPlayerDialog extends GetView<VisitVideoPlayerController> {
           body: SafeArea(
             child: LayoutBuilder(
               builder: (context, constraints) {
-                if (constraints.maxWidth < 8 || constraints.maxHeight < 8) {
+                if (!constraints.hasBoundedWidth ||
+                    !constraints.hasBoundedHeight ||
+                    !constraints.maxWidth.isFinite ||
+                    !constraints.maxHeight.isFinite ||
+                    constraints.maxWidth < 8 ||
+                    constraints.maxHeight < 8) {
                   return const ColoredBox(color: Colors.black);
                 }
 
@@ -4861,7 +5144,12 @@ class VisitVideoPlayerDialog extends GetView<VisitVideoPlayerController> {
         color: Colors.black,
         child: LayoutBuilder(
           builder: (context, constraints) {
-            if (constraints.maxWidth < 8 || constraints.maxHeight < 8) {
+            if (!constraints.hasBoundedWidth ||
+                !constraints.hasBoundedHeight ||
+                !constraints.maxWidth.isFinite ||
+                !constraints.maxHeight.isFinite ||
+                constraints.maxWidth < 8 ||
+                constraints.maxHeight < 8) {
               return const SizedBox.expand();
             }
 

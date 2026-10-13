@@ -76,7 +76,10 @@ import flutter_background_service_ios
     observeBackgroundAppRefreshChanges()
     notifyFlutterOfLocationWakeIfNeeded()
     application.registerForRemoteNotifications()
-    IosAppKillCycleReporter.shared.recoverKillFromBackgroundIfNeeded()
+    IosAppKillCycleReporter.shared.recoverKillFromBackgroundIfNeeded(
+      onDuty: isOnDuty(),
+      unpaidBreak: isUnpaidBreak()
+    )
 
     IosAppKillCycleReporter.shared.uploadKilledEventIfNeeded(reason: "didFinishLaunching")
 
@@ -745,7 +748,10 @@ import flutter_background_service_ios
 
       DutyWakeUploader.shared.beginLocationWake(flutterTimeout: 0)
 
-      IosAppKillCycleReporter.shared.recoverKillFromBackgroundIfNeeded()
+      IosAppKillCycleReporter.shared.recoverKillFromBackgroundIfNeeded(
+        onDuty: isOnDuty(),
+        unpaidBreak: isUnpaidBreak()
+      )
       IosAppKillCycleReporter.shared.uploadKilledEventIfNeeded(reason: "location_wake")
 
       DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
@@ -842,6 +848,7 @@ import flutter_background_service_ios
       UserDefaults.standard.set(false, forKey: unpaidBreakKey)
       DutyWakeUploader.shared.cancel()
       stopSlcMonitoring()
+      IosAppKillCycleReporter.shared.clearBackgroundKillCandidate(reason: "off_duty")
     }
   }
 

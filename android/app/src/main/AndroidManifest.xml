@@ -33,8 +33,9 @@
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
-    <!-- Android 13+ image access. Video and audio access are not used. -->
+    <!-- Android 13+ media access for issue/incident gallery imports. -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
 
     <!-- Push notifications and foreground-service notification. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />

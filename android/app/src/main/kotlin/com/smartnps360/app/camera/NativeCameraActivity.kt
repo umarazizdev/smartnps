@@ -35,8 +35,12 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import com.smartnps360.app.R
 import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.pow
 import kotlin.math.roundToInt
 
@@ -107,6 +111,10 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
   private var shutterLongPressActive = false
   private var busyVisible = false
   private var isPortraitBlocked = false
+  private var systemInsetLeft = 0
+  private var systemInsetTop = 0
+  private var systemInsetRight = 0
+  private var systemInsetBottom = 0
 
   private val mainHandler = Handler(Looper.getMainLooper())
   private var recordStartElapsed = 0L
@@ -163,6 +171,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     CamPerf.resetSession()
     super.onCreate(savedInstanceState)
     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    WindowCompat.setDecorFitsSystemWindows(window, false)
     setContentView(R.layout.activity_native_camera)
     Log.d(NativeCameraContract.LOG_TAG, "NATIVE_SCREEN_CREATED")
 
@@ -211,6 +220,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     portraitBlockIcon = findViewById(R.id.portrait_block_icon)
     rightChrome = findViewById(R.id.right_chrome)
     topBar = findViewById(R.id.top_bar)
+    installSystemBarsInsetHandling()
 
     val root = findViewById<FrameLayout>(R.id.native_camera_root)
     val spotSize = (100 * resources.displayMetrics.density).toInt()
@@ -459,6 +469,7 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     updateFlashButtonVisibility(deviceHasFlash)
 
     updateCloseChromePosition(portrait)
+    applySystemChromeInsets()
     updateAuxChromeVisibility()
     updateRecordingDurationBadge()
     if (portrait) {
@@ -472,6 +483,55 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     if (portrait && isRecordingUi) {
       session?.abortRecording()
     }
+  }
+
+  private fun installSystemBarsInsetHandling() {
+    val root = findViewById<View>(R.id.native_camera_root)
+    ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+      val bars = insets.getInsets(
+        WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+      )
+      val tappable = insets.getInsets(WindowInsetsCompat.Type.tappableElement())
+      systemInsetLeft = max(bars.left, tappable.left)
+      systemInsetTop = max(bars.top, tappable.top)
+      systemInsetRight = max(bars.right, tappable.right)
+      systemInsetBottom = max(bars.bottom, tappable.bottom)
+      applySystemChromeInsets()
+      insets
+    }
+    ViewCompat.requestApplyInsets(root)
+  }
+
+  private fun applySystemChromeInsets() {
+    if (!::rightChrome.isInitialized || !::zoomRow.isInitialized || !::topBar.isInitialized) {
+      return
+    }
+    val density = resources.displayMetrics.density
+    val chromeWidth = (112 * density).toInt()
+    val zoomBaseEnd = (124 * density).toInt()
+    val zoomInsetExtra =
+      if (systemInsetRight > 0) (16 * density).toInt() else 0
+
+    (rightChrome.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
+      lp.width = chromeWidth + systemInsetRight
+      lp.marginEnd = 0
+      rightChrome.layoutParams = lp
+    }
+    rightChrome.setPadding(0, systemInsetTop, systemInsetRight, systemInsetBottom)
+
+    (zoomRow.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
+      lp.marginEnd = zoomBaseEnd + systemInsetRight + zoomInsetExtra
+      zoomRow.layoutParams = lp
+    }
+
+    topBar.setPadding(
+      (18 * density).toInt() + systemInsetLeft,
+      (16 * density).toInt() + systemInsetTop,
+      (18 * density).toInt() + systemInsetRight,
+      (8 * density).toInt(),
+    )
+
+    updateFlashLeadingPadding(isPortraitBlocked)
   }
 
   private fun updateCloseChromePosition(portrait: Boolean) {
@@ -504,7 +564,9 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
   private fun updateFlashLeadingPadding(portrait: Boolean) {
     if (!::btnFlash.isInitialized) return
     val density = resources.displayMetrics.density
-    val leading = ((if (portrait) 18 else 28) * density).toInt()
+    val leading =
+      ((if (portrait) 18 else 28) * density).toInt() + systemInsetLeft
+    val top = (16 * density).toInt() + systemInsetTop
     val flashIconSize = (42 * density).toInt()
     val flashLabelWidth = (72 * density).toInt()
 
@@ -512,15 +574,32 @@ class NativeCameraActivity : AppCompatActivity(), NativeCameraSession.Listener {
     val trayLeading = leading + flashIconSize + (8 * density).toInt()
     (btnFlash.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
       lp.marginStart = leading
+      lp.topMargin = top
       btnFlash.layoutParams = lp
     }
     (flashLabel.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
       lp.marginStart = labelLeading
+      lp.topMargin = top + (46 * density).toInt()
       flashLabel.layoutParams = lp
     }
     (flashModeTray.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
       lp.marginStart = trayLeading
+      lp.topMargin = top
       flashModeTray.layoutParams = lp
+    }
+    if (::extensionRow.isInitialized) {
+      (extensionRow.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
+        lp.marginStart = (18 * density).toInt() + systemInsetLeft
+        lp.topMargin = (72 * density).toInt() + systemInsetTop
+        extensionRow.layoutParams = lp
+      }
+    }
+    if (::exposureRow.isInitialized) {
+      (exposureRow.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
+        lp.marginStart = (18 * density).toInt() + systemInsetLeft
+        lp.bottomMargin = (20 * density).toInt() + systemInsetBottom
+        exposureRow.layoutParams = lp
+      }
     }
   }
 

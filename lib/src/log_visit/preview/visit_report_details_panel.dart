@@ -6,12 +6,22 @@ import '../flow/visit_report_details.dart';
 import '../flow/visit_video_flow_controller.dart';
 import '../log_visit_theme.dart';
 
+// Opaque surfaces keep dark-mode contrast consistent across the page gradient.
+const _reportDarkSurface = Color(0xFF172131);
+const _reportDarkInput = Color(0xFF111B2B);
+const _reportDarkOutline = Color(0xFF60718B);
+const _reportDarkAccent = Color(0xFF93C5FD);
+
 String _formatReportDateTime(DateTime value) {
   final hour = value.hour % 12 == 0 ? 12 : value.hour % 12;
   final minute = value.minute.toString().padLeft(2, '0');
   final period = value.hour >= 12 ? 'PM' : 'AM';
   return '${value.month}/${value.day}/${value.year}, '
       '$hour:$minute $period';
+}
+
+void _dismissReportKeyboard() {
+  FocusManager.instance.primaryFocus?.unfocus();
 }
 
 class VisitReportDetailsPanel extends StatelessWidget {
@@ -32,52 +42,56 @@ class VisitReportDetailsPanel extends StatelessWidget {
       final kind = flow.flowKind;
       if (!kind.isStructuredReport) return const SizedBox.shrink();
       final details = flow.reportDetails.value;
-      return Padding(
-        padding: EdgeInsets.fromLTRB(
-          compact ? 14 : 16,
-          compact ? 2 : 4,
-          compact ? 14 : 16,
-          compact ? 4 : 8,
-        ),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: isDark
-                ? const Color(0xFF121826).withValues(alpha: 0.96)
-                : Colors.white.withValues(alpha: 0.98),
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.10)
-                  : const Color(0xFFD8E0EA),
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: isDark ? 0.18 : 0.04),
-                blurRadius: 16,
-                offset: const Offset(0, 6),
-              ),
-            ],
+      return GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: _dismissReportKeyboard,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+            compact ? 14 : 16,
+            compact ? 2 : 4,
+            compact ? 14 : 16,
+            compact ? 4 : 8,
           ),
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(
-              compact ? 12 : 14,
-              compact ? 12 : 14,
-              compact ? 12 : 14,
-              compact ? 12 : 14,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: isDark
+                  ? _reportDarkSurface
+                  : Colors.white.withValues(alpha: 0.98),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(
+                color: isDark
+                    ? Colors.white.withValues(alpha: 0.10)
+                    : const Color(0xFFD8E0EA),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: isDark ? 0.18 : 0.04),
+                  blurRadius: 16,
+                  offset: const Offset(0, 6),
+                ),
+              ],
             ),
-            child: kind == VisitFlowKind.issueReport
-                ? _IssueReportForm(
-                    isDark: isDark,
-                    compact: compact,
-                    details: details,
-                    onChanged: flow.updateReportDetails,
-                  )
-                : _IncidentReportForm(
-                    isDark: isDark,
-                    compact: compact,
-                    details: details,
-                    onChanged: flow.updateReportDetails,
-                  ),
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                compact ? 16 : 20,
+                compact ? 16 : 20,
+                compact ? 16 : 20,
+                compact ? 16 : 20,
+              ),
+              child: kind == VisitFlowKind.issueReport
+                  ? _IssueReportForm(
+                      isDark: isDark,
+                      compact: compact,
+                      details: details,
+                      onChanged: flow.updateReportDetails,
+                    )
+                  : _IncidentReportForm(
+                      isDark: isDark,
+                      compact: compact,
+                      details: details,
+                      onChanged: flow.updateReportDetails,
+                    ),
+            ),
           ),
         ),
       );
@@ -100,21 +114,21 @@ class _IssueReportForm extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final gap = compact ? 10.0 : 12.0;
+    final gap = compact ? 16.0 : 20.0;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _ReportFormHeader(
           isDark: isDark,
           icon: Icons.flag_rounded,
-          iconColor: const Color(0xFF7C3AED),
-          title: 'Report an Issue',
-          subtitle: 'Security, maintenance or any other site issue',
+          iconColor: isDark ? const Color(0xFFC4B5FD) : const Color(0xFF7C3AED),
+          title: 'Issue details',
+          subtitle: 'Describe the site issue. * Required fields',
         ),
         SizedBox(height: gap + 2),
         _LabeledField(
           isDark: isDark,
-          label: 'TITLE',
+          label: 'Report title',
           required: true,
           child: _ReportTextField(
             isDark: isDark,
@@ -127,12 +141,14 @@ class _IssueReportForm extends StatelessWidget {
         SizedBox(height: gap),
         _LabeledField(
           isDark: isDark,
-          label: 'CATEGORY',
+          label: 'Category',
+          required: true,
           child: Column(
             children: [
               _ReportPickerField(
                 isDark: isDark,
-                value: details.category ??
+                value:
+                    details.category ??
                     VisitReportDetails.issueCategories.first,
                 icon: Icons.keyboard_arrow_down_rounded,
                 onTap: () => _openCategoryPicker(
@@ -169,16 +185,18 @@ class _IssueReportForm extends StatelessWidget {
         SizedBox(height: gap),
         _LabeledField(
           isDark: isDark,
-          label: 'DETAILS',
+          label: 'What happened?',
           required: true,
           child: _ReportTextField(
             isDark: isDark,
             value: details.details,
             hint: 'Describe the issue — what, where, and any action taken...',
-            maxLines: compact ? 3 : 3,
+            maxLines: 4,
             onChanged: (value) => onChanged(details.copyWith(details: value)),
           ),
         ),
+        SizedBox(height: gap),
+        Divider(color: isDark ? Colors.white12 : const Color(0xFFE2E8F0)),
         SizedBox(height: gap),
         _ReportAttentionFlags(
           isDark: isDark,
@@ -204,6 +222,7 @@ class _IncidentReportForm extends StatelessWidget {
   final ValueChanged<VisitReportDetails> onChanged;
 
   Future<void> _pickDateTime(BuildContext context) async {
+    _dismissReportKeyboard();
     final initial = details.occurredAt ?? DateTime.now();
     final date = await showDatePicker(
       context: context,
@@ -232,15 +251,14 @@ class _IncidentReportForm extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final gap = compact ? 10.0 : 12.0;
+    final gap = compact ? 16.0 : 20.0;
     final wide = MediaQuery.sizeOf(context).width >= 700;
     final categoryField = _LabeledField(
       isDark: isDark,
-      label: 'CATEGORY',
+      label: 'Category',
       child: _ReportPickerField(
         isDark: isDark,
-        value:
-            details.category ?? VisitReportDetails.incidentCategories.first,
+        value: details.category ?? VisitReportDetails.incidentCategories.first,
         icon: Icons.keyboard_arrow_down_rounded,
         onTap: () => _openCategoryPicker(
           context: context,
@@ -254,7 +272,7 @@ class _IncidentReportForm extends StatelessWidget {
     );
     final dateField = _LabeledField(
       isDark: isDark,
-      label: 'DATE & TIME',
+      label: 'Date & time',
       child: _ReportPickerField(
         isDark: isDark,
         value: details.occurredAt == null
@@ -266,7 +284,7 @@ class _IncidentReportForm extends StatelessWidget {
     );
     final locationField = _LabeledField(
       isDark: isDark,
-      label: 'LOCATION',
+      label: 'Location',
       child: _ReportTextField(
         isDark: isDark,
         value: details.location,
@@ -277,7 +295,7 @@ class _IncidentReportForm extends StatelessWidget {
     );
     final peopleField = _LabeledField(
       isDark: isDark,
-      label: 'PEOPLE INVOLVED / WITNESSES',
+      label: 'People involved or witnesses',
       child: _ReportTextField(
         isDark: isDark,
         value: details.peopleInvolved,
@@ -294,14 +312,14 @@ class _IncidentReportForm extends StatelessWidget {
         _ReportFormHeader(
           isDark: isDark,
           icon: Icons.warning_amber_rounded,
-          iconColor: const Color(0xFFDC2626),
-          title: 'Incident Report',
-          subtitle: 'Document a security or safety incident',
+          iconColor: isDark ? _reportDarkAccent : const Color(0xFF2563EB),
+          title: 'Incident details',
+          subtitle: 'Record the incident. * Required fields',
         ),
         SizedBox(height: gap + 2),
         _LabeledField(
           isDark: isDark,
-          label: 'TITLE',
+          label: 'Report title',
           required: true,
           child: _ReportTextField(
             isDark: isDark,
@@ -344,18 +362,20 @@ class _IncidentReportForm extends StatelessWidget {
         SizedBox(height: gap),
         _LabeledField(
           isDark: isDark,
-          label: 'DESCRIPTION',
+          label: 'What happened?',
           required: true,
           child: _ReportTextField(
             isDark: isDark,
             value: details.description,
             hint:
                 'What happened — who, what, when, where, and any action taken...',
-            maxLines: 3,
+            maxLines: 4,
             onChanged: (value) =>
                 onChanged(details.copyWith(description: value)),
           ),
         ),
+        SizedBox(height: gap),
+        Divider(color: isDark ? Colors.white12 : const Color(0xFFE2E8F0)),
         SizedBox(height: gap),
         _ReportAttentionFlags(
           isDark: isDark,
@@ -375,6 +395,7 @@ Future<void> _openCategoryPicker({
   required String? selected,
   required ValueChanged<String> onSelected,
 }) async {
+  _dismissReportKeyboard();
   final chosen = await showModalBottomSheet<String>(
     context: context,
     isScrollControlled: true,
@@ -385,7 +406,7 @@ Future<void> _openCategoryPicker({
       return Container(
         height: height,
         decoration: BoxDecoration(
-          color: isDark ? const Color(0xFF151E2F) : Colors.white,
+          color: isDark ? _reportDarkSurface : Colors.white,
           borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
           border: Border.all(
             color: isDark
@@ -483,9 +504,7 @@ Future<void> _openCategoryPicker({
                               Icon(
                                 Icons.check_circle_rounded,
                                 size: 20,
-                                color: isDark
-                                    ? const Color(0xFF93C5FD)
-                                    : cPrimary,
+                                color: isDark ? _reportDarkAccent : cPrimary,
                               ),
                           ],
                         ),
@@ -520,34 +539,40 @@ class _ReportAttentionFlags extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
-          'ATTENTION',
+          'Follow-up',
           style: TextStyle(
-            color: isDark
-                ? Colors.white.withValues(alpha: 0.55)
-                : const Color(0xFF667085),
-            fontSize: 11,
+            color: isDark ? cDarkTextSecondary : const Color(0xFF667085),
+            fontSize: 13,
             fontWeight: FontWeight.w700,
-            letterSpacing: 0.6,
+            letterSpacing: 0.1,
           ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'Flag this report for review by the relevant team.',
+          style: TextStyle(
+            color: isDark ? cDarkTextSecondary : const Color(0xFF64748B),
+            fontSize: 13,
+            height: 1.4,
+          ),
+        ),
+        const SizedBox(height: 12),
+        _AttentionFlagToggle(
+          isDark: isDark,
+          icon: Icons.shield_outlined,
+          label: 'NPS team',
+          value: details.attentionToNps,
+          onChanged: (value) =>
+              onChanged(details.copyWith(attentionToNps: value)),
         ),
         const SizedBox(height: 8),
         _AttentionFlagToggle(
           isDark: isDark,
           icon: Icons.apartment_rounded,
-          label: 'Attention to property management',
+          label: 'Property management',
           value: details.attentionToPropertyManagement,
-          onChanged: (value) => onChanged(
-            details.copyWith(attentionToPropertyManagement: value),
-          ),
-        ),
-        const SizedBox(height: 8),
-        _AttentionFlagToggle(
-          isDark: isDark,
-          icon: Icons.shield_outlined,
-          label: 'Attention to NPS',
-          value: details.attentionToNps,
           onChanged: (value) =>
-              onChanged(details.copyWith(attentionToNps: value)),
+              onChanged(details.copyWith(attentionToPropertyManagement: value)),
         ),
       ],
     );
@@ -571,7 +596,7 @@ class _AttentionFlagToggle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const accent = Color(0xFFDC2626);
+    final accent = isDark ? _reportDarkAccent : cPrimary;
     return Material(
       color: value
           ? accent.withValues(alpha: isDark ? 0.16 : 0.07)
@@ -624,31 +649,22 @@ class _AttentionFlagToggle extends StatelessWidget {
                   style: TextStyle(
                     color: value
                         ? (isDark
-                              ? const Color(0xFFFFE4E6)
-                              : const Color(0xFF9F1239))
-                        : (isDark
-                              ? cDarkTextPrimary
-                              : const Color(0xFF1E293B)),
+                              ? const Color(0xFFDBEAFE)
+                              : const Color(0xFF1E40AF))
+                        : (isDark ? cDarkTextPrimary : const Color(0xFF1E293B)),
                     fontSize: 13,
                     fontWeight: FontWeight.w700,
                     height: 1.2,
                   ),
                 ),
               ),
-              SizedBox(
-                width: 42,
-                height: 28,
-                child: FittedBox(
-                  fit: BoxFit.contain,
-                  alignment: Alignment.centerRight,
-                  child: Switch.adaptive(
-                    value: value,
-                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    activeTrackColor: accent.withValues(alpha: 0.45),
-                    activeThumbColor: accent,
-                    onChanged: onChanged,
-                  ),
-                ),
+              Switch.adaptive(
+                value: value,
+                activeTrackColor: accent,
+                activeThumbColor: isDark ? _reportDarkInput : Colors.white,
+                inactiveThumbColor: isDark ? cDarkTextSecondary : null,
+                inactiveTrackColor: isDark ? const Color(0xFF334155) : null,
+                onChanged: onChanged,
               ),
             ],
           ),
@@ -681,7 +697,7 @@ class _ReportFormHeader extends StatelessWidget {
           width: 38,
           height: 38,
           decoration: BoxDecoration(
-            color: iconColor.withValues(alpha: isDark ? 0.22 : 0.12),
+            color: iconColor.withValues(alpha: 0.12),
             borderRadius: BorderRadius.circular(11),
           ),
           child: Icon(icon, color: iconColor, size: 20),
@@ -695,7 +711,7 @@ class _ReportFormHeader extends StatelessWidget {
                 title,
                 style: TextStyle(
                   color: isDark ? cDarkTextPrimary : const Color(0xFF0F172A),
-                  fontSize: 16.5,
+                  fontSize: 20,
                   fontWeight: FontWeight.w800,
                   height: 1.15,
                 ),
@@ -707,7 +723,7 @@ class _ReportFormHeader extends StatelessWidget {
                   color: isDark
                       ? cDarkTextSecondary.withValues(alpha: 0.88)
                       : const Color(0xFF64748B),
-                  fontSize: 12,
+                  fontSize: 13,
                   fontWeight: FontWeight.w500,
                   height: 1.25,
                 ),
@@ -738,25 +754,26 @@ class _LabeledField extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
+        Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             Text(
               label,
               style: TextStyle(
-                color: isDark
-                    ? Colors.white.withValues(alpha: 0.58)
-                    : const Color(0xFF667085),
-                fontSize: 11,
+                color: isDark ? cDarkTextSecondary : const Color(0xFF667085),
+                fontSize: 13,
                 fontWeight: FontWeight.w700,
-                letterSpacing: 0.6,
+                letterSpacing: 0.1,
               ),
             ),
             if (required)
-              const Text(
+              Text(
                 ' *',
                 style: TextStyle(
-                  color: Color(0xFFEF4444),
-                  fontSize: 11,
+                  color: isDark
+                      ? const Color(0xFFFDA4AF)
+                      : const Color(0xFFEF4444),
+                  fontSize: 13,
                   fontWeight: FontWeight.w800,
                 ),
               ),
@@ -824,15 +841,13 @@ class _ReportTextFieldState extends State<_ReportTextField> {
     final border = OutlineInputBorder(
       borderRadius: BorderRadius.circular(11),
       borderSide: BorderSide(
-        color: widget.isDark
-            ? Colors.white.withValues(alpha: 0.12)
-            : const Color(0xFFD5DEEA),
+        color: widget.isDark ? _reportDarkOutline : const Color(0xFFD5DEEA),
       ),
     );
     final focused = OutlineInputBorder(
       borderRadius: BorderRadius.circular(11),
       borderSide: BorderSide(
-        color: widget.isDark ? const Color(0xFF4F8DF7) : cPrimary,
+        color: widget.isDark ? _reportDarkAccent : cPrimary,
         width: 1.5,
       ),
     );
@@ -842,29 +857,27 @@ class _ReportTextFieldState extends State<_ReportTextField> {
       maxLines: widget.maxLines,
       minLines: widget.maxLines > 1 ? widget.maxLines : 1,
       textInputAction: widget.textInputAction,
+      textCapitalization: TextCapitalization.sentences,
+      onTapOutside: (_) => _focusNode.unfocus(),
       style: TextStyle(
         color: widget.isDark ? cDarkTextPrimary : const Color(0xFF0F172A),
-        fontSize: 14,
+        fontSize: 15,
         fontWeight: FontWeight.w500,
         height: 1.35,
       ),
-      cursorColor: widget.isDark ? const Color(0xFF93C5FD) : cPrimary,
+      cursorColor: widget.isDark ? _reportDarkAccent : cPrimary,
       decoration: InputDecoration(
         hintText: widget.hint,
         hintStyle: TextStyle(
-          color: widget.isDark
-              ? Colors.white.withValues(alpha: 0.34)
-              : const Color(0xFF94A3B8),
-          fontSize: 14,
+          color: widget.isDark ? cDarkIconColor : const Color(0xFF64748B),
+          fontSize: 15,
           fontWeight: FontWeight.w500,
         ),
         filled: true,
-        fillColor: widget.isDark
-            ? const Color(0xFF0F1522)
-            : const Color(0xFFF8FAFC),
+        fillColor: widget.isDark ? _reportDarkInput : const Color(0xFFF8FAFC),
         contentPadding: const EdgeInsets.symmetric(
           horizontal: 12,
-          vertical: 12,
+          vertical: 15,
         ),
         border: border,
         enabledBorder: border,
@@ -891,30 +904,27 @@ class _ReportPickerField extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: isDark ? const Color(0xFF0F1522) : const Color(0xFFF8FAFC),
+      color: isDark ? _reportDarkInput : const Color(0xFFF8FAFC),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(11),
         side: BorderSide(
-          color: isDark
-              ? Colors.white.withValues(alpha: 0.12)
-              : const Color(0xFFD5DEEA),
+          color: isDark ? _reportDarkOutline : const Color(0xFFD5DEEA),
         ),
       ),
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(11),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
           child: Row(
             children: [
               Expanded(
                 child: Text(
                   value,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+
                   style: TextStyle(
                     color: isDark ? cDarkTextPrimary : const Color(0xFF0F172A),
-                    fontSize: 14,
+                    fontSize: 15,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -922,7 +932,7 @@ class _ReportPickerField extends StatelessWidget {
               Icon(
                 icon,
                 size: 20,
-                color: isDark ? const Color(0xFF93C5FD) : cPrimary,
+                color: isDark ? _reportDarkAccent : cPrimary,
               ),
             ],
           ),

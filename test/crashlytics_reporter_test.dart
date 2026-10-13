@@ -21,5 +21,27 @@ void main() {
       expect(CrashlyticsReporter.shouldIgnoreError(text), isFalse);
       expect(CrashlyticsReporter.isNonFatalError(text), isTrue);
     });
+
+    test('ignores hot-reload listener lookup failures', () {
+      const text =
+          'Lookup failed: _syncSessionTicker in package:smartnps360/'
+          'src/debug/debug_env_logs_screen.dart';
+      expect(CrashlyticsReporter.shouldIgnoreError(text), isTrue);
+    });
+
+    test('marks infinite-height layout assertions as non-fatal', () {
+      const text =
+          'BoxConstraints forces an infinite height. '
+          'RenderBox was not laid out: RenderFlex#35ab4';
+      expect(CrashlyticsReporter.shouldIgnoreError(text), isFalse);
+      expect(CrashlyticsReporter.isNonFatalError(text), isTrue);
+    });
+
+    test('ignores unsolicited HTTP response noise', () {
+      const text =
+          'HttpException: Unexpected response (unsolicited response without '
+          'request).';
+      expect(CrashlyticsReporter.shouldIgnoreError(text), isTrue);
+    });
   });
 }
