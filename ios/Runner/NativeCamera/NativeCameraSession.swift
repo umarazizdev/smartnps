@@ -320,7 +320,7 @@ final class NativeCameraSession: NSObject {
     if let live = currentDevice?.videoZoomFactor, live > 0.01 {
       preferredZoomFactor = live
     }
-    val previousWasPhoto = !isVideoMode
+    let previousWasPhoto = !isVideoMode
     isVideoMode = video
 
     if !video {

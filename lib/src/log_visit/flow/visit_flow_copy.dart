@@ -115,12 +115,19 @@ class VisitFlowCopy {
       case VisitFlowKind.siteCheck:
         return 'Capture a clear photo or hold the capture button to record a site check video.';
       case VisitFlowKind.issueReport:
-        return 'Capture photos or video of the issue, then fill in the report fields above.';
+        return 'Add photos or videos from the camera or gallery, then fill in the report fields above.';
       case VisitFlowKind.incidentReport:
-        return 'Capture photos or video of the incident, then fill in the report fields above.';
+        return 'Add photos or videos from the camera or gallery, then fill in the report fields above.';
       case VisitFlowKind.patrol:
         return 'Capture a clear photo or hold the capture button to record a patrol round video.';
     }
+  }
+
+  String mediaActionLabel({required bool hasMedia}) {
+    if (isStructuredReport) {
+      return hasMedia ? 'Add More' : 'Add';
+    }
+    return hasMedia ? 'Capture More' : 'Capture';
   }
 
   String get roundTagCaptureTitle => 'Select patrol round';
@@ -255,6 +262,19 @@ class VisitFlowCopy {
         return 'Incident Reported';
       case VisitFlowKind.patrol:
         return 'Site Patrol Done';
+    }
+  }
+
+  String get successMessage {
+    switch (kind) {
+      case VisitFlowKind.siteCheck:
+        return 'Visit report uploaded successfully';
+      case VisitFlowKind.issueReport:
+        return 'Issue report uploaded successfully';
+      case VisitFlowKind.incidentReport:
+        return 'Incident report uploaded successfully';
+      case VisitFlowKind.patrol:
+        return 'Visit report uploaded successfully';
     }
   }
 

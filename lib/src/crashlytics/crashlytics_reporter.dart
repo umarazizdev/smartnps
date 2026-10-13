@@ -58,6 +58,7 @@ class CrashlyticsReporter {
     if (SecureStorageAccess.isRecoverableKeychainError(error)) return true;
     final text = error.toString();
     if (_looksLikeNetworkNoise(text)) return true;
+    if (_looksLikeHotReloadNoise(text)) return true;
 
     if (_looksLikeDisposedWebViewChannel(text)) return true;
     return false;
@@ -75,7 +76,7 @@ class CrashlyticsReporter {
     }
 
     final text = error.toString();
-    if (_looksLikeLayoutOverflow(text)) {
+    if (_looksLikeLayoutOverflow(text) || _looksLikeLayoutConstraintNoise(text)) {
       return true;
     }
 
@@ -90,16 +91,21 @@ class CrashlyticsReporter {
     if (isNonFatalError(details.exception)) return true;
     final text = '${details.exceptionAsString()} ${details.library ?? ''}';
     return _looksLikeLayoutOverflow(text) ||
+        _looksLikeLayoutConstraintNoise(text) ||
         SecureStorageAccess.isRecoverableKeychainError(text) ||
-        _looksLikeNetworkNoise(text);
+        _looksLikeNetworkNoise(text) ||
+        _looksLikeHotReloadNoise(text);
   }
 
   static bool shouldIgnoreFlutterError(FlutterErrorDetails details) {
     if (details.silent) return true;
     if (shouldIgnoreError(details.exception)) return true;
     final text = details.exceptionAsString();
+    final context = details.context?.toDescription() ?? '';
+    final combined = '$text $context';
     return SecureStorageAccess.isRecoverableKeychainError(text) ||
-        _looksLikeNetworkNoise(text);
+        _looksLikeNetworkNoise(text) ||
+        _looksLikeHotReloadNoise(combined);
   }
 
   static bool _looksLikeNetworkNoise(String text) {
@@ -122,6 +128,22 @@ class CrashlyticsReporter {
         lower.contains('overflowed by') ||
         lower.contains('a renderflex overflowed') ||
         lower.contains('cannot hit test a render box with no size');
+  }
+
+  static bool _looksLikeLayoutConstraintNoise(String text) {
+    final lower = text.toLowerCase();
+    return lower.contains('boxconstraints forces an infinite height') ||
+        lower.contains('boxconstraints forces an infinite width') ||
+        lower.contains('renderbox was not laid out') ||
+        (lower.contains('failed assertion') && lower.contains('hassize'));
+  }
+
+  static bool _looksLikeHotReloadNoise(String text) {
+    final lower = text.toLowerCase();
+    return lower.contains('lookup failed:') ||
+        lower.contains('ext.flutter.reassemble') ||
+        lower.contains("is not a subtype of type 'state<") ||
+        lower.contains('is not a subtype of type \'state<');
   }
 
   static bool _looksLikeDisposedWebViewChannel(String text) {

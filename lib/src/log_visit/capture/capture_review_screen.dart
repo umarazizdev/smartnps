@@ -192,7 +192,13 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
                           148.0,
                           164.0,
                         ),
-                        child: _actionBar(context: context, isLandscape: true),
+                        child: Align(
+                          alignment: Alignment.center,
+                          child: _actionBar(
+                            context: context,
+                            isLandscape: true,
+                          ),
+                        ),
                       ),
                     ),
                   ],
@@ -359,7 +365,8 @@ class _CaptureReviewActionBar extends StatelessWidget {
               : (actionCount * actionHeight) +
                     ((actionCount - 1) * actionGap);
           final neededHeight = actionsBlockHeight + doneGap + doneHeight;
-          final fits = !constraints.hasBoundedHeight ||
+          final fits = constraints.hasBoundedHeight &&
+              constraints.maxHeight.isFinite &&
               constraints.maxHeight >= neededHeight - 0.5;
 
           final column = Column(
@@ -395,14 +402,14 @@ class _CaptureReviewActionBar extends StatelessWidget {
         rows.add(const SizedBox(height: 8));
       }
       final left = actions[i];
-      final hasRight = i + 1 < actions.length;
-      if (hasRight) {
+      final rightIndex = i + 1;
+      if (rightIndex < actions.length) {
         rows.add(
           Row(
             children: [
               Expanded(child: left),
               const SizedBox(width: 6),
-              Expanded(child: actions[i + 1]),
+              Expanded(child: actions[rightIndex]),
             ],
           ),
         );

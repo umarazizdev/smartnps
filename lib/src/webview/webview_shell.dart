@@ -194,8 +194,6 @@ class _WebViewShellState extends State<WebViewShell>
 
   Timer? _offlineConnectivityDebounce;
 
-  String? _lastBottomBarVisibilityLog;
-
   void _setNativeAuthSession(bool value) {
     final wasReady = _shouldUploadNativePermissionStatus;
     final active = value && _ui.officerLoggedIn.value;
@@ -625,61 +623,6 @@ class _WebViewShellState extends State<WebViewShell>
     final tabIndex = _bottomTabIndexFromUri(uri);
     if (tabIndex != null && _ui.selectedBottomTabIndex.value != tabIndex) {
       _ui.selectedBottomTabIndex.value = tabIndex;
-    }
-  }
-
-  void _logBottomBarVisibility({
-    required bool show,
-    required bool showPermissionBlocker,
-    required bool uploadingFromDialog,
-  }) {
-    final uri = _ui.currentUri.value;
-    final keyboardInset = _ui.flutterKeyboardInset.value;
-    final isAuth = _isAuthRoute(uri);
-    final isBottomRoute = _isBottomBarRoute(uri);
-    final preserve = _ui.preserveBottomBarDuringLoad.value;
-    final reasons = <String>[];
-    if (showPermissionBlocker) reasons.add('permissionBlocker');
-    if (_ui.showOffline.value) reasons.add('offline');
-    if (!_ui.firstPageLoaded.value) reasons.add('firstPageNotLoaded');
-    if (!_ui.officerLoggedIn.value) reasons.add('notLoggedIn');
-    if (_ui.isKeyboardOpen) {
-      reasons.add('keyboardOpen(inset=${keyboardInset.toStringAsFixed(1)})');
-    }
-    if (isAuth) reasons.add('authRoute');
-    if (_ui.showingLogVisit.value) reasons.add('showingLogVisit');
-    if (uploadingFromDialog) reasons.add('uploadingFromDialog');
-    if (_ui.webHidesBottomBar.value) reasons.add('webHidesBottomBar');
-    if (!isBottomRoute && !preserve) {
-      reasons.add('notBottomBarRoute+noPreserve');
-    }
-
-    final signature =
-        'show=$show uri=${uri?.toString() ?? 'null'} '
-        'reasons=${reasons.isEmpty ? 'none' : reasons.join('|')} '
-        'flags={permissionBlocker=$showPermissionBlocker '
-        'offline=${_ui.showOffline.value} '
-        'firstPageLoaded=${_ui.firstPageLoaded.value} '
-        'officerLoggedIn=${_ui.officerLoggedIn.value} '
-        'keyboardOpen=${_ui.isKeyboardOpen} '
-        'keyboardInset=${keyboardInset.toStringAsFixed(1)} '
-        'authRoute=$isAuth '
-        'showingLogVisit=${_ui.showingLogVisit.value} '
-        'uploadingFromDialog=$uploadingFromDialog '
-        'webHidesBottomBar=${_ui.webHidesBottomBar.value} '
-        'isBottomBarRoute=$isBottomRoute '
-        'preserveDuringLoad=$preserve '
-        'selectedTab=${_ui.selectedBottomTabIndex.value} '
-        'platform=${Platform.isAndroid
-            ? 'android'
-            : Platform.isIOS
-            ? 'ios'
-            : 'other'}}';
-
-    if (_lastBottomBarVisibilityLog == signature) return;
-    _lastBottomBarVisibilityLog = signature;
-    if (kDebugMode) {
-      debugPrint('[SmartNPS360][BottomBar] $signature');
     }
   }
 
@@ -6542,11 +6485,6 @@ class _WebViewShellState extends State<WebViewShell>
                                   !_ui.webHidesBottomBar.value &&
                                   (_isBottomBarRoute(_ui.currentUri.value) ||
                                       _ui.preserveBottomBarDuringLoad.value);
-                              _logBottomBarVisibility(
-                                show: showBottomBar,
-                                showPermissionBlocker: showPermissionBlocker,
-                                uploadingFromDialog: false,
-                              );
                               if (!showBottomBar) {
                                 return const SizedBox.shrink();
                               }

@@ -19,6 +19,7 @@ class DebugEnvLogsController extends GetxController {
   }.obs;
   final selectedDuration = SessionDebugDuration.fiveMinutes.obs;
   final sessionRevision = 0.obs;
+  final detailLogExpanded = false.obs;
 
   Timer? _sessionTicker;
 
@@ -68,13 +69,26 @@ class DebugEnvLogsController extends GetxController {
   }
 
   void _onSessionChanged() {
-    sessionRevision.value++;
-    _syncSessionTicker();
+    if (isClosed) return;
+    try {
+      sessionRevision.value++;
+      _syncSessionTicker();
+    } catch (_) {}
   }
 
   void _syncSessionTicker() {
+    if (isClosed) {
+      _sessionTicker?.cancel();
+      _sessionTicker = null;
+      return;
+    }
     if (session.isRunning) {
       _sessionTicker ??= Timer.periodic(const Duration(seconds: 1), (_) {
+        if (isClosed) {
+          _sessionTicker?.cancel();
+          _sessionTicker = null;
+          return;
+        }
         sessionRevision.value++;
         if (!session.isRunning) {
           _sessionTicker?.cancel();
@@ -158,6 +172,35 @@ class DebugEnvLogsController extends GetxController {
   Future<void> copySessionLogs() async {
     await Clipboard.setData(ClipboardData(text: session.toCopyText()));
     _snack('Session logs copied');
+  }
+
+  /// Copies raw session log lines for support / debugging.
+  Future<void> copyDetailLogs() async {
+    final lines = session.logs;
+    if (lines.isEmpty) {
+      _snack('No detail logs to copy');
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: lines.join('\n')));
+    _snack('Detail logs copied');
+  }
+
+  /// Copies the provided log lines (e.g. Activity section).
+  Future<void> copyLogLines(
+    List<String> lines, {
+    String label = 'Logs',
+  }) async {
+    if (lines.isEmpty) {
+      _snack('No ${label.toLowerCase()} to copy');
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: lines.join('\n')));
+    _snack('$label copied');
+  }
+
+  /// Expands or collapses the detail log panel.
+  void toggleDetailLogExpanded() {
+    detailLogExpanded.toggle();
   }
 
   void toggleCategory(SessionDebugCategory category) {
