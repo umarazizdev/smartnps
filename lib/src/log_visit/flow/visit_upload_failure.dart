@@ -46,10 +46,14 @@ class VisitUploadFailure {
   }) {
     final errors = result.errors;
     if (errors == null || errors.isEmpty) {
+      final summary = _cleanMessage(result.displayMessage);
+      final missingVisitId = summary.toLowerCase().contains('missing visit_id');
       return VisitUploadFailurePresentation(
         title: 'Upload failed',
-        summary: _cleanMessage(result.displayMessage),
-        guidance: 'Please review your report and try again.',
+        summary: summary,
+        guidance: missingVisitId
+            ? 'The server did not confirm this report. Try uploading again.'
+            : 'Please review your report and try again.',
       );
     }
 
@@ -195,9 +199,7 @@ class VisitUploadFailure {
     final completed = <VisitCheckpoint>[];
     for (final checkpoint in checkpoints) {
       final hasMedia = mediaItems.any(
-        (e) =>
-            e.siteCheckpointId == checkpoint.id &&
-            (e.isPhoto || e.isVideo),
+        (e) => e.siteCheckpointId == checkpoint.id && (e.isPhoto || e.isVideo),
       );
       if (hasMedia) completed.add(checkpoint);
     }

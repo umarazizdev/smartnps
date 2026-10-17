@@ -313,7 +313,6 @@ class VisitUploadQueue {
     return VisitUploadApi.instance.uploadVisit(
       meta: meta,
       items: snapshot.items,
-      batchVoicePath: snapshot.batchNote.voiceNotePath,
       generalVoicePath: snapshot.generalNote.voiceNotePath,
       uploadUrl: snapshot.context?.uploadUrl,
       onProgress: onProgress,

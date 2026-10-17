@@ -122,25 +122,23 @@ class VisitUploadResult {
       } catch (_) {}
     }
 
-    final visitId = _asInt(
-      map?['report_id'] ??
-          map?['reportId'] ??
-          map?['visit_id'] ??
-          map?['visitId'],
-    );
-    final successFlag = map?['success'];
+    final idSource = _mapWithVisitId(map);
+    final visitId = _visitIdFrom(idSource, allowBareId: idSource != map);
+    final successFlag = map?['success'] ?? idSource?['success'];
     final statusOk = statusCode >= 200 && statusCode < 300;
     final claimedSuccess =
         successFlag == true || (successFlag == null && statusOk);
     final ok = claimedSuccess && visitId != null;
 
     Map<String, dynamic>? errors;
-    final rawErrors = map?['errors'];
+    final rawErrors = map?['errors'] ?? idSource?['errors'];
     if (rawErrors is Map) {
       errors = Map<String, dynamic>.from(rawErrors);
     }
 
-    final apiMessage = map?['message']?.toString();
+    final apiMessage =
+        _firstText(map, const ['message']) ??
+        _firstText(idSource, const ['message']);
     final message = ok
         ? apiMessage
         : (claimedSuccess && visitId == null
@@ -154,13 +152,93 @@ class VisitUploadResult {
       statusCode: statusCode,
       visitId: visitId,
       clientDraftId:
-          map?['client_draft_id']?.toString() ??
-          map?['clientDraftId']?.toString(),
-      itemsSaved: _asInt(map?['items_saved'] ?? map?['itemsSaved']),
+          _firstText(map, const ['client_draft_id', 'clientDraftId']) ??
+          _firstText(idSource, const ['client_draft_id', 'clientDraftId']),
+      itemsSaved:
+          _firstInt(map, const ['items_saved', 'itemsSaved']) ??
+          _firstInt(idSource, const ['items_saved', 'itemsSaved']),
       message: message,
       errors: errors,
       flowKind: flowKind,
     );
+  }
+
+  static const _visitIdKeys = <String>[
+    'visit_id',
+    'visitId',
+    'report_id',
+    'reportId',
+  ];
+
+  static const _envelopeKeys = <String>[
+    'data',
+    'payload',
+    'result',
+    'visit',
+    'report',
+  ];
+
+  /// First object that actually contains a visit id.
+  ///
+  /// A blank or non-numeric `report_id` must not hide `visit_id`, and a
+  /// wrapped patrol payload (`data.visit_id`, `visit.id`) still counts.
+  static Map<String, dynamic>? _mapWithVisitId(Map<String, dynamic>? map) {
+    if (map == null) return null;
+    if (_visitIdFrom(map, allowBareId: false) != null) return map;
+
+    for (final nested in _nestedMaps(map)) {
+      if (_visitIdFrom(nested, allowBareId: true) != null) return nested;
+    }
+    return map;
+  }
+
+  static List<Map<String, dynamic>> _nestedMaps(Map<String, dynamic> map) {
+    final maps = <Map<String, dynamic>>[];
+    for (final key in _envelopeKeys) {
+      final nested = _asMap(map[key]);
+      if (nested == null) continue;
+      maps.add(nested);
+      for (final innerKey in _envelopeKeys) {
+        final inner = _asMap(nested[innerKey]);
+        if (inner != null) maps.add(inner);
+      }
+    }
+    return maps;
+  }
+
+  static int? _visitIdFrom(
+    Map<String, dynamic>? map, {
+    required bool allowBareId,
+  }) {
+    final id = _firstInt(map, _visitIdKeys);
+    if (id != null) return id;
+    if (!allowBareId) return null;
+    return _firstInt(map, const ['id']);
+  }
+
+  static int? _firstInt(Map<String, dynamic>? map, List<String> keys) {
+    if (map == null) return null;
+    for (final key in keys) {
+      if (!map.containsKey(key)) continue;
+      final parsed = _asInt(map[key]);
+      if (parsed != null) return parsed;
+    }
+    return null;
+  }
+
+  static String? _firstText(Map<String, dynamic>? map, List<String> keys) {
+    if (map == null) return null;
+    for (final key in keys) {
+      final text = map[key]?.toString().trim();
+      if (text != null && text.isNotEmpty) return text;
+    }
+    return null;
+  }
+
+  static Map<String, dynamic>? _asMap(dynamic value) {
+    if (value is Map<String, dynamic>) return value;
+    if (value is Map) return Map<String, dynamic>.from(value);
+    return null;
   }
 
   static int? _asInt(dynamic value) {
@@ -178,7 +256,6 @@ class VisitUploadApi {
   Future<VisitUploadResult> uploadVisit({
     required Map<String, dynamic> meta,
     required List<VisitMediaItem> items,
-    String? batchVoicePath,
     String? generalVoicePath,
     String? uploadUrl,
     void Function(int current, int total)? onProgress,
@@ -267,16 +344,6 @@ class VisitUploadApi {
       }
     }
 
-    final batchVoiceResult = await _attachBatchVoice(
-      form: form,
-      meta: meta,
-      batchVoicePath: batchVoicePath,
-    );
-    if (batchVoiceResult != null) {
-      _logResult(batchVoiceResult);
-      return batchVoiceResult;
-    }
-
     final generalVoiceResult = await _attachGeneralVoice(
       form: form,
       meta: meta,
@@ -288,10 +355,7 @@ class VisitUploadApi {
     }
 
     final resolvedUploadUrl = _resolveUploadUrl(uploadUrl);
-    final flowKind = _resolveFlowKind(
-      meta: meta,
-      uploadUrl: resolvedUploadUrl,
-    );
+    final flowKind = _resolveFlowKind(meta: meta, uploadUrl: resolvedUploadUrl);
 
     if (kDebugMode) {
       debugPrint(
@@ -366,8 +430,7 @@ class VisitUploadApi {
           debugPrint('[VisitUploadApi] stack=$stack');
         }
       }
-      final network =
-          error is SocketException || error is HttpException;
+      final network = error is SocketException || error is HttpException;
       final fallback = VisitUploadResult(
         success: false,
         message: error.toString(),
@@ -399,8 +462,8 @@ class VisitUploadApi {
       return VisitFlowKind.fromVisitType(visitType);
     }
 
-    final path = Uri.tryParse(uploadUrl)?.path.toLowerCase() ??
-        uploadUrl.toLowerCase();
+    final path =
+        Uri.tryParse(uploadUrl)?.path.toLowerCase() ?? uploadUrl.toLowerCase();
     if (path.contains('/issue-reports')) return VisitFlowKind.issueReport;
     if (path.contains('/incident-reports')) {
       return VisitFlowKind.incidentReport;
@@ -421,9 +484,10 @@ class VisitUploadApi {
     if (mediaBytes <= 0) {
       if (totalHint > 0) {
         final ratio = (sent / totalHint).clamp(0.0, 1.0);
-        return (ratio * itemByteWeights.length)
-            .ceil()
-            .clamp(1, itemByteWeights.length);
+        return (ratio * itemByteWeights.length).ceil().clamp(
+          1,
+          itemByteWeights.length,
+        );
       }
       return 1;
     }
@@ -437,9 +501,18 @@ class VisitUploadApi {
     return itemByteWeights.length;
   }
 
+  static String _bodyPreview(dynamic responseBody) {
+    if (responseBody == null) return '';
+    final text = responseBody.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (text.isEmpty) return '';
+    if (text.length <= 180) return text;
+    return '${text.substring(0, 180)}…';
+  }
+
   void _logResult(VisitUploadResult result, {dynamic responseBody}) {
     if (!result.success) {
-      final path = Uri.tryParse(ApiUrls.visitsUploadUrl)?.path ?? '/visits/upload';
+      final path =
+          Uri.tryParse(ApiUrls.visitsUploadUrl)?.path ?? '/visits/upload';
       final draftId = result.clientDraftId?.trim() ?? '';
       final ids = <String>[
         if (result.visitId != null) 'visitId=${result.visitId}',
@@ -449,7 +522,8 @@ class VisitUploadApi {
         SessionDebugCategory.uploads,
         'FAIL POST $path status=${result.statusCode} '
         '${ids.isEmpty ? '' : '$ids '}'
-        'message=${result.displayMessage} errors=${result.errors}',
+        'message=${result.displayMessage} errors=${result.errors} '
+        'body=${_bodyPreview(responseBody)}',
       );
     }
     if (!kDebugMode) return;
@@ -517,53 +591,6 @@ class VisitUploadApi {
       }
       return null;
     }
-  }
-
-  Future<VisitUploadResult?> _attachBatchVoice({
-    required FormData form,
-    required Map<String, dynamic> meta,
-    required String? batchVoicePath,
-  }) async {
-    final attentionNeeded = meta['attention_needed'] ?? meta['batch_note'];
-    if (attentionNeeded is! Map) return null;
-
-    final neededRaw = attentionNeeded['needed']
-        ?.toString()
-        .trim()
-        .toLowerCase();
-    final neededYes =
-        neededRaw == 'yes' ||
-        neededRaw == 'true' ||
-        attentionNeeded['needed'] == true;
-    final wantsVoice = neededYes && attentionNeeded['has_voice_note'] == true;
-    if (!wantsVoice) return null;
-
-    final path = batchVoicePath?.trim();
-    if (path == null || path.isEmpty) {
-      return const VisitUploadResult(
-        success: false,
-        message: 'Attention needed voice note missing.',
-      );
-    }
-    final voiceFile = File(path);
-    if (!await voiceFile.exists()) {
-      return const VisitUploadResult(
-        success: false,
-        message: 'Attention needed voice note file missing.',
-      );
-    }
-
-    form.files.add(
-      MapEntry(
-        'attention_voice',
-        await MultipartFile.fromFile(
-          path,
-          filename: 'attention_voice${_extension(path) ?? '.m4a'}',
-          contentType: _voiceContentType(path),
-        ),
-      ),
-    );
-    return null;
   }
 
   Future<VisitUploadResult?> _attachGeneralVoice({

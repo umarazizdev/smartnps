@@ -25,24 +25,27 @@ void main() {
       expect(result.displayMessage, 'Visit report uploaded successfully');
     });
 
-    test('accepts live onsite-patrol /api/onsite-patrol/visits 200 response', () {
-      final result = VisitUploadResult.parseHttp(
-        statusCode: 200,
-        flowKind: VisitFlowKind.siteCheck,
-        data: {
-          'success': true,
-          'message': 'Visit report uploaded successfully',
-          'visit_id': 1836,
-          'client_draft_id': '865b056b-472d-42f4-8628-4325e1c97cb5',
-          'items_saved': 1,
-        },
-      );
+    test(
+      'accepts live onsite-patrol /api/onsite-patrol/visits 200 response',
+      () {
+        final result = VisitUploadResult.parseHttp(
+          statusCode: 200,
+          flowKind: VisitFlowKind.siteCheck,
+          data: {
+            'success': true,
+            'message': 'Visit report uploaded successfully',
+            'visit_id': 1836,
+            'client_draft_id': '865b056b-472d-42f4-8628-4325e1c97cb5',
+            'items_saved': 1,
+          },
+        );
 
-      expect(result.success, isTrue);
-      expect(result.visitId, 1836);
-      expect(result.itemsSaved, 1);
-      expect(result.displayMessage, 'Visit report uploaded successfully');
-    });
+        expect(result.success, isTrue);
+        expect(result.visitId, 1836);
+        expect(result.itemsSaved, 1);
+        expect(result.displayMessage, 'Visit report uploaded successfully');
+      },
+    );
 
     test('accepts live incident-reports 201 with itemsSaved=0', () {
       final result = VisitUploadResult.parseHttp(
@@ -87,11 +90,7 @@ void main() {
       final result = VisitUploadResult.parseHttp(
         statusCode: 201,
         flowKind: VisitFlowKind.patrol,
-        data: {
-          'success': true,
-          'visitId': 42,
-          'itemsSaved': 3,
-        },
+        data: {'success': true, 'visitId': 42, 'itemsSaved': 3},
       );
 
       expect(result.success, isTrue);
@@ -102,10 +101,7 @@ void main() {
     test('rejects 2xx with success true but missing visit_id', () {
       final result = VisitUploadResult.parseHttp(
         statusCode: 200,
-        data: {
-          'success': true,
-          'message': 'OK',
-        },
+        data: {'success': true, 'message': 'OK'},
       );
 
       expect(result.success, isFalse);
@@ -127,16 +123,73 @@ void main() {
     test('rejects success:false even when visit_id is present', () {
       final result = VisitUploadResult.parseHttp(
         statusCode: 200,
-        data: {
-          'success': false,
-          'message': 'Validation failed',
-          'visit_id': 9,
-        },
+        data: {'success': false, 'message': 'Validation failed', 'visit_id': 9},
       );
 
       expect(result.success, isFalse);
       expect(result.visitId, 9);
       expect(result.message, 'Validation failed');
+    });
+
+    test('uses visit_id when report_id is present but not numeric', () {
+      final result = VisitUploadResult.parseHttp(
+        statusCode: 200,
+        flowKind: VisitFlowKind.patrol,
+        data: {
+          'success': true,
+          'report_id': '',
+          'visit_id': 159906,
+          'items_saved': 1,
+          'client_draft_id': 'draft-1',
+        },
+      );
+
+      expect(result.success, isTrue);
+      expect(result.visitId, 159906);
+      expect(result.itemsSaved, 1);
+      expect(result.clientDraftId, 'draft-1');
+    });
+
+    test('accepts a patrol id nested under data or visit', () {
+      final wrapped = VisitUploadResult.parseHttp(
+        statusCode: 200,
+        flowKind: VisitFlowKind.patrol,
+        data: {
+          'success': true,
+          'data': {
+            'visit_id': 55,
+            'client_draft_id': 'nested-draft',
+            'items_saved': 1,
+          },
+        },
+      );
+      expect(wrapped.success, isTrue);
+      expect(wrapped.visitId, 55);
+      expect(wrapped.clientDraftId, 'nested-draft');
+      expect(wrapped.itemsSaved, 1);
+
+      final visitObject = VisitUploadResult.parseHttp(
+        statusCode: 201,
+        flowKind: VisitFlowKind.patrol,
+        data: {
+          'success': true,
+          'visit': {'id': 77, 'items_saved': 2},
+        },
+      );
+      expect(visitObject.success, isTrue);
+      expect(visitObject.visitId, 77);
+      expect(visitObject.itemsSaved, 2);
+    });
+
+    test('does not treat a bare top-level id as the visit id', () {
+      final result = VisitUploadResult.parseHttp(
+        statusCode: 200,
+        data: {'success': true, 'id': 5},
+      );
+
+      expect(result.success, isFalse);
+      expect(result.visitId, isNull);
+      expect(result.message, 'Upload response missing visit_id.');
     });
 
     test('parses JSON string bodies', () {

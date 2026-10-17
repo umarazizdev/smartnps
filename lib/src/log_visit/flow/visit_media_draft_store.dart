@@ -86,7 +86,6 @@ class VisitMediaDraftSnapshot {
     this.siteName,
     this.context,
     this.savedAt,
-    this.batchNote = const VisitBatchNote(),
     this.generalNote = const VisitBatchNote(),
     this.reportDetails = const VisitReportDetails(),
     this.lastUploadIssue,
@@ -98,7 +97,6 @@ class VisitMediaDraftSnapshot {
   final String? siteName;
   final VisitPatrolContext? context;
   final DateTime? savedAt;
-  final VisitBatchNote batchNote;
   final VisitBatchNote generalNote;
   final VisitReportDetails reportDetails;
   final VisitDraftLastUploadIssue? lastUploadIssue;
@@ -122,7 +120,6 @@ class VisitMediaDraftSnapshot {
   /// Draft should appear in resume lists / be reopened from bridge.
   bool get hasResumeContent =>
       hasItems ||
-      batchNote.hasContent ||
       generalNote.hasContent ||
       lastUploadIssue != null ||
       (isStructuredReport &&
@@ -153,7 +150,6 @@ class VisitMediaDraftSnapshot {
     String? siteName,
     VisitPatrolContext? context,
     DateTime? savedAt,
-    VisitBatchNote? batchNote,
     VisitBatchNote? generalNote,
     VisitReportDetails? reportDetails,
     VisitDraftLastUploadIssue? lastUploadIssue,
@@ -165,7 +161,6 @@ class VisitMediaDraftSnapshot {
       siteName: siteName ?? this.siteName,
       context: context ?? this.context,
       savedAt: savedAt ?? this.savedAt,
-      batchNote: batchNote ?? this.batchNote,
       generalNote: generalNote ?? this.generalNote,
       reportDetails: reportDetails ?? this.reportDetails,
       lastUploadIssue: lastUploadIssue ?? this.lastUploadIssue,
@@ -647,7 +642,6 @@ class VisitMediaDraftStore {
       startedAt: updated.startedAt,
       siteName: updated.siteName,
       context: context,
-      batchNote: updated.batchNote,
       generalNote: updated.generalNote,
       reportDetails: updated.reportDetails,
       lastUploadIssue: updated.lastUploadIssue,
@@ -661,7 +655,6 @@ class VisitMediaDraftStore {
     String? siteName,
     VisitPatrolContext? context,
     VisitDraftKey? key,
-    VisitBatchNote batchNote = const VisitBatchNote(),
     VisitBatchNote generalNote = const VisitBatchNote(),
     VisitReportDetails reportDetails = const VisitReportDetails(),
     VisitDraftLastUploadIssue? lastUploadIssue,
@@ -707,7 +700,6 @@ class VisitMediaDraftStore {
       'startedAt': effectiveStartedAt?.toIso8601String(),
       'siteName': effectiveSiteName,
       'context': context?.toJson(),
-      'attentionNeeded': batchNote.toJson(),
       'generalNote': generalNote.toJson(),
       'reportDetails': reportDetails.toJson(),
       if (lastUploadIssue != null) 'lastUploadIssue': lastUploadIssue.toJson(),
@@ -859,18 +851,6 @@ class VisitMediaDraftStore {
           ? draftKey
           : (resolvedKey.isScoped ? resolvedKey : draftKey);
 
-      VisitBatchNote batch = const VisitBatchNote();
-      final attentionRaw = map['attentionNeeded'] ?? map['batchNote'];
-      if (attentionRaw is Map) {
-        batch = VisitBatchNote.fromJson(
-          Map<String, dynamic>.from(attentionRaw),
-        );
-        final voice = batch.voiceNotePath;
-        if (voice != null && voice.isNotEmpty && !await File(voice).exists()) {
-          batch = batch.copyWith(clearVoiceNote: true);
-        }
-      }
-
       VisitBatchNote general = const VisitBatchNote();
       final generalRaw = map['generalNote'] ?? map['general_note'];
       if (generalRaw is Map) {
@@ -902,7 +882,6 @@ class VisitMediaDraftStore {
             ? context?.siteName
             : legacySiteName,
         context: context,
-        batchNote: batch,
         generalNote: general,
         reportDetails: reportDetails,
         lastUploadIssue: VisitDraftLastUploadIssue.tryParse(

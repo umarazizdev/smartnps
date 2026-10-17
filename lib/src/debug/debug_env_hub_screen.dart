@@ -10,9 +10,7 @@ class DebugEnvHubScreen extends StatelessWidget {
   const DebugEnvHubScreen({super.key});
 
   void _open(BuildContext context, Widget screen) {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => screen),
-    );
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => screen));
   }
 
   @override
@@ -120,10 +118,7 @@ class _HubCard extends StatelessWidget {
                   ),
                 ),
               ),
-              Icon(
-                Icons.chevron_right_rounded,
-                color: colors.subtitle,
-              ),
+              Icon(Icons.chevron_right_rounded, color: colors.subtitle),
             ],
           ),
         ),
