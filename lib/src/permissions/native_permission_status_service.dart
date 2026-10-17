@@ -1456,10 +1456,10 @@ class NativePermissionStatusService {
           receiveTimeout: const Duration(seconds: 12),
         ),
       );
-      final ok =
-          response.statusCode != null &&
-          response.statusCode! >= 200 &&
-          response.statusCode! < 300;
+      final ok = PermissionStatusApiContract.isAcceptedResponse(
+        statusCode: response.statusCode,
+        body: response.data,
+      );
       if (logResponseBody || !ok) {
         final body = response.data?.toString() ?? '';
         final preview =
@@ -1471,6 +1471,12 @@ class NativePermissionStatusService {
             'has_opened=${payload[PermissionStatusApiContract.openedAt] != null} '
             'body=$preview',
           ),
+        );
+      }
+      if (!ok) {
+        _debugLog(
+          'permission-status rejected status=${response.statusCode} '
+          '(2xx requires accepted body)',
         );
       }
       if (ok) _rememberUploadedBattery(payload);

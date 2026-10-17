@@ -64,6 +64,51 @@ class DutyHeartbeatPayload {
       : 30;
 }
 
+enum DutyHeartbeatFetchOutcome {
+  /// Parsed on_duty / off_duty payload.
+  success,
+
+  /// Network/timeout/no usable transport response.
+  offline,
+
+  /// HTTP 401/403.
+  unauthorized,
+
+  /// Non-2xx HTTP response (other than auth).
+  httpFailure,
+
+  /// HTTP 2xx but body could not be parsed as duty status.
+  unrecognizableBody,
+}
+
+class DutyHeartbeatFetchResult {
+  const DutyHeartbeatFetchResult._(this.outcome, [this.payload]);
+
+  const DutyHeartbeatFetchResult.success(DutyHeartbeatPayload payload)
+    : this._(DutyHeartbeatFetchOutcome.success, payload);
+
+  const DutyHeartbeatFetchResult.offline()
+    : this._(DutyHeartbeatFetchOutcome.offline);
+
+  const DutyHeartbeatFetchResult.unauthorized()
+    : this._(DutyHeartbeatFetchOutcome.unauthorized);
+
+  const DutyHeartbeatFetchResult.httpFailure()
+    : this._(DutyHeartbeatFetchOutcome.httpFailure);
+
+  const DutyHeartbeatFetchResult.unrecognizableBody()
+    : this._(DutyHeartbeatFetchOutcome.unrecognizableBody);
+
+  final DutyHeartbeatFetchOutcome outcome;
+  final DutyHeartbeatPayload? payload;
+
+  /// Offline / transport problems may keep a local on_duty snapshot.
+  /// A 2xx response with an unreadable body must not.
+  bool get allowsOfflineSnapshotFallback =>
+      outcome == DutyHeartbeatFetchOutcome.offline ||
+      outcome == DutyHeartbeatFetchOutcome.httpFailure;
+}
+
 class DutyHeartbeatClient {
   DutyHeartbeatClient._();
 
@@ -76,9 +121,16 @@ class DutyHeartbeatClient {
   }
 
   static Future<DutyHeartbeatPayload?> fetchHeartbeat() async {
+    final result = await fetchHeartbeatResult();
+    return result.payload;
+  }
+
+  static Future<DutyHeartbeatFetchResult> fetchHeartbeatResult() async {
     ApiClient.instance.ensureAuthInterceptorInstalled();
     final token = await AuthRepository.instance.ensureValidAccessToken();
-    if (token == null || token.isEmpty) return null;
+    if (token == null || token.isEmpty) {
+      return const DutyHeartbeatFetchResult.offline();
+    }
 
     try {
       final response = await ApiClient.instance.dio.getUri(
@@ -90,19 +142,39 @@ class DutyHeartbeatClient {
           validateStatus: (status) => status != null && status < 500,
         ),
       );
-
-      final statusCode = response.statusCode ?? 0;
-      dutyHeartbeatDebugLog(
-        '[DutyHeartbeatClient] heartbeat response '
-        'statusCode=$statusCode payload=${response.data}',
+      return interpretHeartbeatResponse(
+        statusCode: response.statusCode,
+        body: response.data,
       );
-      if (statusCode == 401 || statusCode == 403) return null;
-      if (statusCode < 200 || statusCode >= 300) return null;
-      return parseHeartbeat(response.data);
     } catch (e) {
       dutyHeartbeatDebugLog('[DutyHeartbeatClient] heartbeat fetch failed: $e');
-      return null;
+      return const DutyHeartbeatFetchResult.offline();
     }
+  }
+
+  static DutyHeartbeatFetchResult interpretHeartbeatResponse({
+    required int? statusCode,
+    required dynamic body,
+  }) {
+    final code = statusCode ?? 0;
+    dutyHeartbeatDebugLog(
+      '[DutyHeartbeatClient] heartbeat response '
+      'statusCode=$code payload=$body',
+    );
+    if (code == 401 || code == 403) {
+      return const DutyHeartbeatFetchResult.unauthorized();
+    }
+    if (code < 200 || code >= 300) {
+      return const DutyHeartbeatFetchResult.httpFailure();
+    }
+    final payload = parseHeartbeat(body);
+    if (payload == null) {
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatClient] heartbeat 2xx body unrecognizable',
+      );
+      return const DutyHeartbeatFetchResult.unrecognizableBody();
+    }
+    return DutyHeartbeatFetchResult.success(payload);
   }
 
   static String? parseDutyStatus(dynamic body) {
