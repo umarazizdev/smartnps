@@ -93,11 +93,7 @@ class _VisitCheckpointScreenState extends State<VisitCheckpointScreen> {
 
   Future<void> _openCapture() async {
     flow.beginCheckpointCapture(widget.checkpointId);
-    final opened = await VisitVideoPreviewScreen.pickRoundTagAndOpenCapture(
-      context: context,
-      flow: flow,
-    );
-    if (!opened) return;
+    await VisitVideoPreviewScreen.openNativeCapture(flow: flow);
     flow.beginCheckpointCapture(widget.checkpointId);
   }
 

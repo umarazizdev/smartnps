@@ -24,7 +24,6 @@ import '../flow/visit_flow_kind.dart';
 import '../flow/visit_gps_session.dart';
 import '../flow/visit_media_draft_store.dart';
 import '../flow/visit_media_geo.dart';
-import '../flow/visit_patrol_round.dart';
 import '../flow/visit_upload_failure.dart';
 import '../flow/visit_upload_queue.dart';
 import '../flow/visit_video_flow_controller.dart';
@@ -81,7 +80,6 @@ enum _VisitMediaFilter { all, photos, videos }
 class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
   static final Rx<_VisitMediaFilter> _mediaFilter = _VisitMediaFilter.all.obs;
 
-  static final RxnString _roundTagFilter = RxnString();
   static final RxBool _draftAutosaveNoticeDismissed = false.obs;
   static final RxBool _orientationCoverVisible = false.obs;
   static Orientation? _lastDraftOrientation;
@@ -257,11 +255,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       await _openStructuredMediaSource(context);
       return;
     }
-    final opened = await pickRoundTagAndOpenCapture(
-      context: context,
-      flow: controller,
-    );
-    if (!opened) return;
+    await openNativeCapture(flow: controller);
   }
 
   Future<void> _openStructuredMediaSource(BuildContext context) async {
@@ -491,80 +485,15 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     return false;
   }
 
-  static Future<bool> pickRoundTagAndOpenCapture({
-    required BuildContext context,
-    required VisitVideoFlowController flow,
+  static Future<bool> openNativeCapture({
+    VisitVideoFlowController? flow,
     bool endCheckpointCapture = false,
-    VisitPatrolRound? preselectedRound,
   }) async {
-    if (endCheckpointCapture) {
+    if (flow != null && endCheckpointCapture) {
       flow.endCheckpointCapture();
     }
-
-    if (flow.supportsRoundTags) {
-      if (preselectedRound != null) {
-        flow.setActiveRound(preselectedRound);
-      } else {
-        if (!context.mounted) return false;
-        final round = await promptRoundTagChoice(context: context, flow: flow);
-        if (round == null) return false;
-        flow.setActiveRound(round);
-      }
-    }
-
     await VisitNativeCaptureLauncher.open();
-    flow.setActiveRound(null);
     return true;
-  }
-
-  Future<void> _openCaptureForRound(
-    BuildContext context,
-    VisitPatrolRound round,
-  ) async {
-    if (!context.mounted) return;
-    await pickRoundTagAndOpenCapture(
-      context: context,
-      flow: controller,
-      preselectedRound: round,
-    );
-  }
-
-  static Future<VisitPatrolRound?> promptRoundTagChoice({
-    required BuildContext context,
-    required VisitVideoFlowController flow,
-  }) async {
-    if (!context.mounted) return null;
-    final rounds = flow.patrolRounds;
-    if (rounds.isEmpty) return null;
-
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final accent = _visitPrimaryActionColor(isDark);
-    final copy = VisitFlowCopy.fromContext(flow.patrolContext.value);
-
-    final promptMessage = copy.roundTagCaptureMessage.trim().isEmpty
-        ? 'Choose which round this capture belongs to. '
-            'Capture media for every round before uploading.'
-        : copy.roundTagCaptureMessage;
-
-    return GlassActionDialog.showWithActions<VisitPatrolRound>(
-      context: context,
-      icon: Icons.route_outlined,
-      iconColor: accent,
-      title: copy.roundTagCaptureTitle,
-      message: promptMessage,
-      barrierDismissible: true,
-      showCloseButton: true,
-      useRootNavigator: true,
-      actions: const <GlassDialogAction<VisitPatrolRound>>[],
-      content: _RoundTagChoicePanel(
-        isDark: isDark,
-        message: promptMessage,
-        rounds: rounds,
-        colorPalette: VisitPatrolRoundColors.mapForTags(
-          rounds.map((e) => e.roundTag),
-        ),
-      ),
-    );
   }
 
   Future<void> _openCheckpoint(VisitCheckpoint checkpoint) async {
@@ -615,19 +544,6 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     }
 
     if (flow.hasIncompleteCheckpoints) return;
-
-    if (flow.supportsRoundTags && !flow.hasAllRequiredRoundTags) {
-      final copy = VisitFlowCopy.fromContext(flow.patrolContext.value);
-      _showTopSnack(
-        title: copy.roundTagsRequiredTitle,
-        message: copy.roundTagsRequiredHint(
-          flow.missingRoundTags.map((e) => e.roundTag),
-        ),
-        isDark: isDark,
-        isError: true,
-      );
-      return;
-    }
 
     if (flow.isStructuredReport && !flow.hasCompleteReportDetails) {
       final message = flow.reportDetails.value.validationMessageFor(
@@ -1297,10 +1213,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       await VisitNativeCaptureLauncher.open();
       return;
     }
-    await pickRoundTagAndOpenCapture(
-      context: dialogContext,
-      flow: flow,
-    );
+    await openNativeCapture(flow: flow);
   }
 
   static Future<void> queueUploadFeedback({
@@ -1331,8 +1244,6 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
             Obx(() {
               // Nested Scaffolds zero MediaQuery.viewInsets; use raw view inset.
               final keyboardOpen = _isSoftKeyboardOpen(context);
-              final supportsRoundTags = controller.supportsRoundTags;
-              final rounds = controller.patrolRounds;
               final allMedia = controller.visibleMediaItems;
               final checkpoints = controller.checkpoints;
               final hasCheckpoints = checkpoints.isNotEmpty;
@@ -1343,100 +1254,21 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
               final photoCount = additionalMedia.where((e) => e.isPhoto).length;
               final videoCount = additionalMedia.where((e) => e.isVideo).length;
               final activeFilter = _mediaFilter.value;
-              final selectedRoundTag = supportsRoundTags
-                  ? _roundTagFilter.value
-                  : null;
-              final activeRoundTag =
-                  selectedRoundTag != null &&
-                      rounds.any(
-                        (r) =>
-                            r.roundTag.trim().toLowerCase() ==
-                            selectedRoundTag.trim().toLowerCase(),
-                      )
-                  ? selectedRoundTag
-                  : null;
-
-              List<VisitMediaItem> typeFiltered;
-              if (supportsRoundTags) {
-                typeFiltered = additionalMedia;
-              } else {
-                typeFiltered = switch (activeFilter) {
-                  _VisitMediaFilter.all => additionalMedia,
-                  _VisitMediaFilter.photos =>
-                    additionalMedia.where((e) => e.isPhoto).toList(),
-                  _VisitMediaFilter.videos =>
-                    additionalMedia.where((e) => e.isVideo).toList(),
-                };
-              }
-
-              final visibleMedia = activeRoundTag == null
-                  ? typeFiltered
-                  : typeFiltered
-                        .where(
-                          (e) =>
-                              e.resolvedRoundTag?.toLowerCase() ==
-                              activeRoundTag.trim().toLowerCase(),
-                        )
-                        .toList(growable: false);
+              final visibleMedia = switch (activeFilter) {
+                _VisitMediaFilter.all => additionalMedia,
+                _VisitMediaFilter.photos =>
+                  additionalMedia.where((e) => e.isPhoto).toList(),
+                _VisitMediaFilter.videos =>
+                  additionalMedia.where((e) => e.isVideo).toList(),
+              };
 
               final locationLabel = controller.locationSubtitle;
               controller.patrolContext.value;
               controller.draftSiteName.value;
               controller.draftRegionName.value;
-              controller.activeRound.value;
               final completedCheckpoints = controller.completedCheckpointCount;
-              final completedRounds = controller.completedRoundTagCount;
               final showFilters =
                   !hasCheckpoints || additionalMedia.isNotEmpty;
-
-              Widget? roundsScrollHeader() {
-                if (!supportsRoundTags || hasCheckpoints) return null;
-                final titleColor = _visitTitleColor(isDark);
-                return Padding(
-                  padding: EdgeInsets.fromLTRB(
-                    isLandscape ? 18 : 16,
-                    isLandscape ? 2 : 4,
-                    isLandscape ? 18 : 16,
-                    isLandscape ? 4 : 6,
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _RoundTagProgressPanel(
-                        isDark: isDark,
-                        compact: isLandscape,
-                        rounds: rounds,
-                        completedCount: completedRounds,
-                        mediaCountFor: controller.mediaCountForRoundTag,
-                        onCapture: (round) =>
-                            _openCaptureForRound(context, round),
-                      ),
-                      SizedBox(height: isLandscape ? 10 : 12),
-                      Text(
-                        'Captured Media (${additionalMedia.length})',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          color: titleColor,
-                          fontWeight: FontWeight.w800,
-                          fontSize: isLandscape ? 13 : null,
-                        ),
-                      ),
-                      if (showFilters) ...[
-                        SizedBox(height: isLandscape ? 6 : 8),
-                        _RoundTagFilterBar(
-                          isDark: isDark,
-                          rounds: rounds,
-                          activeRoundTag: activeRoundTag,
-                          onChanged: (tag) => _roundTagFilter.value = tag,
-                          compact: isLandscape,
-                        ),
-                      ],
-                      SizedBox(height: isLandscape ? 6 : 8),
-                    ],
-                  ),
-                );
-              }
 
               Widget? reportDetailsHeader() {
                 if (!controller.isStructuredReport) return null;
@@ -1492,18 +1324,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                 );
               }
 
-              Widget? scrollLeading() {
-                final report = reportDetailsHeader();
-                final rounds = roundsScrollHeader();
-                if (report == null && rounds == null) return null;
-                if (report == null) return rounds;
-                if (rounds == null) return report;
-                return Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [report, rounds],
-                );
-              }
+              Widget? scrollLeading() => reportDetailsHeader();
 
               Widget mediaBody() {
                 final leading = scrollLeading();
@@ -1513,7 +1334,6 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                     isDark,
                     locationLabel: locationLabel,
                     isLandscape: isLandscape,
-                    supportsRoundTags: supportsRoundTags,
                     leading: leading,
                   );
                 }
@@ -1524,7 +1344,6 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                       context,
                       isDark,
                       activeFilter,
-                      roundTag: activeRoundTag,
                     ),
                   );
                 }
@@ -1553,17 +1372,9 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                   checkpointCompleted: completedCheckpoints,
                   checkpointTotal: checkpoints.length,
                   showMediaFilters:
-                      showFilters &&
-                      !(supportsRoundTags && !hasCheckpoints) &&
-                      !controller.isStructuredReport,
+                      showFilters && !controller.isStructuredReport,
                   flowKind: controller.flowKind,
-                  roundTags: supportsRoundTags ? rounds : const [],
-                  roundTagCompleted: completedRounds,
-                  activeRoundTag: activeRoundTag,
-                  onRoundTagChanged: (tag) => _roundTagFilter.value = tag,
-                  deferCapturedMediaSection:
-                      (supportsRoundTags && !hasCheckpoints) ||
-                      controller.isStructuredReport,
+                  deferCapturedMediaSection: controller.isStructuredReport,
                 );
               }
 
@@ -1706,15 +1517,12 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     bool isDark, {
     String? locationLabel,
     bool isLandscape = false,
-    bool supportsRoundTags = false,
     Widget? leading,
   }) {
     final location = locationLabel?.trim();
     final hasLocation = location != null && location.isNotEmpty;
     final readyTitle = _copy.readyToStart;
-    final captureHint = supportsRoundTags
-        ? _copy.emptyRoundTagsHint
-        : _copy.emptyCaptureHint;
+    final captureHint = _copy.emptyCaptureHint;
     final compact = leading != null || isLandscape;
     final buttonSize = compact ? 72.0 : 92.0;
     final emptyContent = Padding(
@@ -1836,12 +1644,9 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
   Widget _buildFilteredEmptyState(
     BuildContext context,
     bool isDark,
-    _VisitMediaFilter filter, {
-    String? roundTag,
-  }) {
-    final message = roundTag != null && roundTag.trim().isNotEmpty
-        ? 'No media for ${roundTag.trim()} yet'
-        : filter == _VisitMediaFilter.videos
+    _VisitMediaFilter filter,
+  ) {
+    final message = filter == _VisitMediaFilter.videos
         ? 'No videos captured yet'
         : 'No photos captured yet';
     return Center(
@@ -1891,17 +1696,6 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
           completed: controller.completedCheckpointCount,
           total: checkpoints.length,
         ),
-        if (controller.supportsRoundTags) ...[
-          SizedBox(height: isLandscape ? 8 : 10),
-          _RoundTagProgressPanel(
-            isDark: isDark,
-            compact: isLandscape,
-            rounds: controller.patrolRounds,
-            completedCount: controller.completedRoundTagCount,
-            mediaCountFor: controller.mediaCountForRoundTag,
-            onCapture: (round) => _openCaptureForRound(context, round),
-          ),
-        ],
         SizedBox(height: isLandscape ? 8 : 10),
         for (var i = 0; i < checkpoints.length; i++) ...[
           if (i > 0) const SizedBox(height: 8),
@@ -2411,259 +2205,6 @@ class _HeaderCheckpointProgressChip extends StatelessWidget {
   }
 }
 
-class _RoundTagProgressPanel extends StatelessWidget {
-  const _RoundTagProgressPanel({
-    required this.isDark,
-    required this.rounds,
-    required this.completedCount,
-    required this.mediaCountFor,
-    required this.onCapture,
-    this.compact = false,
-  });
-
-  final bool isDark;
-  final List<VisitPatrolRound> rounds;
-  final int completedCount;
-  final int Function(String roundTag) mediaCountFor;
-  final ValueChanged<VisitPatrolRound> onCapture;
-  final bool compact;
-
-  @override
-  Widget build(BuildContext context) {
-    if (rounds.isEmpty) return const SizedBox.shrink();
-
-    final total = rounds.length;
-    final completed = completedCount.clamp(0, total);
-    final progress = total <= 0 ? 0.0 : (completed / total).clamp(0.0, 1.0);
-    final allDone = completed >= total;
-    final accent = allDone
-        ? const Color(0xFF059669)
-        : _visitPrimaryActionColor(isDark);
-    final track = isDark
-        ? Colors.white.withValues(alpha: 0.10)
-        : const Color(0xFFE6EAF1);
-    final copy = const VisitFlowCopy();
-    final palette = VisitPatrolRoundColors.mapForTags(
-      rounds.map((e) => e.roundTag),
-    );
-
-    return Container(
-      padding: EdgeInsets.fromLTRB(
-        compact ? 10 : 12,
-        compact ? 9 : 11,
-        compact ? 10 : 12,
-        compact ? 9 : 11,
-      ),
-      decoration: BoxDecoration(
-        color: _visitCardColor(isDark),
-        borderRadius: BorderRadius.circular(compact ? 13 : 15),
-        border: Border.all(
-          color: allDone
-              ? accent.withValues(alpha: isDark ? 0.40 : 0.26)
-              : _visitBorderColor(isDark),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Icon(
-                allDone ? Icons.verified_rounded : Icons.route_outlined,
-                size: compact ? 16 : 18,
-                color: accent,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      copy.roundTagsProgressTitle,
-                      style: TextStyle(
-                        color: _visitTitleColor(isDark),
-                        fontSize: compact ? 12 : 13,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      copy.roundTagsProgressStatus(
-                        completed: completed,
-                        total: total,
-                      ),
-                      style: TextStyle(
-                        color: _visitBodyColor(isDark),
-                        fontSize: compact ? 10.5 : 11.5,
-                        fontWeight: FontWeight.w600,
-                        height: 1.2,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Text(
-                '$completed/$total',
-                style: TextStyle(
-                  color: accent,
-                  fontSize: compact ? 12 : 13,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ],
-          ),
-          SizedBox(height: compact ? 7 : 9),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(999),
-            child: TweenAnimationBuilder<double>(
-              tween: Tween<double>(begin: 0, end: progress),
-              duration: const Duration(milliseconds: 420),
-              curve: Curves.easeOutCubic,
-              builder: (context, value, _) {
-                return LinearProgressIndicator(
-                  value: value,
-                  minHeight: compact ? 6 : 7,
-                  backgroundColor: track,
-                  color: accent,
-                );
-              },
-            ),
-          ),
-          SizedBox(height: compact ? 8 : 10),
-          for (var i = 0; i < rounds.length; i++) ...[
-            if (i > 0) SizedBox(height: compact ? 6 : 7),
-            _RoundTagChecklistRow(
-              isDark: isDark,
-              compact: compact,
-              round: rounds[i],
-              color: VisitPatrolRoundColors.forTag(
-                rounds[i].roundTag,
-                palette: palette,
-              ),
-              mediaCount: mediaCountFor(rounds[i].roundTag),
-              onTap: () => onCapture(rounds[i]),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _RoundTagChecklistRow extends StatelessWidget {
-  const _RoundTagChecklistRow({
-    required this.isDark,
-    required this.round,
-    required this.color,
-    required this.mediaCount,
-    required this.onTap,
-    this.compact = false,
-  });
-
-  final bool isDark;
-  final VisitPatrolRound round;
-  final Color color;
-  final int mediaCount;
-  final VoidCallback onTap;
-  final bool compact;
-
-  @override
-  Widget build(BuildContext context) {
-    final done = mediaCount > 0;
-    final statusColor = done ? const Color(0xFF059669) : color;
-    final statusLabel = done
-        ? (mediaCount == 1 ? '1 item' : '$mediaCount items')
-        : 'Needed';
-    final fill = done
-        ? statusColor.withValues(alpha: isDark ? 0.16 : 0.08)
-        : (isDark
-              ? Colors.white.withValues(alpha: 0.04)
-              : const Color(0xFFF7F9FC));
-    final border = done
-        ? statusColor.withValues(alpha: isDark ? 0.42 : 0.28)
-        : _visitBorderColor(isDark);
-
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Ink(
-          decoration: BoxDecoration(
-            color: fill,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: border),
-          ),
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(
-              compact ? 8 : 10,
-              compact ? 8 : 9,
-              compact ? 8 : 10,
-              compact ? 8 : 9,
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: compact ? 22 : 24,
-                  height: compact ? 22 : 24,
-                  decoration: BoxDecoration(
-                    color: done
-                        ? statusColor
-                        : color.withValues(alpha: isDark ? 0.22 : 0.12),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                    done ? Icons.check_rounded : Icons.circle_outlined,
-                    size: compact ? 13 : 14,
-                    color: done ? Colors.white : color,
-                  ),
-                ),
-                SizedBox(width: compact ? 8 : 10),
-                Expanded(
-                  child: Text(
-                    round.roundTag,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: _visitTitleColor(isDark),
-                      fontSize: compact ? 12.5 : 13.5,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-                Container(
-                  padding: EdgeInsets.symmetric(
-                    horizontal: compact ? 7 : 8,
-                    vertical: compact ? 3 : 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: statusColor.withValues(alpha: isDark ? 0.20 : 0.12),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Text(
-                    statusLabel,
-                    style: TextStyle(
-                      color: statusColor,
-                      fontSize: compact ? 10.5 : 11,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ),
-                SizedBox(width: compact ? 4 : 6),
-                Icon(
-                  Icons.camera_alt_outlined,
-                  size: compact ? 15 : 16,
-                  color: done ? statusColor : color,
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _CheckpointListCard extends StatelessWidget {
   const _CheckpointListCard({
     required this.checkpoint,
@@ -2979,15 +2520,6 @@ class _PatrolCompleteDialogBody extends StatelessWidget {
         ? Colors.white.withValues(alpha: 0.78)
         : const Color(0xFF475467);
     final copy = VisitFlowCopy.fromContext(flow.patrolContext.value);
-    final showRounds = flow.supportsRoundTags;
-    final roundSummary = copy.completionRoundsSummary(
-      flow.patrolRounds.map(
-        (round) => MapEntry(
-          round.roundTag,
-          flow.mediaCountForRoundTag(round.roundTag),
-        ),
-      ),
-    );
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -3002,29 +2534,6 @@ class _PatrolCompleteDialogBody extends StatelessWidget {
             fontWeight: FontWeight.w500,
           ),
         ),
-        if (showRounds && roundSummary.isNotEmpty) ...[
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.06)
-                  : const Color(0xFFF3F6FB),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: _visitBorderColor(isDark)),
-            ),
-            child: Text(
-              roundSummary,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: _visitTitleColor(isDark),
-                fontSize: 13,
-                height: 1.4,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-        ],
         if (!copy.isStructuredReport) ...[
           const SizedBox(height: 14),
           VisitBatchNotesPanel(
@@ -3343,10 +2852,6 @@ class _VisitHeader extends StatelessWidget {
     this.checkpointTotal = 0,
     this.showMediaFilters = true,
     this.flowKind = VisitFlowKind.patrol,
-    this.roundTags = const <VisitPatrolRound>[],
-    this.roundTagCompleted = 0,
-    this.activeRoundTag,
-    this.onRoundTagChanged,
     this.deferCapturedMediaSection = false,
   });
 
@@ -3365,10 +2870,6 @@ class _VisitHeader extends StatelessWidget {
   final int checkpointTotal;
   final bool showMediaFilters;
   final VisitFlowKind flowKind;
-  final List<VisitPatrolRound> roundTags;
-  final int roundTagCompleted;
-  final String? activeRoundTag;
-  final ValueChanged<String?>? onRoundTagChanged;
   final bool deferCapturedMediaSection;
 
   @override
@@ -3446,13 +2947,6 @@ class _VisitHeader extends StatelessWidget {
                   isDark: isDark,
                   completed: checkpointCompleted,
                   total: checkpointTotal,
-                ),
-              ] else if (roundTags.isNotEmpty) ...[
-                const SizedBox(width: 8),
-                _HeaderCheckpointProgressChip(
-                  isDark: isDark,
-                  completed: roundTagCompleted,
-                  total: roundTags.length,
                 ),
               ],
             ],
@@ -3546,339 +3040,17 @@ class _VisitHeader extends StatelessWidget {
               !hasCheckpoints &&
               !deferCapturedMediaSection) ...[
             SizedBox(height: isLandscape ? 6 : 8),
-            if (roundTags.isNotEmpty && onRoundTagChanged != null)
-              _RoundTagFilterBar(
-                isDark: isDark,
-                rounds: roundTags,
-                activeRoundTag: activeRoundTag,
-                onChanged: onRoundTagChanged!,
-                compact: isLandscape,
-              )
-            else
-              _MediaFilterBar(
-                isDark: isDark,
-                activeFilter: activeFilter,
-                totalCount: totalCount,
-                photoCount: photoCount,
-                videoCount: videoCount,
-                onChanged: onFilterChanged,
-                compact: isLandscape,
-              ),
+            _MediaFilterBar(
+              isDark: isDark,
+              activeFilter: activeFilter,
+              totalCount: totalCount,
+              photoCount: photoCount,
+              videoCount: videoCount,
+              onChanged: onFilterChanged,
+              compact: isLandscape,
+            ),
           ],
         ],
-      ),
-    );
-  }
-}
-
-class _RoundTagChoicePanel extends StatelessWidget {
-  const _RoundTagChoicePanel({
-    required this.isDark,
-    required this.message,
-    required this.rounds,
-    required this.colorPalette,
-  });
-
-  final bool isDark;
-  final String? message;
-  final List<VisitPatrolRound> rounds;
-  final Map<String, Color> colorPalette;
-
-  @override
-  Widget build(BuildContext context) {
-    final bodyColor = isDark
-        ? Colors.white.withValues(alpha: 0.72)
-        : const Color(0xFF475467);
-    final raw = message?.trim() ?? '';
-    final body = raw.isEmpty
-        ? 'Choose which round this capture belongs to.'
-        : raw;
-
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text(
-          body,
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            color: bodyColor,
-            fontSize: 14,
-            height: 1.45,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 16),
-        for (var i = 0; i < rounds.length; i++) ...[
-          if (i > 0) const SizedBox(height: 10),
-          _RoundTagChoiceButton(
-            round: rounds[i],
-            isDark: isDark,
-            color: VisitPatrolRoundColors.forTag(
-              rounds[i].roundTag,
-              palette: colorPalette,
-            ),
-            onTap: () => Navigator.of(context).pop(rounds[i]),
-          ),
-        ],
-      ],
-    );
-  }
-}
-
-class _RoundTagChoiceButton extends StatelessWidget {
-  const _RoundTagChoiceButton({
-    required this.round,
-    required this.isDark,
-    required this.color,
-    required this.onTap,
-  });
-
-  final VisitPatrolRound round;
-  final bool isDark;
-  final Color color;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final titleColor = isDark ? Colors.white : const Color(0xFF0F172A);
-    final fill = color.withValues(alpha: isDark ? 0.18 : 0.08);
-    final border = color.withValues(alpha: isDark ? 0.55 : 0.42);
-
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
-        child: Ink(
-          decoration: BoxDecoration(
-            color: fill,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: border, width: 1.4),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 13, 12, 13),
-            child: Row(
-              children: [
-                Container(
-                  width: 4,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: color,
-                    borderRadius: BorderRadius.circular(99),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color: color.withValues(alpha: isDark ? 0.28 : 0.14),
-                    borderRadius: BorderRadius.circular(11),
-                  ),
-                  child: Icon(
-                    Icons.route_rounded,
-                    color: color,
-                    size: 19,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    round.roundTag,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: titleColor,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                      height: 1.2,
-                    ),
-                  ),
-                ),
-                Icon(
-                  Icons.chevron_right_rounded,
-                  color: color.withValues(alpha: 0.9),
-                  size: 22,
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _RoundTagFilterBar extends StatelessWidget {
-  const _RoundTagFilterBar({
-    required this.isDark,
-    required this.rounds,
-    required this.activeRoundTag,
-    required this.onChanged,
-    this.compact = false,
-  });
-
-  final bool isDark;
-  final List<VisitPatrolRound> rounds;
-  final String? activeRoundTag;
-  final ValueChanged<String?> onChanged;
-  final bool compact;
-
-  @override
-  Widget build(BuildContext context) {
-    final palette = VisitPatrolRoundColors.mapForTags(
-      rounds.map((e) => e.roundTag),
-    );
-    return Wrap(
-      spacing: compact ? 6 : 8,
-      runSpacing: compact ? 6 : 8,
-      children: [
-        _RoundFilterChip(
-          label: 'All',
-          color: _visitPrimaryActionColor(isDark),
-          selected: activeRoundTag == null,
-          isDark: isDark,
-          compact: compact,
-          onTap: () => onChanged(null),
-        ),
-        for (final round in rounds)
-          _RoundFilterChip(
-            label: round.roundTag,
-            color: VisitPatrolRoundColors.forTag(
-              round.roundTag,
-              palette: palette,
-            ),
-            selected:
-                activeRoundTag?.trim().toLowerCase() ==
-                round.roundTag.trim().toLowerCase(),
-            isDark: isDark,
-            compact: compact,
-            onTap: () => onChanged(round.roundTag),
-          ),
-      ],
-    );
-  }
-}
-
-class _RoundFilterChip extends StatelessWidget {
-  const _RoundFilterChip({
-    required this.label,
-    required this.color,
-    required this.selected,
-    required this.isDark,
-    required this.onTap,
-    this.compact = false,
-  });
-
-  final String label;
-  final Color color;
-  final bool selected;
-  final bool isDark;
-  final VoidCallback onTap;
-  final bool compact;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: selected
-          ? color
-          : (isDark
-                ? color.withValues(alpha: 0.16)
-                : color.withValues(alpha: 0.10)),
-      borderRadius: BorderRadius.circular(999),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(999),
-        child: Container(
-          padding: EdgeInsets.symmetric(
-            horizontal: compact ? 10 : 12,
-            vertical: compact ? 7 : 9,
-          ),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(
-              color: selected
-                  ? color
-                  : color.withValues(alpha: isDark ? 0.45 : 0.28),
-            ),
-            boxShadow: selected
-                ? [
-                    BoxShadow(
-                      color: color.withValues(alpha: 0.22),
-                      blurRadius: 8,
-                      offset: const Offset(0, 3),
-                    ),
-                  ]
-                : null,
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              color: selected
-                  ? Colors.white
-                  : (isDark ? color.withValues(alpha: 0.95) : color),
-              fontSize: compact ? 11.5 : 12.5,
-              fontWeight: FontWeight.w800,
-              height: 1.1,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _RoundTagBadge extends StatelessWidget {
-  const _RoundTagBadge({
-    required this.label,
-    required this.isDark,
-    this.compact = false,
-  });
-
-  final String label;
-  final bool isDark;
-  final bool compact;
-
-  @override
-  Widget build(BuildContext context) {
-    List<String> amongTags = const <String>[];
-    if (Get.isRegistered<VisitVideoFlowController>()) {
-      amongTags = Get.find<VisitVideoFlowController>()
-          .patrolRounds
-          .map((e) => e.roundTag)
-          .toList(growable: false);
-    }
-    final accent = VisitPatrolRoundColors.forTag(
-      label,
-      amongTags: amongTags,
-    );
-    return Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: compact ? 7 : 8,
-        vertical: compact ? 3 : 4,
-      ),
-      decoration: BoxDecoration(
-        color: isDark
-            ? accent.withValues(alpha: 0.20)
-            : accent.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(
-          color: isDark
-              ? accent.withValues(alpha: 0.40)
-              : accent.withValues(alpha: 0.28),
-        ),
-      ),
-      child: Text(
-        label,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(
-          color: accent,
-          fontSize: compact ? 10.5 : 11.5,
-          fontWeight: FontWeight.w800,
-          height: 1.1,
-        ),
       ),
     );
   }
@@ -4079,7 +3251,6 @@ class VisitMediaPreviewCard extends StatelessWidget {
         ? 118.0
         : 92.0;
     final title = item.isPhoto ? 'Photo ${index + 1}' : 'Video ${index + 1}';
-    final roundTag = item.resolvedRoundTag;
     const attentionAccent = Color(0xFFE11D48);
     final attentionOn =
         item.attentionNeeded && !_hideMediaAttentionToggle;
@@ -4152,14 +3323,6 @@ class VisitMediaPreviewCard extends StatelessWidget {
                                       height: 1.15,
                                     ),
                                   ),
-                                  if (roundTag != null) ...[
-                                    const SizedBox(height: 5),
-                                    _RoundTagBadge(
-                                      label: roundTag,
-                                      isDark: isDark,
-                                      compact: compact,
-                                    ),
-                                  ],
                                 ],
                               ),
                             ),

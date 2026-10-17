@@ -130,47 +130,6 @@ class VisitFlowCopy {
     return hasMedia ? 'Capture More' : 'Capture';
   }
 
-  String get roundTagCaptureTitle => 'Select patrol round';
-
-  String get roundTagCaptureMessage =>
-      'Choose which round this capture belongs to. '
-      'Capture media for every round before uploading.';
-
-  String get roundTagsRequiredTitle => 'All rounds required';
-
-  String get roundTagsProgressTitle => 'Patrol rounds';
-
-  String roundTagsProgressStatus({required int completed, required int total}) {
-    if (total <= 0) return '';
-    if (completed >= total) return 'All rounds captured';
-    if (completed <= 0) {
-      return 'Capture media for each round before completing';
-    }
-    return '$completed of $total rounds captured';
-  }
-
-  String roundTagsRequiredHint(Iterable<String> missingTags) {
-    final labels = missingTags.map((e) => e.trim()).where((e) => e.isNotEmpty);
-    if (labels.isEmpty) {
-      return 'Please capture photos or videos for every round, '
-          'then complete the report again.';
-    }
-    return 'Please capture media for: ${labels.join(', ')}.';
-  }
-
-  String get emptyRoundTagsHint =>
-      'Tap Capture and select a patrol round. '
-      'Finish every round before uploading your patrol report.';
-
-  String completionRoundsSummary(Iterable<MapEntry<String, int>> counts) {
-    final lines = counts
-        .map((e) => e.key)
-        .where((e) => e.trim().isNotEmpty)
-        .toList(growable: false);
-    if (lines.isEmpty) return '';
-    return lines.join('\n');
-  }
-
   String get noLocation {
     switch (kind) {
       case VisitFlowKind.siteCheck:
