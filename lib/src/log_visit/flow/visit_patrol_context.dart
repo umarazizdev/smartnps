@@ -1,9 +1,7 @@
 import 'dart:math';
 
-import '../../api/api_urls.dart';
 import 'visit_checkpoint.dart';
 import 'visit_flow_kind.dart';
-import 'visit_patrol_round.dart';
 
 class VisitPatrolContext {
   const VisitPatrolContext({
@@ -24,7 +22,6 @@ class VisitPatrolContext {
     this.reportContextId,
     this.reportContextIssuedAt,
     this.timeSheetId,
-    this.patrolWindows = const <VisitPatrolRound>[],
     this.checkpoints = const <VisitCheckpoint>[],
   });
 
@@ -48,7 +45,6 @@ class VisitPatrolContext {
   final DateTime? reportContextIssuedAt;
   /// Timesheet from report-context (or bridge), when available.
   final int? timeSheetId;
-  final List<VisitPatrolRound> patrolWindows;
   final List<VisitCheckpoint> checkpoints;
 
   bool get hasReportContext {
@@ -69,29 +65,6 @@ class VisitPatrolContext {
   bool get isIncidentReport => flowKind == VisitFlowKind.incidentReport;
 
   bool get isStructuredReport => flowKind.isStructuredReport;
-
-  bool get isOnsitePatrol {
-    final url = uploadUrl?.trim().toLowerCase() ?? '';
-    if (url.isEmpty) return false;
-    final onsite = ApiUrls.onsitePatrolVisitsUploadUrl.trim().toLowerCase();
-    return url.contains('onsite-patrol') ||
-        (onsite.isNotEmpty && url == onsite);
-  }
-
-  bool get supportsRoundTags =>
-      !isOnsitePatrol &&
-      !isSiteCheck &&
-      !isStructuredReport &&
-      patrolWindows.isNotEmpty;
-
-  VisitPatrolRound? roundByTag(String? tag) {
-    final needle = tag?.trim().toLowerCase();
-    if (needle == null || needle.isEmpty) return null;
-    for (final round in patrolWindows) {
-      if (round.roundTag.trim().toLowerCase() == needle) return round;
-    }
-    return null;
-  }
 
   String? get displayPlaceName {
     final site = siteName?.trim();
@@ -226,7 +199,6 @@ class VisitPatrolContext {
     String? reportContextId,
     DateTime? reportContextIssuedAt,
     int? timeSheetId,
-    List<VisitPatrolRound>? patrolWindows,
     List<VisitCheckpoint>? checkpoints,
     bool clearClientDraftId = false,
     bool clearRegionId = false,
@@ -280,7 +252,6 @@ class VisitPatrolContext {
           ? null
           : (reportContextIssuedAt ?? this.reportContextIssuedAt),
       timeSheetId: clearTimeSheetId ? null : (timeSheetId ?? this.timeSheetId),
-      patrolWindows: patrolWindows ?? this.patrolWindows,
       checkpoints: checkpoints ?? this.checkpoints,
     );
   }
@@ -306,7 +277,6 @@ class VisitPatrolContext {
       if (reportContextIssuedAt != null)
         'reportContextIssuedAt': reportContextIssuedAt!.toUtc().toIso8601String(),
       if (timeSheetId != null) 'timeSheetId': timeSheetId,
-      'patrolWindows': patrolWindows.map((e) => e.toJson()).toList(),
       'checkpoints': checkpoints.map((e) => e.toJson()).toList(),
     };
   }
@@ -419,7 +389,6 @@ class VisitPatrolContext {
           json['time_sheet_id'] ??
           nestedPatrol?['time_sheet_id'],
     );
-    final patrolWindows = VisitPatrolRound.listFromPayload(json);
     final checkpoints = VisitCheckpoint.listFromJson(
       json['checkpoints'],
       baseUrl: uploadUrl,
@@ -439,7 +408,6 @@ class VisitPatrolContext {
         reportContextId == null &&
         reportContextIssuedAt == null &&
         timeSheetId == null &&
-        patrolWindows.isEmpty &&
         checkpoints.isEmpty) {
       return null;
     }
@@ -462,7 +430,6 @@ class VisitPatrolContext {
       reportContextId: reportContextId,
       reportContextIssuedAt: reportContextIssuedAt,
       timeSheetId: timeSheetId,
-      patrolWindows: patrolWindows,
       checkpoints: checkpoints,
     );
   }
