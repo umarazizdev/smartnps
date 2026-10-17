@@ -73,21 +73,6 @@ class VisitBatchNote {
     );
   }
 
-  Map<String, dynamic> toUploadMeta() {
-    if (!enabled) {
-      return <String, dynamic>{
-        'needed': 'no',
-        'text_note': '',
-        'has_voice_note': false,
-      };
-    }
-    return <String, dynamic>{
-      'needed': 'yes',
-      'text_note': hasTextNote ? textNote.trim() : '',
-      'has_voice_note': hasVoiceNote,
-    };
-  }
-
   Map<String, dynamic> toGeneralUploadMeta() {
     if (!enabled) {
       return <String, dynamic>{
@@ -246,7 +231,6 @@ class VisitVideoFlowController extends GetxController {
   final uploadProgressCurrent = 0.obs;
   final uploadProgressTotal = 0.obs;
   final uploadLocationLabel = ''.obs;
-  final batchNote = const VisitBatchNote().obs;
   final generalNote = const VisitBatchNote().obs;
   final reportDetails = const VisitReportDetails().obs;
   final activeCheckpointId = RxnInt();
@@ -428,7 +412,6 @@ class VisitVideoFlowController extends GetxController {
     try {
       _thumbnailFutures.clear();
       mediaItems.clear();
-      batchNote.value = const VisitBatchNote();
       generalNote.value = const VisitBatchNote();
       reportDetails.value = const VisitReportDetails();
       lastUploadIssue.value = null;
@@ -451,7 +434,6 @@ class VisitVideoFlowController extends GetxController {
     mediaItems.assignAll(snapshot.items);
     _startedAt = snapshot.startedAt;
     activeDraftKey.value = snapshot.draftKey;
-    batchNote.value = snapshot.batchNote;
     generalNote.value = snapshot.generalNote;
     reportDetails.value = snapshot.reportDetails;
     lastUploadIssue.value = snapshot.lastUploadIssue;
@@ -529,7 +511,6 @@ class VisitVideoFlowController extends GetxController {
       draftRegionName.value = null;
       patrolContext.value = null;
       activeDraftKey.value = null;
-      batchNote.value = const VisitBatchNote();
       generalNote.value = const VisitBatchNote();
       reportDetails.value = const VisitReportDetails();
       lastUploadIssue.value = null;
@@ -550,7 +531,6 @@ class VisitVideoFlowController extends GetxController {
 
   Future<void> reloadForAccountChange() async {
     if (mediaItems.isNotEmpty ||
-        batchNote.value.hasContent ||
         generalNote.value.hasContent ||
         reportDetails.value.title.trim().isNotEmpty ||
         reportDetails.value.details.trim().isNotEmpty ||
@@ -584,19 +564,10 @@ class VisitVideoFlowController extends GetxController {
       siteName: draftSiteName.value,
       context: context,
       savedAt: DateTime.now(),
-      batchNote: batchNote.value,
       generalNote: generalNote.value,
       reportDetails: reportDetails.value,
       lastUploadIssue: lastUploadIssue.value,
     );
-  }
-
-  Future<void> setBatchNotesEnabled(bool enabled) async {
-    if (batchNote.value.enabled == enabled) return;
-    batchNote.value = batchNote.value.copyWith(enabled: enabled);
-    if (mediaItems.isNotEmpty) {
-      await _persistDraft();
-    }
   }
 
   Future<void> setGeneralNotesEnabled(bool enabled) async {
@@ -607,19 +578,8 @@ class VisitVideoFlowController extends GetxController {
     }
   }
 
-  Future<void> updateBatchTextNote(String textNote) async {
-    await _updateToggleNoteText(current: batchNote, textNote: textNote);
-  }
-
   Future<void> updateGeneralTextNote(String textNote) async {
     await _updateToggleNoteText(current: generalNote, textNote: textNote);
-  }
-
-  Future<void> updateBatchVoiceNote(String? voiceNotePath) async {
-    await _updateToggleNoteVoice(
-      current: batchNote,
-      voiceNotePath: voiceNotePath,
-    );
   }
 
   Future<void> updateGeneralVoiceNote(String? voiceNotePath) async {
@@ -856,7 +816,6 @@ class VisitVideoFlowController extends GetxController {
       if (VisitUploadQueue.instance.isQueued(targetKey)) {
         mediaItems.clear();
         _startedAt = null;
-        batchNote.value = const VisitBatchNote();
         generalNote.value = const VisitBatchNote();
         reportDetails.value = VisitReportDetails.defaultsFor(
           baseMerged.flowKind,
@@ -1055,7 +1014,6 @@ class VisitVideoFlowController extends GetxController {
       mediaItems: mediaItems.toList(growable: false),
       context: patrolContext.value,
       startedAt: _startedAt,
-      batchNote: batchNote.value,
       generalNote: generalNote.value,
       reportDetails: reportDetails.value,
       clientDraftId: draftId,
@@ -1076,7 +1034,6 @@ class VisitVideoFlowController extends GetxController {
     final startedAt = _startedAt;
     final siteName = draftSiteName.value;
     final context = patrolContext.value;
-    final note = batchNote.value;
     final general = generalNote.value;
     final report = reportDetails.value;
     final issue = lastUploadIssue.value;
@@ -1100,7 +1057,6 @@ class VisitVideoFlowController extends GetxController {
         siteName: siteName,
         context: context,
         key: key,
-        batchNote: note,
         generalNote: general,
         reportDetails: report,
         lastUploadIssue: issue,
@@ -1120,7 +1076,6 @@ class VisitVideoFlowController extends GetxController {
     final startedAt = _startedAt;
     final siteName = draftSiteName.value;
     final context = patrolContext.value;
-    final note = batchNote.value;
     final general = generalNote.value;
     final report = reportDetails.value;
     final issue = lastUploadIssue.value;
@@ -1144,7 +1099,6 @@ class VisitVideoFlowController extends GetxController {
         siteName: siteName,
         context: context,
         key: key,
-        batchNote: note,
         generalNote: general,
         reportDetails: report,
         lastUploadIssue: issue,
@@ -1853,7 +1807,6 @@ class VisitVideoFlowController extends GetxController {
         await _store.deleteQuietly(item.voiceNotePath);
         await _store.deleteQuietly(item.path);
       }
-      await _store.deleteQuietly(batchNote.value.voiceNotePath);
       await _store.deleteQuietly(generalNote.value.voiceNotePath);
       await _store.clearDraft(deleteFiles: true, key: key);
     } else {
@@ -1861,7 +1814,6 @@ class VisitVideoFlowController extends GetxController {
     }
     _thumbnailFutures.clear();
     mediaItems.clear();
-    batchNote.value = const VisitBatchNote();
     generalNote.value = const VisitBatchNote();
     reportDetails.value = const VisitReportDetails();
     lastUploadIssue.value = null;
@@ -1894,7 +1846,6 @@ class VisitUploadMeta {
       mediaItems: snapshot.items,
       context: context,
       startedAt: snapshot.startedAt,
-      batchNote: snapshot.batchNote,
       generalNote: snapshot.generalNote,
       reportDetails: snapshot.reportDetails,
       clientDraftId: draftId,
@@ -1907,7 +1858,6 @@ class VisitUploadMeta {
     required List<VisitMediaItem> mediaItems,
     required VisitPatrolContext? context,
     required DateTime? startedAt,
-    required VisitBatchNote batchNote,
     required VisitBatchNote generalNote,
     required String clientDraftId,
     VisitReportDetails reportDetails = const VisitReportDetails(),
@@ -2021,7 +1971,6 @@ class VisitUploadMeta {
       'submitted_at': submitted.toIso8601String(),
       'items': items,
       if (!structured) ...<String, dynamic>{
-        'attention_needed': batchNote.toUploadMeta(),
         'general_note': generalNote.toGeneralUploadMeta(),
         if (checkpointsMeta.isNotEmpty) 'checkpoints': checkpointsMeta,
       },

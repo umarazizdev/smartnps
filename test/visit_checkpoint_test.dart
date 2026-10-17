@@ -200,7 +200,6 @@ void main() {
       mediaItems: items,
       context: flow.patrolContext.value,
       startedAt: DateTime.utc(2026, 8, 2, 8, 0),
-      batchNote: flow.batchNote.value,
       generalNote: flow.generalNote.value,
       clientDraftId: 'draft-video',
       submittedAt: DateTime.utc(2026, 8, 2, 8, 15),

@@ -5,7 +5,6 @@ import '../../app/app_navigator.dart';
 import '../../utilities/overlay_prompt_guard.dart';
 import '../../widgets/dialogs/glass_action_dialog.dart';
 import '../notes/visit_batch_notes_panel.dart';
-import '../notes/visit_media_notes_sheet.dart';
 import 'visit_flow_copy.dart';
 import 'visit_flow_kind.dart';
 import 'visit_media_draft_store.dart';
@@ -305,7 +304,6 @@ class VisitDraftResumeDialog {
             VisitBatchNotesPanel(
               flow: activeFlow,
               isDark: isDark,
-              scope: VisitBatchNoteScope.generalNote,
               titleOverride: 'Additional note',
               showToggle: false,
               alwaysShowActions: true,

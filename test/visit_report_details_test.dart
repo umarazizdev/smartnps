@@ -208,7 +208,6 @@ void main() {
         mediaItems: const [],
         context: context,
         startedAt: started,
-        batchNote: const VisitBatchNote(enabled: true, textNote: 'batch'),
         generalNote: const VisitBatchNote(enabled: true, textNote: 'general'),
         reportDetails: details,
         clientDraftId: 'draft-42',

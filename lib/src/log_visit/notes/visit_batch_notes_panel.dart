@@ -12,7 +12,6 @@ class VisitBatchNotesPanel extends StatelessWidget {
     super.key,
     required this.flow,
     required this.isDark,
-    this.scope = VisitBatchNoteScope.attentionNeeded,
     this.titleOverride,
     this.showToggle = true,
     this.alwaysShowActions = false,
@@ -20,18 +19,15 @@ class VisitBatchNotesPanel extends StatelessWidget {
 
   final VisitVideoFlowController flow;
   final bool isDark;
-  final VisitBatchNoteScope scope;
   final String? titleOverride;
   final bool showToggle;
   final bool alwaysShowActions;
 
-  bool get _isAttention => scope == VisitBatchNoteScope.attentionNeeded;
-
   @override
   Widget build(BuildContext context) {
-    final accentColor = _isAttention
-        ? const Color(0xFFDC2626)
-        : (isDark ? const Color(0xFF60A5FA) : const Color(0xFF2563EB));
+    final accentColor = isDark
+        ? const Color(0xFF60A5FA)
+        : const Color(0xFF2563EB);
     final titleColor = accentColor;
     final border = accentColor.withValues(alpha: isDark ? 0.42 : 0.28);
     final cardBg = accentColor.withValues(alpha: isDark ? 0.16 : 0.08);
@@ -41,11 +37,10 @@ class VisitBatchNotesPanel extends StatelessWidget {
     final bodyColor = isDark
         ? Colors.white.withValues(alpha: 0.82)
         : const Color(0xFF374151);
-    final title =
-        titleOverride ?? (_isAttention ? 'Attention needed' : 'General note');
+    final title = titleOverride ?? 'General note';
 
     return Obx(() {
-      final note = _isAttention ? flow.batchNote.value : flow.generalNote.value;
+      final note = flow.generalNote.value;
       final enabled = note.enabled;
       final showActions = enabled || alwaysShowActions;
 
@@ -86,11 +81,7 @@ class VisitBatchNotesPanel extends StatelessWidget {
                         activeTrackColor: accentColor.withValues(alpha: 0.45),
                         activeThumbColor: accentColor,
                         onChanged: (value) {
-                          unawaited(
-                            _isAttention
-                                ? flow.setBatchNotesEnabled(value)
-                                : flow.setGeneralNotesEnabled(value),
-                          );
+                          unawaited(flow.setGeneralNotesEnabled(value));
                         },
                       ),
                     ),
@@ -111,7 +102,6 @@ class VisitBatchNotesPanel extends StatelessWidget {
                       onTap: () => openVisitBatchNotesSheet(
                         context: context,
                         kind: VisitMediaNoteKind.text,
-                        scope: scope,
                       ),
                     ),
                   ),
@@ -126,7 +116,6 @@ class VisitBatchNotesPanel extends StatelessWidget {
                       onTap: () => openVisitBatchNotesSheet(
                         context: context,
                         kind: VisitMediaNoteKind.voice,
-                        scope: scope,
                       ),
                     ),
                   ),

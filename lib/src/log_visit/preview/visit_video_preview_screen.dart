@@ -712,7 +712,6 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
           startedAt: uploadSnapshot.startedAt,
           siteName: uploadSnapshot.siteName,
           context: uploadSnapshot.context,
-          batchNote: uploadSnapshot.batchNote,
           generalNote: uploadSnapshot.generalNote,
           reportDetails: uploadSnapshot.reportDetails,
           lastUploadIssue: null,
@@ -787,7 +786,6 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
         return VisitUploadApi.instance.uploadVisit(
           meta: meta,
           items: draft.items,
-          batchVoicePath: draft.batchNote.voiceNotePath,
           generalVoicePath: draft.generalNote.voiceNotePath,
           uploadUrl: draft.context?.uploadUrl,
           onProgress: (current, total) {
@@ -3032,7 +3030,6 @@ class _PatrolCompleteDialogBody extends StatelessWidget {
           VisitBatchNotesPanel(
             flow: flow,
             isDark: isDark,
-            scope: VisitBatchNoteScope.generalNote,
             titleOverride: 'Additional note',
             showToggle: false,
             alwaysShowActions: true,
