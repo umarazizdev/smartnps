@@ -127,7 +127,8 @@ class DutyHeartbeatService {
     if (!await _hasActiveAuthToken()) return false;
 
     try {
-      final payload = await _fetchHeartbeat();
+      final result = await _fetchHeartbeatResult();
+      final payload = result.payload;
       if (payload?.isOnDuty == true) {
         if (payload!.allowsLocationTracking) {
           await DutyStatusSnapshot.markOnDuty();
@@ -141,6 +142,9 @@ class DutyHeartbeatService {
       if (payload?.isOffDuty == true) {
         await DutyStatusSnapshot.clear();
         await _setNativeUnpaidBreak(false);
+        return false;
+      }
+      if (!result.allowsOfflineSnapshotFallback) {
         return false;
       }
     } catch (e) {
@@ -292,7 +296,8 @@ class DutyHeartbeatService {
 
   Future<void> _reconcileDutyAfterLocationWake() async {
     try {
-      final payload = await _fetchHeartbeat();
+      final result = await _fetchHeartbeatResult();
+      final payload = result.payload;
       if (payload != null && payload.allowsLocationTracking) {
         await DutyStatusSnapshot.markOnDuty();
         await _setNativeUnpaidBreak(false);
@@ -335,6 +340,26 @@ class DutyHeartbeatService {
         );
         await DutyStatusSnapshot.clear();
         await _applyOffDuty();
+        return;
+      }
+
+      if (result.outcome == DutyHeartbeatFetchOutcome.unrecognizableBody) {
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] iOS location wake reconcile: '
+          '2xx body unrecognizable — not using cached duty',
+        );
+        SessionDebugLogger.instance.log(
+          SessionDebugCategory.duty,
+          'location wake reconcile: unrecognizable body; cached duty not used',
+        );
+        return;
+      }
+
+      if (!result.allowsOfflineSnapshotFallback) {
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] iOS location wake reconcile: '
+          'outcome=${result.outcome.name}',
+        );
         return;
       }
 
@@ -443,7 +468,9 @@ class DutyHeartbeatService {
     }
 
     try {
-      final payload = await _fetchHeartbeat();
+      final result = await _fetchHeartbeatResult();
+      final payload = result.payload;
+
       if (payload != null && payload.allowsLocationTracking) {
         await DutyStatusSnapshot.markOnDuty();
         await _setNativeUnpaidBreak(false);
@@ -486,6 +513,32 @@ class DutyHeartbeatService {
         await _setNativeUnpaidBreak(false);
         if (stopIfNotOnDuty) {
           await _applyOffDuty();
+        }
+        return false;
+      }
+
+      if (result.outcome == DutyHeartbeatFetchOutcome.unrecognizableBody) {
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] tracking denied; heartbeat body '
+          'unrecognizable — not using cached duty',
+        );
+        SessionDebugLogger.instance.log(
+          SessionDebugCategory.duty,
+          'heartbeat 2xx body unrecognizable; cached duty not used',
+        );
+        if (stopIfNotOnDuty) {
+          await _stopTrackingForFailedDutyConfirm();
+        }
+        return false;
+      }
+
+      if (!result.allowsOfflineSnapshotFallback) {
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] tracking denied; heartbeat '
+          'outcome=${result.outcome.name}',
+        );
+        if (stopIfNotOnDuty) {
+          await _stopTrackingForFailedDutyConfirm();
         }
         return false;
       }
@@ -844,12 +897,15 @@ class DutyHeartbeatService {
     await _syncPermissionReadyState();
 
     DutyHeartbeatPayload? payload;
+    DutyHeartbeatFetchResult? heartbeatResult;
     try {
-      payload = await _fetchHeartbeat();
+      heartbeatResult = await _fetchHeartbeatResult();
+      payload = heartbeatResult.payload;
     } catch (e) {
       dutyHeartbeatDebugLog(
         '[DutyHeartbeatService] recheck heartbeat failed (offline?): $e',
       );
+      heartbeatResult = const DutyHeartbeatFetchResult.offline();
       payload = null;
     }
 
@@ -880,6 +936,28 @@ class DutyHeartbeatService {
     }
 
     if (status != onDuty) {
+      if (heartbeatResult?.outcome ==
+          DutyHeartbeatFetchOutcome.unrecognizableBody) {
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] recheck: 2xx body unrecognizable — '
+          'not using cached duty',
+        );
+        SessionDebugLogger.instance.log(
+          SessionDebugCategory.duty,
+          'recheck heartbeat unrecognizable body; cached duty not used',
+        );
+        await refreshBackgroundLocationPermissionBannerState();
+        return;
+      }
+      if (heartbeatResult != null &&
+          !heartbeatResult.allowsOfflineSnapshotFallback) {
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] recheck skipped snapshot; '
+          'outcome=${heartbeatResult.outcome.name}',
+        );
+        await refreshBackgroundLocationPermissionBannerState();
+        return;
+      }
       if (!await DutyStatusSnapshot.isValidOnDutyForCurrentUser() ||
           await _isNativeUnpaidBreak()) {
         if (fromResume) {
@@ -1215,20 +1293,41 @@ class DutyHeartbeatService {
         return;
       }
 
-      final payload = await _fetchHeartbeat();
-      if (payload == null) {
-        if (await DutyStatusSnapshot.isValidOnDutyForCurrentUser() &&
-            !await _isNativeUnpaidBreak()) {
-          dutyHeartbeatDebugLog(
-            '[DutyHeartbeatService] poll offline; snapshot on_duty — ensuring tracking',
-          );
-          _lastAppliedStatus = onDuty;
-          await _ensureTrackingRunningForOnDuty(allowPrompts: true);
-        }
+      final result = await _fetchHeartbeatResult();
+      final payload = result.payload;
+      if (payload != null) {
+        await _applyAttendancePayload(payload, source: 'heartbeat');
         return;
       }
 
-      await _applyAttendancePayload(payload, source: 'heartbeat');
+      if (result.outcome == DutyHeartbeatFetchOutcome.unrecognizableBody) {
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] poll 2xx body unrecognizable; '
+          'not using cached duty',
+        );
+        SessionDebugLogger.instance.log(
+          SessionDebugCategory.duty,
+          'poll heartbeat unrecognizable body; cached duty not used',
+        );
+        return;
+      }
+
+      if (!result.allowsOfflineSnapshotFallback) {
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] poll skipped snapshot; '
+          'outcome=${result.outcome.name}',
+        );
+        return;
+      }
+
+      if (await DutyStatusSnapshot.isValidOnDutyForCurrentUser() &&
+          !await _isNativeUnpaidBreak()) {
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeatService] poll offline; snapshot on_duty — ensuring tracking',
+        );
+        _lastAppliedStatus = onDuty;
+        await _ensureTrackingRunningForOnDuty(allowPrompts: true);
+      }
     } catch (e) {
       dutyHeartbeatDebugLog('[DutyHeartbeatService] poll failed: $e');
       if (await DutyStatusSnapshot.isValidOnDutyForCurrentUser() &&
@@ -1434,45 +1533,47 @@ class DutyHeartbeatService {
   }
 
   Future<DutyHeartbeatPayload?> _fetchHeartbeat() async {
-    final response = await _dio.getUri(
-      Uri.parse(ApiUrls.heartbeatUrl),
-      options: Options(
-        headers: const {'Accept': 'application/json'},
-        sendTimeout: const Duration(seconds: 10),
-        receiveTimeout: const Duration(seconds: 10),
-        validateStatus: (status) => status != null && status < 500,
-      ),
-    );
+    final result = await _fetchHeartbeatResult();
+    return result.payload;
+  }
 
-    final statusCode = response.statusCode ?? 0;
-    dutyHeartbeatDebugLog(
-      '[DutyHeartbeat] response statusCode=$statusCode payload=${response.data}',
-    );
-    if (statusCode == 401 || statusCode == 403) {
-      return null;
-    }
-
-    if (statusCode < 200 || statusCode >= 300) {
-      return null;
-    }
-
-    final payload = DutyHeartbeatClient.parseHeartbeat(response.data);
-    if (payload != null && kDebugMode) {
-      final now = DateTime.now();
-      final gap = _lastHeartbeatSuccessAt == null
-          ? 'first'
-          : '${now.difference(_lastHeartbeatSuccessAt!).inSeconds}s';
-      _lastHeartbeatSuccessAt = now;
-      final hh = now.hour.toString().padLeft(2, '0');
-      final mm = now.minute.toString().padLeft(2, '0');
-      final ss = now.second.toString().padLeft(2, '0');
-      dutyHeartbeatDebugLog(
-        '[DutyHeartbeat] ok duty=${payload.dutyStatus} '
-        'working=${payload.workingStatus} break=${payload.breakType} '
-        'unpaid=${payload.isUnpaidBreak} after=$gap @$hh:$mm:$ss',
+  Future<DutyHeartbeatFetchResult> _fetchHeartbeatResult() async {
+    try {
+      final response = await _dio.getUri(
+        Uri.parse(ApiUrls.heartbeatUrl),
+        options: Options(
+          headers: const {'Accept': 'application/json'},
+          sendTimeout: const Duration(seconds: 10),
+          receiveTimeout: const Duration(seconds: 10),
+          validateStatus: (status) => status != null && status < 500,
+        ),
       );
+
+      final result = DutyHeartbeatClient.interpretHeartbeatResponse(
+        statusCode: response.statusCode,
+        body: response.data,
+      );
+      final payload = result.payload;
+      if (payload != null && kDebugMode) {
+        final now = DateTime.now();
+        final gap = _lastHeartbeatSuccessAt == null
+            ? 'first'
+            : '${now.difference(_lastHeartbeatSuccessAt!).inSeconds}s';
+        _lastHeartbeatSuccessAt = now;
+        final hh = now.hour.toString().padLeft(2, '0');
+        final mm = now.minute.toString().padLeft(2, '0');
+        final ss = now.second.toString().padLeft(2, '0');
+        dutyHeartbeatDebugLog(
+          '[DutyHeartbeat] ok duty=${payload.dutyStatus} '
+          'working=${payload.workingStatus} break=${payload.breakType} '
+          'unpaid=${payload.isUnpaidBreak} after=$gap @$hh:$mm:$ss',
+        );
+      }
+      return result;
+    } catch (e) {
+      dutyHeartbeatDebugLog('[DutyHeartbeat] fetch failed: $e');
+      return const DutyHeartbeatFetchResult.offline();
     }
-    return payload;
   }
 
   Future<void> _applyOnDuty() async {
@@ -1670,9 +1771,12 @@ class DutyHeartbeatService {
 
   Future<void> _reconcileAfterFailedStart() async {
     DutyHeartbeatPayload? payload;
+    DutyHeartbeatFetchResult result;
     try {
-      payload = await _fetchHeartbeat();
+      result = await _fetchHeartbeatResult();
+      payload = result.payload;
     } catch (_) {
+      result = const DutyHeartbeatFetchResult.offline();
       payload = null;
     }
 
@@ -1702,6 +1806,15 @@ class DutyHeartbeatService {
           await BackgroundLocationPermissions.hasSufficientBackgroundAccess()) {
         unawaited(retryOnDutyTrackingIfReady());
       }
+      return;
+    }
+    if (!result.allowsOfflineSnapshotFallback) {
+      dutyHeartbeatDebugLog(
+        '[DutyHeartbeatService] reconcileAfterFailedStart: '
+        'outcome=${result.outcome.name} — not using cached duty',
+      );
+      await refreshBackgroundLocationPermissionBannerState();
+      _onDutyAutoPromptComplete = true;
       return;
     }
     if (await DutyStatusSnapshot.isValidOnDutyForCurrentUser()) {

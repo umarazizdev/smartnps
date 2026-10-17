@@ -182,16 +182,43 @@ class SessionDebugLogger extends ChangeNotifier {
     _safeNotifyListeners();
   }
 
+  /// Prefer [logApiStatus]. Kept for callers that only want 2xx path filters.
   void logApiSuccess({
     required String method,
     required Uri uri,
     required int statusCode,
   }) {
-    if (!shouldLogApiSuccess(uri)) return;
-    log(
-      SessionDebugCategory.apiSuccess,
-      'OK $method ${_safePath(uri)} status=$statusCode',
-    );
+    logApiStatus(method: method, uri: uri, statusCode: statusCode);
+  }
+
+  /// Logs every HTTP outcome with its real status code (200, 202, 404, 0, …).
+  /// Does not normalize statuses or label them all as OK.
+  void logApiStatus({
+    required String method,
+    required Uri uri,
+    required int statusCode,
+    String? error,
+  }) {
+    _syncExpired();
+    if (!isRunning) return;
+
+    final hasApi = _categories.contains(SessionDebugCategory.apiErrors);
+    final hasApiOk = _categories.contains(SessionDebugCategory.apiSuccess);
+    if (!hasApi && !hasApiOk) return;
+
+    // `api` captures all paths. `api_ok` alone still honors path filters.
+    if (!hasApi && hasApiOk && !shouldLogApiSuccess(uri)) return;
+
+    final path = _safePath(uri);
+    final errorPart =
+        (error == null || error.trim().isEmpty) ? '' : ' error=${error.trim()}';
+    final message = '$method $path status=$statusCode$errorPart';
+
+    // Prefer the `api` bucket when both are on so each call logs once.
+    final category = hasApi
+        ? SessionDebugCategory.apiErrors
+        : SessionDebugCategory.apiSuccess;
+    log(category, message);
   }
 
   static String _safePath(Uri uri) {

@@ -977,11 +977,17 @@ class _SessionLogEntry {
     // Session lifecycle lines are not issues.
     if (category == 'session') return _SessionLogSeverity.info;
 
-    // API success category is only written for successful responses.
-    if (category == 'api_ok') return _SessionLogSeverity.success;
-
-    // API category is only written for failed/error responses.
-    if (category == 'api') return _SessionLogSeverity.error;
+    // API lines always carry a real status; classify by that code.
+    if (category == 'api' || category == 'api_ok') {
+      if (status == null) {
+        return category == 'api_ok'
+            ? _SessionLogSeverity.success
+            : _SessionLogSeverity.error;
+      }
+      if (status >= 200 && status < 300) return _SessionLogSeverity.success;
+      if (status >= 300 && status < 400) return _SessionLogSeverity.info;
+      return _SessionLogSeverity.error;
+    }
 
     if (category == 'uploads') {
       if (_containsAny(lower, const [
@@ -1071,21 +1077,26 @@ class _SessionLogEntry {
       return message;
     }
 
-    if (category == 'api_ok') {
-      return api ?? data ?? 'Request completed';
-    }
+    if (category == 'api_ok' || category == 'api') {
+      final code = _statusCode(lower);
+      if (severity == _SessionLogSeverity.success ||
+          (code != null && code >= 200 && code < 300)) {
+        return api ?? data ?? 'Request completed';
+      }
+      if (severity == _SessionLogSeverity.info) {
+        return api ?? data ?? 'Request redirected';
+      }
 
-    if (category == 'api') {
       final String issue;
       if (_containsAny(lower, const ['timeout', 'timed out'])) {
         issue = 'Timed out';
       } else if (_containsAny(lower, const ['connection', 'socket', 'network'])) {
         issue = 'Connection failed';
-      } else if (_statusCode(lower) == 401 || _statusCode(lower) == 403) {
+      } else if (code == 401 || code == 403) {
         issue = 'Sign-in failed';
-      } else if (_statusCode(lower) == 404) {
+      } else if (code == 404) {
         issue = 'Not found';
-      } else if ((_statusCode(lower) ?? 0) >= 500) {
+      } else if ((code ?? 0) >= 500) {
         issue = 'Server error';
       } else {
         issue = 'Request failed';
@@ -1221,7 +1232,7 @@ class _SessionLogEntry {
   }
 
   static int? _statusCode(String lower) {
-    final match = RegExp(r'status[=\s:]*([0-9]{3})').firstMatch(lower);
+    final match = RegExp(r'status[=\s:]*([0-9]{1,3})').firstMatch(lower);
     if (match == null) return null;
     return int.tryParse(match.group(1)!);
   }

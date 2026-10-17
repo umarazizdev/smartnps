@@ -2,6 +2,45 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:smartnps360/src/background/duty/duty_heartbeat_client.dart';
 
 void main() {
+  group('DutyHeartbeatClient.interpretHeartbeatResponse', () {
+    test('success for parseable 2xx body', () {
+      final result = DutyHeartbeatClient.interpretHeartbeatResponse(
+        statusCode: 200,
+        body: {'status': 'on_duty'},
+      );
+      expect(result.outcome, DutyHeartbeatFetchOutcome.success);
+      expect(result.payload?.isOnDuty, isTrue);
+      expect(result.allowsOfflineSnapshotFallback, isFalse);
+    });
+
+    test('unrecognizableBody for 2xx without duty status', () {
+      final result = DutyHeartbeatClient.interpretHeartbeatResponse(
+        statusCode: 202,
+        body: {'ok': true},
+      );
+      expect(result.outcome, DutyHeartbeatFetchOutcome.unrecognizableBody);
+      expect(result.payload, isNull);
+      expect(result.allowsOfflineSnapshotFallback, isFalse);
+    });
+
+    test('offline snapshot fallback only for transport-like failures', () {
+      expect(
+        DutyHeartbeatClient.interpretHeartbeatResponse(
+          statusCode: 503,
+          body: null,
+        ).allowsOfflineSnapshotFallback,
+        isTrue,
+      );
+      expect(
+        DutyHeartbeatClient.interpretHeartbeatResponse(
+          statusCode: 401,
+          body: null,
+        ).allowsOfflineSnapshotFallback,
+        isFalse,
+      );
+    });
+  });
+
   group('DutyHeartbeatClient.parseDutyStatus', () {
     test('parses plain and nested duty values', () {
       expect(DutyHeartbeatClient.parseDutyStatus('on_duty'), 'on_duty');

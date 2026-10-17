@@ -73,16 +73,11 @@ class ApiClient {
     );
   }
 
+  /// Logs the real HTTP status for every response. No status is rewritten
+  /// or treated as a generic 200 OK.
   static void logHttpResult(String method, Uri uri, int? statusCode) {
     if (statusCode == null) return;
-    if (statusCode >= 400) {
-      SessionDebugLogger.instance.log(
-        SessionDebugCategory.apiErrors,
-        '$method ${_safePath(uri)} status=$statusCode',
-      );
-      return;
-    }
-    SessionDebugLogger.instance.logApiSuccess(
+    SessionDebugLogger.instance.logApiStatus(
       method: method,
       uri: uri,
       statusCode: statusCode,
@@ -95,15 +90,12 @@ class ApiClient {
     int statusCode,
     String error,
   ) {
-    SessionDebugLogger.instance.log(
-      SessionDebugCategory.apiErrors,
-      '$method ${_safePath(uri)} status=$statusCode error=$error',
+    SessionDebugLogger.instance.logApiStatus(
+      method: method,
+      uri: uri,
+      statusCode: statusCode,
+      error: error,
     );
-  }
-
-  static String _safePath(Uri uri) {
-    final path = uri.path.isEmpty ? '/' : uri.path;
-    return path;
   }
 
   static String _errorMessage(DioException error) {
