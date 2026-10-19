@@ -1,8 +1,33 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:smartnps360/src/api/api_urls.dart';
 import 'package:smartnps360/src/api/visit_upload_api.dart';
 import 'package:smartnps360/src/log_visit/flow/visit_flow_kind.dart';
 
 void main() {
+  group('VisitUploadApi.resolveSiteCheckUploadUrl', () {
+    test('builds site-checks shifts visits url for checklist drafts', () {
+      final url = VisitUploadApi.resolveSiteCheckUploadUrl(
+        meta: {
+          'visit_type': 'site_check',
+          'site_check_time_sheet_id': 20693,
+        },
+      );
+      expect(url, ApiUrls.siteCheckVisitsUploadUrl(20693));
+      expect(url, endsWith('/site-checks/shifts/20693/visits'));
+    });
+
+    test('returns null for normal patrol drafts', () {
+      final url = VisitUploadApi.resolveSiteCheckUploadUrl(
+        meta: {
+          'visit_type': 'patrol',
+          'site_id': 1,
+          'time_sheet_id': 99,
+        },
+      );
+      expect(url, isNull);
+    });
+  });
+
   group('VisitUploadResult.parseHttp', () {
     test('accepts live log-visit patrol /api/visits 200 response', () {
       final result = VisitUploadResult.parseHttp(

@@ -703,7 +703,13 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
           meta: meta,
           items: draft.items,
           generalVoicePath: draft.generalNote.voiceNotePath,
-          uploadUrl: draft.context?.uploadUrl,
+          uploadUrl:
+              VisitUploadApi.resolveSiteCheckUploadUrl(
+                visitType: draft.context?.visitType,
+                siteCheckTimeSheetId: draft.context?.siteCheckTimeSheetId,
+                timeSheetId: draft.context?.timeSheetId,
+              ) ??
+              draft.context?.uploadUrl,
           onProgress: (current, total) {
             flow.uploadProgressCurrent.value = current;
             flow.uploadProgressTotal.value = total;
@@ -732,13 +738,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       }
 
       if (result.success) {
-        if (kDebugMode) {
-          debugPrint(
-            '[VisitUpload] SUCCESS status=${result.statusCode} '
-            'visitId=${result.visitId} clientDraftId=${result.clientDraftId} '
-            'itemsSaved=${result.itemsSaved} message=${result.displayMessage}',
-          );
-        }
+        // Full SUCCESS payload is logged by VisitUploadApi via logDebugJson.
         _clearUploadProgress(flow);
         await VisitUploadQueue.instance.remove(draftKey);
         await VisitMediaDraftStore.instance.clearDraft(

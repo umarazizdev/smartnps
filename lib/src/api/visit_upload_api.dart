@@ -11,6 +11,7 @@ import '../debug/session_debug_logger.dart';
 import '../log_visit/flow/visit_flow_copy.dart';
 import '../log_visit/flow/visit_flow_kind.dart';
 import '../log_visit/flow/visit_video_flow_controller.dart';
+import '../utilities/app_debug_log.dart';
 import 'api_client.dart';
 import 'api_urls.dart';
 
@@ -354,7 +355,7 @@ class VisitUploadApi {
       return generalVoiceResult;
     }
 
-    final resolvedUploadUrl = _resolveUploadUrl(uploadUrl);
+    final resolvedUploadUrl = _resolveUploadUrl(uploadUrl, meta: meta);
     final flowKind = _resolveFlowKind(meta: meta, uploadUrl: resolvedUploadUrl);
 
     if (kDebugMode) {
@@ -442,12 +443,82 @@ class VisitUploadApi {
     }
   }
 
-  static String _resolveUploadUrl(String? uploadUrl) {
+  static String _resolveUploadUrl(
+    String? uploadUrl, {
+    Map<String, dynamic>? meta,
+  }) {
+    final siteCheckUrl = resolveSiteCheckUploadUrl(meta: meta);
+    if (siteCheckUrl != null) return siteCheckUrl;
+
     final trimmed = uploadUrl?.trim();
     if (trimmed == null || trimmed.isEmpty) {
       return ApiUrls.visitsUploadUrl;
     }
     return trimmed;
+  }
+
+  /// Checklist / site-check uploads go to
+  /// `POST /api/site-checks/shifts/{timeSheet}/visits`.
+  static String? resolveSiteCheckUploadUrl({
+    Map<String, dynamic>? meta,
+    String? visitType,
+    int? siteCheckTimeSheetId,
+    int? timeSheetId,
+  }) {
+    final type =
+        (visitType ?? meta?['visit_type'] ?? meta?['visitType'])
+            ?.toString()
+            .trim()
+            .toLowerCase() ??
+        '';
+    final hasSiteCheckTimeSheet =
+        siteCheckTimeSheetId != null ||
+        _metaHasAnyKey(meta, const [
+          'site_check_time_sheet_id',
+          'siteCheckTimeSheetId',
+        ]);
+    final isSiteCheck =
+        VisitFlowKind.fromVisitType(type) == VisitFlowKind.siteCheck ||
+        (type.isEmpty && hasSiteCheckTimeSheet);
+    if (!isSiteCheck) return null;
+
+    final timeSheet =
+        siteCheckTimeSheetId ??
+        _intFromMeta(meta, const [
+          'site_check_time_sheet_id',
+          'siteCheckTimeSheetId',
+        ]) ??
+        timeSheetId ??
+        _intFromMeta(meta, const [
+          'time_sheet_id',
+          'timeSheetId',
+          'timeSheet',
+          'timesheet_id',
+          'timesheet',
+        ]);
+    if (timeSheet == null) return null;
+    return ApiUrls.siteCheckVisitsUploadUrl(timeSheet);
+  }
+
+  static int? _intFromMeta(Map<String, dynamic>? meta, List<String> keys) {
+    if (meta == null) return null;
+    for (final key in keys) {
+      if (!meta.containsKey(key)) continue;
+      final value = meta[key];
+      if (value is int) return value;
+      if (value is num) return value.toInt();
+      final parsed = int.tryParse(value?.toString().trim() ?? '');
+      if (parsed != null) return parsed;
+    }
+    return null;
+  }
+
+  static bool _metaHasAnyKey(Map<String, dynamic>? meta, List<String> keys) {
+    if (meta == null) return false;
+    for (final key in keys) {
+      if (meta.containsKey(key) && meta[key] != null) return true;
+    }
+    return false;
   }
 
   static VisitFlowKind _resolveFlowKind({
@@ -468,6 +539,7 @@ class VisitUploadApi {
     if (path.contains('/incident-reports')) {
       return VisitFlowKind.incidentReport;
     }
+    if (path.contains('/site-checks/')) return VisitFlowKind.siteCheck;
     if (path.contains('/onsite-patrol/')) return VisitFlowKind.siteCheck;
     return VisitFlowKind.patrol;
   }
@@ -531,14 +603,27 @@ class VisitUploadApi {
       debugPrint(
         '[VisitUploadApi] SUCCESS status=${result.statusCode} '
         'visitId=${result.visitId} clientDraftId=${result.clientDraftId} '
-        'itemsSaved=${result.itemsSaved} message=${result.displayMessage}',
+        'itemsSaved=${result.itemsSaved}',
       );
+      logDebugJson('VisitUploadApi SUCCESS', {
+        'statusCode': result.statusCode,
+        'visitId': result.visitId,
+        'clientDraftId': result.clientDraftId,
+        'itemsSaved': result.itemsSaved,
+        'message': result.displayMessage,
+        'body': responseBody,
+      });
     } else {
       debugPrint(
         '[VisitUploadApi] FAIL status=${result.statusCode} '
-        'message=${result.displayMessage} errors=${result.errors} '
-        'body=$responseBody',
+        'message=${result.displayMessage} errors=${result.errors}',
       );
+      logDebugJson('VisitUploadApi FAIL', {
+        'statusCode': result.statusCode,
+        'message': result.displayMessage,
+        'errors': result.errors,
+        'body': responseBody,
+      });
     }
   }
 

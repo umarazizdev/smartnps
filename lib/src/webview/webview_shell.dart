@@ -32,6 +32,7 @@ import '../auth/auth_state.dart';
 import '../auth/auth_repository.dart';
 import '../api/api_client.dart';
 import '../api/api_urls.dart';
+import '../api/visit_upload_api.dart';
 import '../device/device_check_service.dart';
 import '../background/duty/duty_heartbeat_service.dart';
 import '../background/duty/clock_in_gate_service.dart';
@@ -3811,8 +3812,9 @@ class _WebViewShellState extends State<WebViewShell>
     );
     patrolLogDebugLog(
       '[SmartNPS360] $handlerName called argsCount=${args.length} '
-      'uploadUrl=$uploadUrl rawArgs=$args',
+      'uploadUrl=$uploadUrl',
     );
+    logJsBridgePayload('[SmartNPS360][JS Bridge] $handlerName payload', args);
 
     final currentHost = _ui.currentUri.value?.host;
     if (!AppConfig.isAllowedHost(currentHost)) {
@@ -3836,7 +3838,7 @@ class _WebViewShellState extends State<WebViewShell>
       if (fromContext != null) {
         patrolLogDebugLog(
           '[SmartNPS360] $handlerName using patrolDraftContext '
-          'keys=${fromContext.keys.toList()} context=$fromContext',
+          'keys=${fromContext.keys.toList()}',
         );
         payload = {...?payload, ...fromContext};
       }
@@ -3914,8 +3916,7 @@ class _WebViewShellState extends State<WebViewShell>
     patrolLogDebugLog(
       '[SmartNPS360] $handlerName ok=${result['ok']} '
       'reopenedPending=${result['reopenedPending']} '
-      'itemCount=${result['itemCount']} '
-      'result=$result',
+      'itemCount=${result['itemCount']}',
     );
     return result;
   }
@@ -3926,11 +3927,16 @@ class _WebViewShellState extends State<WebViewShell>
   }) async {
     final flow = VisitDraftResumeDialog.ensureFlowController();
     unawaited(VisitGpsSession.instance.start());
+    final bridgePayload = _normalizeBridgeMap(payload);
+    final resolvedUploadUrl = _resolveBridgeUploadUrl(
+      bridgePayload,
+      fallback: uploadUrl,
+    );
     final normalized = <String, dynamic>{
-      ...?_normalizeBridgeMap(payload),
-      'api_upload_url': uploadUrl,
-      'upload_url': uploadUrl,
-      'uploadUrl': uploadUrl,
+      ...?bridgePayload,
+      'api_upload_url': resolvedUploadUrl,
+      'upload_url': resolvedUploadUrl,
+      'uploadUrl': resolvedUploadUrl,
     };
 
     await _captureWebResumePoint();
@@ -3954,9 +3960,7 @@ class _WebViewShellState extends State<WebViewShell>
     final contextError = await flow.ensureOperationalReportContext();
     flow.isPreparingReport.value = false;
     if (contextError != null) {
-      patrolLogDebugLog(
-        '[SmartNPS360] report context failed: $contextError payload=$normalized',
-      );
+      patrolLogDebugLog('[SmartNPS360] report context failed: $contextError');
       await _closeLogVisit(openDashboard: true);
       Get.closeAllSnackbars();
       Get.snackbar(
@@ -3987,8 +3991,7 @@ class _WebViewShellState extends State<WebViewShell>
       'sitePatrolWindowId=${ctx?.sitePatrolWindowId} '
       'uploadUrl=${ctx?.uploadUrl} '
       'resumeUri=$_uriBeforeLogVisit '
-      'scrollY=$_scrollYBeforeLogVisit '
-      'payload=$normalized',
+      'scrollY=$_scrollYBeforeLogVisit',
     );
 
     return <String, dynamic>{
@@ -4037,6 +4040,24 @@ class _WebViewShellState extends State<WebViewShell>
       }
     }
     return out;
+  }
+
+  /// Site-check / checklist drafts upload to
+  /// `POST /api/site-checks/shifts/{timeSheet}/visits`.
+  String _resolveBridgeUploadUrl(
+    Map<String, dynamic>? payload, {
+    required String fallback,
+  }) {
+    final siteCheckUrl = VisitUploadApi.resolveSiteCheckUploadUrl(
+      meta: payload,
+    );
+    if (siteCheckUrl != null) {
+      patrolLogDebugLog(
+        '[SmartNPS360] using site-check upload url=$siteCheckUrl',
+      );
+      return siteCheckUrl;
+    }
+    return fallback;
   }
 
   String? _stringFromPayload(Map? payload, List<String> keys) {
@@ -4203,7 +4224,7 @@ class _WebViewShellState extends State<WebViewShell>
   void _logRawCheckpoints(dynamic raw) {
     if (raw is! List) {
       patrolLogDebugLog(
-        '[SmartNPS360] checkpoints raw type=${raw.runtimeType} value=$raw',
+        '[SmartNPS360] checkpoints raw type=${raw.runtimeType}',
       );
       return;
     }
@@ -4211,7 +4232,7 @@ class _WebViewShellState extends State<WebViewShell>
       final entry = raw[i];
       if (entry is! Map) {
         patrolLogDebugLog(
-          '[SmartNPS360] checkpoint[$i] non-map type=${entry.runtimeType} value=$entry',
+          '[SmartNPS360] checkpoint[$i] non-map type=${entry.runtimeType}',
         );
         continue;
       }
@@ -4223,8 +4244,7 @@ class _WebViewShellState extends State<WebViewShell>
         'photo_url=${map['photo_url'] ?? map['photoUrl']} '
         'photo_path=${map['photo_path'] ?? map['photoPath']} '
         'image_url=${map['image_url'] ?? map['imageUrl']} '
-        'image=${map['image']} photo=${map['photo']} '
-        'raw=$map',
+        'image=${map['image']} photo=${map['photo']}',
       );
     }
   }
