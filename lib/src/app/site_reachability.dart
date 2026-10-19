@@ -9,16 +9,28 @@ class SiteReachability {
   SiteReachability._();
 
   static const _timeout = Duration(seconds: 5);
+  static const _maxAttempts = 3;
+  static const _retryDelay = Duration(milliseconds: 700);
 
   static Future<bool>? _inFlight;
 
   static Future<bool> canReachSite() {
-    return _inFlight ??= _probe().whenComplete(() {
+    return _inFlight ??= _probeWithRetries().whenComplete(() {
       _inFlight = null;
     });
   }
 
-  static Future<bool> _probe() async {
+  static Future<bool> _probeWithRetries() async {
+    for (var attempt = 1; attempt <= _maxAttempts; attempt++) {
+      if (await _probeOnce(attempt: attempt)) return true;
+      if (attempt < _maxAttempts) {
+        await Future<void>.delayed(_retryDelay);
+      }
+    }
+    return false;
+  }
+
+  static Future<bool> _probeOnce({required int attempt}) async {
     final uri = Uri.parse(AppRoutes.webBaseUrl);
     final client = HttpClient()
       ..connectionTimeout = _timeout
@@ -28,17 +40,22 @@ class SiteReachability {
       final headStatus = await _statusFor(client, 'HEAD', uri);
       if (headStatus == HttpStatus.methodNotAllowed) {
         final getStatus = await _statusFor(client, 'GET', uri);
-        _log(getStatus != null, method: 'GET', status: getStatus);
+        _log(
+          getStatus != null,
+          method: 'GET',
+          status: getStatus,
+          attempt: attempt,
+        );
         return getStatus != null;
       }
       if (headStatus != null) {
-        _log(true, method: 'HEAD', status: headStatus);
+        _log(true, method: 'HEAD', status: headStatus, attempt: attempt);
         return true;
       }
-      _log(false, method: 'HEAD');
+      _log(false, method: 'HEAD', attempt: attempt);
       return false;
     } catch (e) {
-      _log(false, error: e);
+      _log(false, error: e, attempt: attempt);
       return false;
     } finally {
       client.close(force: true);
@@ -62,9 +79,7 @@ class SiteReachability {
       final response = await request.close().timeout(_timeout);
       try {
         await response.drain<void>().timeout(_timeout);
-      } catch (_) {
-
-      }
+      } catch (_) {}
       return response.statusCode;
     } on TimeoutException {
       return null;
@@ -84,15 +99,15 @@ class SiteReachability {
     String? method,
     int? status,
     Object? error,
+    int? attempt,
   }) {
     if (!kDebugMode) return;
-    if (kDebugMode) {
-      debugPrint(
-        '[SmartNPS360][Reachability] reachable=$reachable'
-        '${method != null ? ' $method' : ''}'
-        '${status != null ? ' status=$status' : ''}'
-        '${error != null ? ' error=$error' : ''}',
-      );
-    }
+    debugPrint(
+      '[SmartNPS360][Reachability] reachable=$reachable'
+      '${attempt != null ? ' attempt=$attempt/$_maxAttempts' : ''}'
+      '${method != null ? ' $method' : ''}'
+      '${status != null ? ' status=$status' : ''}'
+      '${error != null ? ' error=$error' : ''}',
+    );
   }
 }
