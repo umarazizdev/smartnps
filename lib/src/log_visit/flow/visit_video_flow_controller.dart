@@ -200,6 +200,7 @@ class VisitVideoFlowController extends GetxController {
   final Map<String, Future<Uint8List?>> _thumbnailFutures =
       <String, Future<Uint8List?>>{};
   final isDraftReady = false.obs;
+
   /// True while issuing `/api/report-contexts` after opening issue/incident.
   final isPreparingReport = false.obs;
   final draftSiteName = RxnString();
@@ -564,9 +565,20 @@ class VisitVideoFlowController extends GetxController {
   }
 
   void _applyContextToState(VisitPatrolContext? context) {
+    // Always assign a fresh instance so GetX listeners rebuild on reopen
+    // even when the draft key is unchanged.
     patrolContext.value = context;
-    draftSiteName.value = context?.siteName ?? draftSiteName.value;
-    draftRegionName.value = context?.regionName;
+    patrolContext.refresh();
+    final site = context?.siteName?.trim();
+    if (site != null && site.isNotEmpty) {
+      draftSiteName.value = site;
+    }
+    final region = context?.regionName?.trim();
+    if (region != null && region.isNotEmpty) {
+      draftRegionName.value = region;
+    } else {
+      draftRegionName.value = context?.regionName;
+    }
     final issued = context?.reportContextIssuedAt;
     if (issued != null) {
       // Freeze started_at to context issuance for operational reports.
@@ -611,136 +623,82 @@ class VisitVideoFlowController extends GetxController {
     final targetKey = VisitDraftKey.fromContext(incoming);
     final currentKey =
         activeDraftKey.value ?? VisitDraftKey.fromContext(patrolContext.value);
+    final currentBeforeSwitch = patrolContext.value;
 
     await _flushPersistQueue();
 
-    if (currentKey != targetKey && mediaItems.isNotEmpty) {
-      await persistCurrentDraft();
+    if (currentKey != targetKey &&
+        (mediaItems.isNotEmpty ||
+            generalNote.value.hasContent ||
+            reportDetails.value.hasUserContent ||
+            currentBeforeSwitch?.hasReportContext == true)) {
+      await persistCurrentDraft(force: true);
     }
 
-    final current = patrolContext.value;
-    final sameSite = currentKey == targetKey;
-
-    final incomingHasCheckpointList =
-        payload != null &&
-        (payload.containsKey('checkpoints') ||
-            payload.containsKey('checkpoint_count'));
-    final List<VisitCheckpoint> mergedCheckpoints;
-    if (incoming.checkpoints.isNotEmpty) {
-      mergedCheckpoints = incoming.checkpoints;
-    } else if (incomingHasCheckpointList) {
-      mergedCheckpoints = const <VisitCheckpoint>[];
-    } else if (sameSite) {
-      mergedCheckpoints = current?.checkpoints ?? const <VisitCheckpoint>[];
-    } else {
-      mergedCheckpoints = const <VisitCheckpoint>[];
-    }
-    final sameStructuredDraft =
-        sameSite &&
-        (incoming.isStructuredReport ||
-            (current?.isStructuredReport == true &&
-                current?.flowKind ==
-                    VisitFlowKind.fromVisitType(
-                      incoming.visitType ?? current?.visitType,
-                    )));
-    final baseMerged = VisitPatrolContext(
-      regionId: incoming.regionId ?? current?.regionId,
-      siteId: incoming.siteId ?? current?.siteId,
-      regionName: incoming.regionName ?? current?.regionName,
-      siteName: incoming.siteName ?? current?.siteName,
-      scheduleId: incoming.scheduleId ?? current?.scheduleId,
-      sitePatrolWindowId:
-          incoming.sitePatrolWindowId ?? current?.sitePatrolWindowId,
-      requestId: incoming.requestId ?? current?.requestId,
-      siteLatitude: incoming.siteLatitude ?? current?.siteLatitude,
-      siteLongitude: incoming.siteLongitude ?? current?.siteLongitude,
-      uploadUrl: incoming.uploadUrl ?? current?.uploadUrl,
-      minimumPhotos:
-          incoming.minimumPhotos ?? (sameSite ? current?.minimumPhotos : null),
-      visitType: incoming.visitType ?? (sameSite ? current?.visitType : null),
-      siteCheckTimeSheetId:
-          incoming.siteCheckTimeSheetId ??
-          (sameSite ? current?.siteCheckTimeSheetId : null),
-      reportContextId: sameStructuredDraft
-          ? (incoming.reportContextId ?? current?.reportContextId)
-          : incoming.reportContextId,
-      reportContextIssuedAt: sameStructuredDraft
-          ? (incoming.reportContextIssuedAt ?? current?.reportContextIssuedAt)
-          : incoming.reportContextIssuedAt,
-      timeSheetId: incoming.timeSheetId ??
-          (sameSite ? current?.timeSheetId : null),
-      checkpoints: mergedCheckpoints,
-    );
-
+    // Keep in-editor user work when reopening the same draft key; otherwise
+    // hydrate media/notes from the target snapshot first.
     final keepInMemory =
         currentKey == targetKey &&
         (mediaItems.isNotEmpty ||
-            (baseMerged.isStructuredReport &&
-                reportDetails.value.hasUserContent));
+            generalNote.value.hasContent ||
+            reportDetails.value.hasUserContent);
+
+    VisitPatrolContext? snapshotCtx;
+    var keptInMemory = keepInMemory;
     if (keepInMemory) {
-      final merged = baseMerged.copyWith(
-        clientDraftId: VisitPatrolContext.resolveClientDraftIdForMerge(
-          sameSite: true,
-          current: current,
-          incoming: incoming,
-          mergedVisit: baseMerged,
-        ),
-      );
-      activeDraftKey.value = VisitDraftKey.fromContext(merged);
-      _applyContextToState(merged);
-      _ensureReportDetailsDefaults();
       await _store.setActiveKey(targetKey);
-      unawaited(persistCurrentDraft());
-      final reopenedPending =
-          mediaItems.isNotEmpty ||
-          (merged.isStructuredReport &&
-              (reportDetails.value.hasUserContent || merged.hasReportContext));
-      patrolLogDebugLog(
-        '[VisitDraft] bridge open key=$targetKey '
-        'reopenedPending=$reopenedPending items=${mediaItems.length} '
-        'siteId=${merged.siteId} regionId=${merged.regionId} '
-        'clientDraftId=${merged.clientDraftId} '
-        'reportContextId=${merged.reportContextId} '
-        'checkpoints=${merged.checkpoints.length} '
-        'photos=${merged.checkpoints.where((e) => e.hasReferencePhoto).length} '
-        'photoUrls=${merged.checkpoints.map((e) => e.photoUrl).toList()} '
-        'keptInMemory=true payload=$payload',
-      );
-      return reopenedPending;
-    }
-
-    late final VisitMediaDraftSnapshot snapshot;
-    _restoring = true;
-    try {
-      await VisitUploadQueue.instance.ensureStarted();
-      await _store.setActiveKey(targetKey);
-      snapshot = await _store.loadDraftSnapshot(key: targetKey);
-      _thumbnailFutures.clear();
-      if (VisitUploadQueue.instance.isQueued(targetKey)) {
-        mediaItems.clear();
-        _startedAt = null;
-        generalNote.value = const VisitBatchNote();
-        reportDetails.value = VisitReportDetails.defaultsFor(
-          baseMerged.flowKind,
-        );
-        lastUploadIssue.value = null;
-        activeDraftKey.value = VisitDraftKey.fromContext(baseMerged);
-      } else {
-        _applySnapshotToState(snapshot);
+    } else {
+      _restoring = true;
+      try {
+        await VisitUploadQueue.instance.ensureStarted();
+        await _store.setActiveKey(targetKey);
+        final snapshot = await _store.loadDraftSnapshot(key: targetKey);
+        snapshotCtx = snapshot.context;
+        _thumbnailFutures.clear();
+        if (VisitUploadQueue.instance.isQueued(targetKey)) {
+          mediaItems.clear();
+          _startedAt = null;
+          generalNote.value = const VisitBatchNote();
+          reportDetails.value = VisitReportDetails.defaultsFor(
+            incoming.flowKind,
+          );
+          lastUploadIssue.value = null;
+          patrolContext.value = null;
+          draftSiteName.value = null;
+          draftRegionName.value = null;
+          activeDraftKey.value = targetKey;
+          snapshotCtx = null;
+        } else {
+          _applySnapshotToState(snapshot);
+        }
+      } finally {
+        _restoring = false;
+        isDraftReady.value = true;
       }
-    } finally {
-      _restoring = false;
-      isDraftReady.value = true;
+      keptInMemory = false;
     }
 
-    final snapshotCtx = snapshot.context;
+    // Baseline is the target draft (memory or disk), not a stale other site.
+    final baseline = patrolContext.value;
+    final sameSite =
+        targetKey ==
+            (activeDraftKey.value ?? VisitDraftKey.fromContext(baseline)) ||
+        (baseline?.isSameSiteAs(incoming) ?? false);
+
+    final baseMerged = VisitPatrolContext.overlayFromBridge(
+      baseline: baseline,
+      incoming: incoming,
+      payload: payload,
+      sameSite: sameSite,
+    );
+
     final merged = baseMerged.copyWith(
       clientDraftId: VisitPatrolContext.resolveClientDraftIdForMerge(
         sameSite: sameSite,
-        current: current,
+        current: baseline ?? currentBeforeSwitch,
         incoming: incoming,
         mergedVisit: baseMerged,
-        targetSnapshot: snapshotCtx,
+        targetSnapshot: snapshotCtx ?? baseline,
       ),
       reportContextId:
           baseMerged.reportContextId ??
@@ -758,18 +716,20 @@ class VisitVideoFlowController extends GetxController {
               : null),
       timeSheetId: baseMerged.timeSheetId ?? snapshotCtx?.timeSheetId,
     );
+
     activeDraftKey.value = VisitDraftKey.fromContext(merged);
     _applyContextToState(merged);
     _ensureReportDetailsDefaults();
+
+    // Persist overlay so disk matches the UI even when the officer made no
+    // media/form edits (checkpoint add/remove, renamed site, etc.).
+    await persistCurrentDraft(force: true);
+
     final reopenedPending =
         mediaItems.isNotEmpty ||
+        generalNote.value.hasContent ||
         (merged.isStructuredReport &&
             (reportDetails.value.hasUserContent || merged.hasReportContext));
-    if (reopenedPending &&
-        (merged.clientDraftId != snapshotCtx?.clientDraftId ||
-            merged.reportContextId != snapshotCtx?.reportContextId)) {
-      unawaited(persistCurrentDraft());
-    }
 
     patrolLogDebugLog(
       '[VisitDraft] bridge open key=$targetKey '
@@ -780,7 +740,9 @@ class VisitVideoFlowController extends GetxController {
       'checkpoints=${merged.checkpoints.length} '
       'photos=${merged.checkpoints.where((e) => e.hasReferencePhoto).length} '
       'photoUrls=${merged.checkpoints.map((e) => e.photoUrl).toList()} '
-      'payload=$payload',
+      'keptInMemory=$keptInMemory '
+      'checkpointKeyPresent='
+      '${VisitPatrolContext.bridgePayloadHasCheckpointList(payload)}',
     );
     return reopenedPending;
   }

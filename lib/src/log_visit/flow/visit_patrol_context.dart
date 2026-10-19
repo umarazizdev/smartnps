@@ -439,6 +439,77 @@ class VisitPatrolContext {
     return fromJson(payload);
   }
 
+  /// Whether the bridge payload explicitly includes a checkpoints list/count.
+  static bool bridgePayloadHasCheckpointList(Map<String, dynamic>? payload) {
+    if (payload == null) return false;
+    return payload.containsKey('checkpoints') ||
+        payload.containsKey('checkpoint_count');
+  }
+
+  /// Overlay latest bridge context onto an existing draft baseline.
+  ///
+  /// - Non-null incoming scalars replace baseline (add/update).
+  /// - Omitted scalars keep baseline when [sameSite].
+  /// - Checkpoints: payload is full truth. Present list replaces (including
+  ///   `[]`); omitted key also clears — web must send the current list.
+  /// - Draft identity (`clientDraftId` / report context) is resolved by caller.
+  static VisitPatrolContext overlayFromBridge({
+    required VisitPatrolContext? baseline,
+    required VisitPatrolContext incoming,
+    required Map<String, dynamic>? payload,
+    required bool sameSite,
+  }) {
+    // Missing checkpoints key means "none now", not "keep cache".
+    final checkpoints = bridgePayloadHasCheckpointList(payload)
+        ? List<VisitCheckpoint>.from(incoming.checkpoints)
+        : const <VisitCheckpoint>[];
+
+    T? pick<T>(T? incomingValue, T? baselineValue) {
+      if (incomingValue != null) return incomingValue;
+      if (sameSite) return baselineValue;
+      return null;
+    }
+
+    final incomingKind = VisitFlowKind.fromVisitType(
+      incoming.visitType ?? (sameSite ? baseline?.visitType : null),
+    );
+    final sameStructuredDraft =
+        sameSite &&
+        (incoming.isStructuredReport ||
+            (baseline?.isStructuredReport == true &&
+                baseline?.flowKind == incomingKind));
+
+    return VisitPatrolContext(
+      regionId: pick(incoming.regionId, baseline?.regionId),
+      siteId: pick(incoming.siteId, baseline?.siteId),
+      regionName: pick(incoming.regionName, baseline?.regionName),
+      siteName: pick(incoming.siteName, baseline?.siteName),
+      scheduleId: pick(incoming.scheduleId, baseline?.scheduleId),
+      sitePatrolWindowId: pick(
+        incoming.sitePatrolWindowId,
+        baseline?.sitePatrolWindowId,
+      ),
+      requestId: pick(incoming.requestId, baseline?.requestId),
+      siteLatitude: pick(incoming.siteLatitude, baseline?.siteLatitude),
+      siteLongitude: pick(incoming.siteLongitude, baseline?.siteLongitude),
+      uploadUrl: pick(incoming.uploadUrl, baseline?.uploadUrl),
+      minimumPhotos: pick(incoming.minimumPhotos, baseline?.minimumPhotos),
+      visitType: pick(incoming.visitType, baseline?.visitType),
+      siteCheckTimeSheetId: pick(
+        incoming.siteCheckTimeSheetId,
+        baseline?.siteCheckTimeSheetId,
+      ),
+      reportContextId: sameStructuredDraft
+          ? (incoming.reportContextId ?? baseline?.reportContextId)
+          : incoming.reportContextId,
+      reportContextIssuedAt: sameStructuredDraft
+          ? (incoming.reportContextIssuedAt ?? baseline?.reportContextIssuedAt)
+          : incoming.reportContextIssuedAt,
+      timeSheetId: pick(incoming.timeSheetId, baseline?.timeSheetId),
+      checkpoints: checkpoints,
+    );
+  }
+
   static String generateClientDraftId() {
     final random = Random.secure();
     final bytes = List<int>.generate(16, (_) => random.nextInt(256));

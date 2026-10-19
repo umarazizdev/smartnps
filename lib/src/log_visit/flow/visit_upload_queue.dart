@@ -314,7 +314,13 @@ class VisitUploadQueue {
       meta: meta,
       items: snapshot.items,
       generalVoicePath: snapshot.generalNote.voiceNotePath,
-      uploadUrl: snapshot.context?.uploadUrl,
+      uploadUrl:
+          VisitUploadApi.resolveSiteCheckUploadUrl(
+            visitType: snapshot.context?.visitType,
+            siteCheckTimeSheetId: snapshot.context?.siteCheckTimeSheetId,
+            timeSheetId: snapshot.context?.timeSheetId,
+          ) ??
+          snapshot.context?.uploadUrl,
       onProgress: onProgress,
     );
   }

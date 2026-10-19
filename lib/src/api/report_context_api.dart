@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
 import '../log_visit/flow/visit_flow_kind.dart';
+import '../utilities/app_debug_log.dart';
 import 'api_client.dart';
 import 'api_urls.dart';
 import 'visit_upload_api.dart';
@@ -89,9 +90,8 @@ class ReportContextApi {
     };
 
     if (kDebugMode) {
-      debugPrint(
-        '[ReportContextApi] POST ${ApiUrls.reportContextsUrl} body=$body',
-      );
+      debugPrint('[ReportContextApi] POST ${ApiUrls.reportContextsUrl}');
+      logDebugJson('ReportContextApi request body', body);
     }
 
     try {
@@ -113,8 +113,20 @@ class ReportContextApi {
           '${result.success ? 'SUCCESS' : 'FAIL'} '
           'status=${result.statusCode} '
           'reportContextId=${result.reportContextId} '
-          'idempotent=${result.idempotent} '
-          'message=${result.displayMessage}',
+          'idempotent=${result.idempotent}',
+        );
+        logDebugJson(
+          result.success
+              ? 'ReportContextApi SUCCESS'
+              : 'ReportContextApi FAIL',
+          {
+            'statusCode': result.statusCode,
+            'reportContextId': result.reportContextId,
+            'clientDraftId': result.clientDraftId,
+            'idempotent': result.idempotent,
+            'message': result.displayMessage,
+            'body': response.data,
+          },
         );
       }
       return result;
