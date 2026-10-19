@@ -3,32 +3,24 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview_platform_interface/flutter_inappwebview_platform_interface.dart';
 
-/// Object specifying creation parameters for creating a [AndroidHttpAuthCredentialDatabase].
-///
-/// When adding additional fields make sure they can be null or have a default
-/// value to avoid breaking changes. See [PlatformHttpAuthCredentialDatabaseCreationParams] for
-/// more information.
 @immutable
 class AndroidHttpAuthCredentialDatabaseCreationParams
     extends PlatformHttpAuthCredentialDatabaseCreationParams {
-  /// Creates a new [AndroidHttpAuthCredentialDatabaseCreationParams] instance.
+
   const AndroidHttpAuthCredentialDatabaseCreationParams(
-    // This parameter prevents breaking changes later.
-    // ignore: avoid_unused_constructor_parameters
+
     PlatformHttpAuthCredentialDatabaseCreationParams params,
   ) : super();
 
-  /// Creates a [AndroidHttpAuthCredentialDatabaseCreationParams] instance based on [PlatformHttpAuthCredentialDatabaseCreationParams].
   factory AndroidHttpAuthCredentialDatabaseCreationParams.fromPlatformHttpAuthCredentialDatabaseCreationParams(
       PlatformHttpAuthCredentialDatabaseCreationParams params) {
     return AndroidHttpAuthCredentialDatabaseCreationParams(params);
   }
 }
 
-///{@macro flutter_inappwebview_platform_interface.PlatformHttpAuthCredentialDatabase}
 class AndroidHttpAuthCredentialDatabase
     extends PlatformHttpAuthCredentialDatabase with ChannelController {
-  /// Creates a new [AndroidHttpAuthCredentialDatabase].
+
   AndroidHttpAuthCredentialDatabase(
       PlatformHttpAuthCredentialDatabaseCreationParams params)
       : super.implementation(
@@ -45,7 +37,6 @@ class AndroidHttpAuthCredentialDatabase
 
   static AndroidHttpAuthCredentialDatabase? _instance;
 
-  ///Gets the database shared instance.
   static AndroidHttpAuthCredentialDatabase instance() {
     return (_instance != null) ? _instance! : _init();
   }
@@ -145,7 +136,7 @@ class AndroidHttpAuthCredentialDatabase
 
   @override
   void dispose() {
-    // empty
+
   }
 }
 

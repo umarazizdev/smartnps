@@ -4,32 +4,24 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview_platform_interface/flutter_inappwebview_platform_interface.dart';
 
-/// Object specifying creation parameters for creating a [AndroidWebStorageManager].
-///
-/// When adding additional fields make sure they can be null or have a default
-/// value to avoid breaking changes. See [PlatformWebStorageManagerCreationParams] for
-/// more information.
 @immutable
 class AndroidWebStorageManagerCreationParams
     extends PlatformWebStorageManagerCreationParams {
-  /// Creates a new [AndroidWebStorageManagerCreationParams] instance.
+
   const AndroidWebStorageManagerCreationParams(
-    // This parameter prevents breaking changes later.
-    // ignore: avoid_unused_constructor_parameters
+
     PlatformWebStorageManagerCreationParams params,
   ) : super();
 
-  /// Creates a [AndroidWebStorageManagerCreationParams] instance based on [PlatformWebStorageManagerCreationParams].
   factory AndroidWebStorageManagerCreationParams.fromPlatformWebStorageManagerCreationParams(
       PlatformWebStorageManagerCreationParams params) {
     return AndroidWebStorageManagerCreationParams(params);
   }
 }
 
-///{@macro flutter_inappwebview_platform_interface.PlatformWebStorageManager}
 class AndroidWebStorageManager extends PlatformWebStorageManager
     with ChannelController {
-  /// Creates a new [AndroidWebStorageManager].
+
   AndroidWebStorageManager(PlatformWebStorageManagerCreationParams params)
       : super.implementation(
           params is AndroidWebStorageManagerCreationParams
@@ -45,7 +37,6 @@ class AndroidWebStorageManager extends PlatformWebStorageManager
 
   static AndroidWebStorageManager? _instance;
 
-  ///Gets the WebStorage manager shared instance.
   static AndroidWebStorageManager instance() {
     return (_instance != null) ? _instance! : _init();
   }
@@ -107,7 +98,7 @@ class AndroidWebStorageManager extends PlatformWebStorageManager
 
   @override
   void dispose() {
-    // empty
+
   }
 }
 

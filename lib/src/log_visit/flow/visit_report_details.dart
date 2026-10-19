@@ -90,7 +90,6 @@ class VisitReportDetails {
     return value == 'other';
   }
 
-  /// True when the officer has entered report fields worth keeping as a draft.
   bool get hasUserContent {
     return title.trim().isNotEmpty ||
         details.trim().isNotEmpty ||

@@ -12,10 +12,6 @@ import 'in_app_webview_controller.dart';
 import '../pull_to_refresh/main.dart';
 import '../pull_to_refresh/pull_to_refresh_controller.dart';
 
-/// Object specifying creation parameters for creating a [PlatformInAppWebViewWidget].
-///
-/// Platform specific implementations can add additional fields by extending
-/// this class.
 class AndroidInAppWebViewWidgetCreationParams
     extends PlatformInAppWebViewWidgetCreationParams {
   AndroidInAppWebViewWidgetCreationParams(
@@ -136,8 +132,6 @@ class AndroidInAppWebViewWidgetCreationParams
       this.pullToRefreshController,
       this.findInteractionController});
 
-  /// Constructs a [AndroidInAppWebViewWidgetCreationParams] using a
-  /// [PlatformInAppWebViewWidgetCreationParams].
   AndroidInAppWebViewWidgetCreationParams.fromPlatformInAppWebViewWidgetCreationParams(
       PlatformInAppWebViewWidgetCreationParams params)
       : this(
@@ -262,11 +256,8 @@ class AndroidInAppWebViewWidgetCreationParams
   final AndroidPullToRefreshController? pullToRefreshController;
 }
 
-///{@macro flutter_inappwebview_platform_interface.PlatformInAppWebViewWidget}
 class AndroidInAppWebViewWidget extends PlatformInAppWebViewWidget {
-  /// Constructs a [AndroidInAppWebViewWidget].
-  ///
-  ///{@macro flutter_inappwebview_platform_interface.PlatformInAppWebViewWidget}
+
   AndroidInAppWebViewWidget(PlatformInAppWebViewWidgetCreationParams params)
       : super.implementation(
           params is AndroidInAppWebViewWidgetCreationParams
@@ -290,13 +281,13 @@ class AndroidInAppWebViewWidget extends PlatformInAppWebViewWidget {
 
     Map<String, dynamic> settingsMap =
         (params.initialSettings != null ? initialSettings.toMap() : null) ??
-            // ignore: deprecated_member_use_from_same_package
+
             params.initialOptions?.toMap() ??
             initialSettings.toMap();
 
     Map<String, dynamic> pullToRefreshSettings =
         params.pullToRefreshController?.params.settings.toMap() ??
-            // ignore: deprecated_member_use_from_same_package
+
             params.pullToRefreshController?.params.options.toMap() ??
             PullToRefreshSettings(enabled: false).toMap();
 
@@ -304,7 +295,7 @@ class AndroidInAppWebViewWidget extends PlatformInAppWebViewWidget {
         params.keepAlive != null) {
       final headlessId = params.headlessWebView?.id;
       if (headlessId != null) {
-        // force keep alive id to match headless webview id
+
         params.keepAlive?.id = headlessId;
       }
     }
@@ -469,7 +460,7 @@ class AndroidInAppWebViewWidget extends PlatformInAppWebViewWidget {
 
   @override
   T controllerFromPlatform<T>(PlatformInAppWebViewController controller) {
-    // unused
+
     throw UnimplementedError();
   }
 }

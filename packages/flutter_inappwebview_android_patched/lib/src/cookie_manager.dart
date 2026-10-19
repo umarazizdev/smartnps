@@ -5,32 +5,24 @@ import 'package:flutter/services.dart';
 
 import 'package:flutter_inappwebview_platform_interface/flutter_inappwebview_platform_interface.dart';
 
-/// Object specifying creation parameters for creating a [AndroidCookieManager].
-///
-/// When adding additional fields make sure they can be null or have a default
-/// value to avoid breaking changes. See [PlatformCookieManagerCreationParams] for
-/// more information.
 @immutable
 class AndroidCookieManagerCreationParams
     extends PlatformCookieManagerCreationParams {
-  /// Creates a new [AndroidCookieManagerCreationParams] instance.
+
   const AndroidCookieManagerCreationParams(
-    // This parameter prevents breaking changes later.
-    // ignore: avoid_unused_constructor_parameters
+
     PlatformCookieManagerCreationParams params,
   ) : super();
 
-  /// Creates a [AndroidCookieManagerCreationParams] instance based on [PlatformCookieManagerCreationParams].
   factory AndroidCookieManagerCreationParams.fromPlatformCookieManagerCreationParams(
       PlatformCookieManagerCreationParams params) {
     return AndroidCookieManagerCreationParams(params);
   }
 }
 
-///{@macro flutter_inappwebview_platform_interface.PlatformCookieManager}
 class AndroidCookieManager extends PlatformCookieManager
     with ChannelController {
-  /// Creates a new [AndroidCookieManager].
+
   AndroidCookieManager(PlatformCookieManagerCreationParams params)
       : super.implementation(
           params is AndroidCookieManagerCreationParams
@@ -46,7 +38,6 @@ class AndroidCookieManager extends PlatformCookieManager
 
   static AndroidCookieManager? _instance;
 
-  ///Gets the [AndroidCookieManager] shared instance.
   static AndroidCookieManager instance() {
     return (_instance != null) ? _instance! : _init();
   }
@@ -211,7 +202,7 @@ class AndroidCookieManager extends PlatformCookieManager
 
   @override
   void dispose() {
-    // empty
+
   }
 }
 

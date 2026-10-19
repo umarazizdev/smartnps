@@ -3,32 +3,24 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview_platform_interface/flutter_inappwebview_platform_interface.dart';
 
-/// Object specifying creation parameters for creating a [AndroidServiceWorkerController].
-///
-/// When adding additional fields make sure they can be null or have a default
-/// value to avoid breaking changes. See [PlatformServiceWorkerControllerCreationParams] for
-/// more information.
 @immutable
 class AndroidServiceWorkerControllerCreationParams
     extends PlatformServiceWorkerControllerCreationParams {
-  /// Creates a new [AndroidServiceWorkerControllerCreationParams] instance.
+
   const AndroidServiceWorkerControllerCreationParams(
-    // This parameter prevents breaking changes later.
-    // ignore: avoid_unused_constructor_parameters
+
     PlatformServiceWorkerControllerCreationParams params,
   ) : super();
 
-  /// Creates a [AndroidServiceWorkerControllerCreationParams] instance based on [PlatformServiceWorkerControllerCreationParams].
   factory AndroidServiceWorkerControllerCreationParams.fromPlatformServiceWorkerControllerCreationParams(
       PlatformServiceWorkerControllerCreationParams params) {
     return AndroidServiceWorkerControllerCreationParams(params);
   }
 }
 
-///{@macro flutter_inappwebview_platform_interface.PlatformServiceWorkerController}
 class AndroidServiceWorkerController extends PlatformServiceWorkerController
     with ChannelController {
-  /// Creates a new [AndroidServiceWorkerController].
+
   AndroidServiceWorkerController(
       PlatformServiceWorkerControllerCreationParams params)
       : super.implementation(
@@ -49,7 +41,6 @@ class AndroidServiceWorkerController extends PlatformServiceWorkerController
 
   static AndroidServiceWorkerController? _instance;
 
-  ///Gets the [AndroidServiceWorkerController] shared instance.
   static AndroidServiceWorkerController instance() {
     return (_instance != null) ? _instance! : _init();
   }
@@ -152,7 +143,7 @@ class AndroidServiceWorkerController extends PlatformServiceWorkerController
 
   @override
   void dispose() {
-    // empty
+
   }
 }
 

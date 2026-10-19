@@ -41,11 +41,6 @@ class PermissionSettingsHelper {
 
   static final ValueNotifier<bool> settingsPromptVisible = ValueNotifier(false);
 
-  /// Single-flight wrapper for [Geolocator.requestPermission].
-  ///
-  /// iOS geolocator throws if a second request starts while one is in progress;
-  /// concurrent callers share one future and already-running errors fall back
-  /// to [Geolocator.checkPermission].
   static Future<LocationPermission> requestGeolocatorPermission() async {
     final existing = _geolocatorPermissionRequest;
     if (existing != null) return existing;

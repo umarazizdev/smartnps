@@ -39,11 +39,11 @@ class VisitPatrolContext {
   final int? minimumPhotos;
   final String? visitType;
   final int? siteCheckTimeSheetId;
-  /// Server-issued authorization for issue/incident uploads.
+
   final String? reportContextId;
-  /// Context `issued_at`; use as immutable draft `started_at`.
+
   final DateTime? reportContextIssuedAt;
-  /// Timesheet from report-context (or bridge), when available.
+
   final int? timeSheetId;
   final List<VisitCheckpoint> checkpoints;
 
@@ -126,8 +126,6 @@ class VisitPatrolContext {
     final incomingId = incoming.clientDraftId?.trim();
     final snapshotId = targetSnapshot?.clientDraftId?.trim();
 
-    // Issue/incident drafts ignore changing bridge request_id so reopen keeps
-    // the same client_draft_id for the site + report type.
     if (mergedVisit.isStructuredReport) {
       if (sameSite &&
           current != null &&
@@ -439,27 +437,19 @@ class VisitPatrolContext {
     return fromJson(payload);
   }
 
-  /// Whether the bridge payload explicitly includes a checkpoints list/count.
   static bool bridgePayloadHasCheckpointList(Map<String, dynamic>? payload) {
     if (payload == null) return false;
     return payload.containsKey('checkpoints') ||
         payload.containsKey('checkpoint_count');
   }
 
-  /// Overlay latest bridge context onto an existing draft baseline.
-  ///
-  /// - Non-null incoming scalars replace baseline (add/update).
-  /// - Omitted scalars keep baseline when [sameSite].
-  /// - Checkpoints: payload is full truth. Present list replaces (including
-  ///   `[]`); omitted key also clears — web must send the current list.
-  /// - Draft identity (`clientDraftId` / report context) is resolved by caller.
   static VisitPatrolContext overlayFromBridge({
     required VisitPatrolContext? baseline,
     required VisitPatrolContext incoming,
     required Map<String, dynamic>? payload,
     required bool sameSite,
   }) {
-    // Missing checkpoints key means "none now", not "keep cache".
+
     final checkpoints = bridgePayloadHasCheckpointList(payload)
         ? List<VisitCheckpoint>.from(incoming.checkpoints)
         : const <VisitCheckpoint>[];

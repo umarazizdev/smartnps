@@ -34,8 +34,6 @@ class OverlayPromptGuard {
     }
   }
 
-  /// Runs [action] while marking an OS permission prompt as in-flight.
-  /// Concurrent callers wait so plugins like geolocator are not re-entered.
   static Future<T> runDuringOsPermissionPrompt<T>(
     Future<T> Function() action,
   ) async {

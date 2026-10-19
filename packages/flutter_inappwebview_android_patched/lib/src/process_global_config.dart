@@ -3,32 +3,24 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview_platform_interface/flutter_inappwebview_platform_interface.dart';
 
-/// Object specifying creation parameters for creating a [AndroidProcessGlobalConfig].
-///
-/// When adding additional fields make sure they can be null or have a default
-/// value to avoid breaking changes. See [PlatformProcessGlobalConfigCreationParams] for
-/// more information.
 @immutable
 class AndroidProcessGlobalConfigCreationParams
     extends PlatformProcessGlobalConfigCreationParams {
-  /// Creates a new [AndroidProcessGlobalConfigCreationParams] instance.
+
   const AndroidProcessGlobalConfigCreationParams(
-    // This parameter prevents breaking changes later.
-    // ignore: avoid_unused_constructor_parameters
+
     PlatformProcessGlobalConfigCreationParams params,
   ) : super();
 
-  /// Creates a [AndroidProcessGlobalConfigCreationParams] instance based on [PlatformProcessGlobalConfigCreationParams].
   factory AndroidProcessGlobalConfigCreationParams.fromPlatformProcessGlobalConfigCreationParams(
       PlatformProcessGlobalConfigCreationParams params) {
     return AndroidProcessGlobalConfigCreationParams(params);
   }
 }
 
-///{@macro flutter_inappwebview_platform_interface.PlatformProcessGlobalConfig}
 class AndroidProcessGlobalConfig extends PlatformProcessGlobalConfig
     with ChannelController {
-  /// Creates a new [AndroidProcessGlobalConfig].
+
   AndroidProcessGlobalConfig(PlatformProcessGlobalConfigCreationParams params)
       : super.implementation(
           params is AndroidProcessGlobalConfigCreationParams
@@ -44,7 +36,6 @@ class AndroidProcessGlobalConfig extends PlatformProcessGlobalConfig
 
   static AndroidProcessGlobalConfig? _instance;
 
-  ///Gets the [AndroidProcessGlobalConfig] shared instance.
   static AndroidProcessGlobalConfig instance() {
     return (_instance != null) ? _instance! : _init();
   }
@@ -67,7 +58,7 @@ class AndroidProcessGlobalConfig extends PlatformProcessGlobalConfig
 
   @override
   void dispose() {
-    // empty
+
   }
 }
 

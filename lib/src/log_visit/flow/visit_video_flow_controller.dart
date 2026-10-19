@@ -201,7 +201,6 @@ class VisitVideoFlowController extends GetxController {
       <String, Future<Uint8List?>>{};
   final isDraftReady = false.obs;
 
-  /// True while issuing `/api/report-contexts` after opening issue/incident.
   final isPreparingReport = false.obs;
   final draftSiteName = RxnString();
   final draftRegionName = RxnString();
@@ -398,7 +397,7 @@ class VisitVideoFlowController extends GetxController {
         (isStructuredReport && details.hasUserContent)) {
       await persistCurrentDraft();
     } else if (isStructuredReport && !details.hasUserContent) {
-      // Clear a previously saved form-only draft when the form is emptied.
+
       await persistCurrentDraft(force: true);
     }
   }
@@ -480,7 +479,6 @@ class VisitVideoFlowController extends GetxController {
     await _flushPersistQueue();
   }
 
-  /// Frozen view of the active editor draft for upload after leaving the UI.
   VisitMediaDraftSnapshot captureDraftSnapshot() {
     final context = patrolContext.value;
     final key = activeDraftKey.value ?? VisitDraftKey.fromContext(context);
@@ -565,8 +563,7 @@ class VisitVideoFlowController extends GetxController {
   }
 
   void _applyContextToState(VisitPatrolContext? context) {
-    // Always assign a fresh instance so GetX listeners rebuild on reopen
-    // even when the draft key is unchanged.
+
     patrolContext.value = context;
     patrolContext.refresh();
     final site = context?.siteName?.trim();
@@ -581,7 +578,7 @@ class VisitVideoFlowController extends GetxController {
     }
     final issued = context?.reportContextIssuedAt;
     if (issued != null) {
-      // Freeze started_at to context issuance for operational reports.
+
       _startedAt = issued.toUtc();
     }
   }
@@ -635,8 +632,6 @@ class VisitVideoFlowController extends GetxController {
       await persistCurrentDraft(force: true);
     }
 
-    // Keep in-editor user work when reopening the same draft key; otherwise
-    // hydrate media/notes from the target snapshot first.
     final keepInMemory =
         currentKey == targetKey &&
         (mediaItems.isNotEmpty ||
@@ -678,7 +673,6 @@ class VisitVideoFlowController extends GetxController {
       keptInMemory = false;
     }
 
-    // Baseline is the target draft (memory or disk), not a stale other site.
     final baseline = patrolContext.value;
     final sameSite =
         targetKey ==
@@ -721,8 +715,6 @@ class VisitVideoFlowController extends GetxController {
     _applyContextToState(merged);
     _ensureReportDetailsDefaults();
 
-    // Persist overlay so disk matches the UI even when the officer made no
-    // media/form edits (checkpoint add/remove, renamed site, etc.).
     await persistCurrentDraft(force: true);
 
     final reopenedPending =
@@ -747,8 +739,6 @@ class VisitVideoFlowController extends GetxController {
     return reopenedPending;
   }
 
-  /// Issues (or reuses) `/api/report-contexts` for issue/incident drafts.
-  /// Returns null on success; otherwise a user-facing error message.
   Future<String?> ensureOperationalReportContext() async {
     final context = patrolContext.value;
     if (context == null || !context.isStructuredReport) return null;

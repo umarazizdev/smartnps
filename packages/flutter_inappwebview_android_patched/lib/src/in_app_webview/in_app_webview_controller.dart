@@ -20,8 +20,6 @@ import '_static_channel.dart';
 
 import '../print_job/main.dart';
 
-///List of forbidden names for JavaScript handlers.
-// ignore: non_constant_identifier_names
 final _JAVASCRIPT_HANDLER_FORBIDDEN_NAMES = UnmodifiableListView<String>([
   "onLoadResource",
   "shouldInterceptAjaxRequest",
@@ -35,37 +33,25 @@ final _JAVASCRIPT_HANDLER_FORBIDDEN_NAMES = UnmodifiableListView<String>([
   "evaluateJavaScriptWithContentWorld"
 ]);
 
-/// Object specifying creation parameters for creating a [AndroidInAppWebViewController].
-///
-/// When adding additional fields make sure they can be null or have a default
-/// value to avoid breaking changes. See [PlatformInAppWebViewControllerCreationParams] for
-/// more information.
 @immutable
 class AndroidInAppWebViewControllerCreationParams
     extends PlatformInAppWebViewControllerCreationParams {
-  /// Creates a new [AndroidInAppWebViewControllerCreationParams] instance.
+
   const AndroidInAppWebViewControllerCreationParams(
       {required super.id, super.webviewParams});
 
-  /// Creates a [AndroidInAppWebViewControllerCreationParams] instance based on [PlatformInAppWebViewControllerCreationParams].
   factory AndroidInAppWebViewControllerCreationParams.fromPlatformInAppWebViewControllerCreationParams(
-      // Recommended placeholder to prevent being broken by platform interface.
-      // ignore: avoid_unused_constructor_parameters
+
       PlatformInAppWebViewControllerCreationParams params) {
     return AndroidInAppWebViewControllerCreationParams(
         id: params.id, webviewParams: params.webviewParams);
   }
 }
 
-///Controls a WebView, such as an [InAppWebView] widget instance, a [AndroidHeadlessInAppWebView] instance or [AndroidInAppBrowser] WebView instance.
-///
-///If you are using the [InAppWebView] widget, an [InAppWebViewController] instance can be obtained by setting the [InAppWebView.onWebViewCreated]
-///callback. Instead, if you are using an [AndroidInAppBrowser] instance, you can get it through the [AndroidInAppBrowser.webViewController] attribute.
 class AndroidInAppWebViewController extends PlatformInAppWebViewController
     with ChannelController {
   static final MethodChannel _staticChannel = IN_APP_WEBVIEW_STATIC_CHANNEL;
 
-  // List of properties to be saved and restored for keep alive feature
   Map<String, JavaScriptHandlerCallback> _javaScriptHandlersMap =
       HashMap<String, JavaScriptHandlerCallback>();
   Map<UserScriptInjectionTime, List<UserScript>> _userScripts = {
@@ -77,7 +63,6 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
   Set<AndroidWebMessageChannel> _webMessageChannels = Set();
   Set<AndroidWebMessageListener> _webMessageListeners = Set();
 
-  // static map that contains the properties to be saved and restored for keep alive feature
   static final Map<InAppWebViewKeepAlive, InAppWebViewControllerKeepAliveProps?>
       _keepAliveMap = {};
 
@@ -175,7 +160,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
       if (keepAlive != null) {
         InAppWebViewControllerKeepAliveProps? props = _keepAliveMap[keepAlive];
         if (props == null) {
-          // save controller properties to restore it later
+
           _keepAliveMap[keepAlive] = InAppWebViewControllerKeepAliveProps(
               injectedScriptsFromURL: _injectedScriptsFromURL,
               javaScriptHandlersMap: _javaScriptHandlersMap,
@@ -184,7 +169,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
               webMessageChannels: _webMessageChannels,
               webMessageListeners: _webMessageListeners);
         } else {
-          // restore controller properties
+
           _injectedScriptsFromURL = props.injectedScriptsFromURL;
           _javaScriptHandlersMap = props.javaScriptHandlersMap;
           _userScripts = props.userScripts;
@@ -244,7 +229,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
       case "onReceivedError":
         if ((webviewParams != null &&
                 (webviewParams!.onReceivedError != null ||
-                    // ignore: deprecated_member_use_from_same_package
+
                     webviewParams!.onLoadError != null)) ||
             _inAppBrowserEventHandler != null) {
           WebResourceRequest request = WebResourceRequest.fromMap(
@@ -258,7 +243,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
               webviewParams!.onReceivedError!(
                   _controllerFromPlatform, request, error);
             else if (isForMainFrame) {
-              // ignore: deprecated_member_use_from_same_package
+
               webviewParams!.onLoadError!(_controllerFromPlatform, request.url,
                   error.type.toNativeValue() ?? -1, error.description);
             }
@@ -274,7 +259,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
       case "onReceivedHttpError":
         if ((webviewParams != null &&
                 (webviewParams!.onReceivedHttpError != null ||
-                    // ignore: deprecated_member_use_from_same_package
+
                     webviewParams!.onLoadHttpError != null)) ||
             _inAppBrowserEventHandler != null) {
           WebResourceRequest request = WebResourceRequest.fromMap(
@@ -288,7 +273,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
               webviewParams!.onReceivedHttpError!(
                   _controllerFromPlatform, request, errorResponse);
             else if (isForMainFrame) {
-              // ignore: deprecated_member_use_from_same_package
+
               webviewParams!.onLoadHttpError!(
                   _controllerFromPlatform,
                   request.url,
@@ -365,7 +350,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
         break;
       case "onDownloadStartRequest":
         if ((webviewParams != null &&
-                // ignore: deprecated_member_use_from_same_package
+
                 (webviewParams!.onDownloadStart != null ||
                     webviewParams!.onDownloadStartRequest != null)) ||
             _inAppBrowserEventHandler != null) {
@@ -379,12 +364,12 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
               webviewParams!.onDownloadStartRequest!(
                   _controllerFromPlatform, downloadStartRequest);
             else {
-              // ignore: deprecated_member_use_from_same_package
+
               webviewParams!.onDownloadStart!(
                   _controllerFromPlatform, downloadStartRequest.url);
             }
           } else {
-            // ignore: deprecated_member_use_from_same_package
+
             _inAppBrowserEventHandler!
                 .onDownloadStart(downloadStartRequest.url);
             _inAppBrowserEventHandler!
@@ -395,7 +380,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
       case "onLoadResourceWithCustomScheme":
         if ((webviewParams != null &&
                 (webviewParams!.onLoadResourceWithCustomScheme != null ||
-                    // ignore: deprecated_member_use_from_same_package
+
                     webviewParams!.onLoadResourceCustomScheme != null)) ||
             _inAppBrowserEventHandler != null) {
           Map<String, dynamic> requestMap =
@@ -410,7 +395,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
             else {
               return (await params
                           .webviewParams!
-                          // ignore: deprecated_member_use_from_same_package
+
                           .onLoadResourceCustomScheme!(
                       _controllerFromPlatform, request.url))
                   ?.toMap();
@@ -459,7 +444,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
       case "onGeolocationPermissionsShowPrompt":
         if ((webviewParams != null &&
                 (webviewParams!.onGeolocationPermissionsShowPrompt != null ||
-                    // ignore: deprecated_member_use_from_same_package
+
                     webviewParams!.androidOnGeolocationPermissionsShowPrompt !=
                         null)) ||
             _inAppBrowserEventHandler != null) {
@@ -473,7 +458,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
             else {
               return (await params
                           .webviewParams!
-                          // ignore: deprecated_member_use_from_same_package
+
                           .androidOnGeolocationPermissionsShowPrompt!(
                       _controllerFromPlatform, origin))
                   ?.toMap();
@@ -490,20 +475,20 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
       case "onGeolocationPermissionsHidePrompt":
         if (webviewParams != null &&
             (webviewParams!.onGeolocationPermissionsHidePrompt != null ||
-                // ignore: deprecated_member_use_from_same_package
+
                 webviewParams!.androidOnGeolocationPermissionsHidePrompt !=
                     null)) {
           if (webviewParams!.onGeolocationPermissionsHidePrompt != null)
             webviewParams!
                 .onGeolocationPermissionsHidePrompt!(_controllerFromPlatform);
           else {
-            // ignore: deprecated_member_use_from_same_package
+
             webviewParams!.androidOnGeolocationPermissionsHidePrompt!(
                 _controllerFromPlatform);
           }
         } else if (_inAppBrowserEventHandler != null) {
           _inAppBrowserEventHandler!.onGeolocationPermissionsHidePrompt();
-          // ignore: deprecated_member_use_from_same_package
+
           _inAppBrowserEventHandler!
               .androidOnGeolocationPermissionsHidePrompt();
         }
@@ -511,7 +496,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
       case "shouldInterceptRequest":
         if ((webviewParams != null &&
                 (webviewParams!.shouldInterceptRequest != null ||
-                    // ignore: deprecated_member_use_from_same_package
+
                     webviewParams!.androidShouldInterceptRequest != null)) ||
             _inAppBrowserEventHandler != null) {
           Map<String, dynamic> arguments =
@@ -524,7 +509,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
                       _controllerFromPlatform, request))
                   ?.toMap();
             else {
-              // ignore: deprecated_member_use_from_same_package
+
               return (await webviewParams!.androidShouldInterceptRequest!(
                       _controllerFromPlatform, request))
                   ?.toMap();
@@ -541,7 +526,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
       case "onRenderProcessUnresponsive":
         if ((webviewParams != null &&
                 (webviewParams!.onRenderProcessUnresponsive != null ||
-                    // ignore: deprecated_member_use_from_same_package
+
                     webviewParams!.androidOnRenderProcessUnresponsive !=
                         null)) ||
             _inAppBrowserEventHandler != null) {
@@ -554,7 +539,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
                       _controllerFromPlatform, uri))
                   ?.toNativeValue();
             else {
-              // ignore: deprecated_member_use_from_same_package
+
               return (await webviewParams!.androidOnRenderProcessUnresponsive!(
                       _controllerFromPlatform, uri))
                   ?.toNativeValue();
@@ -571,7 +556,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
       case "onRenderProcessResponsive":
         if ((webviewParams != null &&
                 (webviewParams!.onRenderProcessResponsive != null ||
-                    // ignore: deprecated_member_use_from_same_package
+
                     webviewParams!.androidOnRenderProcessResponsive != null)) ||
             _inAppBrowserEventHandler != null) {
           String? url = call.arguments["url"];
@@ -583,7 +568,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
                       _controllerFromPlatform, uri))
                   ?.toNativeValue();
             else {
-              // ignore: deprecated_member_use_from_same_package
+
               return (await webviewParams!.androidOnRenderProcessResponsive!(
                       _controllerFromPlatform, uri))
                   ?.toNativeValue();
@@ -600,7 +585,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
       case "onRenderProcessGone":
         if ((webviewParams != null &&
                 (webviewParams!.onRenderProcessGone != null ||
-                    // ignore: deprecated_member_use_from_same_package
+
                     webviewParams!.androidOnRenderProcessGone != null)) ||
             _inAppBrowserEventHandler != null) {
           Map<String, dynamic> arguments =
@@ -613,13 +598,13 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
               webviewParams!.onRenderProcessGone!(
                   _controllerFromPlatform, detail);
             else {
-              // ignore: deprecated_member_use_from_same_package
+
               webviewParams!.androidOnRenderProcessGone!(
                   _controllerFromPlatform, detail);
             }
           } else if (_inAppBrowserEventHandler != null) {
             _inAppBrowserEventHandler!.onRenderProcessGone(detail);
-            // ignore: deprecated_member_use_from_same_package
+
             _inAppBrowserEventHandler!.androidOnRenderProcessGone(detail);
           }
         }
@@ -627,7 +612,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
       case "onFormResubmission":
         if ((webviewParams != null &&
                 (webviewParams!.onFormResubmission != null ||
-                    // ignore: deprecated_member_use_from_same_package
+
                     webviewParams!.androidOnFormResubmission != null)) ||
             _inAppBrowserEventHandler != null) {
           String? url = call.arguments["url"];
@@ -639,7 +624,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
                       _controllerFromPlatform, uri))
                   ?.toNativeValue();
             else {
-              // ignore: deprecated_member_use_from_same_package
+
               return (await webviewParams!.androidOnFormResubmission!(
                       _controllerFromPlatform, uri))
                   ?.toNativeValue();
@@ -647,7 +632,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
           } else {
             return ((await _inAppBrowserEventHandler!
                         .onFormResubmission(uri)) ??
-                    // ignore: deprecated_member_use_from_same_package
+
                     (await _inAppBrowserEventHandler!
                         .androidOnFormResubmission(uri)))
                 ?.toNativeValue();
@@ -656,7 +641,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
         break;
       case "onZoomScaleChanged":
         if ((webviewParams != null &&
-                // ignore: deprecated_member_use_from_same_package
+
                 (webviewParams!.androidOnScaleChanged != null ||
                     webviewParams!.onZoomScaleChanged != null)) ||
             _inAppBrowserEventHandler != null) {
@@ -668,13 +653,13 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
               webviewParams!.onZoomScaleChanged!(
                   _controllerFromPlatform, oldScale, newScale);
             else {
-              // ignore: deprecated_member_use_from_same_package
+
               webviewParams!.androidOnScaleChanged!(
                   _controllerFromPlatform, oldScale, newScale);
             }
           } else {
             _inAppBrowserEventHandler!.onZoomScaleChanged(oldScale, newScale);
-            // ignore: deprecated_member_use_from_same_package
+
             _inAppBrowserEventHandler!
                 .androidOnScaleChanged(oldScale, newScale);
           }
@@ -683,7 +668,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
       case "onReceivedIcon":
         if ((webviewParams != null &&
                 (webviewParams!.onReceivedIcon != null ||
-                    // ignore: deprecated_member_use_from_same_package
+
                     webviewParams!.androidOnReceivedIcon != null)) ||
             _inAppBrowserEventHandler != null) {
           Uint8List icon =
@@ -693,13 +678,13 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
             if (webviewParams!.onReceivedIcon != null)
               webviewParams!.onReceivedIcon!(_controllerFromPlatform, icon);
             else {
-              // ignore: deprecated_member_use_from_same_package
+
               webviewParams!.androidOnReceivedIcon!(
                   _controllerFromPlatform, icon);
             }
           } else {
             _inAppBrowserEventHandler!.onReceivedIcon(icon);
-            // ignore: deprecated_member_use_from_same_package
+
             _inAppBrowserEventHandler!.androidOnReceivedIcon(icon);
           }
         }
@@ -707,7 +692,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
       case "onReceivedTouchIconUrl":
         if ((webviewParams != null &&
                 (webviewParams!.onReceivedTouchIconUrl != null ||
-                    // ignore: deprecated_member_use_from_same_package
+
                     webviewParams!.androidOnReceivedTouchIconUrl != null)) ||
             _inAppBrowserEventHandler != null) {
           String url = call.arguments["url"];
@@ -719,13 +704,13 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
               webviewParams!.onReceivedTouchIconUrl!(
                   _controllerFromPlatform, uri, precomposed);
             else {
-              // ignore: deprecated_member_use_from_same_package
+
               webviewParams!.androidOnReceivedTouchIconUrl!(
                   _controllerFromPlatform, uri, precomposed);
             }
           } else {
             _inAppBrowserEventHandler!.onReceivedTouchIconUrl(uri, precomposed);
-            // ignore: deprecated_member_use_from_same_package
+
             _inAppBrowserEventHandler!
                 .androidOnReceivedTouchIconUrl(uri, precomposed);
           }
@@ -785,7 +770,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
       case "onJsBeforeUnload":
         if ((webviewParams != null &&
                 (webviewParams!.onJsBeforeUnload != null ||
-                    // ignore: deprecated_member_use_from_same_package
+
                     webviewParams!.androidOnJsBeforeUnload != null)) ||
             _inAppBrowserEventHandler != null) {
           Map<String, dynamic> arguments =
@@ -799,7 +784,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
                       _controllerFromPlatform, jsBeforeUnloadRequest))
                   ?.toMap();
             else {
-              // ignore: deprecated_member_use_from_same_package
+
               return (await webviewParams!.androidOnJsBeforeUnload!(
                       _controllerFromPlatform, jsBeforeUnloadRequest))
                   ?.toMap();
@@ -816,7 +801,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
       case "onSafeBrowsingHit":
         if ((webviewParams != null &&
                 (webviewParams!.onSafeBrowsingHit != null ||
-                    // ignore: deprecated_member_use_from_same_package
+
                     webviewParams!.androidOnSafeBrowsingHit != null)) ||
             _inAppBrowserEventHandler != null) {
           String url = call.arguments["url"];
@@ -830,7 +815,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
                       _controllerFromPlatform, uri, threatType))
                   ?.toMap();
             else {
-              // ignore: deprecated_member_use_from_same_package
+
               return (await webviewParams!.androidOnSafeBrowsingHit!(
                       _controllerFromPlatform, uri, threatType))
                   ?.toMap();
@@ -847,7 +832,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
       case "onReceivedLoginRequest":
         if ((webviewParams != null &&
                 (webviewParams!.onReceivedLoginRequest != null ||
-                    // ignore: deprecated_member_use_from_same_package
+
                     webviewParams!.androidOnReceivedLoginRequest != null)) ||
             _inAppBrowserEventHandler != null) {
           Map<String, dynamic> arguments =
@@ -859,13 +844,13 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
               webviewParams!.onReceivedLoginRequest!(
                   _controllerFromPlatform, loginRequest);
             else {
-              // ignore: deprecated_member_use_from_same_package
+
               webviewParams!.androidOnReceivedLoginRequest!(
                   _controllerFromPlatform, loginRequest);
             }
           } else {
             _inAppBrowserEventHandler!.onReceivedLoginRequest(loginRequest);
-            // ignore: deprecated_member_use_from_same_package
+
             _inAppBrowserEventHandler!
                 .androidOnReceivedLoginRequest(loginRequest);
           }
@@ -1002,7 +987,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
       case "onPermissionRequest":
         if ((webviewParams != null &&
                 (webviewParams!.onPermissionRequest != null ||
-                    // ignore: deprecated_member_use_from_same_package
+
                     webviewParams!.androidOnPermissionRequest != null)) ||
             _inAppBrowserEventHandler != null) {
           String origin = call.arguments["origin"];
@@ -1051,19 +1036,19 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
       case "onWebContentProcessDidTerminate":
         if (webviewParams != null &&
             (webviewParams!.onWebContentProcessDidTerminate != null ||
-                // ignore: deprecated_member_use_from_same_package
+
                 webviewParams!.iosOnWebContentProcessDidTerminate != null)) {
           if (webviewParams!.onWebContentProcessDidTerminate != null)
             webviewParams!
                 .onWebContentProcessDidTerminate!(_controllerFromPlatform);
           else {
-            // ignore: deprecated_member_use_from_same_package
+
             webviewParams!
                 .iosOnWebContentProcessDidTerminate!(_controllerFromPlatform);
           }
         } else if (_inAppBrowserEventHandler != null) {
           _inAppBrowserEventHandler!.onWebContentProcessDidTerminate();
-          // ignore: deprecated_member_use_from_same_package
+
           _inAppBrowserEventHandler!.iosOnWebContentProcessDidTerminate();
         }
         break;
@@ -1087,7 +1072,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
                     null ||
                 params
                         .webviewParams!
-                        // ignore: deprecated_member_use_from_same_package
+
                         .iosOnDidReceiveServerRedirectForProvisionalNavigation !=
                     null)) {
           if (webviewParams!
@@ -1098,7 +1083,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
           else {
             params
                     .webviewParams!
-                    // ignore: deprecated_member_use_from_same_package
+
                     .iosOnDidReceiveServerRedirectForProvisionalNavigation!(
                 _controllerFromPlatform);
           }
@@ -1112,14 +1097,14 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
       case "onNavigationResponse":
         if ((webviewParams != null &&
                 (webviewParams!.onNavigationResponse != null ||
-                    // ignore: deprecated_member_use_from_same_package
+
                     webviewParams!.iosOnNavigationResponse != null)) ||
             _inAppBrowserEventHandler != null) {
           Map<String, dynamic> arguments =
               call.arguments.cast<String, dynamic>();
-          // ignore: deprecated_member_use_from_same_package
+
           IOSWKNavigationResponse iosOnNavigationResponse =
-              // ignore: deprecated_member_use_from_same_package
+
               IOSWKNavigationResponse.fromMap(arguments)!;
 
           NavigationResponse navigationResponse =
@@ -1131,7 +1116,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
                       _controllerFromPlatform, navigationResponse))
                   ?.toNativeValue();
             else {
-              // ignore: deprecated_member_use_from_same_package
+
               return (await webviewParams!.iosOnNavigationResponse!(
                       _controllerFromPlatform, iosOnNavigationResponse))
                   ?.toNativeValue();
@@ -1149,7 +1134,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
       case "shouldAllowDeprecatedTLS":
         if ((webviewParams != null &&
                 (webviewParams!.shouldAllowDeprecatedTLS != null ||
-                    // ignore: deprecated_member_use_from_same_package
+
                     webviewParams!.iosShouldAllowDeprecatedTLS != null)) ||
             _inAppBrowserEventHandler != null) {
           Map<String, dynamic> arguments =
@@ -1163,7 +1148,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
                       _controllerFromPlatform, challenge))
                   ?.toNativeValue();
             else {
-              // ignore: deprecated_member_use_from_same_package
+
               return (await webviewParams!.iosShouldAllowDeprecatedTLS!(
                       _controllerFromPlatform, challenge))
                   ?.toNativeValue();
@@ -1172,7 +1157,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
             return (await _inAppBrowserEventHandler!
                         .shouldAllowDeprecatedTLS(challenge))
                     ?.toNativeValue() ??
-                // ignore: deprecated_member_use_from_same_package
+
                 (await _inAppBrowserEventHandler!
                         .iosShouldAllowDeprecatedTLS(challenge))
                     ?.toNativeValue();
@@ -1244,9 +1229,9 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
 
           ContextMenuItem menuItemClicked = ContextMenuItem(
               id: id,
-              // ignore: deprecated_member_use_from_same_package
+
               androidId: androidId,
-              // ignore: deprecated_member_use_from_same_package
+
               iosId: iosId,
               title: title,
               action: null);
@@ -1308,7 +1293,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
       case "onPrintRequest":
         if ((webviewParams != null &&
                 (webviewParams!.onPrintRequest != null ||
-                    // ignore: deprecated_member_use_from_same_package
+
                     webviewParams!.onPrint != null)) ||
             _inAppBrowserEventHandler != null) {
           String? url = call.arguments["url"];
@@ -1324,12 +1309,12 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
               return await webviewParams!.onPrintRequest!(
                   _controllerFromPlatform, uri, printJob);
             else {
-              // ignore: deprecated_member_use_from_same_package
+
               webviewParams!.onPrint!(_controllerFromPlatform, uri);
               return false;
             }
           } else {
-            // ignore: deprecated_member_use_from_same_package
+
             _inAppBrowserEventHandler!.onPrint(uri);
             return await _inAppBrowserEventHandler!
                 .onPrintRequest(uri, printJob);
@@ -1408,7 +1393,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
         break;
       case "onCallJsHandler":
         String handlerName = call.arguments["handlerName"];
-        // decode args to json
+
         List<dynamic> args = jsonDecode(call.arguments["args"]);
 
         _debugLog(handlerName, args);
@@ -1537,7 +1522,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
         }
 
         if (_javaScriptHandlersMap.containsKey(handlerName)) {
-          // convert result to json
+
           try {
             return jsonEncode(await _javaScriptHandlersMap[handlerName]!(args));
           } catch (error, stacktrace) {
@@ -1680,7 +1665,6 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
       }
     }
 
-    // try to get /favicon.ico
     try {
       HttpClient client = HttpClient();
       var faviconUrl =
@@ -1696,7 +1680,6 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
           name: this.runtimeType.toString());
     }
 
-    // try to get the manifest file
     HttpClientRequest? manifestRequest;
     HttpClientResponse? manifestResponse;
     bool manifestFound = false;
@@ -1928,8 +1911,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
     var data = await channel?.invokeMethod('evaluateJavascript', args);
     if (data != null) {
       try {
-        // try to json decode the data coming from JavaScript
-        // otherwise return it as it is.
+
         data = json.decode(data);
       } catch (e) {}
     }
@@ -2159,7 +2141,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
     Map<String, dynamic> args = <String, dynamic>{};
     var height = await channel?.invokeMethod('getContentHeight', args);
     if (height == null || height == 0) {
-      // try to use javascript
+
       var scrollHeight = await evaluateJavascript(
           source: "document.documentElement.scrollHeight;");
       if (scrollHeight != null && scrollHeight is num) {
@@ -2174,7 +2156,7 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
     Map<String, dynamic> args = <String, dynamic>{};
     var height = await channel?.invokeMethod('getContentWidth', args);
     if (height == null || height == 0) {
-      // try to use javascript
+
       var scrollHeight = await evaluateJavascript(
           source: "document.documentElement.scrollWidth;");
       if (scrollHeight != null && scrollHeight is num) {
@@ -2292,13 +2274,13 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
   var metaTagNodes = document.head.getElementsByTagName('meta');
   for (var i = 0; i < metaTagNodes.length; i++) {
     var metaTagNode = metaTagNodes[i];
-    
+
     var otherAttributes = metaTagNode.getAttributeNames();
     var nameIndex = otherAttributes.indexOf("name");
     if (nameIndex !== -1) otherAttributes.splice(nameIndex, 1);
     var contentIndex = otherAttributes.indexOf("content");
     if (contentIndex !== -1) otherAttributes.splice(contentIndex, 1);
-    
+
     var attrs = [];
     for (var j = 0; j < otherAttributes.length; j++) {
       var otherAttribute = otherAttributes[j];
@@ -2351,10 +2333,9 @@ class AndroidInAppWebViewController extends PlatformInAppWebViewController
           await channel?.invokeMethod('getMetaThemeColor', args));
       return themeColor;
     } catch (e) {
-      // not implemented
+
     }
 
-    // try using javascript
     var metaTags = await getMetaTags();
     MetaTag? metaTagThemeColor;
 

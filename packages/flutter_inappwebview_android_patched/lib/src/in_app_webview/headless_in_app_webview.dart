@@ -7,15 +7,10 @@ import '../find_interaction/find_interaction_controller.dart';
 import '../pull_to_refresh/pull_to_refresh_controller.dart';
 import 'in_app_webview_controller.dart';
 
-/// Object specifying creation parameters for creating a [AndroidHeadlessInAppWebView].
-///
-/// When adding additional fields make sure they can be null or have a default
-/// value to avoid breaking changes. See [PlatformHeadlessInAppWebViewCreationParams] for
-/// more information.
 @immutable
 class AndroidHeadlessInAppWebViewCreationParams
     extends PlatformHeadlessInAppWebViewCreationParams {
-  /// Creates a new [AndroidHeadlessInAppWebViewCreationParams] instance.
+
   AndroidHeadlessInAppWebViewCreationParams(
       {super.controllerFromPlatform,
       super.initialSize,
@@ -129,7 +124,6 @@ class AndroidHeadlessInAppWebViewCreationParams
       this.pullToRefreshController,
       this.findInteractionController});
 
-  /// Creates a [AndroidHeadlessInAppWebViewCreationParams] instance based on [PlatformHeadlessInAppWebViewCreationParams].
   AndroidHeadlessInAppWebViewCreationParams.fromPlatformHeadlessInAppWebViewCreationParams(
       PlatformHeadlessInAppWebViewCreationParams params)
       : this(
@@ -249,7 +243,6 @@ class AndroidHeadlessInAppWebViewCreationParams
   final AndroidPullToRefreshController? pullToRefreshController;
 }
 
-///{@macro flutter_inappwebview_platform_interface.PlatformHeadlessInAppWebView}
 class AndroidHeadlessInAppWebView extends PlatformHeadlessInAppWebView
     with ChannelController {
   @override
@@ -263,7 +256,6 @@ class AndroidHeadlessInAppWebView extends PlatformHeadlessInAppWebView
 
   AndroidInAppWebViewController? _webViewController;
 
-  /// Constructs a [AndroidHeadlessInAppWebView].
   AndroidHeadlessInAppWebView(PlatformHeadlessInAppWebViewCreationParams params)
       : super.implementation(
           params is AndroidHeadlessInAppWebViewCreationParams

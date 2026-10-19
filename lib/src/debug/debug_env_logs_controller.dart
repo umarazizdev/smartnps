@@ -174,7 +174,6 @@ class DebugEnvLogsController extends GetxController {
     _snack('Session logs copied');
   }
 
-  /// Copies raw session log lines for support / debugging.
   Future<void> copyDetailLogs() async {
     final lines = session.logs;
     if (lines.isEmpty) {
@@ -185,7 +184,6 @@ class DebugEnvLogsController extends GetxController {
     _snack('Detail logs copied');
   }
 
-  /// Copies the provided log lines (e.g. Activity section).
   Future<void> copyLogLines(
     List<String> lines, {
     String label = 'Logs',
@@ -198,7 +196,6 @@ class DebugEnvLogsController extends GetxController {
     _snack('$label copied');
   }
 
-  /// Expands or collapses the detail log panel.
   void toggleDetailLogExpanded() {
     detailLogExpanded.toggle();
   }

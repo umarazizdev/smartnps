@@ -182,7 +182,6 @@ class SessionDebugLogger extends ChangeNotifier {
     _safeNotifyListeners();
   }
 
-  /// Prefer [logApiStatus]. Kept for callers that only want 2xx path filters.
   void logApiSuccess({
     required String method,
     required Uri uri,
@@ -191,8 +190,6 @@ class SessionDebugLogger extends ChangeNotifier {
     logApiStatus(method: method, uri: uri, statusCode: statusCode);
   }
 
-  /// Logs every HTTP outcome with its real status code (200, 202, 404, 0, …).
-  /// Does not normalize statuses or label them all as OK.
   void logApiStatus({
     required String method,
     required Uri uri,
@@ -206,7 +203,6 @@ class SessionDebugLogger extends ChangeNotifier {
     final hasApiOk = _categories.contains(SessionDebugCategory.apiSuccess);
     if (!hasApi && !hasApiOk) return;
 
-    // `api` captures all paths. `api_ok` alone still honors path filters.
     if (!hasApi && hasApiOk && !shouldLogApiSuccess(uri)) return;
 
     final path = _safePath(uri);
@@ -214,7 +210,6 @@ class SessionDebugLogger extends ChangeNotifier {
         (error == null || error.trim().isEmpty) ? '' : ' error=${error.trim()}';
     final message = '$method $path status=$statusCode$errorPart';
 
-    // Prefer the `api` bucket when both are on so each call logs once.
     final category = hasApi
         ? SessionDebugCategory.apiErrors
         : SessionDebugCategory.apiSuccess;
@@ -451,7 +446,6 @@ class SessionDebugLogger extends ChangeNotifier {
       );
     }
 
-    // Migrate legacy single-target preference.
     final legacy = SessionDebugApiSuccessTarget.tryParse(
       prefs.getString(_prefsApiSuccessTargetKey) ?? '',
     );
@@ -541,8 +535,7 @@ enum SessionDebugApiSuccessTarget {
     if (this == SessionDebugApiSuccessTarget.all) return true;
     final path = uri.path.isEmpty ? '/' : uri.path;
     if (path == pathSuffix) return true;
-    // Allow subpaths of the selected API, but avoid cross-matches
-    // (e.g. `/visits` must not match `/onsite-patrol/visits`).
+
     return path.startsWith('$pathSuffix/');
   }
 

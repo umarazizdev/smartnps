@@ -2,24 +2,17 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview_platform_interface/flutter_inappwebview_platform_interface.dart';
 
-/// Object specifying creation parameters for creating a [AndroidWebMessageListener].
-///
-/// When adding additional fields make sure they can be null or have a default
-/// value to avoid breaking changes. See [PlatformWebMessageListenerCreationParams] for
-/// more information.
 @immutable
 class AndroidWebMessageListenerCreationParams
     extends PlatformWebMessageListenerCreationParams {
-  /// Creates a new [AndroidWebMessageListenerCreationParams] instance.
+
   const AndroidWebMessageListenerCreationParams(
       {required this.allowedOriginRules,
       required super.jsObjectName,
       super.onPostMessage});
 
-  /// Creates a [AndroidWebMessageListenerCreationParams] instance based on [PlatformWebMessageListenerCreationParams].
   factory AndroidWebMessageListenerCreationParams.fromPlatformWebMessageListenerCreationParams(
-      // Recommended placeholder to prevent being broken by platform interface.
-      // ignore: avoid_unused_constructor_parameters
+
       PlatformWebMessageListenerCreationParams params) {
     return AndroidWebMessageListenerCreationParams(
         allowedOriginRules: params.allowedOriginRules ?? Set.from(["*"]),
@@ -36,10 +29,9 @@ class AndroidWebMessageListenerCreationParams
   }
 }
 
-///{@macro flutter_inappwebview_platform_interface.PlatformWebMessageListener}
 class AndroidWebMessageListener extends PlatformWebMessageListener
     with ChannelController {
-  /// Constructs a [AndroidWebMessageListener].
+
   AndroidWebMessageListener(PlatformWebMessageListenerCreationParams params)
       : super.implementation(
           params is AndroidWebMessageListenerCreationParams
@@ -55,7 +47,6 @@ class AndroidWebMessageListener extends PlatformWebMessageListener
     initMethodCallHandler();
   }
 
-  ///Message Listener ID used internally.
   final String _id = IdGenerator.generate();
 
   AndroidJavaScriptReplyProxy? _replyProxy;
@@ -114,31 +105,23 @@ class AndroidWebMessageListener extends PlatformWebMessageListener
   }
 }
 
-/// Object specifying creation parameters for creating a [AndroidJavaScriptReplyProxy].
-///
-/// When adding additional fields make sure they can be null or have a default
-/// value to avoid breaking changes. See [PlatformJavaScriptReplyProxyCreationParams] for
-/// more information.
 @immutable
 class AndroidJavaScriptReplyProxyCreationParams
     extends PlatformJavaScriptReplyProxyCreationParams {
-  /// Creates a new [AndroidJavaScriptReplyProxyCreationParams] instance.
+
   const AndroidJavaScriptReplyProxyCreationParams(
       {required super.webMessageListener});
 
-  /// Creates a [AndroidJavaScriptReplyProxyCreationParams] instance based on [PlatformJavaScriptReplyProxyCreationParams].
   factory AndroidJavaScriptReplyProxyCreationParams.fromPlatformJavaScriptReplyProxyCreationParams(
-      // Recommended placeholder to prevent being broken by platform interface.
-      // ignore: avoid_unused_constructor_parameters
+
       PlatformJavaScriptReplyProxyCreationParams params) {
     return AndroidJavaScriptReplyProxyCreationParams(
         webMessageListener: params.webMessageListener);
   }
 }
 
-///{@macro flutter_inappwebview_platform_interface.JavaScriptReplyProxy}
 class AndroidJavaScriptReplyProxy extends PlatformJavaScriptReplyProxy {
-  /// Constructs a [AndroidWebMessageListener].
+
   AndroidJavaScriptReplyProxy(PlatformJavaScriptReplyProxyCreationParams params)
       : super.implementation(
           params is AndroidJavaScriptReplyProxyCreationParams

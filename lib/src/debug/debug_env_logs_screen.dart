@@ -974,10 +974,8 @@ class _SessionLogEntry {
     final lower = message.toLowerCase();
     final status = _statusCode(lower);
 
-    // Session lifecycle lines are not issues.
     if (category == 'session') return _SessionLogSeverity.info;
 
-    // API lines always carry a real status; classify by that code.
     if (category == 'api' || category == 'api_ok') {
       if (status == null) {
         return category == 'api_ok'
