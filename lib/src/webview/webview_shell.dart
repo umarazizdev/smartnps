@@ -3907,8 +3907,7 @@ class _WebViewShellState extends State<WebViewShell>
     );
 
     if (visitType != null && visitType.trim().isNotEmpty) {
-      // Dedicated issue/incident handlers own the visit type so drafts stay
-      // isolated from patrol/onsite even if the web payload omits or mismatches it.
+
       payload = {...?payload, 'visit_type': visitType, 'visitType': visitType};
     }
 
@@ -3947,8 +3946,6 @@ class _WebViewShellState extends State<WebViewShell>
       Get.back();
     }
 
-    // Open the draft UI first for issue/incident, then authorize in-place so
-    // the officer sees a preparing state instead of waiting on the dashboard.
     final needsReportContextPrep =
         flow.isStructuredReport &&
         flow.patrolContext.value?.hasReportContext != true;
@@ -4042,8 +4039,6 @@ class _WebViewShellState extends State<WebViewShell>
     return out;
   }
 
-  /// Site-check / checklist drafts upload to
-  /// `POST /api/site-checks/shifts/{timeSheet}/visits`.
   String _resolveBridgeUploadUrl(
     Map<String, dynamic>? payload, {
     required String fallback,

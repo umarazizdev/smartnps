@@ -107,7 +107,6 @@ class VisitMediaDraftSnapshot {
       context?.isStructuredReport == true ||
       (draftKey.flowKind?.isStructuredReport ?? false);
 
-  /// Issue/incident reports may submit with zero media; patrol may not.
   bool get canUpload =>
       hasItems ||
       (isStructuredReport &&
@@ -117,7 +116,6 @@ class VisitMediaDraftSnapshot {
                 VisitFlowKind.issueReport,
           ));
 
-  /// Draft should appear in resume lists / be reopened from bridge.
   bool get hasResumeContent =>
       hasItems ||
       generalNote.hasContent ||
@@ -830,8 +828,6 @@ class VisitMediaDraftStore {
         context = context.copyWith(siteName: legacySiteName);
       }
 
-      // Folder suffix is authoritative for issue/incident drafts so multi-report
-      // pickers and resume flows keep the correct type even if context is stale.
       final folderKind = draftKey.flowKind;
       if (folderKind != null && folderKind.isStructuredReport) {
         if (context == null) {

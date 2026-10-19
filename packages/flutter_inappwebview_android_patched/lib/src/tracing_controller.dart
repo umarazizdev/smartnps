@@ -3,32 +3,24 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview_platform_interface/flutter_inappwebview_platform_interface.dart';
 
-/// Object specifying creation parameters for creating a [AndroidTracingController].
-///
-/// When adding additional fields make sure they can be null or have a default
-/// value to avoid breaking changes. See [PlatformTracingControllerCreationParams] for
-/// more information.
 @immutable
 class AndroidTracingControllerCreationParams
     extends PlatformTracingControllerCreationParams {
-  /// Creates a new [AndroidTracingControllerCreationParams] instance.
+
   const AndroidTracingControllerCreationParams(
-    // This parameter prevents breaking changes later.
-    // ignore: avoid_unused_constructor_parameters
+
     PlatformTracingControllerCreationParams params,
   ) : super();
 
-  /// Creates a [AndroidTracingControllerCreationParams] instance based on [PlatformTracingControllerCreationParams].
   factory AndroidTracingControllerCreationParams.fromPlatformTracingControllerCreationParams(
       PlatformTracingControllerCreationParams params) {
     return AndroidTracingControllerCreationParams(params);
   }
 }
 
-///{@macro flutter_inappwebview_platform_interface.PlatformTracingController}
 class AndroidTracingController extends PlatformTracingController
     with ChannelController {
-  /// Creates a new [AndroidTracingController].
+
   AndroidTracingController(PlatformTracingControllerCreationParams params)
       : super.implementation(
           params is AndroidTracingControllerCreationParams
@@ -44,7 +36,6 @@ class AndroidTracingController extends PlatformTracingController
 
   static AndroidTracingController? _instance;
 
-  ///Gets the [AndroidTracingController] shared instance.
   static AndroidTracingController instance() {
     return (_instance != null) ? _instance! : _init();
   }
@@ -79,7 +70,7 @@ class AndroidTracingController extends PlatformTracingController
 
   @override
   void dispose() {
-    // empty
+
   }
 }
 

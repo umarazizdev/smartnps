@@ -73,8 +73,6 @@ class ApiClient {
     );
   }
 
-  /// Logs the real HTTP status for every response. No status is rewritten
-  /// or treated as a generic 200 OK.
   static void logHttpResult(String method, Uri uri, int? statusCode) {
     if (statusCode == null) return;
     SessionDebugLogger.instance.logApiStatus(

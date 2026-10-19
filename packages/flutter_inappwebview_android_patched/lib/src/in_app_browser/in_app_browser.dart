@@ -9,14 +9,9 @@ import '../find_interaction/find_interaction_controller.dart';
 import '../in_app_webview/in_app_webview_controller.dart';
 import '../pull_to_refresh/pull_to_refresh_controller.dart';
 
-/// Object specifying creation parameters for creating a [AndroidInAppBrowser].
-///
-/// When adding additional fields make sure they can be null or have a default
-/// value to avoid breaking changes. See [PlatformInAppBrowserCreationParams] for
-/// more information.
 class AndroidInAppBrowserCreationParams
     extends PlatformInAppBrowserCreationParams {
-  /// Creates a new [AndroidInAppBrowserCreationParams] instance.
+
   AndroidInAppBrowserCreationParams(
       {super.contextMenu,
       this.pullToRefreshController,
@@ -24,10 +19,8 @@ class AndroidInAppBrowserCreationParams
       super.initialUserScripts,
       super.windowId});
 
-  /// Creates a [AndroidInAppBrowserCreationParams] instance based on [PlatformInAppBrowserCreationParams].
   factory AndroidInAppBrowserCreationParams.fromPlatformInAppBrowserCreationParams(
-      // Recommended placeholder to prevent being broken by platform interface.
-      // ignore: avoid_unused_constructor_parameters
+
       PlatformInAppBrowserCreationParams params) {
     return AndroidInAppBrowserCreationParams(
         contextMenu: params.contextMenu,
@@ -46,12 +39,10 @@ class AndroidInAppBrowserCreationParams
   final AndroidPullToRefreshController? pullToRefreshController;
 }
 
-///{@macro flutter_inappwebview_platform_interface.PlatformInAppBrowser}
 class AndroidInAppBrowser extends PlatformInAppBrowser with ChannelController {
   @override
   final String id = IdGenerator.generate();
 
-  /// Constructs a [AndroidInAppBrowser].
   AndroidInAppBrowser(PlatformInAppBrowserCreationParams params)
       : super.implementation(
           params is AndroidInAppBrowserCreationParams
@@ -65,7 +56,6 @@ class AndroidInAppBrowser extends PlatformInAppBrowser with ChannelController {
   static final AndroidInAppBrowser _staticValue =
       AndroidInAppBrowser(AndroidInAppBrowserCreationParams());
 
-  /// Provide static access.
   factory AndroidInAppBrowser.static() {
     return _staticValue;
   }
@@ -176,7 +166,7 @@ class AndroidInAppBrowser extends PlatformInAppBrowser with ChannelController {
   @override
   Future<void> openUrlRequest(
       {required URLRequest urlRequest,
-      // ignore: deprecated_member_use_from_same_package
+
       @Deprecated('Use settings instead') InAppBrowserClassOptions? options,
       InAppBrowserClassSettings? settings}) async {
     assert(urlRequest.url != null && urlRequest.url.toString().isNotEmpty);
@@ -190,7 +180,7 @@ class AndroidInAppBrowser extends PlatformInAppBrowser with ChannelController {
   @override
   Future<void> openFile(
       {required String assetFilePath,
-      // ignore: deprecated_member_use_from_same_package
+
       @Deprecated('Use settings instead') InAppBrowserClassOptions? options,
       InAppBrowserClassSettings? settings}) async {
     assert(assetFilePath.isNotEmpty);
@@ -209,7 +199,7 @@ class AndroidInAppBrowser extends PlatformInAppBrowser with ChannelController {
       WebUri? baseUrl,
       @Deprecated("Use historyUrl instead") Uri? androidHistoryUrl,
       WebUri? historyUrl,
-      // ignore: deprecated_member_use_from_same_package
+
       @Deprecated('Use settings instead') InAppBrowserClassOptions? options,
       InAppBrowserClassSettings? settings}) async {
     Map<String, dynamic> args =

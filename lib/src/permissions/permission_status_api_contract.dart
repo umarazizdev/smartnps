@@ -25,9 +25,6 @@ class PermissionStatusApiContract {
     openedAt,
   };
 
-  /// True only when HTTP is 2xx and the body does not indicate failure.
-  /// Empty/null bodies are accepted (common for 202/204). HTML or
-  /// `success: false` bodies are rejected even if the status is 2xx.
   static bool isAcceptedResponse({
     required int? statusCode,
     required dynamic body,

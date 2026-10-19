@@ -3,32 +3,24 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview_platform_interface/flutter_inappwebview_platform_interface.dart';
 
-/// Object specifying creation parameters for creating a [AndroidWebViewFeature].
-///
-/// When adding additional fields make sure they can be null or have a default
-/// value to avoid breaking changes. See [PlatformWebViewFeatureCreationParams] for
-/// more information.
 @immutable
 class AndroidWebViewFeatureCreationParams
     extends PlatformWebViewFeatureCreationParams {
-  /// Creates a new [AndroidWebViewFeatureCreationParams] instance.
+
   const AndroidWebViewFeatureCreationParams(
-    // This parameter prevents breaking changes later.
-    // ignore: avoid_unused_constructor_parameters
+
     PlatformWebViewFeatureCreationParams params,
   ) : super();
 
-  /// Creates a [AndroidWebViewFeatureCreationParams] instance based on [PlatformWebViewFeatureCreationParams].
   factory AndroidWebViewFeatureCreationParams.fromPlatformWebViewFeatureCreationParams(
       PlatformWebViewFeatureCreationParams params) {
     return AndroidWebViewFeatureCreationParams(params);
   }
 }
 
-///{@macro flutter_inappwebview_platform_interface.PlatformWebViewFeature}
 class AndroidWebViewFeature extends PlatformWebViewFeature
     with ChannelController {
-  /// Creates a new [AndroidWebViewFeature].
+
   AndroidWebViewFeature(PlatformWebViewFeatureCreationParams params)
       : super.implementation(
           params is AndroidWebViewFeatureCreationParams
@@ -48,7 +40,6 @@ class AndroidWebViewFeature extends PlatformWebViewFeature
 
   static AndroidWebViewFeature? _instance;
 
-  ///Gets the [AndroidWebViewFeature] shared instance.
   static AndroidWebViewFeature instance() {
     return (_instance != null) ? _instance! : _init();
   }
@@ -80,7 +71,7 @@ class AndroidWebViewFeature extends PlatformWebViewFeature
 
   @override
   void dispose() {
-    // empty
+
   }
 }
 

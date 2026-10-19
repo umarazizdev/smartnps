@@ -3,22 +3,15 @@ import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview_platform_interface/flutter_inappwebview_platform_interface.dart';
 import 'web_message_port.dart';
 
-/// Object specifying creation parameters for creating a [AndroidWebMessageChannel].
-///
-/// When adding additional fields make sure they can be null or have a default
-/// value to avoid breaking changes. See [PlatformWebMessageChannelCreationParams] for
-/// more information.
 @immutable
 class AndroidWebMessageChannelCreationParams
     extends PlatformWebMessageChannelCreationParams {
-  /// Creates a new [AndroidWebMessageChannelCreationParams] instance.
+
   const AndroidWebMessageChannelCreationParams(
       {required super.id, required super.port1, required super.port2});
 
-  /// Creates a [AndroidWebMessageChannelCreationParams] instance based on [PlatformWebMessageChannelCreationParams].
   factory AndroidWebMessageChannelCreationParams.fromPlatformWebMessageChannelCreationParams(
-      // Recommended placeholder to prevent being broken by platform interface.
-      // ignore: avoid_unused_constructor_parameters
+
       PlatformWebMessageChannelCreationParams params) {
     return AndroidWebMessageChannelCreationParams(
         id: params.id, port1: params.port1, port2: params.port2);
@@ -30,10 +23,9 @@ class AndroidWebMessageChannelCreationParams
   }
 }
 
-///{@macro flutter_inappwebview_platform_interface.PlatformWebMessageChannel}
 class AndroidWebMessageChannel extends PlatformWebMessageChannel
     with ChannelController {
-  /// Constructs a [AndroidWebMessageChannel].
+
   AndroidWebMessageChannel(PlatformWebMessageChannelCreationParams params)
       : super.implementation(
           params is AndroidWebMessageChannelCreationParams
@@ -55,7 +47,6 @@ class AndroidWebMessageChannel extends PlatformWebMessageChannel
           port2: AndroidWebMessagePort(
               AndroidWebMessagePortCreationParams(index: 1))));
 
-  /// Provide static access.
   factory AndroidWebMessageChannel.static() {
     return _staticValue;
   }

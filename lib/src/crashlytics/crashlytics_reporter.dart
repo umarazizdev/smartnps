@@ -14,7 +14,7 @@ class CrashlyticsReporter {
   static bool _lifecycleInstalled = false;
 
   static Future<void> init() async {
-    // Debug runs (e.g. VS Code F5) must not upload Crashlytics noise.
+
     final collectionEnabled = !kDebugMode;
     await FirebaseCrashlytics.instance
         .setCrashlyticsCollectionEnabled(collectionEnabled);
@@ -50,7 +50,7 @@ class CrashlyticsReporter {
     try {
       await FirebaseCrashlytics.instance.sendUnsentReports();
     } catch (_) {
-      // Best-effort flush only.
+
     }
   }
 

@@ -179,10 +179,6 @@ class VisitUploadResult {
     'report',
   ];
 
-  /// First object that actually contains a visit id.
-  ///
-  /// A blank or non-numeric `report_id` must not hide `visit_id`, and a
-  /// wrapped patrol payload (`data.visit_id`, `visit.id`) still counts.
   static Map<String, dynamic>? _mapWithVisitId(Map<String, dynamic>? map) {
     if (map == null) return null;
     if (_visitIdFrom(map, allowBareId: false) != null) return map;
@@ -457,8 +453,6 @@ class VisitUploadApi {
     return trimmed;
   }
 
-  /// Checklist / site-check uploads go to
-  /// `POST /api/site-checks/shifts/{timeSheet}/visits`.
   static String? resolveSiteCheckUploadUrl({
     Map<String, dynamic>? meta,
     String? visitType,

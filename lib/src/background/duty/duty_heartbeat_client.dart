@@ -65,19 +65,15 @@ class DutyHeartbeatPayload {
 }
 
 enum DutyHeartbeatFetchOutcome {
-  /// Parsed on_duty / off_duty payload.
+
   success,
 
-  /// Network/timeout/no usable transport response.
   offline,
 
-  /// HTTP 401/403.
   unauthorized,
 
-  /// Non-2xx HTTP response (other than auth).
   httpFailure,
 
-  /// HTTP 2xx but body could not be parsed as duty status.
   unrecognizableBody,
 }
 
@@ -102,8 +98,6 @@ class DutyHeartbeatFetchResult {
   final DutyHeartbeatFetchOutcome outcome;
   final DutyHeartbeatPayload? payload;
 
-  /// Offline / transport problems may keep a local on_duty snapshot.
-  /// A 2xx response with an unreadable body must not.
   bool get allowsOfflineSnapshotFallback =>
       outcome == DutyHeartbeatFetchOutcome.offline ||
       outcome == DutyHeartbeatFetchOutcome.httpFailure;

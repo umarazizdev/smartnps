@@ -6,7 +6,6 @@ import 'package:smartnps360/src/log_visit/flow/visit_report_details.dart';
 import 'package:smartnps360/src/log_visit/flow/visit_video_flow_controller.dart';
 import 'package:smartnps360/src/log_visit/preview/visit_report_details_panel.dart';
 
-// Keep layout checks independent of device storage and report submission.
 class _PreviewFlow extends VisitVideoFlowController {
   @override
   Future<void> updateReportDetails(VisitReportDetails details) async {

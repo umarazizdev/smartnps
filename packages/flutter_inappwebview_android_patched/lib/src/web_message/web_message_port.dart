@@ -3,21 +3,14 @@ import 'package:flutter_inappwebview_platform_interface/flutter_inappwebview_pla
 
 import 'web_message_channel.dart';
 
-/// Object specifying creation parameters for creating a [AndroidWebMessagePort].
-///
-/// When adding additional fields make sure they can be null or have a default
-/// value to avoid breaking changes. See [PlatformWebMessagePortCreationParams] for
-/// more information.
 @immutable
 class AndroidWebMessagePortCreationParams
     extends PlatformWebMessagePortCreationParams {
-  /// Creates a new [AndroidWebMessagePortCreationParams] instance.
+
   const AndroidWebMessagePortCreationParams({required super.index});
 
-  /// Creates a [AndroidWebMessagePortCreationParams] instance based on [PlatformWebMessagePortCreationParams].
   factory AndroidWebMessagePortCreationParams.fromPlatformWebMessagePortCreationParams(
-      // Recommended placeholder to prevent being broken by platform interface.
-      // ignore: avoid_unused_constructor_parameters
+
       PlatformWebMessagePortCreationParams params) {
     return AndroidWebMessagePortCreationParams(index: params.index);
   }
@@ -28,12 +21,10 @@ class AndroidWebMessagePortCreationParams
   }
 }
 
-///{@macro flutter_inappwebview_platform_interface.PlatformWebMessagePort}
 class AndroidWebMessagePort extends PlatformWebMessagePort {
   WebMessageCallback? _onMessage;
   late AndroidWebMessageChannel _webMessageChannel;
 
-  /// Constructs a [AndroidWebMessagePort].
   AndroidWebMessagePort(PlatformWebMessagePortCreationParams params)
       : super.implementation(
           params is AndroidWebMessagePortCreationParams

@@ -8,17 +8,11 @@ import 'app_config.dart';
 
 const JsonEncoder _debugJsonEncoder = JsonEncoder.withIndent('  ');
 
-/// Prints [value] as pretty JSON through [developer.log].
-///
-/// [debugPrint] wraps around 1024 characters and can drop later chunks, so
-/// large JS bridge report payloads look trimmed in the Cursor debug console.
-/// [developer.log] keeps the full [JsonEncoder] text.
 void logDebugJson(String name, Object? value) {
   if (!kDebugMode) return;
   developer.log(_encodeDebugJson(value), name: name);
 }
 
-/// Full JS bridge payload or response, including issue and incident reports.
 void logJsBridgePayload(String name, Object? value) {
   if (!AppConfig.enablePatrolLogDebugLog) return;
   logDebugJson(name, value);

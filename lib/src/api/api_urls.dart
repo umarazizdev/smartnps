@@ -21,8 +21,6 @@ class ApiUrls {
   static String get incidentReportsUploadUrl => '$baseUrl/incident-reports';
   static String get reportContextsUrl => '$baseUrl/report-contexts';
 
-  /// Site-check / checklist visit upload.
-  /// `POST /api/site-checks/shifts/{timeSheet}/visits`
   static String siteCheckVisitsUploadUrl(Object timeSheet) {
     final id = timeSheet.toString().trim();
     return '$baseUrl/site-checks/shifts/$id/visits';

@@ -6,33 +6,24 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview_platform_interface/flutter_inappwebview_platform_interface.dart';
 
-/// Object specifying creation parameters for creating a [AndroidChromeSafariBrowser].
-///
-/// When adding additional fields make sure they can be null or have a default
-/// value to avoid breaking changes. See [PlatformChromeSafariBrowserCreationParams] for
-/// more information.
 @immutable
 class AndroidChromeSafariBrowserCreationParams
     extends PlatformChromeSafariBrowserCreationParams {
-  /// Creates a new [AndroidChromeSafariBrowserCreationParams] instance.
+
   const AndroidChromeSafariBrowserCreationParams();
 
-  /// Creates a [AndroidChromeSafariBrowserCreationParams] instance based on [PlatformChromeSafariBrowserCreationParams].
   factory AndroidChromeSafariBrowserCreationParams.fromPlatformChromeSafariBrowserCreationParams(
-      // Recommended placeholder to prevent being broken by platform interface.
-      // ignore: avoid_unused_constructor_parameters
+
       PlatformChromeSafariBrowserCreationParams params) {
     return AndroidChromeSafariBrowserCreationParams();
   }
 }
 
-///{@macro flutter_inappwebview_platform_interface.PlatformChromeSafariBrowser}
 class AndroidChromeSafariBrowser extends PlatformChromeSafariBrowser
     with ChannelController {
   @override
   final String id = IdGenerator.generate();
 
-  /// Constructs a [AndroidChromeSafariBrowser].
   AndroidChromeSafariBrowser(PlatformChromeSafariBrowserCreationParams params)
       : super.implementation(
           params is AndroidChromeSafariBrowserCreationParams
@@ -44,7 +35,6 @@ class AndroidChromeSafariBrowser extends PlatformChromeSafariBrowser
   static final AndroidChromeSafariBrowser _staticValue =
       AndroidChromeSafariBrowser(AndroidChromeSafariBrowserCreationParams());
 
-  /// Provide static access.
   factory AndroidChromeSafariBrowser.static() {
     return _staticValue;
   }
@@ -185,7 +175,7 @@ class AndroidChromeSafariBrowser extends PlatformChromeSafariBrowser
       List<WebUri>? otherLikelyURLs,
       WebUri? referrer,
       @Deprecated('Use settings instead')
-      // ignore: deprecated_member_use_from_same_package
+
       ChromeSafariBrowserClassOptions? options,
       ChromeSafariBrowserSettings? settings}) async {
     assert(!_isOpened, 'The browser is already opened.');

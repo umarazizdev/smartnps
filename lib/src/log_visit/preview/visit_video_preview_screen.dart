@@ -67,8 +67,6 @@ Color _visitPrimaryActionColor(bool isDark) {
   return isDark ? const Color(0xFF4F8DF7) : cPrimary;
 }
 
-/// Raw window inset — parent Scaffolds consume [MediaQuery.viewInsets], so
-/// those read as 0 even while the keyboard is open and the body is resized.
 bool _isSoftKeyboardOpen(BuildContext context) {
   final view = View.of(context);
   final inset = view.viewInsets.bottom / view.devicePixelRatio;
@@ -300,7 +298,6 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     await _importGalleryMedia(context);
   }
 
-  /// Requests camera, microphone, and gallery access up front for issue/incident.
   Future<bool> _ensureStructuredCapturePermissions(BuildContext context) async {
     final permissions = <Permission>[
       Permission.camera,
@@ -367,13 +364,13 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     }
 
     final photos = await statusOf(Permission.photos);
-    // iOS Photos: full access (granted) or limited library both count as usable.
+
     final photosOk = photos.isGranted || photos.isLimited;
     var galleryOk = photosOk;
     if (Platform.isAndroid) {
       final videos = await statusOf(Permission.videos);
       final videosOk = videos.isGranted || videos.isLimited;
-      // Either photos or videos access is enough to open the gallery picker.
+
       galleryOk = photosOk || videosOk;
     }
     if (!galleryOk) {
@@ -423,7 +420,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
 
     final picker = ImagePicker();
     try {
-      // One system gallery UI for both photos and videos (no second app dialog).
+
       final files = await picker.pickMultipleMedia(
         imageQuality: 100,
         requestFullMetadata: true,
@@ -594,8 +591,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
 
     final locationLabel = flow.locationSubtitle?.trim() ?? '';
     final movedToDashboard = onUploadStarted != null;
-    // Capture before leaving the editor so upload does not depend on a
-    // post-release disk reload (form-only drafts / race with markInFlight).
+
     final uploadSnapshot = flow.captureDraftSnapshot();
     final draftKey = uploadSnapshot.draftKey;
     final progressTotal = uploadSnapshot.items.isEmpty
@@ -738,7 +734,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       }
 
       if (result.success) {
-        // Full SUCCESS payload is logged by VisitUploadApi via logDebugJson.
+
         _clearUploadProgress(flow);
         await VisitUploadQueue.instance.remove(draftKey);
         await VisitMediaDraftStore.instance.clearDraft(
@@ -1229,8 +1225,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     final mediaQuery = MediaQuery.of(context);
     final orientation = mediaQuery.orientation;
     final isLandscape = orientation == Orientation.landscape;
-    // Subscribe to MediaQuery size so keyboard-driven scaffold resize rebuilds
-    // this screen; inset detection itself uses FlutterView (see below).
+
     mediaQuery.size;
     _noteDraftOrientation(orientation);
     final scaffoldBg = isDark ? cDarkBackground : cMainBg;
@@ -1242,7 +1237,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
             ColoredBox(color: scaffoldBg),
             VisitPageBackground(isDark: isDark),
             Obx(() {
-              // Nested Scaffolds zero MediaQuery.viewInsets; use raw view inset.
+
               final keyboardOpen = _isSoftKeyboardOpen(context);
               final allMedia = controller.visibleMediaItems;
               final checkpoints = controller.checkpoints;

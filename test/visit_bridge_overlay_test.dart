@@ -212,7 +212,6 @@ void main() {
       expect(flow.checkpoints.map((e) => e.id), [1, 2]);
       expect(flow.draftSiteName.value, 'Gate A');
 
-      // Add more checkpoints + rename site (no media edits).
       await flow.applyBridgePatrolContext({
         'region_id': 7,
         'site_id': 11,
@@ -228,7 +227,6 @@ void main() {
       expect(flow.patrolContext.value?.siteName, 'Gate A West');
       expect(flow.draftSiteName.value, 'Gate A West');
 
-      // Remove one checkpoint via shorter authoritative list.
       await flow.applyBridgePatrolContext({
         'region_id': 7,
         'site_id': 11,
@@ -240,7 +238,6 @@ void main() {
       });
       expect(flow.checkpoints.map((e) => e.id), [1, 3]);
 
-      // Explicit clear.
       await flow.applyBridgePatrolContext({
         'region_id': 7,
         'site_id': 11,
@@ -248,7 +245,6 @@ void main() {
       });
       expect(flow.checkpoints, isEmpty);
 
-      // Restore checkpoints, then omit key → clear cache (web is authoritative).
       await flow.applyBridgePatrolContext({
         'region_id': 7,
         'site_id': 11,

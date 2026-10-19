@@ -299,8 +299,7 @@ class _OnDutyPermissionsDialogPanelState
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Header + permission rows share one scroll region so short
-                  // landscape heights cannot overflow the fixed Column chrome.
+
                   Expanded(
                     child: ListView(
                       padding: EdgeInsets.zero,

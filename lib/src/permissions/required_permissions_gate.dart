@@ -252,7 +252,6 @@ class RequiredPermissionsGate {
       return;
     }
 
-    // Serialize OS/settings actions so permission plugins are never re-entered.
     final previous = _handleActionInFlight;
     final gate = Completer<void>();
     _handleActionInFlight = gate.future;

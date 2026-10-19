@@ -6,7 +6,6 @@ import '../flow/visit_report_details.dart';
 import '../flow/visit_video_flow_controller.dart';
 import '../log_visit_theme.dart';
 
-// Opaque surfaces keep dark-mode contrast consistent across the page gradient.
 const _reportDarkSurface = Color(0xFF172131);
 const _reportDarkInput = Color(0xFF111B2B);
 const _reportDarkOutline = Color(0xFF60718B);

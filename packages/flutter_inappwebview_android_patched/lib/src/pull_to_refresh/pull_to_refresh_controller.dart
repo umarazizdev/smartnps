@@ -3,21 +3,14 @@ import 'dart:ui';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview_platform_interface/flutter_inappwebview_platform_interface.dart';
 
-/// Object specifying creation parameters for creating a [AndroidPullToRefreshController].
-///
-/// When adding additional fields make sure they can be null or have a default
-/// value to avoid breaking changes. See [PlatformPullToRefreshControllerCreationParams] for
-/// more information.
 class AndroidPullToRefreshControllerCreationParams
     extends PlatformPullToRefreshControllerCreationParams {
-  /// Creates a new [AndroidPullToRefreshControllerCreationParams] instance.
+
   AndroidPullToRefreshControllerCreationParams(
       {super.onRefresh, super.options, super.settings});
 
-  /// Creates a [AndroidPullToRefreshControllerCreationParams] instance based on [PlatformPullToRefreshControllerCreationParams].
   factory AndroidPullToRefreshControllerCreationParams.fromPlatformPullToRefreshControllerCreationParams(
-      // Recommended placeholder to prevent being broken by platform interface.
-      // ignore: avoid_unused_constructor_parameters
+
       PlatformPullToRefreshControllerCreationParams params) {
     return AndroidPullToRefreshControllerCreationParams(
         onRefresh: params.onRefresh,
@@ -26,10 +19,9 @@ class AndroidPullToRefreshControllerCreationParams
   }
 }
 
-///{@macro flutter_inappwebview_platform_interface.PlatformPullToRefreshController}
 class AndroidPullToRefreshController extends PlatformPullToRefreshController
     with ChannelController {
-  /// Constructs a [AndroidPullToRefreshController].
+
   AndroidPullToRefreshController(
       PlatformPullToRefreshControllerCreationParams params)
       : super.implementation(
