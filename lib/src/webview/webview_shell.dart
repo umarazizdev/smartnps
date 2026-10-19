@@ -178,8 +178,11 @@ class _WebViewShellState extends State<WebViewShell>
   static const _resumeStuckWatchdogDelay = Duration(seconds: 8);
   static const _resumeStaleReloadThreshold = Duration(minutes: 30);
   static const _maxSilentRecoveries = 2;
+  static const _offlineStartupGrace = Duration(seconds: 6);
+  static const _offlineConnectivityDebounceDelay = Duration(seconds: 2);
 
   DateTime? _lastBackgroundedAt;
+  DateTime? _offlineStartupGraceEndsAt;
 
   Timer? _splashReleaseTimer;
   Timer? _loadWatchdog;
@@ -192,6 +195,7 @@ class _WebViewShellState extends State<WebViewShell>
   int _startupTimeoutExtensions = 0;
   bool _recoveryInFlight = false;
   bool _awaitingRecoveryLoad = false;
+  bool _skippedOfflineWhileReachable = false;
 
   Timer? _offlineConnectivityDebounce;
 
@@ -2402,6 +2406,7 @@ class _WebViewShellState extends State<WebViewShell>
       );
     }
 
+    _offlineStartupGraceEndsAt = DateTime.now().add(_offlineStartupGrace);
     unawaited(_syncOfflineFromConnectivity());
     _scheduleStartupWatchdogs();
     _connectivitySub = Connectivity().onConnectivityChanged.listen((results) {
@@ -2820,6 +2825,31 @@ class _WebViewShellState extends State<WebViewShell>
     return results.any((r) => r != ConnectivityResult.none);
   }
 
+  bool _isInOfflineStartupGrace() {
+    if (_ui.firstPageLoaded.value) {
+      _offlineStartupGraceEndsAt = null;
+      return false;
+    }
+    final ends = _offlineStartupGraceEndsAt;
+    if (ends == null) return false;
+    if (!DateTime.now().isBefore(ends)) {
+      _offlineStartupGraceEndsAt = null;
+      return false;
+    }
+    return true;
+  }
+
+  Duration? _remainingOfflineStartupGrace() {
+    final ends = _offlineStartupGraceEndsAt;
+    if (ends == null) return null;
+    final remaining = ends.difference(DateTime.now());
+    if (remaining <= Duration.zero) {
+      _offlineStartupGraceEndsAt = null;
+      return null;
+    }
+    return remaining;
+  }
+
   void _cancelOfflineConnectivityDebounce() {
     _offlineConnectivityDebounce?.cancel();
     _offlineConnectivityDebounce = null;
@@ -2832,6 +2862,32 @@ class _WebViewShellState extends State<WebViewShell>
     await _handleConnectivityChanged(results);
   }
 
+  Future<bool> _isConfirmedOffline() async {
+    return !(await SiteReachability.canReachSite());
+  }
+
+  Future<void> _showOfflineOnlyIfConfirmed({required bool needsReload}) async {
+    if (!mounted) return;
+    if (_ui.showOffline.value) return;
+    if (_isInOfflineStartupGrace()) {
+      if (!_recoveryInFlight && !_awaitingRecoveryLoad) {
+        unawaited(_recoverWebView(reason: 'offline_deferred_grace'));
+      }
+      return;
+    }
+    if (!await _isConfirmedOffline()) {
+      if (!mounted) return;
+      if (!_recoveryInFlight && !_awaitingRecoveryLoad) {
+        unawaited(_recoverWebView(reason: 'offline_unconfirmed'));
+      }
+      return;
+    }
+    if (!mounted) return;
+    if (_ui.showOffline.value) return;
+    _clearOfflineRetryUi();
+    _showOffline(needsReload: needsReload);
+  }
+
   void _clearOfflineRetryUi() {
     _ui.offlineRetrying.value = false;
     _ui.offlineStatusMessage.value = null;
@@ -2840,6 +2896,8 @@ class _WebViewShellState extends State<WebViewShell>
   void _dismissOfflineScreen() {
     _cancelOfflineConnectivityDebounce();
     _holdOfflineUntilReload = false;
+    _offlineStartupGraceEndsAt = null;
+    _skippedOfflineWhileReachable = false;
     _ui.showOffline.value = false;
     _clearOfflineRetryUi();
     _silentRecoveryAttempts = 0;
@@ -2847,6 +2905,7 @@ class _WebViewShellState extends State<WebViewShell>
 
   void _showOffline({required bool needsReload}) {
     if (needsReload) _offlineNeedsReload = true;
+    _offlineStartupGraceEndsAt = null;
     _ui.showOffline.value = true;
     _endMainFrameNavigationChrome();
   }
@@ -2855,8 +2914,8 @@ class _WebViewShellState extends State<WebViewShell>
     List<ConnectivityResult> results,
   ) async {
     if (!mounted) return;
-    final hasInternet = _hasNetworkInterface(results);
-    if (hasInternet) {
+    final hasNetwork = _hasNetworkInterface(results);
+    if (hasNetwork) {
       _cancelOfflineConnectivityDebounce();
       if (!_ui.showOffline.value) return;
       _ui.offlineRetrying.value = true;
@@ -2867,7 +2926,7 @@ class _WebViewShellState extends State<WebViewShell>
 
     _offlineConnectivityDebounce?.cancel();
     _offlineConnectivityDebounce = Timer(
-      const Duration(milliseconds: 500),
+      _offlineConnectivityDebounceDelay,
       () => unawaited(_confirmOfflineFromConnectivity()),
     );
   }
@@ -2875,6 +2934,7 @@ class _WebViewShellState extends State<WebViewShell>
   Future<void> _confirmOfflineFromConnectivity() async {
     _offlineConnectivityDebounce = null;
     if (!mounted) return;
+
     final results = await Connectivity().checkConnectivity();
     if (!mounted) return;
     if (_hasNetworkInterface(results) ||
@@ -2885,6 +2945,24 @@ class _WebViewShellState extends State<WebViewShell>
         _ui.offlineStatusMessage.value = null;
         await _recoverFromOffline();
       }
+      return;
+    }
+
+    if (!mounted) return;
+    if (_ui.showOffline.value) return;
+
+    final graceLeft = _remainingOfflineStartupGrace();
+    if (graceLeft != null) {
+      _offlineConnectivityDebounce?.cancel();
+      _offlineConnectivityDebounce = Timer(
+        graceLeft,
+        () => unawaited(_confirmOfflineFromConnectivity()),
+      );
+      return;
+    }
+
+    if (!await _isConfirmedOffline()) {
+      if (!mounted) return;
       return;
     }
     if (!mounted) return;
@@ -2973,6 +3051,8 @@ class _WebViewShellState extends State<WebViewShell>
     _recoveryInFlight = false;
     _awaitingRecoveryLoad = false;
     _startupTimeoutExtensions = 0;
+    _skippedOfflineWhileReachable = false;
+    _offlineStartupGraceEndsAt = null;
     _ui.splashReleased.value = true;
     _ui.firstPageLoaded.value = true;
   }
@@ -3021,7 +3101,7 @@ class _WebViewShellState extends State<WebViewShell>
       return;
     }
     if (!mounted) return;
-    _showOffline(needsReload: true);
+    await _showOfflineOnlyIfConfirmed(needsReload: true);
   }
 
   bool _isStaleBackgroundResume() {
@@ -3184,15 +3264,30 @@ class _WebViewShellState extends State<WebViewShell>
       await _recoverWebView(reason: 'recovery_timeout', recreate: true);
       return;
     }
-    _failRecoveryToOffline();
+    await _failRecoveryToOffline();
   }
 
-  void _failRecoveryToOffline() {
+  Future<void> _failRecoveryToOffline() async {
     _recoveryInFlight = false;
     _awaitingRecoveryLoad = false;
     _recoveryWatchdog?.cancel();
     _recoveryWatchdog = null;
     _ui.endNavigation();
+
+    if (!await _isConfirmedOffline()) {
+      if (!mounted) return;
+      if (!_skippedOfflineWhileReachable) {
+        _skippedOfflineWhileReachable = true;
+        _silentRecoveryAttempts = 0;
+        await _recoverWebView(
+          reason: 'recovery_exhausted_but_online',
+          recreate: true,
+        );
+      }
+      return;
+    }
+    if (!mounted) return;
+    _skippedOfflineWhileReachable = false;
     _holdOfflineUntilReload = true;
     _ui.offlineRetrying.value = false;
     _ui.offlineStatusMessage.value =
@@ -3227,7 +3322,7 @@ class _WebViewShellState extends State<WebViewShell>
 
     if (_silentRecoveryAttempts > _maxSilentRecoveries) {
       _recoveryInFlight = false;
-      _failRecoveryToOffline();
+      await _failRecoveryToOffline();
       return;
     }
 
@@ -3276,6 +3371,13 @@ class _WebViewShellState extends State<WebViewShell>
     _recoveryInFlight = false;
 
     if (await SiteReachability.canReachSite()) {
+      if (!mounted) return;
+      _offlineNeedsReload = true;
+      await _recoverFromOffline();
+      return;
+    }
+    if (!mounted) return;
+    if (!await _isConfirmedOffline()) {
       if (!mounted) return;
       _offlineNeedsReload = true;
       await _recoverFromOffline();
@@ -6302,6 +6404,32 @@ class _WebViewShellState extends State<WebViewShell>
                                                     reason: 'main_frame_error',
                                                   ),
                                                 );
+                                                return;
+                                              }
+                                              if (!mounted) return;
+                                              if (_isInOfflineStartupGrace()) {
+                                                if (!_recoveryInFlight &&
+                                                    !_awaitingRecoveryLoad) {
+                                                  unawaited(
+                                                    _recoverWebView(
+                                                      reason:
+                                                          'main_frame_error_grace',
+                                                    ),
+                                                  );
+                                                }
+                                                return;
+                                              }
+                                              if (!await _isConfirmedOffline()) {
+                                                if (!mounted) return;
+                                                if (!_recoveryInFlight &&
+                                                    !_awaitingRecoveryLoad) {
+                                                  unawaited(
+                                                    _recoverWebView(
+                                                      reason:
+                                                          'main_frame_error_recovered',
+                                                    ),
+                                                  );
+                                                }
                                                 return;
                                               }
                                               if (!mounted) return;
