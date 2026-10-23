@@ -180,6 +180,7 @@ class _WebViewShellState extends State<WebViewShell>
   static const _maxSilentRecoveries = 2;
   static const _offlineStartupGrace = Duration(seconds: 6);
   static const _offlineConnectivityDebounceDelay = Duration(seconds: 2);
+  static const _offlineInterfaceRecheckDelay = Duration(milliseconds: 450);
 
   DateTime? _lastBackgroundedAt;
   DateTime? _offlineStartupGraceEndsAt;
@@ -2862,7 +2863,19 @@ class _WebViewShellState extends State<WebViewShell>
     await _handleConnectivityChanged(results);
   }
 
+  Future<bool> _deviceHasNetworkInterface() async {
+    final results = await Connectivity().checkConnectivity();
+    if (!mounted) return true;
+    return _hasNetworkInterface(results);
+  }
+
   Future<bool> _isConfirmedOffline() async {
+    if (await _deviceHasNetworkInterface()) return false;
+    if (!mounted) return false;
+    await Future<void>.delayed(_offlineInterfaceRecheckDelay);
+    if (!mounted) return false;
+    if (await _deviceHasNetworkInterface()) return false;
+    if (!mounted) return false;
     return !(await SiteReachability.canReachSite());
   }
 
@@ -2973,40 +2986,27 @@ class _WebViewShellState extends State<WebViewShell>
 
   Future<void> _recoverFromOffline() async {
     if (!mounted) return;
-    final needsReload = _offlineNeedsReload || !_ui.firstPageLoaded.value;
-    if (!needsReload) {
+
+    final hasNetwork =
+        await _deviceHasNetworkInterface() ||
+        await SiteReachability.canReachSite();
+    if (!mounted) return;
+
+    if (hasNetwork) {
+      final needsReload = _offlineNeedsReload || !_ui.firstPageLoaded.value;
+      _holdOfflineUntilReload = false;
       _dismissOfflineScreen();
-      return;
-    }
-
-    final controller = _controller;
-    if (controller == null) {
-      _ui.offlineRetrying.value = false;
-      _ui.offlineStatusMessage.value =
-          'Unable to reconnect right now. Please try again.';
-      return;
-    }
-
-    final target = _ui.currentUri.value?.toString() ?? AppRoutes.webBaseUrl;
-    try {
-      _awaitingOfflineRecoveryLoad = true;
-
-      await controller.loadUrl(urlRequest: URLRequest(url: WebUri(target)));
-    } catch (_) {
-      _awaitingOfflineRecoveryLoad = false;
-      if (await SiteReachability.canReachSite()) {
-        if (!mounted) return;
-        _holdOfflineUntilReload = false;
-        _dismissOfflineScreen();
-        return;
+      if (needsReload) {
+        unawaited(
+          _recoverWebView(reason: 'offline_network_restored', recreate: true),
+        );
       }
-      if (!mounted) return;
-      _holdOfflineUntilReload = true;
-      _ui.offlineRetrying.value = false;
-      _ui.offlineStatusMessage.value =
-          'Couldn\'t reconnect. Check your connection and try again.';
-      _showOffline(needsReload: true);
+      return;
     }
+
+    _ui.offlineRetrying.value = false;
+    _ui.offlineStatusMessage.value =
+        'Still no internet connection. Please check your network and try again.';
   }
 
   void _cancelWebViewWatchdogs() {
@@ -3095,7 +3095,8 @@ class _WebViewShellState extends State<WebViewShell>
       }
     }
 
-    if (await SiteReachability.canReachSite()) {
+    if (await _deviceHasNetworkInterface() ||
+        await SiteReachability.canReachSite()) {
       if (!mounted) return;
       await _recoverWebView(reason: 'startup_timeout');
       return;
@@ -3369,26 +3370,8 @@ class _WebViewShellState extends State<WebViewShell>
     _ui.offlineStatusMessage.value = null;
     _silentRecoveryAttempts = 0;
     _recoveryInFlight = false;
-
-    if (await SiteReachability.canReachSite()) {
-      if (!mounted) return;
-      _offlineNeedsReload = true;
-      await _recoverFromOffline();
-      return;
-    }
-    if (!mounted) return;
-    if (!await _isConfirmedOffline()) {
-      if (!mounted) return;
-      _offlineNeedsReload = true;
-      await _recoverFromOffline();
-      return;
-    }
-    if (!mounted) return;
-    _holdOfflineUntilReload = true;
-    _showOffline(needsReload: true);
-    _ui.offlineRetrying.value = false;
-    _ui.offlineStatusMessage.value =
-        'Still no internet connection. Please check your network and try again.';
+    _offlineNeedsReload = true;
+    await _recoverFromOffline();
   }
 
   bool _isInternalUrl(Uri uri) => AppConfig.isAllowedHost(uri.host);
@@ -6393,7 +6376,9 @@ class _WebViewShellState extends State<WebViewShell>
                                                 return;
                                               }
 
-                                              if (await SiteReachability.canReachSite()) {
+                                              if (await _deviceHasNetworkInterface() ||
+                                                  await SiteReachability
+                                                      .canReachSite()) {
                                                 if (!mounted) return;
                                                 if (_recoveryInFlight ||
                                                     _awaitingRecoveryLoad) {
@@ -6755,6 +6740,11 @@ class _WebViewShellState extends State<WebViewShell>
     final controller = _controller;
     if (controller == null) return;
 
+    if (item == _BottomItem.actions) {
+      await _openWebActionMenu(controller);
+      return;
+    }
+
     final currentPath = AppConfig.normalizeWebPath(_ui.currentUri.value);
     if (_ui.selectedBottomTabIndex.value == item.index &&
         currentPath == item.normalizedPath &&
@@ -6786,6 +6776,26 @@ class _WebViewShellState extends State<WebViewShell>
       } catch (_) {}
     }
     await controller.loadUrl(urlRequest: URLRequest(url: WebUri(item.url)));
+  }
+
+  Future<void> _openWebActionMenu(InAppWebViewController controller) async {
+    final source = '''
+(function () {
+  try {
+    if (window.SmartNPS360 &&
+        typeof window.SmartNPS360.${AppRoutes.openActionMenu} === 'function') {
+      window.SmartNPS360.${AppRoutes.openActionMenu}();
+    } else {
+      window.dispatchEvent(new CustomEvent('${AppRoutes.openActionMenuEvent}'));
+    }
+  } catch (e) {}
+})();
+''';
+    await _safeEvaluateJavascript(
+      controller,
+      source: source,
+      debugLabel: AppRoutes.openActionMenu,
+    );
   }
 
   bool _isAuthRoute(Uri? uri) => AuthSessionManager.isLoginRoute(uri);
@@ -6866,6 +6876,12 @@ enum _BottomItem {
     'assets/list.png',
     '/officer/shift-log',
   ),
+  actions(
+    'Actions',
+    'assets/actions-grid-outline.png',
+    'assets/actions-grid.png',
+    '',
+  ),
   timesheet(
     'TimeSheet',
     'assets/schedule-outline.png',
@@ -6915,6 +6931,7 @@ class _BottomBar extends StatelessWidget {
     const visibleItems = <_BottomItem>[
       _BottomItem.dashboard,
       _BottomItem.shiftLog,
+      _BottomItem.actions,
       _BottomItem.timesheet,
       _BottomItem.profile,
     ];
@@ -6927,6 +6944,7 @@ class _BottomBar extends StatelessWidget {
           iosSymbolName: switch (item) {
             _BottomItem.dashboard => 'house.fill',
             _BottomItem.shiftLog => 'list.clipboard',
+            _BottomItem.actions => 'square.grid.2x2.fill',
             _BottomItem.timesheet => 'calendar',
             _BottomItem.profile => 'person.crop.circle.fill',
           },

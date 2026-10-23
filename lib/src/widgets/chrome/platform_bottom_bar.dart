@@ -57,8 +57,7 @@ class PlatformBottomBar extends StatelessWidget {
         (defaultTargetPlatform == TargetPlatform.iOS ||
             defaultTargetPlatform == TargetPlatform.macOS);
 
-    final activeTint =
-        tint ?? const Color(AppConfig.cBottomBarActive);
+    final activeTint = tint ?? const Color(AppConfig.cBottomBarActive);
 
     return isApplePlatform
         ? _CupertinoNativeBottomBar(
@@ -152,10 +151,7 @@ class _ClassicBottomBar extends StatelessWidget {
       return _buildAndroidBar(context, effectiveIsDark: effectiveIsDark);
     }
 
-    return _buildLegacyFloatingBar(
-      context,
-      effectiveIsDark: effectiveIsDark,
-    );
+    return _buildLegacyFloatingBar(context, effectiveIsDark: effectiveIsDark);
   }
 
   Widget _buildAndroidBar(
@@ -226,8 +222,9 @@ class _ClassicBottomBar extends StatelessWidget {
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             fontSize: 11,
-                            fontWeight:
-                                isActive ? FontWeight.w600 : FontWeight.w500,
+                            fontWeight: isActive
+                                ? FontWeight.w600
+                                : FontWeight.w500,
                             height: 1.1,
                             color: color,
                           ),
@@ -250,8 +247,9 @@ class _ClassicBottomBar extends StatelessWidget {
   }) {
     final bottomInset = MediaQuery.paddingOf(context).bottom;
     final activeColor = tint;
-    final inactiveColor =
-        effectiveIsDark ? Colors.white : const Color(0xFF272527);
+    final inactiveColor = effectiveIsDark
+        ? Colors.white
+        : const Color(0xFF272527);
     final bgColor = effectiveIsDark
         ? (darkSurface ?? const Color(0xFF1A2332)).withAlpha(210)
         : (surface ?? const Color(0xFFFBFBFD)).withAlpha(245);
