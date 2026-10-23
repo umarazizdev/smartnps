@@ -15,6 +15,8 @@ class AppRoutes {
   static const createIssue = 'createIssue';
   static const createIncident = 'createIncident';
   static const getPendingDrafts = 'getPendingDrafts';
+  static const openActionMenu = 'openActionMenu';
+  static const openActionMenuEvent = 'smartnps360:open-action-menu';
 
   static String get webBaseUrl => DebugEnvConfig.instance.webBaseUrl;
 

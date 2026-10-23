@@ -35,10 +35,13 @@ class SiteReachability {
     final client = HttpClient()
       ..connectionTimeout = _timeout
       ..idleTimeout = _timeout
-      ..autoUncompress = false;
+      ..autoUncompress = false
+      ..userAgent =
+          'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) '
+          'AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148';
     try {
       final headStatus = await _statusFor(client, 'HEAD', uri);
-      if (headStatus == HttpStatus.methodNotAllowed) {
+      if (headStatus == HttpStatus.methodNotAllowed || headStatus == null) {
         final getStatus = await _statusFor(client, 'GET', uri);
         _log(
           getStatus != null,
@@ -48,12 +51,8 @@ class SiteReachability {
         );
         return getStatus != null;
       }
-      if (headStatus != null) {
-        _log(true, method: 'HEAD', status: headStatus, attempt: attempt);
-        return true;
-      }
-      _log(false, method: 'HEAD', attempt: attempt);
-      return false;
+      _log(true, method: 'HEAD', status: headStatus, attempt: attempt);
+      return true;
     } catch (e) {
       _log(false, error: e, attempt: attempt);
       return false;
