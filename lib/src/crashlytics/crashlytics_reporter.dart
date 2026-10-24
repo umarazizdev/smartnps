@@ -8,25 +8,28 @@ import 'package:flutter/widgets.dart';
 
 import '../utilities/secure_storage_access.dart';
 
-/// Crashlytics helpers focused on maximizing delivery for real users.
-///
-/// Hard process kills still upload on the *next* launch (SDK limitation).
-/// Caught Flutter errors can flush immediately while the app is still alive.
-///
-/// Recoverable noise (network blips, keychain locked, layout overflow) is
-/// ignored or recorded as non-fatal so Crashlytics stays useful for real
-/// crashes.
 class CrashlyticsReporter {
   CrashlyticsReporter._();
 
   static bool _lifecycleInstalled = false;
 
   static Future<void> init() async {
+
+    final collectionEnabled = !kDebugMode;
+    await FirebaseCrashlytics.instance
+        .setCrashlyticsCollectionEnabled(collectionEnabled);
+
+    if (!collectionEnabled) {
+      FlutterError.onError = FlutterError.presentError;
+      PlatformDispatcher.instance.onError = (error, stack) {
+        debugPrint('[CrashlyticsReporter] skipped (debug): $error');
+        return true;
+      };
+      return;
+    }
+
     FlutterError.onError = (errorDetails) {
       unawaited(_recordFlutterError(errorDetails));
-      if (kDebugMode) {
-        FlutterError.presentError(errorDetails);
-      }
     };
 
     PlatformDispatcher.instance.onError = (error, stack) {
@@ -38,29 +41,29 @@ class CrashlyticsReporter {
       return true;
     };
 
-    await FirebaseCrashlytics.instance.setCrashlyticsCollectionEnabled(true);
     await flushUnsent();
     _installLifecycleFlush();
   }
 
   static Future<void> flushUnsent() async {
+    if (kDebugMode) return;
     try {
       await FirebaseCrashlytics.instance.sendUnsentReports();
-    } catch (e, st) {
-      if (kDebugMode) {
-        debugPrint('[CrashlyticsReporter] sendUnsentReports failed: $e\n$st');
-      }
+    } catch (_) {
+
     }
   }
 
-  /// Recoverable conditions we should not spam into Crashlytics.
   static bool shouldIgnoreError(Object error) {
     if (SecureStorageAccess.isRecoverableKeychainError(error)) return true;
     final text = error.toString();
-    return _looksLikeNetworkNoise(text);
+    if (_looksLikeNetworkNoise(text)) return true;
+    if (_looksLikeHotReloadNoise(text)) return true;
+
+    if (_looksLikeDisposedWebViewChannel(text)) return true;
+    return false;
   }
 
-  /// True for recoverable noise that should not count as a crash.
   static bool isNonFatalError(Object error) {
     if (shouldIgnoreError(error)) return true;
     if (error is SocketException ||
@@ -73,7 +76,11 @@ class CrashlyticsReporter {
     }
 
     final text = error.toString();
-    if (_looksLikeLayoutOverflow(text)) {
+    if (_looksLikeLayoutOverflow(text) || _looksLikeLayoutConstraintNoise(text)) {
+      return true;
+    }
+
+    if (_looksLikeWebSettingsClassCast(text)) {
       return true;
     }
     return false;
@@ -84,16 +91,21 @@ class CrashlyticsReporter {
     if (isNonFatalError(details.exception)) return true;
     final text = '${details.exceptionAsString()} ${details.library ?? ''}';
     return _looksLikeLayoutOverflow(text) ||
+        _looksLikeLayoutConstraintNoise(text) ||
         SecureStorageAccess.isRecoverableKeychainError(text) ||
-        _looksLikeNetworkNoise(text);
+        _looksLikeNetworkNoise(text) ||
+        _looksLikeHotReloadNoise(text);
   }
 
   static bool shouldIgnoreFlutterError(FlutterErrorDetails details) {
     if (details.silent) return true;
     if (shouldIgnoreError(details.exception)) return true;
     final text = details.exceptionAsString();
+    final context = details.context?.toDescription() ?? '';
+    final combined = '$text $context';
     return SecureStorageAccess.isRecoverableKeychainError(text) ||
-        _looksLikeNetworkNoise(text);
+        _looksLikeNetworkNoise(text) ||
+        _looksLikeHotReloadNoise(combined);
   }
 
   static bool _looksLikeNetworkNoise(String text) {
@@ -118,7 +130,37 @@ class CrashlyticsReporter {
         lower.contains('cannot hit test a render box with no size');
   }
 
+  static bool _looksLikeLayoutConstraintNoise(String text) {
+    final lower = text.toLowerCase();
+    return lower.contains('boxconstraints forces an infinite height') ||
+        lower.contains('boxconstraints forces an infinite width') ||
+        lower.contains('renderbox was not laid out') ||
+        (lower.contains('failed assertion') && lower.contains('hassize'));
+  }
+
+  static bool _looksLikeHotReloadNoise(String text) {
+    final lower = text.toLowerCase();
+    return lower.contains('lookup failed:') ||
+        lower.contains('ext.flutter.reassemble') ||
+        lower.contains("is not a subtype of type 'state<") ||
+        lower.contains('is not a subtype of type \'state<');
+  }
+
+  static bool _looksLikeDisposedWebViewChannel(String text) {
+    final lower = text.toLowerCase();
+    return lower.contains('missingpluginexception') &&
+        lower.contains('evaluatejavascript') &&
+        lower.contains('flutter_inappwebview');
+  }
+
+  static bool _looksLikeWebSettingsClassCast(String text) {
+    final lower = text.toLowerCase();
+    return lower.contains('websettingswrapper') &&
+        lower.contains('contentsettingsadapter');
+  }
+
   static Future<void> _recordFlutterError(FlutterErrorDetails details) async {
+    if (kDebugMode) return;
     try {
       if (shouldIgnoreFlutterError(details)) {
         return;
@@ -141,6 +183,7 @@ class CrashlyticsReporter {
     StackTrace stack, {
     required bool fatal,
   }) async {
+    if (kDebugMode) return;
     try {
       await FirebaseCrashlytics.instance.recordError(
         error,
@@ -156,8 +199,6 @@ class CrashlyticsReporter {
     }
   }
 
-  /// Flush whenever the app returns to foreground (covers "user opens again"
-  /// without needing them to understand Crashlytics).
   static void _installLifecycleFlush() {
     if (_lifecycleInstalled) return;
     _lifecycleInstalled = true;
@@ -168,6 +209,7 @@ class CrashlyticsReporter {
 class _CrashlyticsLifecycleObserver with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (kDebugMode) return;
     if (state == AppLifecycleState.resumed ||
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {

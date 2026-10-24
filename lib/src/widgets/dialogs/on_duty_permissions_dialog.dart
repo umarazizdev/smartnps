@@ -267,7 +267,9 @@ class _OnDutyPermissionsDialogPanelState
     final isDark = NativeThemeController.instance.isDark;
     final colors = PermissionBlockerColors.of(isDark);
     final media = MediaQuery.of(context);
-    final maxHeight = media.size.height * 0.88;
+    final isLandscape = media.orientation == Orientation.landscape;
+    final maxHeight = media.size.height * (isLandscape ? 0.92 : 0.88);
+    final logoHeight = isLandscape ? 44.0 : 72.0;
     final versionColor = isDark
         ? Colors.white.withValues(alpha: 0.38)
         : const Color(0xFF9CA3AF);
@@ -280,8 +282,8 @@ class _OnDutyPermissionsDialogPanelState
     return Dialog(
       backgroundColor: colors.background,
       insetPadding: EdgeInsets.symmetric(
-        horizontal: media.orientation == Orientation.landscape ? 40 : 16,
-        vertical: media.orientation == Orientation.landscape ? 16 : 20,
+        horizontal: isLandscape ? 40 : 16,
+        vertical: isLandscape ? 12 : 20,
       ),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       clipBehavior: Clip.antiAlias,
@@ -293,73 +295,75 @@ class _OnDutyPermissionsDialogPanelState
         child: Stack(
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
+              padding: EdgeInsets.fromLTRB(16, isLandscape ? 12 : 16, 16, 10),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Center(
-                    child: DebugEnvLogoHotspot(height: 72),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    _titleText,
-                    style: TextStyle(
-                      color: colors.title,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -0.3,
-                      height: 1.2,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    _subtitleText,
-                    style: TextStyle(
-                      color: colors.subtitle,
-                      fontSize: 12.5,
-                      height: 1.35,
-                      fontWeight: FontWeight.w500,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 10),
-                  Center(
-                    child: Container(
-                      width: 36,
-                      height: 2.5,
-                      decoration: BoxDecoration(
-                        color: colors.divider,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  PermissionPrivacyBanner(colors: colors, compact: true),
-                  const SizedBox(height: 10),
+
                   Expanded(
-                    child: _loading
-                        ? const SingleChildScrollView(
-                            child: PermissionBlockerShimmerList(
-                              itemCount: 5,
-                              compact: true,
-                            ),
-                          )
-                        : ListView.separated(
-                            padding: EdgeInsets.zero,
-                            itemCount: orderedItems.length,
-                            separatorBuilder: (_, __) =>
-                                const SizedBox(height: 8),
-                            itemBuilder: (context, index) {
-                              final item = orderedItems[index];
-                              return PermissionBlockerRow(
-                                item: item,
-                                colors: colors,
-                                busy: _busyId == item.id,
-                                onAction: () => _onAction(item),
-                              );
-                            },
+                    child: ListView(
+                      padding: EdgeInsets.zero,
+                      children: [
+                        Center(
+                          child: DebugEnvLogoHotspot(height: logoHeight),
+                        ),
+                        SizedBox(height: isLandscape ? 4 : 8),
+                        Text(
+                          _titleText,
+                          style: TextStyle(
+                            color: colors.title,
+                            fontSize: isLandscape ? 16 : 18,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.3,
+                            height: 1.2,
                           ),
+                          textAlign: TextAlign.center,
+                        ),
+                        SizedBox(height: isLandscape ? 4 : 6),
+                        Text(
+                          _subtitleText,
+                          style: TextStyle(
+                            color: colors.subtitle,
+                            fontSize: isLandscape ? 12 : 12.5,
+                            height: 1.35,
+                            fontWeight: FontWeight.w500,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                        SizedBox(height: isLandscape ? 6 : 10),
+                        Center(
+                          child: Container(
+                            width: 36,
+                            height: 2.5,
+                            decoration: BoxDecoration(
+                              color: colors.divider,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                        ),
+                        SizedBox(height: isLandscape ? 6 : 10),
+                        PermissionPrivacyBanner(
+                          colors: colors,
+                          compact: true,
+                        ),
+                        SizedBox(height: isLandscape ? 8 : 10),
+                        if (_loading)
+                          const PermissionBlockerShimmerList(
+                            itemCount: 5,
+                            compact: true,
+                          )
+                        else
+                          for (var i = 0; i < orderedItems.length; i++) ...[
+                            if (i > 0) const SizedBox(height: 8),
+                            PermissionBlockerRow(
+                              item: orderedItems[i],
+                              colors: colors,
+                              busy: _busyId == orderedItems[i].id,
+                              onAction: () => _onAction(orderedItems[i]),
+                            ),
+                          ],
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 6),
                   Text(

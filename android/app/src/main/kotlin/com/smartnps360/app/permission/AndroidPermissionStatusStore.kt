@@ -2,10 +2,6 @@ package com.smartnps360.app.permission
 
 import android.content.Context
 
-/**
- * Session for killed-app permission-status sync.
- * Independent from duty kill-watch so this never starts location FGS.
- */
 internal object AndroidPermissionStatusStore {
   private const val PREFS = "smartnps360_android_permission_status"
   private const val KEY_ARMED = "armed"
@@ -19,6 +15,8 @@ internal object AndroidPermissionStatusStore {
   private const val KEY_PUSH = "push_status"
   private const val KEY_FINGERPRINT = "last_fingerprint"
   private const val KEY_FULL_PERMISSIONS_JSON = "full_permissions_json"
+  private const val KEY_CACHED_BATTERY_PERCENTAGE = "cached_battery_percentage"
+  private const val KEY_CACHED_LOW_POWER_MODE = "cached_low_power_mode"
 
   fun arm(
     context: Context,
@@ -166,7 +164,6 @@ internal object AndroidPermissionStatusStore {
       .apply()
   }
 
-  /** Full Flutter permission map for kill/wake lightweight POSTs. */
   fun writeFullPermissionsCache(context: Context, permissions: Map<String, String>) {
     if (permissions.isEmpty()) return
     val obj = org.json.JSONObject()
@@ -198,5 +195,38 @@ internal object AndroidPermissionStatusStore {
     } catch (_: Exception) {
       null
     }
+  }
+
+  fun writeBatteryCache(
+    context: Context,
+    batteryPercentage: Int?,
+    lowPowerMode: String?,
+  ) {
+    val editor = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+    if (batteryPercentage != null && batteryPercentage in 0..100) {
+      editor.putInt(KEY_CACHED_BATTERY_PERCENTAGE, batteryPercentage)
+    }
+    if (!lowPowerMode.isNullOrBlank()) {
+      editor.putString(KEY_CACHED_LOW_POWER_MODE, lowPowerMode.trim())
+    }
+    editor.apply()
+    android.util.Log.i(
+      "AndroidPermStatus",
+      "cached battery percentage=$batteryPercentage low_power_mode=$lowPowerMode",
+    )
+  }
+
+  fun readCachedBatteryPercentage(context: Context): Int? {
+    val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    if (!prefs.contains(KEY_CACHED_BATTERY_PERCENTAGE)) return null
+    val value = prefs.getInt(KEY_CACHED_BATTERY_PERCENTAGE, -1)
+    return value.takeIf { it in 0..100 }
+  }
+
+  fun readCachedLowPowerMode(context: Context): String? {
+    return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+      .getString(KEY_CACHED_LOW_POWER_MODE, null)
+      ?.trim()
+      ?.takeIf { it.isNotEmpty() }
   }
 }

@@ -10,6 +10,7 @@ import 'package:get/get.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../api/visit_upload_api.dart';
+import 'visit_flow_kind.dart';
 import 'visit_gps_session.dart';
 import 'visit_media_draft_store.dart';
 import 'visit_upload_failure.dart';
@@ -25,7 +26,8 @@ typedef VisitQueuedUploadFailureHandler =
       required VisitMediaDraftSnapshot snapshot,
     });
 
-typedef VisitQueuedUploadSuccessHandler = Future<void> Function();
+typedef VisitQueuedUploadSuccessHandler =
+    Future<void> Function({required VisitFlowKind flowKind});
 
 class VisitUploadQueue {
   VisitUploadQueue._({
@@ -205,7 +207,7 @@ class VisitUploadQueue {
       }
 
       final snapshot = await _store.loadDraftSnapshot(key: key);
-      if (!snapshot.hasItems) {
+      if (!snapshot.canUpload) {
         _queuedKeys.remove(folderName);
         await _persistQueue();
         continue;
@@ -221,15 +223,34 @@ class VisitUploadQueue {
       final flow = _ensureFlowController();
       _beginUploadBanner(flow, itemCount: snapshot.items.length);
 
+      var activeSnapshot = snapshot;
       VisitUploadResult result;
       try {
         result = await _runUpload(
-          snapshot,
+          activeSnapshot,
           onProgress: (current, total) {
             flow.uploadProgressCurrent.value = current;
             flow.uploadProgressTotal.value = total;
           },
         );
+        if (!result.success &&
+            !result.isNetworkFailure &&
+            result.isClientDraftReuseError) {
+          if (kDebugMode) {
+            debugPrint(
+              '[VisitUploadQueue] client_draft_id reuse; rotating and '
+              'retrying once draft=$folderName',
+            );
+          }
+          activeSnapshot = await _store.rotateClientDraftId(activeSnapshot);
+          result = await _runUpload(
+            activeSnapshot,
+            onProgress: (current, total) {
+              flow.uploadProgressCurrent.value = current;
+              flow.uploadProgressTotal.value = total;
+            },
+          );
+        }
       } catch (error, stack) {
         if (kDebugMode) {
           debugPrint('[VisitUploadQueue] unexpected error=$error');
@@ -243,15 +264,18 @@ class VisitUploadQueue {
         _clearUploadBanner(flow);
         await _handleNonNetworkFailure(
           key: key,
-          snapshot: snapshot,
-          presentation: VisitUploadFailure.presentUnexpected(error),
+          snapshot: activeSnapshot,
+          presentation: VisitUploadFailure.presentUnexpected(
+            error,
+            flowKind: activeSnapshot.context?.flowKind ?? VisitFlowKind.patrol,
+          ),
         );
         continue;
       }
 
       if (result.success) {
         _clearUploadBanner(flow);
-        await _handleSuccess(key: key, snapshot: snapshot);
+        await _handleSuccess(key: key, snapshot: activeSnapshot);
         continue;
       }
 
@@ -268,11 +292,11 @@ class VisitUploadQueue {
       _clearUploadBanner(flow);
       await _handleNonNetworkFailure(
         key: key,
-        snapshot: snapshot,
+        snapshot: activeSnapshot,
         presentation: VisitUploadFailure.present(
           result: result,
-          mediaItems: snapshot.items,
-          checkpoints: snapshot.context?.checkpoints ?? const [],
+          mediaItems: activeSnapshot.items,
+          checkpoints: activeSnapshot.context?.checkpoints ?? const [],
         ),
       );
     }
@@ -289,9 +313,14 @@ class VisitUploadQueue {
     return VisitUploadApi.instance.uploadVisit(
       meta: meta,
       items: snapshot.items,
-      batchVoicePath: snapshot.batchNote.voiceNotePath,
       generalVoicePath: snapshot.generalNote.voiceNotePath,
-      uploadUrl: snapshot.context?.uploadUrl,
+      uploadUrl:
+          VisitUploadApi.resolveSiteCheckUploadUrl(
+            visitType: snapshot.context?.visitType,
+            siteCheckTimeSheetId: snapshot.context?.siteCheckTimeSheetId,
+            timeSheetId: snapshot.context?.timeSheetId,
+          ) ??
+          snapshot.context?.uploadUrl,
       onProgress: onProgress,
     );
   }
@@ -353,7 +382,9 @@ class VisitUploadQueue {
 
     final successHandler = onUploadSucceeded;
     if (successHandler != null) {
-      await successHandler();
+      await successHandler(
+        flowKind: snapshot.context?.flowKind ?? VisitFlowKind.patrol,
+      );
     }
   }
 

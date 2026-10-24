@@ -1,18 +1,22 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:video_thumbnail/video_thumbnail.dart' as vt;
 
+import '../../api/report_context_api.dart';
 import '../../auth/auth_repository.dart';
 import '../../utilities/app_debug_log.dart';
 import 'cam_perf.dart';
 import 'visit_checkpoint.dart';
 import 'visit_media_draft_store.dart';
 import 'visit_media_geo.dart';
+import 'visit_flow_kind.dart';
 import 'visit_patrol_context.dart';
+import 'visit_report_details.dart';
 import 'visit_upload_queue.dart';
 
 enum VisitMediaType { photo, video }
@@ -66,21 +70,6 @@ class VisitBatchNote {
       textNote: (json['textNote'] as String?) ?? '',
       voiceNotePath: json['voiceNotePath'] as String?,
     );
-  }
-
-  Map<String, dynamic> toUploadMeta() {
-    if (!enabled) {
-      return <String, dynamic>{
-        'needed': 'no',
-        'text_note': '',
-        'has_voice_note': false,
-      };
-    }
-    return <String, dynamic>{
-      'needed': 'yes',
-      'text_note': hasTextNote ? textNote.trim() : '',
-      'has_voice_note': hasVoiceNote,
-    };
   }
 
   Map<String, dynamic> toGeneralUploadMeta() {
@@ -211,6 +200,8 @@ class VisitVideoFlowController extends GetxController {
   final Map<String, Future<Uint8List?>> _thumbnailFutures =
       <String, Future<Uint8List?>>{};
   final isDraftReady = false.obs;
+
+  final isPreparingReport = false.obs;
   final draftSiteName = RxnString();
   final draftRegionName = RxnString();
   final patrolContext = Rxn<VisitPatrolContext>();
@@ -221,8 +212,8 @@ class VisitVideoFlowController extends GetxController {
   final uploadProgressCurrent = 0.obs;
   final uploadProgressTotal = 0.obs;
   final uploadLocationLabel = ''.obs;
-  final batchNote = const VisitBatchNote().obs;
   final generalNote = const VisitBatchNote().obs;
+  final reportDetails = const VisitReportDetails().obs;
   final activeCheckpointId = RxnInt();
 
   final lastUploadIssue = Rxn<VisitDraftLastUploadIssue>();
@@ -251,6 +242,14 @@ class VisitVideoFlowController extends GetxController {
   List<VisitMediaItem> get visibleMediaItems =>
       mediaItems.where((e) => !e.isPendingCapture).toList(growable: false);
 
+  VisitFlowKind get flowKind =>
+      patrolContext.value?.flowKind ?? VisitFlowKind.patrol;
+
+  bool get isStructuredReport => flowKind.isStructuredReport;
+
+  bool get hasCompleteReportDetails =>
+      !isStructuredReport || reportDetails.value.isCompleteFor(flowKind);
+
   List<VisitMediaItem> mediaForCheckpoint(int checkpointId) {
     return mediaItems
         .where((e) => e.siteCheckpointId == checkpointId && !e.isPendingCapture)
@@ -258,7 +257,6 @@ class VisitVideoFlowController extends GetxController {
   }
 
   bool isCheckpointCompleted(int checkpointId) {
-    // Photo or video capture both complete the checkpoint.
     return mediaForCheckpoint(checkpointId).isNotEmpty;
   }
 
@@ -273,8 +271,6 @@ class VisitVideoFlowController extends GetxController {
   int get capturedPhotoCount =>
       visibleMediaItems.where((e) => e.isPhoto).length;
 
-  /// When [VisitPatrolContext.minimumPhotos] is set (> 0), only photos count
-  /// toward enabling Complete Report. Videos alone do not satisfy it.
   bool get meetsMinimumPhotoRequirement {
     final minimum = patrolContext.value?.minimumPhotos;
     if (minimum == null || minimum <= 0) return true;
@@ -282,8 +278,11 @@ class VisitVideoFlowController extends GetxController {
   }
 
   bool get canCompleteReport {
-    if (isUploading.value) return false;
+    if (isUploading.value || isPreparingReport.value) return false;
     if (hasIncompleteCheckpoints) return false;
+    if (isStructuredReport) {
+      return hasCompleteReportDetails;
+    }
     final minimum = patrolContext.value?.minimumPhotos;
     if (minimum != null && minimum > 0) {
       return meetsMinimumPhotoRequirement;
@@ -313,8 +312,6 @@ class VisitVideoFlowController extends GetxController {
       var snapshot = await _store.loadDraftSnapshot();
       if (snapshot.hasItems &&
           VisitUploadQueue.instance.isQueued(snapshot.draftKey)) {
-        // Queued/in-flight drafts stay on disk for upload, but must not
-        // reappear as the editable active draft.
         snapshot = const VisitMediaDraftSnapshot(
           items: <VisitMediaItem>[],
           draftKey: VisitDraftKey.unscoped,
@@ -322,8 +319,8 @@ class VisitVideoFlowController extends GetxController {
         await _store.setActiveKey(VisitDraftKey.unscoped, force: true);
       }
       if (!snapshot.hasItems) {
-        final pending =
-            await VisitUploadQueue.instance.listEditablePendingDrafts();
+        final pending = await VisitUploadQueue.instance
+            .listEditablePendingDrafts();
         if (pending.isNotEmpty) {
           snapshot = pending.first;
           await _store.setActiveKey(snapshot.draftKey);
@@ -336,16 +333,14 @@ class VisitVideoFlowController extends GetxController {
     }
   }
 
-  /// Clears the in-memory editor after a draft was claimed by the upload queue.
-  /// Draft files on disk are left intact for upload / silent retry.
   Future<void> releaseEditorAfterQueuedClaim() async {
     await _flushPersistQueue();
     _restoring = true;
     try {
       _thumbnailFutures.clear();
       mediaItems.clear();
-      batchNote.value = const VisitBatchNote();
       generalNote.value = const VisitBatchNote();
+      reportDetails.value = const VisitReportDetails();
       lastUploadIssue.value = null;
       activeCheckpointId.value = null;
       _startedAt = null;
@@ -353,6 +348,7 @@ class VisitVideoFlowController extends GetxController {
       draftRegionName.value = null;
       patrolContext.value = null;
       activeDraftKey.value = null;
+      isPreparingReport.value = false;
       await _store.setActiveKey(VisitDraftKey.unscoped, force: true);
       isDraftReady.value = true;
     } finally {
@@ -364,8 +360,8 @@ class VisitVideoFlowController extends GetxController {
     mediaItems.assignAll(snapshot.items);
     _startedAt = snapshot.startedAt;
     activeDraftKey.value = snapshot.draftKey;
-    batchNote.value = snapshot.batchNote;
     generalNote.value = snapshot.generalNote;
+    reportDetails.value = snapshot.reportDetails;
     lastUploadIssue.value = snapshot.lastUploadIssue;
     _applyContextToState(snapshot.context);
     if (draftSiteName.value == null || draftSiteName.value!.isEmpty) {
@@ -373,6 +369,36 @@ class VisitVideoFlowController extends GetxController {
     }
     if (draftRegionName.value == null || draftRegionName.value!.isEmpty) {
       draftRegionName.value = snapshot.context?.regionName;
+    }
+    _ensureReportDetailsDefaults();
+  }
+
+  void _ensureReportDetailsDefaults() {
+    final kind = flowKind;
+    if (!kind.isStructuredReport) return;
+    final current = reportDetails.value;
+    final needsDefaultCategory =
+        current.category == null || current.category!.trim().isEmpty;
+    final needsDefaultOccurredAt =
+        kind == VisitFlowKind.incidentReport && current.occurredAt == null;
+    if (!needsDefaultCategory && !needsDefaultOccurredAt) return;
+    final defaults = VisitReportDetails.defaultsFor(kind);
+    reportDetails.value = current.copyWith(
+      category: needsDefaultCategory ? defaults.category : current.category,
+      occurredAt: needsDefaultOccurredAt
+          ? defaults.occurredAt
+          : current.occurredAt,
+    );
+  }
+
+  Future<void> updateReportDetails(VisitReportDetails details) async {
+    reportDetails.value = details;
+    if (mediaItems.isNotEmpty ||
+        (isStructuredReport && details.hasUserContent)) {
+      await persistCurrentDraft();
+    } else if (isStructuredReport && !details.hasUserContent) {
+
+      await persistCurrentDraft(force: true);
     }
   }
 
@@ -411,10 +437,11 @@ class VisitVideoFlowController extends GetxController {
       draftRegionName.value = null;
       patrolContext.value = null;
       activeDraftKey.value = null;
-      batchNote.value = const VisitBatchNote();
       generalNote.value = const VisitBatchNote();
+      reportDetails.value = const VisitReportDetails();
       lastUploadIssue.value = null;
       activeCheckpointId.value = null;
+      isPreparingReport.value = false;
       isUploading.value = false;
       isQueueUploading.value = false;
       uploadProgressCurrent.value = 0;
@@ -430,8 +457,10 @@ class VisitVideoFlowController extends GetxController {
 
   Future<void> reloadForAccountChange() async {
     if (mediaItems.isNotEmpty ||
-        batchNote.value.hasContent ||
-        generalNote.value.hasContent) {
+        generalNote.value.hasContent ||
+        reportDetails.value.title.trim().isNotEmpty ||
+        reportDetails.value.details.trim().isNotEmpty ||
+        reportDetails.value.description.trim().isNotEmpty) {
       await persistCurrentDraft();
     }
     await resetForLogout();
@@ -439,19 +468,31 @@ class VisitVideoFlowController extends GetxController {
     await _restoreFuture;
   }
 
-  Future<void> persistCurrentDraft() async {
+  Future<void> persistCurrentDraft({bool force = false}) async {
     if (_restoring) return;
-    if (mediaItems.isEmpty) return;
+    final keepStructured =
+        isStructuredReport &&
+        (reportDetails.value.hasUserContent ||
+            patrolContext.value?.hasReportContext == true);
+    if (!force && mediaItems.isEmpty && !keepStructured) return;
     await _persistDraft();
     await _flushPersistQueue();
   }
 
-  Future<void> setBatchNotesEnabled(bool enabled) async {
-    if (batchNote.value.enabled == enabled) return;
-    batchNote.value = batchNote.value.copyWith(enabled: enabled);
-    if (mediaItems.isNotEmpty) {
-      await _persistDraft();
-    }
+  VisitMediaDraftSnapshot captureDraftSnapshot() {
+    final context = patrolContext.value;
+    final key = activeDraftKey.value ?? VisitDraftKey.fromContext(context);
+    return VisitMediaDraftSnapshot(
+      items: visibleMediaItems,
+      draftKey: key,
+      startedAt: _startedAt,
+      siteName: draftSiteName.value,
+      context: context,
+      savedAt: DateTime.now(),
+      generalNote: generalNote.value,
+      reportDetails: reportDetails.value,
+      lastUploadIssue: lastUploadIssue.value,
+    );
   }
 
   Future<void> setGeneralNotesEnabled(bool enabled) async {
@@ -462,19 +503,8 @@ class VisitVideoFlowController extends GetxController {
     }
   }
 
-  Future<void> updateBatchTextNote(String textNote) async {
-    await _updateToggleNoteText(current: batchNote, textNote: textNote);
-  }
-
   Future<void> updateGeneralTextNote(String textNote) async {
     await _updateToggleNoteText(current: generalNote, textNote: textNote);
-  }
-
-  Future<void> updateBatchVoiceNote(String? voiceNotePath) async {
-    await _updateToggleNoteVoice(
-      current: batchNote,
-      voiceNotePath: voiceNotePath,
-    );
   }
 
   Future<void> updateGeneralVoiceNote(String? voiceNotePath) async {
@@ -490,10 +520,7 @@ class VisitVideoFlowController extends GetxController {
   }) async {
     final trimmed = textNote.trim();
     if (trimmed.isNotEmpty) {
-      current.value = current.value.copyWith(
-        enabled: true,
-        textNote: trimmed,
-      );
+      current.value = current.value.copyWith(enabled: true, textNote: trimmed);
     } else {
       current.value = current.value.copyWith(textNote: '');
     }
@@ -536,9 +563,24 @@ class VisitVideoFlowController extends GetxController {
   }
 
   void _applyContextToState(VisitPatrolContext? context) {
+
     patrolContext.value = context;
-    draftSiteName.value = context?.siteName ?? draftSiteName.value;
-    draftRegionName.value = context?.regionName;
+    patrolContext.refresh();
+    final site = context?.siteName?.trim();
+    if (site != null && site.isNotEmpty) {
+      draftSiteName.value = site;
+    }
+    final region = context?.regionName?.trim();
+    if (region != null && region.isNotEmpty) {
+      draftRegionName.value = region;
+    } else {
+      draftRegionName.value = context?.regionName;
+    }
+    final issued = context?.reportContextIssuedAt;
+    if (issued != null) {
+
+      _startedAt = issued.toUtc();
+    }
   }
 
   Future<void> _flushPersistQueue() async {
@@ -578,106 +620,200 @@ class VisitVideoFlowController extends GetxController {
     final targetKey = VisitDraftKey.fromContext(incoming);
     final currentKey =
         activeDraftKey.value ?? VisitDraftKey.fromContext(patrolContext.value);
+    final currentBeforeSwitch = patrolContext.value;
 
     await _flushPersistQueue();
 
-    if (currentKey != targetKey && mediaItems.isNotEmpty) {
-      await persistCurrentDraft();
+    if (currentKey != targetKey &&
+        (mediaItems.isNotEmpty ||
+            generalNote.value.hasContent ||
+            reportDetails.value.hasUserContent ||
+            currentBeforeSwitch?.hasReportContext == true)) {
+      await persistCurrentDraft(force: true);
     }
 
-    final current = patrolContext.value;
-    final sameSite = currentKey == targetKey;
+    final keepInMemory =
+        currentKey == targetKey &&
+        (mediaItems.isNotEmpty ||
+            generalNote.value.hasContent ||
+            reportDetails.value.hasUserContent);
 
-    final incomingHasCheckpointList =
-        payload != null &&
-        (payload.containsKey('checkpoints') ||
-            payload.containsKey('checkpoint_count'));
-    final List<VisitCheckpoint> mergedCheckpoints;
-    if (incoming.checkpoints.isNotEmpty) {
-      mergedCheckpoints = incoming.checkpoints;
-    } else if (incomingHasCheckpointList) {
-      mergedCheckpoints = const <VisitCheckpoint>[];
-    } else if (sameSite) {
-      mergedCheckpoints = current?.checkpoints ?? const <VisitCheckpoint>[];
+    VisitPatrolContext? snapshotCtx;
+    var keptInMemory = keepInMemory;
+    if (keepInMemory) {
+      await _store.setActiveKey(targetKey);
     } else {
-      mergedCheckpoints = const <VisitCheckpoint>[];
+      _restoring = true;
+      try {
+        await VisitUploadQueue.instance.ensureStarted();
+        await _store.setActiveKey(targetKey);
+        final snapshot = await _store.loadDraftSnapshot(key: targetKey);
+        snapshotCtx = snapshot.context;
+        _thumbnailFutures.clear();
+        if (VisitUploadQueue.instance.isQueued(targetKey)) {
+          mediaItems.clear();
+          _startedAt = null;
+          generalNote.value = const VisitBatchNote();
+          reportDetails.value = VisitReportDetails.defaultsFor(
+            incoming.flowKind,
+          );
+          lastUploadIssue.value = null;
+          patrolContext.value = null;
+          draftSiteName.value = null;
+          draftRegionName.value = null;
+          activeDraftKey.value = targetKey;
+          snapshotCtx = null;
+        } else {
+          _applySnapshotToState(snapshot);
+        }
+      } finally {
+        _restoring = false;
+        isDraftReady.value = true;
+      }
+      keptInMemory = false;
     }
-    final merged = VisitPatrolContext(
-      clientDraftId: current?.clientDraftId?.isNotEmpty == true
-          ? current!.clientDraftId
-          : (incoming.clientDraftId?.isNotEmpty == true
-                ? incoming.clientDraftId
-                : VisitPatrolContext.generateClientDraftId()),
-      regionId: incoming.regionId ?? current?.regionId,
-      siteId: incoming.siteId ?? current?.siteId,
-      regionName: incoming.regionName ?? current?.regionName,
-      siteName: incoming.siteName ?? current?.siteName,
-      scheduleId: incoming.scheduleId ?? current?.scheduleId,
-      sitePatrolWindowId:
-          incoming.sitePatrolWindowId ?? current?.sitePatrolWindowId,
-      requestId: incoming.requestId ?? current?.requestId,
-      siteLatitude: incoming.siteLatitude ?? current?.siteLatitude,
-      siteLongitude: incoming.siteLongitude ?? current?.siteLongitude,
-      uploadUrl: incoming.uploadUrl ?? current?.uploadUrl,
-      minimumPhotos: incoming.minimumPhotos ??
-          (sameSite ? current?.minimumPhotos : null),
-      checkpoints: mergedCheckpoints,
+
+    final baseline = patrolContext.value;
+    final sameSite =
+        targetKey ==
+            (activeDraftKey.value ?? VisitDraftKey.fromContext(baseline)) ||
+        (baseline?.isSameSiteAs(incoming) ?? false);
+
+    final baseMerged = VisitPatrolContext.overlayFromBridge(
+      baseline: baseline,
+      incoming: incoming,
+      payload: payload,
+      sameSite: sameSite,
     );
 
-    if (currentKey == targetKey && mediaItems.isNotEmpty) {
-      activeDraftKey.value = VisitDraftKey.fromContext(merged);
-      _applyContextToState(merged);
-      await _store.setActiveKey(targetKey);
-      unawaited(persistCurrentDraft());
-      final reopenedPending = mediaItems.isNotEmpty;
-      patrolLogDebugLog(
-        '[VisitDraft] bridge open key=$targetKey '
-        'reopenedPending=$reopenedPending items=${mediaItems.length} '
-        'siteId=${merged.siteId} regionId=${merged.regionId} '
-        'checkpoints=${merged.checkpoints.length} '
-        'photos=${merged.checkpoints.where((e) => e.hasReferencePhoto).length} '
-        'photoUrls=${merged.checkpoints.map((e) => e.photoUrl).toList()} '
-        'keptInMemory=true payload=$payload',
-      );
-      return reopenedPending;
-    }
-
-    _restoring = true;
-    try {
-      await VisitUploadQueue.instance.ensureStarted();
-      await _store.setActiveKey(targetKey);
-      final snapshot = await _store.loadDraftSnapshot(key: targetKey);
-      _thumbnailFutures.clear();
-      if (VisitUploadQueue.instance.isQueued(targetKey)) {
-        // Upload owns this draft folder; open a fresh editor session.
-        mediaItems.clear();
-        _startedAt = null;
-        batchNote.value = const VisitBatchNote();
-        generalNote.value = const VisitBatchNote();
-        lastUploadIssue.value = null;
-        activeDraftKey.value = VisitDraftKey.fromContext(merged);
-      } else {
-        _applySnapshotToState(snapshot);
-      }
-    } finally {
-      _restoring = false;
-      isDraftReady.value = true;
-    }
+    final merged = baseMerged.copyWith(
+      clientDraftId: VisitPatrolContext.resolveClientDraftIdForMerge(
+        sameSite: sameSite,
+        current: baseline ?? currentBeforeSwitch,
+        incoming: incoming,
+        mergedVisit: baseMerged,
+        targetSnapshot: snapshotCtx ?? baseline,
+      ),
+      reportContextId:
+          baseMerged.reportContextId ??
+          (sameSite &&
+                  snapshotCtx?.isStructuredReport == true &&
+                  snapshotCtx?.flowKind == baseMerged.flowKind
+              ? snapshotCtx?.reportContextId
+              : null),
+      reportContextIssuedAt:
+          baseMerged.reportContextIssuedAt ??
+          (sameSite &&
+                  snapshotCtx?.isStructuredReport == true &&
+                  snapshotCtx?.flowKind == baseMerged.flowKind
+              ? snapshotCtx?.reportContextIssuedAt
+              : null),
+      timeSheetId: baseMerged.timeSheetId ?? snapshotCtx?.timeSheetId,
+    );
 
     activeDraftKey.value = VisitDraftKey.fromContext(merged);
     _applyContextToState(merged);
+    _ensureReportDetailsDefaults();
 
-    final reopenedPending = mediaItems.isNotEmpty;
+    await persistCurrentDraft(force: true);
+
+    final reopenedPending =
+        mediaItems.isNotEmpty ||
+        generalNote.value.hasContent ||
+        (merged.isStructuredReport &&
+            (reportDetails.value.hasUserContent || merged.hasReportContext));
+
     patrolLogDebugLog(
       '[VisitDraft] bridge open key=$targetKey '
       'reopenedPending=$reopenedPending items=${mediaItems.length} '
       'siteId=${merged.siteId} regionId=${merged.regionId} '
+      'clientDraftId=${merged.clientDraftId} '
+      'reportContextId=${merged.reportContextId} '
       'checkpoints=${merged.checkpoints.length} '
       'photos=${merged.checkpoints.where((e) => e.hasReferencePhoto).length} '
       'photoUrls=${merged.checkpoints.map((e) => e.photoUrl).toList()} '
-      'payload=$payload',
+      'keptInMemory=$keptInMemory '
+      'checkpointKeyPresent='
+      '${VisitPatrolContext.bridgePayloadHasCheckpointList(payload)}',
     );
     return reopenedPending;
+  }
+
+  Future<String?> ensureOperationalReportContext() async {
+    final context = patrolContext.value;
+    if (context == null || !context.isStructuredReport) return null;
+
+    if (context.hasReportContext) {
+      if (_startedAt == null && context.reportContextIssuedAt != null) {
+        _startedAt = context.reportContextIssuedAt!.toUtc();
+      }
+      await persistCurrentDraft();
+      return null;
+    }
+
+    final siteId = context.siteId;
+    if (siteId == null) {
+      return 'A site is required to start this report. '
+          'Open it again from the web with a selected site.';
+    }
+
+    var draftId = context.clientDraftId?.trim();
+    if (draftId == null || draftId.isEmpty) {
+      draftId = ensureClientDraftId();
+    }
+
+    final online = await _hasNetworkInterface();
+    if (!online) {
+      final kindLabel = context.isIncidentReport ? 'incident' : 'issue';
+      return 'You need an internet connection to start a new $kindLabel report.';
+    }
+
+    final result = await ReportContextApi.instance.issueContext(
+      clientDraftId: draftId,
+      visitKind: context.flowKind,
+      siteId: siteId,
+    );
+    if (!result.success || result.reportContextId == null) {
+      return result.displayMessage;
+    }
+
+    final issuedAt = result.issuedAt?.toUtc() ?? DateTime.now().toUtc();
+    final updated = context.copyWith(
+      clientDraftId: result.clientDraftId?.trim().isNotEmpty == true
+          ? result.clientDraftId!.trim()
+          : draftId,
+      siteId: result.siteId ?? siteId,
+      regionId: result.regionId ?? context.regionId,
+      siteName: result.siteName ?? context.siteName,
+      regionName: result.regionName ?? context.regionName,
+      reportContextId: result.reportContextId,
+      reportContextIssuedAt: issuedAt,
+      timeSheetId: result.timeSheetId ?? context.timeSheetId,
+      visitType: result.visitType ?? context.visitType,
+    );
+    activeDraftKey.value = VisitDraftKey.fromContext(updated);
+    _applyContextToState(updated);
+    _startedAt = issuedAt;
+    await persistCurrentDraft(force: true);
+    patrolLogDebugLog(
+      '[VisitDraft] report context ready '
+      'reportContextId=${updated.reportContextId} '
+      'issuedAt=$issuedAt '
+      'clientDraftId=${updated.clientDraftId} '
+      'siteId=${updated.siteId} regionId=${updated.regionId} '
+      'idempotent=${result.idempotent}',
+    );
+    return null;
+  }
+
+  static Future<bool> _hasNetworkInterface() async {
+    try {
+      final results = await Connectivity().checkConnectivity();
+      if (results.isEmpty) return false;
+      return results.any((r) => r != ConnectivityResult.none);
+    } catch (_) {
+      return true;
+    }
   }
 
   void updateSiteName(String? name) {
@@ -714,6 +850,18 @@ class VisitVideoFlowController extends GetxController {
     return id;
   }
 
+  Future<String> regenerateClientDraftId({bool persist = true}) async {
+    final id = VisitPatrolContext.generateClientDraftId();
+    final current = patrolContext.value;
+    patrolContext.value = (current ?? const VisitPatrolContext()).copyWith(
+      clientDraftId: id,
+    );
+    if (persist && mediaItems.isNotEmpty) {
+      await persistCurrentDraft();
+    }
+    return id;
+  }
+
   Future<Map<String, dynamic>> buildUploadMeta({DateTime? submittedAt}) async {
     final draftId = ensureClientDraftId();
     final officerId = await AuthRepository.instance.getOfficerAccountId();
@@ -721,8 +869,8 @@ class VisitVideoFlowController extends GetxController {
       mediaItems: mediaItems.toList(growable: false),
       context: patrolContext.value,
       startedAt: _startedAt,
-      batchNote: batchNote.value,
       generalNote: generalNote.value,
+      reportDetails: reportDetails.value,
       clientDraftId: draftId,
       submittedAt: submittedAt,
       officerId: officerId,
@@ -741,8 +889,8 @@ class VisitVideoFlowController extends GetxController {
     final startedAt = _startedAt;
     final siteName = draftSiteName.value;
     final context = patrolContext.value;
-    final note = batchNote.value;
     final general = generalNote.value;
+    final report = reportDetails.value;
     final issue = lastUploadIssue.value;
     final key = activeDraftKey.value ?? VisitDraftKey.fromContext(context);
     if (VisitUploadQueue.instance.isQueued(key)) {
@@ -764,8 +912,8 @@ class VisitVideoFlowController extends GetxController {
         siteName: siteName,
         context: context,
         key: key,
-        batchNote: note,
         generalNote: general,
+        reportDetails: report,
         lastUploadIssue: issue,
       );
     });
@@ -783,8 +931,8 @@ class VisitVideoFlowController extends GetxController {
     final startedAt = _startedAt;
     final siteName = draftSiteName.value;
     final context = patrolContext.value;
-    final note = batchNote.value;
     final general = generalNote.value;
+    final report = reportDetails.value;
     final issue = lastUploadIssue.value;
     final key = activeDraftKey.value ?? VisitDraftKey.fromContext(context);
     if (VisitUploadQueue.instance.isQueued(key)) {
@@ -806,8 +954,8 @@ class VisitVideoFlowController extends GetxController {
         siteName: siteName,
         context: context,
         key: key,
-        batchNote: note,
         generalNote: general,
+        reportDetails: report,
         lastUploadIssue: issue,
       );
     });
@@ -1050,22 +1198,21 @@ class VisitVideoFlowController extends GetxController {
     }
     _txnLog('IMPORT_COMPLETE id=$id bytes=${await File(durablePath).length()}');
 
-    final updated =
-        (existing ??
-                VisitMediaItem(path: durablePath, type: type, captureId: id))
-            .copyWith(
-              path: durablePath,
-              captureId: id ?? existing?.captureId,
-              capturedAt: geo?.capturedAt ?? existing?.capturedAt,
-              latitude: geo?.latitude ?? existing?.latitude,
-              longitude: geo?.longitude ?? existing?.longitude,
-              accuracyMeters: geo?.accuracyMeters ?? existing?.accuracyMeters,
-              siteCheckpointId:
-                  existing?.siteCheckpointId ?? activeCheckpointId.value,
-              isPendingCapture: markAccepted
-                  ? false
-                  : (existing?.isPendingCapture ?? true),
-            );
+    final base =
+        existing ??
+        VisitMediaItem(path: durablePath, type: type, captureId: id);
+    final updated = base.copyWith(
+      path: durablePath,
+      captureId: id ?? existing?.captureId,
+      capturedAt: geo?.capturedAt ?? existing?.capturedAt,
+      latitude: geo?.latitude ?? existing?.latitude,
+      longitude: geo?.longitude ?? existing?.longitude,
+      accuracyMeters: geo?.accuracyMeters ?? existing?.accuracyMeters,
+      siteCheckpointId: existing?.siteCheckpointId ?? activeCheckpointId.value,
+      isPendingCapture: markAccepted
+          ? false
+          : (existing?.isPendingCapture ?? true),
+    );
 
     _txnLog(
       'FINALIZE_${markAccepted ? "COMPLETE" : "READY"} id=$id path=$durablePath',
@@ -1116,7 +1263,8 @@ class VisitVideoFlowController extends GetxController {
       'MARK_ACCEPTED_COPYWITH',
       usePhotoClock: true,
     );
-    final updated = mediaItems[index].copyWith(
+    final current = mediaItems[index];
+    final updated = current.copyWith(
       path: item.path,
       capturedAt: geo?.capturedAt ?? item.capturedAt,
       latitude: geo?.latitude ?? item.latitude,
@@ -1422,9 +1570,7 @@ class VisitVideoFlowController extends GetxController {
   }) async {
     final index = mediaItems.indexWhere((e) => e.path == mediaPath);
     if (index < 0) return;
-    mediaItems[index] = mediaItems[index].copyWith(
-      textNote: textNote.trim(),
-    );
+    mediaItems[index] = mediaItems[index].copyWith(textNote: textNote.trim());
     await _persistDraft();
   }
 
@@ -1455,9 +1601,7 @@ class VisitVideoFlowController extends GetxController {
       await _persistDraft();
       return;
     }
-    mediaItems[index] = mediaItems[index].copyWith(
-      voiceNotePath: durableVoice,
-    );
+    mediaItems[index] = mediaItems[index].copyWith(voiceNotePath: durableVoice);
     await _persistDraft();
   }
 
@@ -1498,7 +1642,6 @@ class VisitVideoFlowController extends GetxController {
         await _store.deleteQuietly(item.voiceNotePath);
         await _store.deleteQuietly(item.path);
       }
-      await _store.deleteQuietly(batchNote.value.voiceNotePath);
       await _store.deleteQuietly(generalNote.value.voiceNotePath);
       await _store.clearDraft(deleteFiles: true, key: key);
     } else {
@@ -1506,8 +1649,8 @@ class VisitVideoFlowController extends GetxController {
     }
     _thumbnailFutures.clear();
     mediaItems.clear();
-    batchNote.value = const VisitBatchNote();
     generalNote.value = const VisitBatchNote();
+    reportDetails.value = const VisitReportDetails();
     lastUploadIssue.value = null;
     activeCheckpointId.value = null;
     _startedAt = null;
@@ -1537,8 +1680,8 @@ class VisitUploadMeta {
       mediaItems: snapshot.items,
       context: context,
       startedAt: snapshot.startedAt,
-      batchNote: snapshot.batchNote,
       generalNote: snapshot.generalNote,
+      reportDetails: snapshot.reportDetails,
       clientDraftId: draftId,
       submittedAt: submittedAt,
       officerId: resolvedOfficerId,
@@ -1549,85 +1692,99 @@ class VisitUploadMeta {
     required List<VisitMediaItem> mediaItems,
     required VisitPatrolContext? context,
     required DateTime? startedAt,
-    required VisitBatchNote batchNote,
     required VisitBatchNote generalNote,
     required String clientDraftId,
+    VisitReportDetails reportDetails = const VisitReportDetails(),
     DateTime? submittedAt,
     String? officerId,
   }) {
-    final started = (startedAt ?? DateTime.now()).toUtc();
+    final kind = context?.flowKind ?? VisitFlowKind.patrol;
+    final structured = kind.isStructuredReport;
+    final started =
+        (structured
+                ? (context?.reportContextIssuedAt ?? startedAt)
+                : startedAt)
+            ?.toUtc() ??
+        DateTime.now().toUtc();
     final submitted = (submittedAt ?? DateTime.now()).toUtc();
 
     final items = <Map<String, dynamic>>[];
     for (var i = 0; i < mediaItems.length; i++) {
       final item = mediaItems[i];
+      final textNote = item.textNote.trim();
       items.add(<String, dynamic>{
         'client_index': i,
         'type': item.type.name,
-        'text_note': item.textNote,
-        'captured_at': item.capturedAt?.toUtc().toIso8601String(),
-        'latitude': item.latitude,
-        'longitude': item.longitude,
-        'accuracy_meters': item.accuracyMeters,
-        'gps_missed': item.isGpsMissed ? 'yes' : 'no',
+        if (textNote.isNotEmpty) 'text_note': textNote,
+        if (item.capturedAt != null)
+          'captured_at': item.capturedAt!.toUtc().toIso8601String(),
+        if (item.latitude != null) 'latitude': item.latitude,
+        if (item.longitude != null) 'longitude': item.longitude,
+        if (item.accuracyMeters != null)
+          'accuracy_meters': item.accuracyMeters,
+        if (item.isGpsMissed) 'gps_missed': 'yes',
         'has_voice_note': item.hasVoiceNote,
-        'attention_needed': item.attentionNeeded ? 'yes' : 'no',
+        if (!structured)
+          'attention_needed': item.attentionNeeded ? 'yes' : 'no',
       });
     }
 
     final checkpointsMeta = <Map<String, dynamic>>[];
-    final definedCheckpoints =
-        context?.checkpoints ?? const <VisitCheckpoint>[];
-    for (final checkpoint in definedCheckpoints) {
-      final linked = mediaItems
-          .where(
-            (e) => e.siteCheckpointId == checkpoint.id && !e.isPendingCapture,
-          )
-          .toList(growable: false);
-      // Prefer a photo when both exist; video alone also completes the checkpoint.
-      var primaryIndex = mediaItems.indexWhere(
-        (e) => e.siteCheckpointId == checkpoint.id && e.isPhoto,
-      );
-      if (primaryIndex < 0) {
-        primaryIndex = mediaItems.indexWhere(
-          (e) =>
-              e.siteCheckpointId == checkpoint.id &&
-              !e.isPendingCapture &&
-              e.isVideo,
-        );
-      }
-      if (primaryIndex < 0) continue;
+    if (!structured) {
+      final definedCheckpoints =
+          context?.checkpoints ?? const <VisitCheckpoint>[];
+      for (final checkpoint in definedCheckpoints) {
+        final linked = mediaItems
+            .where(
+              (e) => e.siteCheckpointId == checkpoint.id && !e.isPendingCapture,
+            )
+            .toList(growable: false);
 
-      final primary = mediaItems[primaryIndex];
-      final notesItem = linked.firstWhere(
-        (e) => e.hasTextNote,
-        orElse: () => primary,
-      );
-      double? distanceMeters;
-      if (checkpoint.hasCoordinates &&
-          primary.latitude != null &&
-          primary.longitude != null) {
-        distanceMeters = Geolocator.distanceBetween(
-          checkpoint.latitude!,
-          checkpoint.longitude!,
-          primary.latitude!,
-          primary.longitude!,
+        var primaryIndex = mediaItems.indexWhere(
+          (e) => e.siteCheckpointId == checkpoint.id && e.isPhoto,
         );
-      }
+        if (primaryIndex < 0) {
+          primaryIndex = mediaItems.indexWhere(
+            (e) =>
+                e.siteCheckpointId == checkpoint.id &&
+                !e.isPendingCapture &&
+                e.isVideo,
+          );
+        }
+        if (primaryIndex < 0) continue;
 
-      checkpointsMeta.add(<String, dynamic>{
-        'site_checkpoint_id': checkpoint.id,
-        'status': 'completed',
-        'checked_at':
-            (primary.capturedAt ?? submitted).toUtc().toIso8601String(),
-        'latitude': primary.latitude,
-        'longitude': primary.longitude,
-        'accuracy_meters': primary.accuracyMeters,
-        if (distanceMeters != null)
-          'distance_meters': double.parse(distanceMeters.toStringAsFixed(1)),
-        'notes': notesItem.textNote.trim(),
-        'photo_client_index': primaryIndex,
-      });
+        final primary = mediaItems[primaryIndex];
+        final notesItem = linked.firstWhere(
+          (e) => e.hasTextNote,
+          orElse: () => primary,
+        );
+        double? distanceMeters;
+        if (checkpoint.hasCoordinates &&
+            primary.latitude != null &&
+            primary.longitude != null) {
+          distanceMeters = Geolocator.distanceBetween(
+            checkpoint.latitude!,
+            checkpoint.longitude!,
+            primary.latitude!,
+            primary.longitude!,
+          );
+        }
+
+        checkpointsMeta.add(<String, dynamic>{
+          'site_checkpoint_id': checkpoint.id,
+          'status': 'completed',
+          'checked_at': (primary.capturedAt ?? submitted)
+              .toUtc()
+              .toIso8601String(),
+          'latitude': primary.latitude,
+          'longitude': primary.longitude,
+          'accuracy_meters': primary.accuracyMeters,
+          if (distanceMeters != null)
+            'distance_meters': double.parse(distanceMeters.toStringAsFixed(1)),
+          'notes': notesItem.textNote.trim(),
+          'photo_client_index': primaryIndex,
+        });
+      }
     }
 
     final resolvedOfficerId = _officerIdForUpload(officerId);
@@ -1636,17 +1793,24 @@ class VisitUploadMeta {
       'started_at': started.toIso8601String(),
       'submitted_at': submitted.toIso8601String(),
       'items': items,
-      'attention_needed': batchNote.toUploadMeta(),
-      'general_note': generalNote.toGeneralUploadMeta(),
-      if (checkpointsMeta.isNotEmpty) 'checkpoints': checkpointsMeta,
+      if (!structured) ...<String, dynamic>{
+        'general_note': generalNote.toGeneralUploadMeta(),
+        if (checkpointsMeta.isNotEmpty) 'checkpoints': checkpointsMeta,
+      },
     };
     final contextFields =
         context?.toUploadMetaFields(officerId: resolvedOfficerId) ??
-        <String, dynamic>{
-          'officer_id': ?resolvedOfficerId,
-        };
+        <String, dynamic>{'officer_id': ?resolvedOfficerId};
     contextFields.remove('client_draft_id');
+    if (structured) {
+      contextFields.remove('schedule_id');
+      contextFields.remove('site_patrol_window_id');
+      contextFields.remove('site_check_time_sheet_id');
+    }
     meta.addAll(contextFields);
+    if (structured) {
+      meta.addAll(reportDetails.toUploadMeta(kind));
+    }
     return meta;
   }
 

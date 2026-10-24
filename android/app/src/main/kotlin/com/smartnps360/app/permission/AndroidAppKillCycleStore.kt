@@ -2,7 +2,6 @@ package com.smartnps360.app.permission
 
 import android.content.Context
 
-/** Local queue for kill → user-open timeline (mirrors iOS). */
 internal object AndroidAppKillCycleStore {
   private const val PREFS = "smartnps360_android_app_kill_cycle"
   private const val DEBUG_PREFS = "smartnps360_android_app_kill_cycle_debug"
@@ -46,7 +45,6 @@ internal object AndroidAppKillCycleStore {
       .commit()
   }
 
-  /** Candidate time written on onStop; promoted to killed_at after process death. */
   fun setBackgroundAt(context: Context, backgroundAt: String) {
     context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
       .edit()
@@ -135,7 +133,7 @@ internal object AndroidAppKillCycleStore {
   }
 
   fun clearDebugLogs(context: Context) {
-    // Keep wake_* fields when clearing log lines only.
+
     val prefs = context.applicationContext.getSharedPreferences(DEBUG_PREFS, Context.MODE_PRIVATE)
     prefs.edit().remove(KEY_DEBUG_LOGS).commit()
   }

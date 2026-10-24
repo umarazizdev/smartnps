@@ -1,0 +1,47 @@
+---
+description: Codex handles all image generation; Cursor agent handles every other task
+alwaysApply: true
+---
+
+# Role split: Codex = images, Cursor = everything else
+
+## Ownership
+
+- **Codex CLI** owns all AI image/icon generation and editing (photos, illustrations, mockups, sprites, textures, transparent cutouts, UI/app icons, variants).
+- **This Cursor agent** owns all other work: code, Flutter/UI, refactors, debugging, git, tests, docs, architecture, research, and wiring generated assets into the app.
+
+## When the user asks for an image or icon
+
+1. Do **not** use Cursor’s built-in `GenerateImage` tool.
+2. Do **not** invent placeholder SVGs when the user asked for a generated raster image/icon.
+3. Delegate to Codex via the project helper:
+
+```bash
+# Image only (default)
+scripts/codex-image.sh "detailed image prompt" [optional/output/path.png]
+
+# Icon only
+scripts/codex-image.sh --icon "simple gauge icon" [optional/output/path.png]
+
+# Both image + matching icon
+scripts/codex-image.sh --both "onboarding welcome art" [optional/output/path-or-dir]
+```
+
+4. After Codex finishes, report the saved path(s), then continue with any non-image follow-up (asset placement, Flutter `Image.asset`, pubspec, etc.).
+
+## When the user asks for mixed work
+
+- Split the request: run Codex for the image/icon part, handle the rest yourself.
+- Example: “make an onboarding illustration and plug it into the screen” → Codex generates the PNG, you update Flutter code.
+
+## Exceptions (stay in Cursor)
+
+- Editing existing repo SVG / vector / code-native icons to match an established system
+- Simple shapes/diagrams better done as SVG, Flutter widgets, or Mermaid
+- Charts/plots from data (generate with code, not image AI)
+---
+
+## Notes
+
+- Codex is already installed and logged in (`codex` CLI).
+- Prefer project-local output under `assets/generated/` (images) or `assets/icons/` (icons), or the path the user names.

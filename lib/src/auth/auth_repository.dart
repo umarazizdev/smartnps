@@ -323,16 +323,17 @@ class AuthRepository {
     required Map<String, dynamic> map,
     Map<String, dynamic>? user,
   }) async {
-    final accessToken = extractAccessToken(map);
-    final refreshToken = extractRefreshToken(map);
+    final payload = _unwrapAuthPayload(map);
+    final accessToken = extractAccessToken(payload);
+    final refreshToken = extractRefreshToken(payload);
     _cacheLoginState(
       accessToken: accessToken,
       refreshToken: refreshToken,
       officerLoggedIn: true,
     );
-    AuthState.instance.setSession(sessionFromAuthMap(map));
+    AuthState.instance.setSession(sessionFromAuthMap(payload));
 
-    final resolvedUser = user ?? extractUser(map);
+    final resolvedUser = user ?? extractUser(payload) ?? extractUser(map);
     if (resolvedUser != null && resolvedUser.isNotEmpty) {
       AuthState.instance.setLoggedInUser(resolvedUser);
       await saveLogin(
@@ -343,7 +344,7 @@ class AuthRepository {
     } else {
       await saveTokensFromAuthResponse(map);
     }
-    await _persistAccessTokenExpiry(map);
+    await _persistAccessTokenExpiry(payload);
     AuthState.instance.clearNeedsReauth();
     AppUpgradeReconciler.endPostUpgradeAuthGrace();
   }
@@ -461,7 +462,6 @@ class AuthRepository {
     await getAccessToken();
     await getRefreshToken();
     await isOfficerLoggedIn();
-    unawaited(CrashlyticsIdentity.syncFromStoredSession());
   }
 
   Future<String?> ensureValidAccessToken() async {
@@ -606,15 +606,7 @@ class AuthRepository {
         statusCode,
       );
       if (statusCode < 200 || statusCode >= 300) {
-        if (statusCode == 401 || statusCode == 403) {
-          await clearStoredCredentials();
-          if (kDebugMode) {
-            debugPrint(
-              '[SmartNPS360][AuthRepo] silent re-login rejected; '
-              'cleared stored credentials',
-            );
-          }
-        }
+        await _handleSilentReloginRejection(statusCode, response.data);
         return null;
       }
 
@@ -643,15 +635,7 @@ class AuthRepository {
         statusCode,
         e.response?.data?.toString() ?? e.message ?? e.type.name,
       );
-      if (statusCode == 401 || statusCode == 403) {
-        await clearStoredCredentials();
-        if (kDebugMode) {
-          debugPrint(
-            '[SmartNPS360][AuthRepo] silent re-login rejected; '
-            'cleared stored credentials',
-          );
-        }
-      }
+      await _handleSilentReloginRejection(statusCode, e.response?.data);
       return null;
     } catch (e) {
       ApiClient.logHttpError(
@@ -662,6 +646,49 @@ class AuthRepository {
       );
       return null;
     }
+  }
+
+  Future<void> _handleSilentReloginRejection(
+    int statusCode,
+    dynamic responseData,
+  ) async {
+    if (statusCode != 401) {
+      if (kDebugMode) {
+        debugPrint(
+          '[SmartNPS360][AuthRepo] silent re-login rejected '
+          'status=$statusCode (credentials kept)',
+        );
+      }
+      return;
+    }
+
+    if (_looksLikeDeviceCheckRejection(responseData)) {
+      if (kDebugMode) {
+        debugPrint(
+          '[SmartNPS360][AuthRepo] silent re-login rejected '
+          '(device check; credentials kept)',
+        );
+      }
+      return;
+    }
+
+    await clearStoredCredentials();
+    if (kDebugMode) {
+      debugPrint(
+        '[SmartNPS360][AuthRepo] silent re-login rejected; '
+        'cleared stored credentials',
+      );
+    }
+  }
+
+  static bool _looksLikeDeviceCheckRejection(dynamic responseData) {
+    final text = responseData?.toString().toLowerCase() ?? '';
+    if (text.isEmpty) return false;
+    return text.contains('device_check') ||
+        text.contains('device-check') ||
+        text.contains('device check') ||
+        text.contains('app attest') ||
+        text.contains('attestation');
   }
 
   bool _softReauthNotifyInFlight = false;
@@ -679,7 +706,6 @@ class AuthRepository {
     }
     _softReauthNotifyInFlight = true;
     try {
-      AuthState.instance.markNeedsReauth();
       if (kDebugMode) {
         debugPrint(
           '[SmartNPS360][AuthRepo] refresh 401/403 → soft re-auth '
@@ -689,7 +715,8 @@ class AuthRepository {
       final handler = onRefreshSessionExpired;
       if (handler != null) {
         await handler();
-        return;
+      } else {
+        AuthState.instance.markNeedsReauth();
       }
     } finally {
       _softReauthNotifyInFlight = false;

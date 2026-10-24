@@ -6,11 +6,11 @@ import 'package:get/get.dart';
 import '../../app/app_routes.dart';
 import '../../widgets/dialogs/glass_action_dialog.dart';
 import '../flow/visit_checkpoint.dart';
+import '../flow/visit_flow_copy.dart';
 import '../flow/visit_video_flow_controller.dart';
 import '../log_visit_theme.dart';
 import '../preview/visit_video_player_controller.dart';
 import '../preview/visit_video_preview_screen.dart';
-import '../record/visit_native_capture_launcher.dart';
 
 Color _cpCardColor(bool isDark) {
   return isDark
@@ -93,7 +93,7 @@ class _VisitCheckpointScreenState extends State<VisitCheckpointScreen> {
 
   Future<void> _openCapture() async {
     flow.beginCheckpointCapture(widget.checkpointId);
-    await VisitNativeCaptureLauncher.open();
+    await VisitVideoPreviewScreen.openNativeCapture(flow: flow);
     flow.beginCheckpointCapture(widget.checkpointId);
   }
 
@@ -115,6 +115,7 @@ class _VisitCheckpointScreenState extends State<VisitCheckpointScreen> {
       message: VisitVideoPreviewScreen.deleteMediaMessage(
         isPhoto: item.isPhoto,
         hasNotes: item.hasNotes,
+        isSiteCheck: flow.patrolContext.value?.isSiteCheck == true,
       ),
       secondaryLabel: 'Cancel',
       primaryLabel: 'Delete',
@@ -346,6 +347,9 @@ class _VisitCheckpointScreenState extends State<VisitCheckpointScreen> {
                                   isDark: isDark,
                                   isLandscape: isLandscape,
                                   onBack: _returnToDraft,
+                                  isSiteCheck:
+                                      flow.patrolContext.value?.isSiteCheck ==
+                                      true,
                                 ),
                                 Expanded(child: content),
                               ],
@@ -366,6 +370,8 @@ class _VisitCheckpointScreenState extends State<VisitCheckpointScreen> {
                             isDark: isDark,
                             isLandscape: isLandscape,
                             onBack: _returnToDraft,
+                            isSiteCheck:
+                                flow.patrolContext.value?.isSiteCheck == true,
                           ),
                           Expanded(child: content),
                           _CheckpointBottomBar(
@@ -391,11 +397,13 @@ class _CheckpointHeader extends StatelessWidget {
     required this.isDark,
     required this.onBack,
     this.isLandscape = false,
+    this.isSiteCheck = false,
   });
 
   final bool isDark;
   final VoidCallback onBack;
   final bool isLandscape;
+  final bool isSiteCheck;
 
   @override
   Widget build(BuildContext context) {
@@ -433,7 +441,7 @@ class _CheckpointHeader extends StatelessWidget {
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              'Patrol Checkpoints',
+              VisitFlowCopy(isSiteCheck: isSiteCheck).checkpointsTitle,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(

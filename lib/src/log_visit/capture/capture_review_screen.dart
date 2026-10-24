@@ -30,9 +30,14 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
     return Get.off<T>(
       () => const CaptureReviewScreen(),
       routeName: AppRoutes.captureReview,
-      transition: Transition.fadeIn,
-      duration: const Duration(milliseconds: 160),
+      transition: Transition.noTransition,
+      duration: Duration.zero,
+      preventDuplicates: true,
+      opaque: true,
       binding: BindingsBuilder(() {
+        if (Get.isRegistered<CaptureReviewController>()) {
+          Get.delete<CaptureReviewController>(force: true);
+        }
         Get.put(
           CaptureReviewController(
             displayPath: filePath,
@@ -45,6 +50,21 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
         );
       }),
     );
+  }
+
+  static void closeIfOpen() {
+    final route = Get.currentRoute;
+    final onReview =
+        route == AppRoutes.captureReview ||
+        route.contains(AppRoutes.captureReview);
+    if (onReview && (Get.key.currentState?.canPop() ?? false)) {
+      Get.back<void>(closeOverlays: true);
+    }
+    scheduleMicrotask(() {
+      if (Get.isRegistered<CaptureReviewController>()) {
+        Get.delete<CaptureReviewController>(force: true);
+      }
+    });
   }
 
   Future<void> _openNotes(
@@ -76,12 +96,14 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
       final hasVoiceNote = item?.hasVoiceNote ?? false;
       final attentionNeeded = item?.attentionNeeded ?? false;
       final mediaPath = item?.path ?? controller.mediaPath.value;
+      final showAttentionAlert = !flow.isStructuredReport;
       return _CaptureReviewActionBar(
         isLandscape: isLandscape,
         busy: busy,
         hasTextNote: hasTextNote,
         hasVoiceNote: hasVoiceNote,
         attentionNeeded: attentionNeeded,
+        showAttentionAlert: showAttentionAlert,
         onAttentionChanged: (value) {
           unawaited(() async {
             var path = mediaPath;
@@ -170,7 +192,13 @@ class CaptureReviewScreen extends GetView<CaptureReviewController> {
                           148.0,
                           164.0,
                         ),
-                        child: _actionBar(context: context, isLandscape: true),
+                        child: Align(
+                          alignment: Alignment.center,
+                          child: _actionBar(
+                            context: context,
+                            isLandscape: true,
+                          ),
+                        ),
                       ),
                     ),
                   ],
@@ -278,6 +306,7 @@ class _CaptureReviewActionBar extends StatelessWidget {
     required this.onVoiceNote,
     required this.onRetake,
     required this.onDone,
+    this.showAttentionAlert = true,
   });
 
   final bool isLandscape;
@@ -285,6 +314,7 @@ class _CaptureReviewActionBar extends StatelessWidget {
   final bool hasTextNote;
   final bool hasVoiceNote;
   final bool attentionNeeded;
+  final bool showAttentionAlert;
   final ValueChanged<bool> onAttentionChanged;
   final VoidCallback onTextNote;
   final VoidCallback onVoiceNote;
@@ -313,12 +343,13 @@ class _CaptureReviewActionBar extends StatelessWidget {
         label: hasVoiceNote ? 'Edit audio' : 'Add audio',
         onPressed: busy ? null : onVoiceNote,
       ),
-      _ReviewAlertTile(
-        isLandscape: isLandscape,
-        enabled: !busy,
-        value: attentionNeeded,
-        onChanged: onAttentionChanged,
-      ),
+      if (showAttentionAlert)
+        _ReviewAlertTile(
+          isLandscape: isLandscape,
+          enabled: !busy,
+          value: attentionNeeded,
+          onChanged: onAttentionChanged,
+        ),
     ];
 
     if (isLandscape) {
@@ -328,9 +359,21 @@ class _CaptureReviewActionBar extends StatelessWidget {
           const doneGap = 10.0;
           const doneHeight = 52.0;
           const actionHeight = 44.0;
+          final actionCount = actions.length;
+          final actionsBlockHeight = actionCount == 0
+              ? 0.0
+              : (actionCount * actionHeight) +
+                    ((actionCount - 1) * actionGap);
+          final neededHeight = actionsBlockHeight + doneGap + doneHeight;
+          final fits = constraints.hasBoundedHeight &&
+              constraints.maxHeight.isFinite &&
+              constraints.maxHeight >= neededHeight - 0.5;
 
-          return Column(
-            mainAxisAlignment: MainAxisAlignment.center,
+          final column = Column(
+            mainAxisAlignment: fits
+                ? MainAxisAlignment.center
+                : MainAxisAlignment.start,
+            mainAxisSize: fits ? MainAxisSize.max : MainAxisSize.min,
             children: [
               for (var index = 0; index < actions.length; index++) ...[
                 SizedBox(height: actionHeight, child: actions[index]),
@@ -346,28 +389,39 @@ class _CaptureReviewActionBar extends StatelessWidget {
               ),
             ],
           );
+
+          if (fits) return column;
+          return SingleChildScrollView(child: column);
         },
       );
+    }
+
+    final rows = <Widget>[];
+    for (var i = 0; i < actions.length; i += 2) {
+      if (rows.isNotEmpty) {
+        rows.add(const SizedBox(height: 8));
+      }
+      final left = actions[i];
+      final rightIndex = i + 1;
+      if (rightIndex < actions.length) {
+        rows.add(
+          Row(
+            children: [
+              Expanded(child: left),
+              const SizedBox(width: 6),
+              Expanded(child: actions[rightIndex]),
+            ],
+          ),
+        );
+      } else {
+        rows.add(left);
+      }
     }
 
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Row(
-          children: [
-            Expanded(child: actions[0]),
-            const SizedBox(width: 6),
-            Expanded(child: actions[1]),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            Expanded(child: actions[2]),
-            const SizedBox(width: 6),
-            Expanded(child: actions[3]),
-          ],
-        ),
+        ...rows,
         const SizedBox(height: 10),
         _ReviewDoneButton(
           height: 54,

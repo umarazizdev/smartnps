@@ -56,10 +56,7 @@ class ClockInGateService {
     _clockInAbandonTimer = null;
   }
 
-  void _scheduleAbandonWatchdog(
-    Duration delay, {
-    required String reason,
-  }) {
+  void _scheduleAbandonWatchdog(Duration delay, {required String reason}) {
     final generation = ++_clockInAbandonGeneration;
     _clockInAbandonTimer?.cancel();
     _clockInAbandonTimer = Timer(delay, () {
@@ -101,9 +98,7 @@ class ClockInGateService {
     }
 
     if (kDebugMode && (wasActive || Platform.isAndroid)) {
-      debugPrint(
-        '[ClockInGateService] clock-in attempt abandoned ($reason)',
-      );
+      debugPrint('[ClockInGateService] clock-in attempt abandoned ($reason)');
     }
   }
 

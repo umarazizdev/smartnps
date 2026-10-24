@@ -26,13 +26,16 @@ class ClockInLocationDisclosureDialog extends StatelessWidget {
       return 'Location is used only while you are clocked in on an active shift. '
           'It supports safety, patrol verification, and attendance. '
           'SmartNPS360 may collect and use your location, including in the '
-          'background. Tracking stops when your shift ends and you clock out.';
+          'background. Tracking pauses during unpaid meal breaks and stops when '
+          'you clock out.';
     }
     return 'Location is used only while you are clocked in on an active shift.\n'
         'It supports safety, patrol verification, and attendance.\n\n'
         'While you are on duty:\n'
         'SmartNPS360 may collect and use your location, including in the '
         'background.\n\n'
+        'During an unpaid meal break:\n'
+        'Location tracking pauses and resumes when you return to duty.\n\n'
         'When you clock out:\n'
         'Tracking stops when your shift ends and you clock out.\n\n'
         'Leaving the site (if enabled):\n'
@@ -111,7 +114,8 @@ class ClockInLocationDisclosureDialog extends StatelessWidget {
     final alwaysLabel = _alwaysAccessLabel();
     return 'Background location ("$alwaysLabel") is required for live location '
         'while you are on duty—including when the app is in the background.\n\n'
-        'Tracking stops when you clock out. You are not tracked off duty.';
+        'Tracking pauses during unpaid meal breaks and stops when you clock out. '
+        'You are not tracked off duty.';
   }
 
   static String _messageForPermission(

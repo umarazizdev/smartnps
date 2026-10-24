@@ -261,9 +261,6 @@ class IosDutyLocationPinger {
       return;
     }
 
-    // After kill relaunch the Geolocator subscription is often alive but silent.
-    // Never skip polling just because `_subscription != null` — that produced
-    // running=true with zero uploads. Poll when forced, or when uploads are quiet.
     if (onlyIfQuiet) {
       final last = _lastUploadAt;
       final quietFor = _streamController.pollInterval;
@@ -290,14 +287,13 @@ class IosDutyLocationPinger {
     }
   }
 
-  /// Immediate GPS poll after SLC/kill wake (bypass quiet gate).
   static Future<void> forceWakeLocationPing() async {
     if (!Platform.isIOS || !_running) return;
     SessionDebugLogger.instance.log(
       SessionDebugCategory.duty,
       'force wake GPS poll (subscription=${_subscription != null})',
     );
-    // Allow first post-wake upload even if a stale gate window remains.
+
     _uploadGate.reset();
     await _pollCurrentPosition(onlyIfQuiet: false);
   }
@@ -377,8 +373,6 @@ class IosDutyLocationPinger {
         return;
       }
 
-      // After kill relaunch, Geolocator can stay subscribed but silent.
-      // Don't assume a live subscription means uploads are flowing.
       final last = _lastUploadAt;
       final streamQuiet = last == null ||
           DateTime.now().difference(last) > const Duration(seconds: 15);
@@ -387,10 +381,6 @@ class IosDutyLocationPinger {
       return;
     }
 
-    // Native keep-alive GPS (dutyGpsLocationManager) is the reliable path after
-    // swipe-kill / SLC relaunch. Geolocator alone often delivers nothing while
-    // backgrounded. Previously we dropped ios_gps whenever isRunning — that
-    // produced "GPS started" logs with zero pings.
     if (source == 'ios_gps') {
       if (!isRunning) {
         unawaited(recoverIfNeeded(fromLocationWake: true));

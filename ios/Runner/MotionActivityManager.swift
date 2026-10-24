@@ -2,7 +2,6 @@ import CoreMotion
 import Flutter
 import Foundation
 
-/// Streams Core Motion activity updates to Flutter via EventChannel.
 final class MotionActivityManager: NSObject, FlutterStreamHandler {
   static let methodChannelName = "com.smartnps360.app/motion_activity"
   static let eventChannelName = "com.smartnps360.app/motion_activity_events"
@@ -12,7 +11,7 @@ final class MotionActivityManager: NSObject, FlutterStreamHandler {
     let queue = OperationQueue()
     queue.name = "com.smartnps360.app.motion_activity"
     queue.maxConcurrentOperationCount = 1
-    // Prefer snappy delivery for the Motion UI / fusion.
+
     queue.qualityOfService = .userInitiated
     return queue
   }()
@@ -25,7 +24,6 @@ final class MotionActivityManager: NSObject, FlutterStreamHandler {
   private var lastPayload: [String: Any]?
   private var lastSignificantActivity: String?
 
-  /// Called on walking / running / driving / cycling while on duty.
   var onSignificantMotion: ((String) -> Void)?
 
   var running: Bool { isStreaming }
@@ -63,8 +61,6 @@ final class MotionActivityManager: NSObject, FlutterStreamHandler {
     stopUpdates()
   }
 
-  // MARK: - FlutterStreamHandler
-
   func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink)
     -> FlutterError?
   {
@@ -78,13 +74,10 @@ final class MotionActivityManager: NSObject, FlutterStreamHandler {
   }
 
   func onCancel(withArguments arguments: Any?) -> FlutterError? {
-    // Clear sink only — duty GPS / fusion may still need recognition.
-    // Flutter stops explicitly via MethodChannel stop().
+
     eventSink = nil
     return nil
   }
-
-  // MARK: - MethodChannel
 
   private func handle(call: FlutterMethodCall, result: @escaping FlutterResult) {
     switch call.method {
@@ -126,7 +119,6 @@ final class MotionActivityManager: NSObject, FlutterStreamHandler {
     return CMMotionActivityManager.isActivityAvailable() ? "granted" : "unavailable"
   }
 
-  /// Triggers the system Motion & Fitness prompt when status is notDetermined.
   private func requestPermission(result: @escaping FlutterResult) {
     guard CMMotionActivityManager.isActivityAvailable() else {
       result("unavailable")
@@ -202,8 +194,7 @@ final class MotionActivityManager: NSObject, FlutterStreamHandler {
           ],
         ]
       }
-      // Do not call startActivityUpdates while notDetermined — that would show
-      // the system prompt outside the permissions dialog Allow / Continue flow.
+
       if status == .notDetermined {
         return [
           "ok": false,
@@ -218,7 +209,7 @@ final class MotionActivityManager: NSObject, FlutterStreamHandler {
     }
 
     if isStreaming {
-      // Refresh snapshot so UI isn't stuck waiting for the next OS event.
+
       emitRecentSnapshot()
       return [
         "ok": true,
@@ -235,10 +226,10 @@ final class MotionActivityManager: NSObject, FlutterStreamHandler {
         }
         return
       }
-      // Skip unknown-only samples when we already have a better last payload.
+
       let mapped = self.mapActivity(activity)
       if mapped.activity == "unknown", self.lastPayload != nil {
-        // Still accept unknown if confidence is high (genuine unknown).
+
         if activity.confidence == .low {
           return
         }
@@ -281,14 +272,12 @@ final class MotionActivityManager: NSObject, FlutterStreamHandler {
     onSignificantMotion?(activity)
   }
 
-  /// Immediate historical query so the screen paints without waiting on live OS lag.
   private func queryLatest(result: @escaping FlutterResult) {
     guard CMMotionActivityManager.isActivityAvailable() else {
       result(["ok": false, "update": NSNull()])
       return
     }
 
-    // queryActivityStarting also triggers the Motion prompt when notDetermined.
     if #available(iOS 11.0, *),
       CMMotionActivityManager.authorizationStatus() == .notDetermined
     {
@@ -344,7 +333,6 @@ final class MotionActivityManager: NSObject, FlutterStreamHandler {
     }
   }
 
-  /// Prefer the newest non-unknown activity; fall back to newest overall.
   private func pickBest(from activities: [CMMotionActivity]) -> CMMotionActivity? {
     guard !activities.isEmpty else { return nil }
     let sorted = activities.sorted { $0.startDate > $1.startDate }
@@ -379,7 +367,6 @@ final class MotionActivityManager: NSObject, FlutterStreamHandler {
   private func mapActivity(_ activity: CMMotionActivity) -> (activity: String, confidence: Int) {
     let confidence = confidencePercent(activity.confidence)
 
-    // Prefer more specific motion states when multiple flags are set.
     if activity.running {
       return ("running", confidence)
     }

@@ -5,10 +5,6 @@ import android.content.Intent
 import android.os.IBinder
 import android.util.Log
 
-/**
- * Lightweight sticky service so [onTaskRemoved] fires on swipe-kill.
- * Not a location FGS — only tracks task removal while duty/permission watch is armed.
- */
 class AndroidAppKillCycleService : Service() {
   override fun onBind(intent: Intent?): IBinder? = null
 

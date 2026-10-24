@@ -54,7 +54,7 @@ internal object AndroidPermissionStatusUploader {
     copy.remove("checkedAt")
     copy.remove("killed_at")
     copy.remove("opened_at")
-    // Stable key order for permissions sub-object.
+
     val perms = copy.optJSONObject("permissions")
     if (perms != null) {
       val ordered = JSONObject()
@@ -98,10 +98,6 @@ internal object AndroidPermissionStatusUploader {
     return false
   }
 
-  /**
-   * Explicit app_cycle timeline upload (killed / kill+open).
-   * Always POSTs; does not use permission fingerprint skip.
-   */
   fun uploadAppCycleEvent(
     context: Context,
     appCycle: String,
@@ -165,7 +161,6 @@ internal object AndroidPermissionStatusUploader {
     return ok
   }
 
-  /** Minimal payload for kill/wake — reuse last full Flutter snapshot when present. */
   private fun buildLightweightPayload(
     context: Context,
     appCycle: String,
@@ -206,6 +201,21 @@ internal object AndroidPermissionStatusUploader {
     AndroidPermissionStatusStore.deviceName(context)?.let {
       payload.put("deviceName", it)
     }
+
+    val cachedBattery = AndroidPermissionStatusStore.readCachedBatteryPercentage(context)
+    val liveBattery = AndroidPermissionStatusReader.batteryPercentage(context)
+    val battery = when {
+      cachedBattery != null -> cachedBattery
+      liveBattery in 0..100 -> liveBattery
+      else -> null
+    }
+    if (battery != null) {
+      payload.put("battery_percentage", battery)
+    }
+    val cachedLowPower = AndroidPermissionStatusStore.readCachedLowPowerMode(context)
+    val lowPower = cachedLowPower
+      ?: AndroidPermissionStatusReader.lowPowerModeStatus(context)
+    payload.put("low_power_mode", lowPower)
     if (!killedAt.isNullOrEmpty()) {
       payload.put("killed_at", killedAt)
     }
@@ -230,7 +240,7 @@ internal object AndroidPermissionStatusUploader {
     }
     val dutyBase = com.smartnps360.app.duty.AndroidDutyKillStore.apiBaseUrl(context)
     if (!dutyBase.isNullOrEmpty()) {
-      // Keep kill uploads on the same API host Flutter is using.
+
       context.getSharedPreferences("smartnps360_android_permission_status", Context.MODE_PRIVATE)
         .edit()
         .putString("api_base_url", dutyBase)
@@ -323,8 +333,7 @@ internal object AndroidPermissionStatusUploader {
   private fun utcNow(): String {
     val fmt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.US)
     fmt.timeZone = TimeZone.getTimeZone("UTC")
-    // Native clock is millisecond-resolution; pad the microsecond part with 000
-    // to match the 6-digit ISO-8601 used by updated_at (e.g. ...:00.123000Z).
+
     return "${fmt.format(Date())}000Z"
   }
 

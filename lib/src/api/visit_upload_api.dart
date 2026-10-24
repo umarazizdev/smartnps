@@ -8,7 +8,10 @@ import 'package:http_parser/http_parser.dart';
 import 'package:path/path.dart' as p;
 
 import '../debug/session_debug_logger.dart';
+import '../log_visit/flow/visit_flow_copy.dart';
+import '../log_visit/flow/visit_flow_kind.dart';
 import '../log_visit/flow/visit_video_flow_controller.dart';
+import '../utilities/app_debug_log.dart';
 import 'api_client.dart';
 import 'api_urls.dart';
 
@@ -22,6 +25,7 @@ class VisitUploadResult {
     this.statusCode,
     this.errors,
     this.isNetworkFailure = false,
+    this.flowKind,
   });
 
   final bool success;
@@ -33,12 +37,53 @@ class VisitUploadResult {
   final Map<String, dynamic>? errors;
 
   final bool isNetworkFailure;
+  final VisitFlowKind? flowKind;
 
   String get displayMessage {
+    if (success) {
+      final kind = flowKind;
+      if (kind != null) return VisitFlowCopy(kind: kind).successMessage;
+      final text = message?.trim();
+      if (text != null && text.isNotEmpty) return text;
+      return const VisitFlowCopy().successMessage;
+    }
     final text = message?.trim();
     if (text != null && text.isNotEmpty) return text;
-    if (success) return 'Patrol round report uploaded successfully';
     return 'Upload failed';
+  }
+
+  bool get isClientDraftReuseError {
+    if (success) return false;
+    final map = errors;
+    if (map != null) {
+      for (final entry in map.entries) {
+        final key = entry.key.toString().toLowerCase();
+        if (key != 'client_draft_id' && key != 'clientdraftid') continue;
+        for (final message in _errorMessages(entry.value)) {
+          if (_looksLikeDraftReuseMessage(message)) return true;
+        }
+      }
+    }
+    return _looksLikeDraftReuseMessage(displayMessage);
+  }
+
+  static List<String> _errorMessages(dynamic value) {
+    if (value is List) {
+      return value
+          .map((e) => e?.toString().trim() ?? '')
+          .where((e) => e.isNotEmpty)
+          .toList(growable: false);
+    }
+    final text = value?.toString().trim() ?? '';
+    if (text.isEmpty) return const <String>[];
+    return <String>[text];
+  }
+
+  static bool _looksLikeDraftReuseMessage(String? raw) {
+    final text = raw?.trim().toLowerCase() ?? '';
+    if (text.isEmpty) return false;
+    return text.contains('already used for a different visit') ||
+        (text.contains('client_draft_id') && text.contains('already used'));
   }
 
   static bool isNetworkDioException(DioException error) {
@@ -46,6 +91,7 @@ class VisitUploadResult {
       case DioExceptionType.connectionTimeout:
       case DioExceptionType.sendTimeout:
       case DioExceptionType.receiveTimeout:
+      case DioExceptionType.transformTimeout:
       case DioExceptionType.connectionError:
         return true;
       case DioExceptionType.unknown:
@@ -59,6 +105,144 @@ class VisitUploadResult {
         return false;
     }
   }
+
+  static VisitUploadResult parseHttp({
+    required int statusCode,
+    required dynamic data,
+    VisitFlowKind? flowKind,
+  }) {
+    Map<String, dynamic>? map;
+    if (data is Map<String, dynamic>) {
+      map = data;
+    } else if (data is Map) {
+      map = Map<String, dynamic>.from(data);
+    } else if (data is String && data.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(data);
+        if (decoded is Map) map = Map<String, dynamic>.from(decoded);
+      } catch (_) {}
+    }
+
+    final idSource = _mapWithVisitId(map);
+    final visitId = _visitIdFrom(idSource, allowBareId: idSource != map);
+    final successFlag = map?['success'] ?? idSource?['success'];
+    final statusOk = statusCode >= 200 && statusCode < 300;
+    final claimedSuccess =
+        successFlag == true || (successFlag == null && statusOk);
+    final ok = claimedSuccess && visitId != null;
+
+    Map<String, dynamic>? errors;
+    final rawErrors = map?['errors'] ?? idSource?['errors'];
+    if (rawErrors is Map) {
+      errors = Map<String, dynamic>.from(rawErrors);
+    }
+
+    final apiMessage =
+        _firstText(map, const ['message']) ??
+        _firstText(idSource, const ['message']);
+    final message = ok
+        ? apiMessage
+        : (claimedSuccess && visitId == null
+              ? (apiMessage?.trim().isNotEmpty == true
+                    ? apiMessage
+                    : 'Upload response missing visit_id.')
+              : apiMessage);
+
+    return VisitUploadResult(
+      success: ok,
+      statusCode: statusCode,
+      visitId: visitId,
+      clientDraftId:
+          _firstText(map, const ['client_draft_id', 'clientDraftId']) ??
+          _firstText(idSource, const ['client_draft_id', 'clientDraftId']),
+      itemsSaved:
+          _firstInt(map, const ['items_saved', 'itemsSaved']) ??
+          _firstInt(idSource, const ['items_saved', 'itemsSaved']),
+      message: message,
+      errors: errors,
+      flowKind: flowKind,
+    );
+  }
+
+  static const _visitIdKeys = <String>[
+    'visit_id',
+    'visitId',
+    'report_id',
+    'reportId',
+  ];
+
+  static const _envelopeKeys = <String>[
+    'data',
+    'payload',
+    'result',
+    'visit',
+    'report',
+  ];
+
+  static Map<String, dynamic>? _mapWithVisitId(Map<String, dynamic>? map) {
+    if (map == null) return null;
+    if (_visitIdFrom(map, allowBareId: false) != null) return map;
+
+    for (final nested in _nestedMaps(map)) {
+      if (_visitIdFrom(nested, allowBareId: true) != null) return nested;
+    }
+    return map;
+  }
+
+  static List<Map<String, dynamic>> _nestedMaps(Map<String, dynamic> map) {
+    final maps = <Map<String, dynamic>>[];
+    for (final key in _envelopeKeys) {
+      final nested = _asMap(map[key]);
+      if (nested == null) continue;
+      maps.add(nested);
+      for (final innerKey in _envelopeKeys) {
+        final inner = _asMap(nested[innerKey]);
+        if (inner != null) maps.add(inner);
+      }
+    }
+    return maps;
+  }
+
+  static int? _visitIdFrom(
+    Map<String, dynamic>? map, {
+    required bool allowBareId,
+  }) {
+    final id = _firstInt(map, _visitIdKeys);
+    if (id != null) return id;
+    if (!allowBareId) return null;
+    return _firstInt(map, const ['id']);
+  }
+
+  static int? _firstInt(Map<String, dynamic>? map, List<String> keys) {
+    if (map == null) return null;
+    for (final key in keys) {
+      if (!map.containsKey(key)) continue;
+      final parsed = _asInt(map[key]);
+      if (parsed != null) return parsed;
+    }
+    return null;
+  }
+
+  static String? _firstText(Map<String, dynamic>? map, List<String> keys) {
+    if (map == null) return null;
+    for (final key in keys) {
+      final text = map[key]?.toString().trim();
+      if (text != null && text.isNotEmpty) return text;
+    }
+    return null;
+  }
+
+  static Map<String, dynamic>? _asMap(dynamic value) {
+    if (value is Map<String, dynamic>) return value;
+    if (value is Map) return Map<String, dynamic>.from(value);
+    return null;
+  }
+
+  static int? _asInt(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    return int.tryParse(value?.toString() ?? '');
+  }
 }
 
 class VisitUploadApi {
@@ -69,12 +253,15 @@ class VisitUploadApi {
   Future<VisitUploadResult> uploadVisit({
     required Map<String, dynamic> meta,
     required List<VisitMediaItem> items,
-    String? batchVoicePath,
     String? generalVoicePath,
     String? uploadUrl,
     void Function(int current, int total)? onProgress,
   }) async {
-    if (items.isEmpty) {
+    final visitType = meta['visit_type']?.toString().trim().toLowerCase();
+    final allowsEmptyMedia =
+        visitType == VisitFlowKind.issueReportVisitType ||
+        visitType == VisitFlowKind.incidentReportVisitType;
+    if (items.isEmpty && !allowsEmptyMedia) {
       const result = VisitUploadResult(
         success: false,
         message: 'Please capture at least one photo or video before upload.',
@@ -154,16 +341,6 @@ class VisitUploadApi {
       }
     }
 
-    final batchVoiceResult = await _attachBatchVoice(
-      form: form,
-      meta: meta,
-      batchVoicePath: batchVoicePath,
-    );
-    if (batchVoiceResult != null) {
-      _logResult(batchVoiceResult);
-      return batchVoiceResult;
-    }
-
     final generalVoiceResult = await _attachGeneralVoice(
       form: form,
       meta: meta,
@@ -174,7 +351,8 @@ class VisitUploadApi {
       return generalVoiceResult;
     }
 
-    final resolvedUploadUrl = _resolveUploadUrl(uploadUrl);
+    final resolvedUploadUrl = _resolveUploadUrl(uploadUrl, meta: meta);
+    final flowKind = _resolveFlowKind(meta: meta, uploadUrl: resolvedUploadUrl);
 
     if (kDebugMode) {
       debugPrint(
@@ -207,7 +385,7 @@ class VisitUploadApi {
       );
 
       onProgress?.call(items.length, items.length);
-      final result = _parseResponse(response);
+      final result = _parseResponse(response, flowKind: flowKind);
       _logResult(result, responseBody: response.data);
       return result;
     } on DioException catch (error) {
@@ -228,7 +406,7 @@ class VisitUploadApi {
       final network = VisitUploadResult.isNetworkDioException(error);
       final parsed = error.response == null
           ? null
-          : _parseResponse(error.response!);
+          : _parseResponse(error.response!, flowKind: flowKind);
       if (parsed != null && !network) {
         _logResult(parsed, responseBody: error.response?.data);
         return parsed;
@@ -238,6 +416,7 @@ class VisitUploadApi {
         statusCode: error.response?.statusCode,
         message: error.message ?? 'Network error while uploading visit.',
         isNetworkFailure: network || error.response == null,
+        flowKind: flowKind,
       );
       _logResult(fallback, responseBody: error.response?.data);
       return fallback;
@@ -248,24 +427,115 @@ class VisitUploadApi {
           debugPrint('[VisitUploadApi] stack=$stack');
         }
       }
-      final network =
-          error is SocketException || error is HttpException;
+      final network = error is SocketException || error is HttpException;
       final fallback = VisitUploadResult(
         success: false,
         message: error.toString(),
         isNetworkFailure: network,
+        flowKind: flowKind,
       );
       _logResult(fallback);
       return fallback;
     }
   }
 
-  static String _resolveUploadUrl(String? uploadUrl) {
+  static String _resolveUploadUrl(
+    String? uploadUrl, {
+    Map<String, dynamic>? meta,
+  }) {
+    final siteCheckUrl = resolveSiteCheckUploadUrl(meta: meta);
+    if (siteCheckUrl != null) return siteCheckUrl;
+
     final trimmed = uploadUrl?.trim();
     if (trimmed == null || trimmed.isEmpty) {
       return ApiUrls.visitsUploadUrl;
     }
     return trimmed;
+  }
+
+  static String? resolveSiteCheckUploadUrl({
+    Map<String, dynamic>? meta,
+    String? visitType,
+    int? siteCheckTimeSheetId,
+    int? timeSheetId,
+  }) {
+    final type =
+        (visitType ?? meta?['visit_type'] ?? meta?['visitType'])
+            ?.toString()
+            .trim()
+            .toLowerCase() ??
+        '';
+    final hasSiteCheckTimeSheet =
+        siteCheckTimeSheetId != null ||
+        _metaHasAnyKey(meta, const [
+          'site_check_time_sheet_id',
+          'siteCheckTimeSheetId',
+        ]);
+    final isSiteCheck =
+        VisitFlowKind.fromVisitType(type) == VisitFlowKind.siteCheck ||
+        (type.isEmpty && hasSiteCheckTimeSheet);
+    if (!isSiteCheck) return null;
+
+    final timeSheet =
+        siteCheckTimeSheetId ??
+        _intFromMeta(meta, const [
+          'site_check_time_sheet_id',
+          'siteCheckTimeSheetId',
+        ]) ??
+        timeSheetId ??
+        _intFromMeta(meta, const [
+          'time_sheet_id',
+          'timeSheetId',
+          'timeSheet',
+          'timesheet_id',
+          'timesheet',
+        ]);
+    if (timeSheet == null) return null;
+    return ApiUrls.siteCheckVisitsUploadUrl(timeSheet);
+  }
+
+  static int? _intFromMeta(Map<String, dynamic>? meta, List<String> keys) {
+    if (meta == null) return null;
+    for (final key in keys) {
+      if (!meta.containsKey(key)) continue;
+      final value = meta[key];
+      if (value is int) return value;
+      if (value is num) return value.toInt();
+      final parsed = int.tryParse(value?.toString().trim() ?? '');
+      if (parsed != null) return parsed;
+    }
+    return null;
+  }
+
+  static bool _metaHasAnyKey(Map<String, dynamic>? meta, List<String> keys) {
+    if (meta == null) return false;
+    for (final key in keys) {
+      if (meta.containsKey(key) && meta[key] != null) return true;
+    }
+    return false;
+  }
+
+  static VisitFlowKind _resolveFlowKind({
+    required Map<String, dynamic> meta,
+    required String uploadUrl,
+  }) {
+    final visitType =
+        meta['visit_type']?.toString().trim() ??
+        meta['visitType']?.toString().trim() ??
+        '';
+    if (visitType.isNotEmpty) {
+      return VisitFlowKind.fromVisitType(visitType);
+    }
+
+    final path =
+        Uri.tryParse(uploadUrl)?.path.toLowerCase() ?? uploadUrl.toLowerCase();
+    if (path.contains('/issue-reports')) return VisitFlowKind.issueReport;
+    if (path.contains('/incident-reports')) {
+      return VisitFlowKind.incidentReport;
+    }
+    if (path.contains('/site-checks/')) return VisitFlowKind.siteCheck;
+    if (path.contains('/onsite-patrol/')) return VisitFlowKind.siteCheck;
+    return VisitFlowKind.patrol;
   }
 
   static int _itemProgressFromBytes({
@@ -280,9 +550,10 @@ class VisitUploadApi {
     if (mediaBytes <= 0) {
       if (totalHint > 0) {
         final ratio = (sent / totalHint).clamp(0.0, 1.0);
-        return (ratio * itemByteWeights.length)
-            .ceil()
-            .clamp(1, itemByteWeights.length);
+        return (ratio * itemByteWeights.length).ceil().clamp(
+          1,
+          itemByteWeights.length,
+        );
       }
       return 1;
     }
@@ -296,12 +567,29 @@ class VisitUploadApi {
     return itemByteWeights.length;
   }
 
+  static String _bodyPreview(dynamic responseBody) {
+    if (responseBody == null) return '';
+    final text = responseBody.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (text.isEmpty) return '';
+    if (text.length <= 180) return text;
+    return '${text.substring(0, 180)}…';
+  }
+
   void _logResult(VisitUploadResult result, {dynamic responseBody}) {
     if (!result.success) {
+      final path =
+          Uri.tryParse(ApiUrls.visitsUploadUrl)?.path ?? '/visits/upload';
+      final draftId = result.clientDraftId?.trim() ?? '';
+      final ids = <String>[
+        if (result.visitId != null) 'visitId=${result.visitId}',
+        if (draftId.isNotEmpty) 'clientDraftId=$draftId',
+      ].join(' ');
       SessionDebugLogger.instance.log(
         SessionDebugCategory.uploads,
-        'FAIL status=${result.statusCode} '
-        'message=${result.displayMessage} errors=${result.errors}',
+        'FAIL POST $path status=${result.statusCode} '
+        '${ids.isEmpty ? '' : '$ids '}'
+        'message=${result.displayMessage} errors=${result.errors} '
+        'body=${_bodyPreview(responseBody)}',
       );
     }
     if (!kDebugMode) return;
@@ -309,14 +597,27 @@ class VisitUploadApi {
       debugPrint(
         '[VisitUploadApi] SUCCESS status=${result.statusCode} '
         'visitId=${result.visitId} clientDraftId=${result.clientDraftId} '
-        'itemsSaved=${result.itemsSaved} message=${result.displayMessage}',
+        'itemsSaved=${result.itemsSaved}',
       );
+      logDebugJson('VisitUploadApi SUCCESS', {
+        'statusCode': result.statusCode,
+        'visitId': result.visitId,
+        'clientDraftId': result.clientDraftId,
+        'itemsSaved': result.itemsSaved,
+        'message': result.displayMessage,
+        'body': responseBody,
+      });
     } else {
       debugPrint(
         '[VisitUploadApi] FAIL status=${result.statusCode} '
-        'message=${result.displayMessage} errors=${result.errors} '
-        'body=$responseBody',
+        'message=${result.displayMessage} errors=${result.errors}',
       );
+      logDebugJson('VisitUploadApi FAIL', {
+        'statusCode': result.statusCode,
+        'message': result.displayMessage,
+        'errors': result.errors,
+        'body': responseBody,
+      });
     }
   }
 
@@ -369,53 +670,6 @@ class VisitUploadApi {
       }
       return null;
     }
-  }
-
-  Future<VisitUploadResult?> _attachBatchVoice({
-    required FormData form,
-    required Map<String, dynamic> meta,
-    required String? batchVoicePath,
-  }) async {
-    final attentionNeeded = meta['attention_needed'] ?? meta['batch_note'];
-    if (attentionNeeded is! Map) return null;
-
-    final neededRaw = attentionNeeded['needed']
-        ?.toString()
-        .trim()
-        .toLowerCase();
-    final neededYes =
-        neededRaw == 'yes' ||
-        neededRaw == 'true' ||
-        attentionNeeded['needed'] == true;
-    final wantsVoice = neededYes && attentionNeeded['has_voice_note'] == true;
-    if (!wantsVoice) return null;
-
-    final path = batchVoicePath?.trim();
-    if (path == null || path.isEmpty) {
-      return const VisitUploadResult(
-        success: false,
-        message: 'Attention needed voice note missing.',
-      );
-    }
-    final voiceFile = File(path);
-    if (!await voiceFile.exists()) {
-      return const VisitUploadResult(
-        success: false,
-        message: 'Attention needed voice note file missing.',
-      );
-    }
-
-    form.files.add(
-      MapEntry(
-        'attention_voice',
-        await MultipartFile.fromFile(
-          path,
-          filename: 'attention_voice${_extension(path) ?? '.m4a'}',
-          contentType: _voiceContentType(path),
-        ),
-      ),
-    );
-    return null;
   }
 
   Future<VisitUploadResult?> _attachGeneralVoice({
@@ -514,48 +768,14 @@ class VisitUploadApi {
     };
   }
 
-  VisitUploadResult _parseResponse(Response<dynamic> response) {
-    final status = response.statusCode ?? 0;
-    final data = response.data;
-    Map<String, dynamic>? map;
-    if (data is Map<String, dynamic>) {
-      map = data;
-    } else if (data is Map) {
-      map = Map<String, dynamic>.from(data);
-    } else if (data is String && data.trim().isNotEmpty) {
-      try {
-        final decoded = jsonDecode(data);
-        if (decoded is Map) map = Map<String, dynamic>.from(decoded);
-      } catch (_) {}
-    }
-
-    final successFlag = map?['success'];
-    final ok =
-        successFlag == true ||
-        (successFlag == null && status >= 200 && status < 300);
-
-    Map<String, dynamic>? errors;
-    final rawErrors = map?['errors'];
-    if (rawErrors is Map) {
-      errors = Map<String, dynamic>.from(rawErrors);
-    }
-
-    return VisitUploadResult(
-      success: ok,
-      statusCode: status,
-      visitId: _asInt(map?['visit_id'] ?? map?['visitId']),
-      clientDraftId:
-          map?['client_draft_id']?.toString() ??
-          map?['clientDraftId']?.toString(),
-      itemsSaved: _asInt(map?['items_saved'] ?? map?['itemsSaved']),
-      message: map?['message']?.toString(),
-      errors: errors,
+  VisitUploadResult _parseResponse(
+    Response<dynamic> response, {
+    VisitFlowKind? flowKind,
+  }) {
+    return VisitUploadResult.parseHttp(
+      statusCode: response.statusCode ?? 0,
+      data: response.data,
+      flowKind: flowKind,
     );
-  }
-
-  int? _asInt(dynamic value) {
-    if (value is int) return value;
-    if (value is num) return value.toInt();
-    return int.tryParse(value?.toString() ?? '');
   }
 }

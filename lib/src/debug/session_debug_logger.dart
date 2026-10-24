@@ -4,10 +4,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Temporary, button-gated debug capture for the Debug Env screen.
-///
-/// Default OFF. Writes only while [isRunning], only for selected categories,
-/// with a hard line cap and rate limit so it stays light.
 class SessionDebugLogger extends ChangeNotifier {
   SessionDebugLogger._();
 
@@ -20,8 +16,11 @@ class SessionDebugLogger extends ChangeNotifier {
   static const String _prefsLogsKey = 'session_debug_logs_v1';
   static const String _prefsEndsAtKey = 'session_debug_ends_at_ms_v1';
   static const String _prefsCategoriesKey = 'session_debug_categories_v1';
+  static const String _prefsApiSuccessTargetKey =
+      'session_debug_api_success_target_v1';
+  static const String _prefsApiSuccessTargetsKey =
+      'session_debug_api_success_targets_v1';
 
-  /// Read by Flutter prefs; native gate uses MethodChannel sync instead.
   static const String killCapturePrefsKey = 'session_debug_kill_capture_v1';
 
   static const MethodChannel _settingsChannel = MethodChannel(
@@ -30,6 +29,8 @@ class SessionDebugLogger extends ChangeNotifier {
 
   final List<String> _logs = <String>[];
   final Set<SessionDebugCategory> _categories = <SessionDebugCategory>{};
+  final Set<SessionDebugApiSuccessTarget> _apiSuccessTargets =
+      <SessionDebugApiSuccessTarget>{SessionDebugApiSuccessTarget.all};
   DateTime? _endsAt;
   bool _ready = false;
   int _appendsThisSecond = 0;
@@ -55,12 +56,37 @@ class SessionDebugLogger extends ChangeNotifier {
   Set<SessionDebugCategory> get categories =>
       Set<SessionDebugCategory>.unmodifiable(_categories);
 
+  Set<SessionDebugApiSuccessTarget> get apiSuccessTargets =>
+      Set<SessionDebugApiSuccessTarget>.unmodifiable(_apiSuccessTargets);
+
+  String get apiSuccessTargetsLabel {
+    if (_apiSuccessTargets.isEmpty ||
+        _apiSuccessTargets.contains(SessionDebugApiSuccessTarget.all)) {
+      return SessionDebugApiSuccessTarget.all.label;
+    }
+    return _apiSuccessTargets.map((t) => t.label).join(', ');
+  }
+
   List<String> get logs => List<String>.unmodifiable(_logs);
 
-  /// True only while Run is active and [category] is selected.
   bool isCategoryActive(SessionDebugCategory category) {
     _syncExpired();
     return isRunning && _categories.contains(category);
+  }
+
+  bool shouldLogApiSuccess(Uri uri) {
+    _syncExpired();
+    if (!isRunning || !_categories.contains(SessionDebugCategory.apiSuccess)) {
+      return false;
+    }
+    if (_apiSuccessTargets.isEmpty ||
+        _apiSuccessTargets.contains(SessionDebugApiSuccessTarget.all)) {
+      return true;
+    }
+    for (final target in _apiSuccessTargets) {
+      if (target.matches(uri)) return true;
+    }
+    return false;
   }
 
   Future<void> ensureReady() async {
@@ -86,16 +112,23 @@ class SessionDebugLogger extends ChangeNotifier {
             .map(SessionDebugCategory.tryParse)
             .whereType<SessionDebugCategory>(),
       );
+    _apiSuccessTargets
+      ..clear()
+      ..addAll(_loadApiSuccessTargets(prefs));
 
     _ready = true;
     _syncExpired();
     _armExpireTimer();
-    notifyListeners();
+    _safeNotifyListeners();
   }
 
   Future<void> start({
     required Set<SessionDebugCategory> categories,
     required Duration duration,
+    Set<SessionDebugApiSuccessTarget> apiSuccessTargets =
+        const <SessionDebugApiSuccessTarget>{
+          SessionDebugApiSuccessTarget.all,
+        },
   }) async {
     await ensureReady();
     if (categories.isEmpty || duration <= Duration.zero) return;
@@ -103,20 +136,32 @@ class SessionDebugLogger extends ChangeNotifier {
     _categories
       ..clear()
       ..addAll(categories);
+    _apiSuccessTargets
+      ..clear()
+      ..addAll(
+        categories.contains(SessionDebugCategory.apiSuccess)
+            ? _normalizeApiSuccessTargets(apiSuccessTargets)
+            : const <SessionDebugApiSuccessTarget>{
+                SessionDebugApiSuccessTarget.all,
+              },
+      );
     _endsAt = DateTime.now().add(duration);
     await _persistMeta();
     _armExpireTimer();
+    final successNote = categories.contains(SessionDebugCategory.apiSuccess)
+        ? ' apiSuccess=${_apiSuccessTargets.map((t) => t.id).join('+')}'
+        : '';
     unawaited(
       _appendLine(
         _formatLine(
           'session',
           'started categories=${categories.map((c) => c.id).join(',')} '
-          'duration=${duration.inMinutes}m',
+          'duration=${duration.inMinutes}m$successNote',
         ),
         persist: true,
       ),
     );
-    notifyListeners();
+    _safeNotifyListeners();
   }
 
   Future<void> stop({String reason = 'stopped'}) async {
@@ -134,7 +179,46 @@ class SessionDebugLogger extends ChangeNotifier {
         persist: true,
       );
     }
-    notifyListeners();
+    _safeNotifyListeners();
+  }
+
+  void logApiSuccess({
+    required String method,
+    required Uri uri,
+    required int statusCode,
+  }) {
+    logApiStatus(method: method, uri: uri, statusCode: statusCode);
+  }
+
+  void logApiStatus({
+    required String method,
+    required Uri uri,
+    required int statusCode,
+    String? error,
+  }) {
+    _syncExpired();
+    if (!isRunning) return;
+
+    final hasApi = _categories.contains(SessionDebugCategory.apiErrors);
+    final hasApiOk = _categories.contains(SessionDebugCategory.apiSuccess);
+    if (!hasApi && !hasApiOk) return;
+
+    if (!hasApi && hasApiOk && !shouldLogApiSuccess(uri)) return;
+
+    final path = _safePath(uri);
+    final errorPart =
+        (error == null || error.trim().isEmpty) ? '' : ' error=${error.trim()}';
+    final message = '$method $path status=$statusCode$errorPart';
+
+    final category = hasApi
+        ? SessionDebugCategory.apiErrors
+        : SessionDebugCategory.apiSuccess;
+    log(category, message);
+  }
+
+  static String _safePath(Uri uri) {
+    final path = uri.path.isEmpty ? '/' : uri.path;
+    return path;
   }
 
   Future<void> clearLogs() async {
@@ -142,10 +226,9 @@ class SessionDebugLogger extends ChangeNotifier {
     _logs.clear();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_prefsLogsKey);
-    notifyListeners();
+    _safeNotifyListeners();
   }
 
-  /// No-op unless a session is running and [category] is selected.
   void log(SessionDebugCategory category, String message) {
     if (!_ready) {
       unawaited(_ensureReadyThenLog(category, message));
@@ -162,7 +245,6 @@ class SessionDebugLogger extends ChangeNotifier {
     unawaited(_appendLine(line, persist: true));
   }
 
-  /// Forwards noisy helpers only when the message looks like a failure.
   void logIfErrorLike(SessionDebugCategory category, String message) {
     if (!_looksLikeError(message)) return;
     log(category, message);
@@ -174,6 +256,9 @@ class SessionDebugLogger extends ChangeNotifier {
       ..writeln('remaining=${remaining.inSeconds}s')
       ..writeln(
         'categories=${_categories.map((c) => c.id).join(',')}',
+      )
+      ..writeln(
+        'apiSuccessTargets=${_apiSuccessTargets.map((t) => t.id).join(',')}',
       )
       ..writeln('--- logs (${_logs.length}) ---');
     for (final line in _logs) {
@@ -215,12 +300,12 @@ class SessionDebugLogger extends ChangeNotifier {
     final wait = ends.difference(DateTime.now());
     if (wait.isNegative) {
       _syncExpired();
-      notifyListeners();
+      _safeNotifyListeners();
       return;
     }
     _expireTimer = Timer(wait, () {
       _syncExpired();
-      notifyListeners();
+      _safeNotifyListeners();
     });
   }
 
@@ -240,12 +325,31 @@ class SessionDebugLogger extends ChangeNotifier {
     if (_logs.length > maxLogs) {
       _logs.removeRange(0, _logs.length - maxLogs);
     }
-    notifyListeners();
+    _safeNotifyListeners();
     if (!persist) return;
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setStringList(_prefsLogsKey, List<String>.from(_logs));
     } catch (_) {}
+  }
+
+  void _safeNotifyListeners() {
+    final previous = FlutterError.onError;
+    FlutterError.onError = (details) {
+      final text = details.exceptionAsString().toLowerCase();
+      if (text.contains('lookup failed:') ||
+          text.contains("is not a subtype of type 'state<") ||
+          text.contains('is not a subtype of type \'state<') ||
+          text.contains('ext.flutter.reassemble')) {
+        return;
+      }
+      previous?.call(details);
+    };
+    try {
+      notifyListeners();
+    } finally {
+      FlutterError.onError = previous;
+    }
   }
 
   Future<void> _persistMeta() async {
@@ -263,6 +367,12 @@ class SessionDebugLogger extends ChangeNotifier {
         await prefs.setStringList(
           _prefsCategoriesKey,
           _categories.map((c) => c.id).toList(growable: false),
+        );
+      }
+      if (_categories.contains(SessionDebugCategory.apiSuccess)) {
+        await prefs.setStringList(
+          _prefsApiSuccessTargetsKey,
+          _apiSuccessTargets.map((t) => t.id).toList(growable: false),
         );
       }
       final killCapture =
@@ -323,10 +433,44 @@ class SessionDebugLogger extends ChangeNotifier {
     }
     return false;
   }
+
+  static Set<SessionDebugApiSuccessTarget> _loadApiSuccessTargets(
+    SharedPreferences prefs,
+  ) {
+    final multi = prefs.getStringList(_prefsApiSuccessTargetsKey);
+    if (multi != null && multi.isNotEmpty) {
+      return _normalizeApiSuccessTargets(
+        multi
+            .map(SessionDebugApiSuccessTarget.tryParse)
+            .whereType<SessionDebugApiSuccessTarget>(),
+      );
+    }
+
+    final legacy = SessionDebugApiSuccessTarget.tryParse(
+      prefs.getString(_prefsApiSuccessTargetKey) ?? '',
+    );
+    return <SessionDebugApiSuccessTarget>{
+      legacy ?? SessionDebugApiSuccessTarget.all,
+    };
+  }
+
+  static Set<SessionDebugApiSuccessTarget> _normalizeApiSuccessTargets(
+    Iterable<SessionDebugApiSuccessTarget> raw,
+  ) {
+    final targets = raw.toSet();
+    if (targets.isEmpty ||
+        targets.contains(SessionDebugApiSuccessTarget.all)) {
+      return <SessionDebugApiSuccessTarget>{
+        SessionDebugApiSuccessTarget.all,
+      };
+    }
+    return targets;
+  }
 }
 
 enum SessionDebugCategory {
   apiErrors('api'),
+  apiSuccess('api_ok'),
   uploads('uploads'),
   duty('duty'),
   permissions('permissions'),
@@ -338,6 +482,7 @@ enum SessionDebugCategory {
 
   String get label => switch (this) {
         SessionDebugCategory.apiErrors => 'API errors',
+        SessionDebugCategory.apiSuccess => 'API success',
         SessionDebugCategory.uploads => 'Uploads',
         SessionDebugCategory.duty => 'Duty',
         SessionDebugCategory.permissions => 'Permissions',
@@ -353,7 +498,57 @@ enum SessionDebugCategory {
   }
 }
 
-/// Preset run durations for the Debug Env screen.
+enum SessionDebugApiSuccessTarget {
+  all('all', 'All APIs', ''),
+  authLogin('auth_login', 'Auth login', '/auth/login'),
+  authRefresh('auth_refresh', 'Auth refresh', '/auth/refresh'),
+  gpsPing('gps_ping', 'GPS ping', '/gps/ping'),
+  gpsBatch('gps_batch', 'GPS batch', '/gps/batch'),
+  heartbeat('heartbeat', 'Heartbeat', '/heartbeat'),
+  pushToken('push_token', 'Push token', '/push-token'),
+  permissionStatus(
+    'permission_status',
+    'Permission status',
+    '/native-app/permission-status',
+  ),
+  visits('visits', 'Visits upload', '/visits'),
+  onsitePatrolVisits(
+    'onsite_patrol_visits',
+    'Onsite patrol visits',
+    '/onsite-patrol/visits',
+  ),
+  issueReports('issue_reports', 'Issue reports', '/issue-reports'),
+  incidentReports(
+    'incident_reports',
+    'Incident reports',
+    '/incident-reports',
+  ),
+  reportContexts('report_contexts', 'Report contexts', '/report-contexts');
+
+  const SessionDebugApiSuccessTarget(this.id, this.label, this.pathSuffix);
+
+  final String id;
+  final String label;
+  final String pathSuffix;
+
+  bool matches(Uri uri) {
+    if (this == SessionDebugApiSuccessTarget.all) return true;
+    final path = uri.path.isEmpty ? '/' : uri.path;
+    if (path == pathSuffix) return true;
+
+    return path.startsWith('$pathSuffix/');
+  }
+
+  static SessionDebugApiSuccessTarget? tryParse(String raw) {
+    final id = raw.trim().toLowerCase();
+    if (id.isEmpty) return null;
+    for (final value in SessionDebugApiSuccessTarget.values) {
+      if (value.id == id) return value;
+    }
+    return null;
+  }
+}
+
 enum SessionDebugDuration {
   oneMinute(Duration(minutes: 1), '1 min'),
   fiveMinutes(Duration(minutes: 5), '5 min'),

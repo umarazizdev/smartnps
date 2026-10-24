@@ -21,10 +21,6 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
-/**
- * Android mirror of iOS kill-cycle reporting:
- * queue first → best-effort upload → reopen with opened_at.
- */
 internal object AndroidAppKillCycleReporter {
   private const val TAG = "AndroidKillCycle"
   private const val NOTIF_CHANNEL = "smartnps360_kill_cycle"
@@ -37,7 +33,6 @@ internal object AndroidAppKillCycleReporter {
   private val killedFlushInFlight = AtomicBoolean(false)
   private val lastTerminateElapsedMs = AtomicLong(0L)
 
-  /** First Activity create in this process — used to recover kill after process death. */
   @Volatile
   private var processSessionStarted = false
 
@@ -72,7 +67,7 @@ internal object AndroidAppKillCycleReporter {
   }
 
   fun canReportKill(context: Context): Boolean {
-    // Native arm flag, with Flutter SharedPreferences fallback if native prefs lagged.
+
     val armed = AndroidDutyKillStore.isArmed(context) ||
       context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
         .getBoolean(AndroidDutyKillStore.FLUTTER_ARMED, false)
@@ -82,10 +77,6 @@ internal object AndroidAppKillCycleReporter {
     return true
   }
 
-  /**
-   * Cold start: if we backgrounded while on duty and the process died before
-   * onTaskRemoved queued a kill, promote background_at → killed_at.
-   */
   fun onActivityCreated(context: Context) {
     if (processSessionStarted) return
     processSessionStarted = true
@@ -108,7 +99,6 @@ internal object AndroidAppKillCycleReporter {
     AndroidAppKillCycleStore.clearBackgroundAt(appContext)
   }
 
-  /** Same-process background — candidate only; cleared on resume unless process dies. */
   fun onActivityStopped(context: Context) {
     if (!canReportKill(context)) {
       AndroidAppKillCycleStore.clearBackgroundAt(context.applicationContext)
@@ -123,10 +113,9 @@ internal object AndroidAppKillCycleReporter {
     val at = utcNow()
     AndroidAppKillCycleStore.setBackgroundAt(context.applicationContext, at)
     debugLog(context, "noted background_at=$at (kill candidate)")
-    // Do NOT schedule kill notification on background — only on real terminate.
+
   }
 
-  /** Swipe-up / task removed while on duty and not unpaid break. */
   fun handleTerminateWhileOnDuty(context: Context) {
     if (!canReportKill(context)) {
       debugLog(
@@ -138,7 +127,6 @@ internal object AndroidAppKillCycleReporter {
       return
     }
 
-    // onTaskRemoved + onDestroy can both fire; only handle once per swipe.
     val nowElapsed = SystemClock.elapsedRealtime()
     val previous = lastTerminateElapsedMs.get()
     if (nowElapsed - previous < 2_500L) {
@@ -148,12 +136,11 @@ internal object AndroidAppKillCycleReporter {
     lastTerminateElapsedMs.set(nowElapsed)
 
     val appContext = context.applicationContext
-    // Always refresh kill stamp for this swipe (don't skip if a stale queue exists).
+
     val killedAt = AndroidAppKillCycleStore.backgroundAt(appContext) ?: utcNow()
     AndroidAppKillCycleStore.queueKilledAt(appContext, killedAt)
     debugLog(appContext, "queued killed_at=$killedAt")
 
-    // Notify on real task-remove / destroy only (not deferred from background).
     showLocalSecurityAlert(appContext)
     val latch = CountDownLatch(1)
     val uploadOk = AtomicBoolean(false)
@@ -185,10 +172,6 @@ internal object AndroidAppKillCycleReporter {
     )
   }
 
-  /**
-   * Near-realtime killed POST when terminate was missed (FGS / alarm wake after kill).
-   * Does not stamp opened_at and does not clear the kill queue.
-   */
   fun uploadKilledEventIfNeeded(context: Context, reason: String) {
     val appContext = context.applicationContext
     val killedAt = AndroidAppKillCycleStore.killedAt(appContext) ?: return
@@ -224,10 +207,9 @@ internal object AndroidAppKillCycleReporter {
     }
   }
 
-  /** Only when UI becomes resumed after a queued kill — not normal background resume. */
   fun markOpenedAfterKillIfNeeded(context: Context) {
     val appContext = context.applicationContext
-    // Same-process resume: drop background candidate so it is not treated as kill.
+
     AndroidAppKillCycleStore.clearBackgroundAt(appContext)
     cancelKillSecurityAlert(appContext, reason = "user_foreground")
 
@@ -248,11 +230,6 @@ internal object AndroidAppKillCycleReporter {
     debugLog(appContext, "queued opened_at=$openedAt (from killed state) wake_service=$wake")
   }
 
-  /**
-   * Stamp opened_at if needed and return full timeline for Flutter reopen upload.
-   * Does not upload — Flutter owns the reopen POST so a bare resumed/sync
-   * cannot race-clear the queue without opened_at.
-   */
   fun prepareTimelineForReopen(context: Context): Map<String, String>? {
     onActivityCreated(context)
     markOpenedAfterKillIfNeeded(context)
@@ -261,18 +238,13 @@ internal object AndroidAppKillCycleReporter {
     return timeline
   }
 
-  /**
-   * Backup only: if Flutter did not clear the kill-reopen queue, upload after a
-   * short delay. Immediate flush on resume was racing Flutter and clearing the
-   * queue (or posting resumed without opened_at surviving on the dashboard).
-   */
   fun scheduleReopenFlushBackup(context: Context) {
     val appContext = context.applicationContext
     if (AndroidAppKillCycleStore.killedAt(appContext) == null) return
     markOpenedAfterKillIfNeeded(appContext)
     uploadExecutor.execute {
       try {
-        // Before Flutter delayed clear (~8s) so backup can POST resumed+opened_at.
+
         Thread.sleep(2_500L)
       } catch (_: InterruptedException) {
         return@execute
@@ -459,7 +431,7 @@ internal object AndroidAppKillCycleReporter {
         channel.enableVibration(true)
         manager.createNotificationChannel(channel)
       }
-      // Prefer app icon; adaptive mipmap can fail as smallIcon on some OEMs.
+
       val smallIcon = context.applicationInfo.icon.takeIf { it != 0 }
         ?: android.R.drawable.ic_dialog_alert
       val notification = NotificationCompat.Builder(context, NOTIF_CHANNEL)
@@ -480,8 +452,7 @@ internal object AndroidAppKillCycleReporter {
   private fun utcNow(): String {
     val fmt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.US)
     fmt.timeZone = TimeZone.getTimeZone("UTC")
-    // Native clock is millisecond-resolution; pad the microsecond part with 000
-    // to match the 6-digit ISO-8601 used by updated_at (e.g. ...:00.123000Z).
+
     return "${fmt.format(Date())}000Z"
   }
 }

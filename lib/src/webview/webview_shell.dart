@@ -32,6 +32,7 @@ import '../auth/auth_state.dart';
 import '../auth/auth_repository.dart';
 import '../api/api_client.dart';
 import '../api/api_urls.dart';
+import '../api/visit_upload_api.dart';
 import '../device/device_check_service.dart';
 import '../background/duty/duty_heartbeat_service.dart';
 import '../background/duty/clock_in_gate_service.dart';
@@ -49,6 +50,7 @@ import '../push/announcements/officer_announcement_coordinator.dart';
 import '../push/notifications/push_notification_service.dart';
 import '../permissions/native_permission_status_service.dart';
 import '../log_visit/flow/visit_draft_resume_dialog.dart';
+import '../log_visit/flow/visit_flow_kind.dart';
 import '../log_visit/flow/visit_gps_session.dart';
 import '../log_visit/flow/visit_media_draft_store.dart';
 import '../log_visit/flow/visit_upload_queue.dart';
@@ -176,8 +178,12 @@ class _WebViewShellState extends State<WebViewShell>
   static const _resumeStuckWatchdogDelay = Duration(seconds: 8);
   static const _resumeStaleReloadThreshold = Duration(minutes: 30);
   static const _maxSilentRecoveries = 2;
+  static const _offlineStartupGrace = Duration(seconds: 6);
+  static const _offlineConnectivityDebounceDelay = Duration(seconds: 2);
+  static const _offlineInterfaceRecheckDelay = Duration(milliseconds: 450);
 
   DateTime? _lastBackgroundedAt;
+  DateTime? _offlineStartupGraceEndsAt;
 
   Timer? _splashReleaseTimer;
   Timer? _loadWatchdog;
@@ -190,10 +196,9 @@ class _WebViewShellState extends State<WebViewShell>
   int _startupTimeoutExtensions = 0;
   bool _recoveryInFlight = false;
   bool _awaitingRecoveryLoad = false;
+  bool _skippedOfflineWhileReachable = false;
 
   Timer? _offlineConnectivityDebounce;
-
-  String? _lastBottomBarVisibilityLog;
 
   void _setNativeAuthSession(bool value) {
     final wasReady = _shouldUploadNativePermissionStatus;
@@ -201,8 +206,7 @@ class _WebViewShellState extends State<WebViewShell>
     _ui.setNativeAuthSession(active);
     if (_shouldUploadNativePermissionStatus) {
       NativePermissionStatusService.instance.startBatteryMonitoring();
-      // Cold open after kill often resumes before auth flags are restored.
-      // Retry kill→opened upload once the session is ready.
+
       if (!wasReady) {
         unawaited(
           NativePermissionStatusService.instance
@@ -222,6 +226,34 @@ class _WebViewShellState extends State<WebViewShell>
       unawaited(sub.cancel());
     }
     _nativeGeoWatches.clear();
+  }
+
+  Future<dynamic> _safeEvaluateJavascript(
+    InAppWebViewController controller, {
+    required String source,
+    String? debugLabel,
+  }) async {
+    if (!mounted || !identical(controller, _controller)) return null;
+    try {
+      return await controller.evaluateJavascript(source: source);
+    } on MissingPluginException catch (e) {
+      _cancelNativeGeoWatches();
+      if (kDebugMode) {
+        debugPrint(
+          '[SmartNPS360] evaluateJavascript skipped'
+          '${debugLabel != null ? ' ($debugLabel)' : ''}: $e',
+        );
+      }
+      return null;
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint(
+          '[SmartNPS360] evaluateJavascript failed'
+          '${debugLabel != null ? ' ($debugLabel)' : ''}: $e',
+        );
+      }
+      return null;
+    }
   }
 
   void _releaseUiLocationOnLogout() {
@@ -600,61 +632,6 @@ class _WebViewShellState extends State<WebViewShell>
     }
   }
 
-  void _logBottomBarVisibility({
-    required bool show,
-    required bool showPermissionBlocker,
-    required bool uploadingFromDialog,
-  }) {
-    final uri = _ui.currentUri.value;
-    final keyboardInset = _ui.flutterKeyboardInset.value;
-    final isAuth = _isAuthRoute(uri);
-    final isBottomRoute = _isBottomBarRoute(uri);
-    final preserve = _ui.preserveBottomBarDuringLoad.value;
-    final reasons = <String>[];
-    if (showPermissionBlocker) reasons.add('permissionBlocker');
-    if (_ui.showOffline.value) reasons.add('offline');
-    if (!_ui.firstPageLoaded.value) reasons.add('firstPageNotLoaded');
-    if (!_ui.officerLoggedIn.value) reasons.add('notLoggedIn');
-    if (_ui.isKeyboardOpen) {
-      reasons.add('keyboardOpen(inset=${keyboardInset.toStringAsFixed(1)})');
-    }
-    if (isAuth) reasons.add('authRoute');
-    if (_ui.showingLogVisit.value) reasons.add('showingLogVisit');
-    if (uploadingFromDialog) reasons.add('uploadingFromDialog');
-    if (_ui.webHidesBottomBar.value) reasons.add('webHidesBottomBar');
-    if (!isBottomRoute && !preserve) {
-      reasons.add('notBottomBarRoute+noPreserve');
-    }
-
-    final signature =
-        'show=$show uri=${uri?.toString() ?? 'null'} '
-        'reasons=${reasons.isEmpty ? 'none' : reasons.join('|')} '
-        'flags={permissionBlocker=$showPermissionBlocker '
-        'offline=${_ui.showOffline.value} '
-        'firstPageLoaded=${_ui.firstPageLoaded.value} '
-        'officerLoggedIn=${_ui.officerLoggedIn.value} '
-        'keyboardOpen=${_ui.isKeyboardOpen} '
-        'keyboardInset=${keyboardInset.toStringAsFixed(1)} '
-        'authRoute=$isAuth '
-        'showingLogVisit=${_ui.showingLogVisit.value} '
-        'uploadingFromDialog=$uploadingFromDialog '
-        'webHidesBottomBar=${_ui.webHidesBottomBar.value} '
-        'isBottomBarRoute=$isBottomRoute '
-        'preserveDuringLoad=$preserve '
-        'selectedTab=${_ui.selectedBottomTabIndex.value} '
-        'platform=${Platform.isAndroid
-            ? 'android'
-            : Platform.isIOS
-            ? 'ios'
-            : 'other'}}';
-
-    if (_lastBottomBarVisibilityLog == signature) return;
-    _lastBottomBarVisibilityLog = signature;
-    if (kDebugMode) {
-      debugPrint('[SmartNPS360][BottomBar] $signature');
-    }
-  }
-
   Future<void> _reconcileBottomBarFromWebView(
     InAppWebViewController controller,
   ) async {
@@ -847,6 +824,28 @@ class _WebViewShellState extends State<WebViewShell>
         );
   }
 
+  static String _injectJsBridgeRoutes(String source) {
+    return source
+        .replaceAll('__JS_BRIDGE_OPEN_LOG_VISIT__', AppRoutes.openLogVisit)
+        .replaceAll(
+          '__JS_BRIDGE_OPEN_ONSITE_LOG_VISIT__',
+          AppRoutes.openOnsiteLogVisit,
+        )
+        .replaceAll('__JS_BRIDGE_OPEN_REPORT_ISSUE__', AppRoutes.createIssue)
+        .replaceAll(
+          '__JS_BRIDGE_OPEN_INCIDENT_REPORT__',
+          AppRoutes.createIncident,
+        )
+        .replaceAll(
+          '__JS_BRIDGE_GET_PENDING_DRAFTS__',
+          AppRoutes.getPendingDrafts,
+        );
+  }
+
+  static String _injectBridgeScript(String source) {
+    return _injectJsBridgeRoutes(_injectPlatformLocationLabels(source));
+  }
+
   static final UserScript _smartNpsBridgeScript = UserScript(
     source: r'''
     (function () {
@@ -953,7 +952,7 @@ class _WebViewShellState extends State<WebViewShell>
           return ensureFlutterBridge()
             .then(function () {
               return window.flutter_inappwebview.callHandler(
-                'openLogVisit',
+                '__JS_BRIDGE_OPEN_LOG_VISIT__',
                 payload == null ? {} : payload
               );
             });
@@ -962,7 +961,25 @@ class _WebViewShellState extends State<WebViewShell>
           return ensureFlutterBridge()
             .then(function () {
               return window.flutter_inappwebview.callHandler(
-                'openOnsiteLogVisit',
+                '__JS_BRIDGE_OPEN_ONSITE_LOG_VISIT__',
+                payload == null ? {} : payload
+              );
+            });
+        };
+        window.SmartNPS360.createIssue = function (payload) {
+          return ensureFlutterBridge()
+            .then(function () {
+              return window.flutter_inappwebview.callHandler(
+                '__JS_BRIDGE_OPEN_REPORT_ISSUE__',
+                payload == null ? {} : payload
+              );
+            });
+        };
+        window.SmartNPS360.createIncident = function (payload) {
+          return ensureFlutterBridge()
+            .then(function () {
+              return window.flutter_inappwebview.callHandler(
+                '__JS_BRIDGE_OPEN_INCIDENT_REPORT__',
                 payload == null ? {} : payload
               );
             });
@@ -970,7 +987,9 @@ class _WebViewShellState extends State<WebViewShell>
         window.SmartNPS360.getPendingDrafts = function () {
           return ensureFlutterBridge()
             .then(function () {
-              return window.flutter_inappwebview.callHandler('getPendingDrafts');
+              return window.flutter_inappwebview.callHandler(
+                '__JS_BRIDGE_GET_PENDING_DRAFTS__'
+              );
             });
         };
         window.SmartNPS360.isNativeApp = function () {
@@ -1574,13 +1593,14 @@ class _WebViewShellState extends State<WebViewShell>
                   password: password
                 });
               })
-              .catch(function () {})
-              .then(function () {
+              .catch(function () { return null; })
+              .then(function (result) {
                 try {
                   form.submit();
                 } catch (_) {
                   setLoginLoading(form, false);
                 }
+                return result;
               });
           });
         }
@@ -2387,6 +2407,7 @@ class _WebViewShellState extends State<WebViewShell>
       );
     }
 
+    _offlineStartupGraceEndsAt = DateTime.now().add(_offlineStartupGrace);
     unawaited(_syncOfflineFromConnectivity());
     _scheduleStartupWatchdogs();
     _connectivitySub = Connectivity().onConnectivityChanged.listen((results) {
@@ -2397,8 +2418,6 @@ class _WebViewShellState extends State<WebViewShell>
     DutyHeartbeatService.instance.backgroundLocationPermissionMissing
         .addListener(_onBackgroundLocationPermissionChanged);
 
-    // Flutter resumed is the primary kill→open upload signal. Always run prepare
-    // on mobile even before auth flags are restored (upload may wait for token).
     if (Platform.isIOS || Platform.isAndroid) {
       unawaited(
         NativePermissionStatusService.instance
@@ -2638,7 +2657,6 @@ class _WebViewShellState extends State<WebViewShell>
 
     if ((Platform.isIOS || Platform.isAndroid) &&
         state == AppLifecycleState.resumed) {
-      // Primary reopen upload path — not gated on auth (prepare stamps opened_at).
       unawaited(
         NativePermissionStatusService.instance
             .uploadAppCycleWithKillTimelineIfNeeded(appCycle: state.name),
@@ -2653,10 +2671,12 @@ class _WebViewShellState extends State<WebViewShell>
 
     if (Platform.isAndroid || Platform.isIOS) {
       if (Platform.isIOS && state == AppLifecycleState.inactive) {
+        _cancelNativeGeoWatches();
         unawaited(BackgroundLocationController.notifyAppBackgrounded());
       } else if (state == AppLifecycleState.paused ||
           state == AppLifecycleState.hidden) {
         _lastBackgroundedAt = DateTime.now();
+        _cancelNativeGeoWatches();
         unawaited(BackgroundLocationController.notifyAppBackgrounded());
       } else if (state == AppLifecycleState.resumed) {
         unawaited(BackgroundLocationController.notifyAppForegrounded());
@@ -2806,6 +2826,31 @@ class _WebViewShellState extends State<WebViewShell>
     return results.any((r) => r != ConnectivityResult.none);
   }
 
+  bool _isInOfflineStartupGrace() {
+    if (_ui.firstPageLoaded.value) {
+      _offlineStartupGraceEndsAt = null;
+      return false;
+    }
+    final ends = _offlineStartupGraceEndsAt;
+    if (ends == null) return false;
+    if (!DateTime.now().isBefore(ends)) {
+      _offlineStartupGraceEndsAt = null;
+      return false;
+    }
+    return true;
+  }
+
+  Duration? _remainingOfflineStartupGrace() {
+    final ends = _offlineStartupGraceEndsAt;
+    if (ends == null) return null;
+    final remaining = ends.difference(DateTime.now());
+    if (remaining <= Duration.zero) {
+      _offlineStartupGraceEndsAt = null;
+      return null;
+    }
+    return remaining;
+  }
+
   void _cancelOfflineConnectivityDebounce() {
     _offlineConnectivityDebounce?.cancel();
     _offlineConnectivityDebounce = null;
@@ -2818,6 +2863,44 @@ class _WebViewShellState extends State<WebViewShell>
     await _handleConnectivityChanged(results);
   }
 
+  Future<bool> _deviceHasNetworkInterface() async {
+    final results = await Connectivity().checkConnectivity();
+    if (!mounted) return true;
+    return _hasNetworkInterface(results);
+  }
+
+  Future<bool> _isConfirmedOffline() async {
+    if (await _deviceHasNetworkInterface()) return false;
+    if (!mounted) return false;
+    await Future<void>.delayed(_offlineInterfaceRecheckDelay);
+    if (!mounted) return false;
+    if (await _deviceHasNetworkInterface()) return false;
+    if (!mounted) return false;
+    return !(await SiteReachability.canReachSite());
+  }
+
+  Future<void> _showOfflineOnlyIfConfirmed({required bool needsReload}) async {
+    if (!mounted) return;
+    if (_ui.showOffline.value) return;
+    if (_isInOfflineStartupGrace()) {
+      if (!_recoveryInFlight && !_awaitingRecoveryLoad) {
+        unawaited(_recoverWebView(reason: 'offline_deferred_grace'));
+      }
+      return;
+    }
+    if (!await _isConfirmedOffline()) {
+      if (!mounted) return;
+      if (!_recoveryInFlight && !_awaitingRecoveryLoad) {
+        unawaited(_recoverWebView(reason: 'offline_unconfirmed'));
+      }
+      return;
+    }
+    if (!mounted) return;
+    if (_ui.showOffline.value) return;
+    _clearOfflineRetryUi();
+    _showOffline(needsReload: needsReload);
+  }
+
   void _clearOfflineRetryUi() {
     _ui.offlineRetrying.value = false;
     _ui.offlineStatusMessage.value = null;
@@ -2826,6 +2909,8 @@ class _WebViewShellState extends State<WebViewShell>
   void _dismissOfflineScreen() {
     _cancelOfflineConnectivityDebounce();
     _holdOfflineUntilReload = false;
+    _offlineStartupGraceEndsAt = null;
+    _skippedOfflineWhileReachable = false;
     _ui.showOffline.value = false;
     _clearOfflineRetryUi();
     _silentRecoveryAttempts = 0;
@@ -2833,6 +2918,7 @@ class _WebViewShellState extends State<WebViewShell>
 
   void _showOffline({required bool needsReload}) {
     if (needsReload) _offlineNeedsReload = true;
+    _offlineStartupGraceEndsAt = null;
     _ui.showOffline.value = true;
     _endMainFrameNavigationChrome();
   }
@@ -2841,8 +2927,8 @@ class _WebViewShellState extends State<WebViewShell>
     List<ConnectivityResult> results,
   ) async {
     if (!mounted) return;
-    final hasInternet = _hasNetworkInterface(results);
-    if (hasInternet) {
+    final hasNetwork = _hasNetworkInterface(results);
+    if (hasNetwork) {
       _cancelOfflineConnectivityDebounce();
       if (!_ui.showOffline.value) return;
       _ui.offlineRetrying.value = true;
@@ -2853,7 +2939,7 @@ class _WebViewShellState extends State<WebViewShell>
 
     _offlineConnectivityDebounce?.cancel();
     _offlineConnectivityDebounce = Timer(
-      const Duration(milliseconds: 500),
+      _offlineConnectivityDebounceDelay,
       () => unawaited(_confirmOfflineFromConnectivity()),
     );
   }
@@ -2861,6 +2947,7 @@ class _WebViewShellState extends State<WebViewShell>
   Future<void> _confirmOfflineFromConnectivity() async {
     _offlineConnectivityDebounce = null;
     if (!mounted) return;
+
     final results = await Connectivity().checkConnectivity();
     if (!mounted) return;
     if (_hasNetworkInterface(results) ||
@@ -2873,6 +2960,24 @@ class _WebViewShellState extends State<WebViewShell>
       }
       return;
     }
+
+    if (!mounted) return;
+    if (_ui.showOffline.value) return;
+
+    final graceLeft = _remainingOfflineStartupGrace();
+    if (graceLeft != null) {
+      _offlineConnectivityDebounce?.cancel();
+      _offlineConnectivityDebounce = Timer(
+        graceLeft,
+        () => unawaited(_confirmOfflineFromConnectivity()),
+      );
+      return;
+    }
+
+    if (!await _isConfirmedOffline()) {
+      if (!mounted) return;
+      return;
+    }
     if (!mounted) return;
     if (_ui.showOffline.value) return;
     _clearOfflineRetryUi();
@@ -2881,40 +2986,27 @@ class _WebViewShellState extends State<WebViewShell>
 
   Future<void> _recoverFromOffline() async {
     if (!mounted) return;
-    final needsReload = _offlineNeedsReload || !_ui.firstPageLoaded.value;
-    if (!needsReload) {
+
+    final hasNetwork =
+        await _deviceHasNetworkInterface() ||
+        await SiteReachability.canReachSite();
+    if (!mounted) return;
+
+    if (hasNetwork) {
+      final needsReload = _offlineNeedsReload || !_ui.firstPageLoaded.value;
+      _holdOfflineUntilReload = false;
       _dismissOfflineScreen();
-      return;
-    }
-
-    final controller = _controller;
-    if (controller == null) {
-      _ui.offlineRetrying.value = false;
-      _ui.offlineStatusMessage.value =
-          'Unable to reconnect right now. Please try again.';
-      return;
-    }
-
-    final target = _ui.currentUri.value?.toString() ?? AppRoutes.webBaseUrl;
-    try {
-      _awaitingOfflineRecoveryLoad = true;
-
-      await controller.loadUrl(urlRequest: URLRequest(url: WebUri(target)));
-    } catch (_) {
-      _awaitingOfflineRecoveryLoad = false;
-      if (await SiteReachability.canReachSite()) {
-        if (!mounted) return;
-        _holdOfflineUntilReload = false;
-        _dismissOfflineScreen();
-        return;
+      if (needsReload) {
+        unawaited(
+          _recoverWebView(reason: 'offline_network_restored', recreate: true),
+        );
       }
-      if (!mounted) return;
-      _holdOfflineUntilReload = true;
-      _ui.offlineRetrying.value = false;
-      _ui.offlineStatusMessage.value =
-          'Couldn\'t reconnect. Check your connection and try again.';
-      _showOffline(needsReload: true);
+      return;
     }
+
+    _ui.offlineRetrying.value = false;
+    _ui.offlineStatusMessage.value =
+        'Still no internet connection. Please check your network and try again.';
   }
 
   void _cancelWebViewWatchdogs() {
@@ -2959,6 +3051,8 @@ class _WebViewShellState extends State<WebViewShell>
     _recoveryInFlight = false;
     _awaitingRecoveryLoad = false;
     _startupTimeoutExtensions = 0;
+    _skippedOfflineWhileReachable = false;
+    _offlineStartupGraceEndsAt = null;
     _ui.splashReleased.value = true;
     _ui.firstPageLoaded.value = true;
   }
@@ -3001,13 +3095,14 @@ class _WebViewShellState extends State<WebViewShell>
       }
     }
 
-    if (await SiteReachability.canReachSite()) {
+    if (await _deviceHasNetworkInterface() ||
+        await SiteReachability.canReachSite()) {
       if (!mounted) return;
       await _recoverWebView(reason: 'startup_timeout');
       return;
     }
     if (!mounted) return;
-    _showOffline(needsReload: true);
+    await _showOfflineOnlyIfConfirmed(needsReload: true);
   }
 
   bool _isStaleBackgroundResume() {
@@ -3170,15 +3265,30 @@ class _WebViewShellState extends State<WebViewShell>
       await _recoverWebView(reason: 'recovery_timeout', recreate: true);
       return;
     }
-    _failRecoveryToOffline();
+    await _failRecoveryToOffline();
   }
 
-  void _failRecoveryToOffline() {
+  Future<void> _failRecoveryToOffline() async {
     _recoveryInFlight = false;
     _awaitingRecoveryLoad = false;
     _recoveryWatchdog?.cancel();
     _recoveryWatchdog = null;
     _ui.endNavigation();
+
+    if (!await _isConfirmedOffline()) {
+      if (!mounted) return;
+      if (!_skippedOfflineWhileReachable) {
+        _skippedOfflineWhileReachable = true;
+        _silentRecoveryAttempts = 0;
+        await _recoverWebView(
+          reason: 'recovery_exhausted_but_online',
+          recreate: true,
+        );
+      }
+      return;
+    }
+    if (!mounted) return;
+    _skippedOfflineWhileReachable = false;
     _holdOfflineUntilReload = true;
     _ui.offlineRetrying.value = false;
     _ui.offlineStatusMessage.value =
@@ -3213,7 +3323,7 @@ class _WebViewShellState extends State<WebViewShell>
 
     if (_silentRecoveryAttempts > _maxSilentRecoveries) {
       _recoveryInFlight = false;
-      _failRecoveryToOffline();
+      await _failRecoveryToOffline();
       return;
     }
 
@@ -3260,19 +3370,8 @@ class _WebViewShellState extends State<WebViewShell>
     _ui.offlineStatusMessage.value = null;
     _silentRecoveryAttempts = 0;
     _recoveryInFlight = false;
-
-    if (await SiteReachability.canReachSite()) {
-      if (!mounted) return;
-      _offlineNeedsReload = true;
-      await _recoverFromOffline();
-      return;
-    }
-    if (!mounted) return;
-    _holdOfflineUntilReload = true;
-    _showOffline(needsReload: true);
-    _ui.offlineRetrying.value = false;
-    _ui.offlineStatusMessage.value =
-        'Still no internet connection. Please check your network and try again.';
+    _offlineNeedsReload = true;
+    await _recoverFromOffline();
   }
 
   bool _isInternalUrl(Uri uri) => AppConfig.isAllowedHost(uri.host);
@@ -3353,9 +3452,6 @@ class _WebViewShellState extends State<WebViewShell>
       liveUri = (await controller.getUrl())?.uriValue;
     } catch (_) {}
 
-    // Shift Log is intentionally not a bottom-bar route (bar hidden). Android
-    // history after tab loadUrl often fails to reselect Dashboard on goBack,
-    // so leaving the Shift Log landing page always returns to Dashboard.
     if (_isShiftLogLandingUri(_ui.currentUri.value) ||
         _isShiftLogLandingUri(liveUri)) {
       await _popFromShiftLogToDashboard(controller);
@@ -3400,8 +3496,6 @@ class _WebViewShellState extends State<WebViewShell>
   Future<void> _syncChromeAfterWebHistoryBack(
     InAppWebViewController controller,
   ) async {
-    // Android WebView often still reports the previous URL immediately after
-    // goBack(); give history a moment to commit before reading it.
     if (Platform.isAndroid) {
       await Future<void>.delayed(const Duration(milliseconds: 120));
     }
@@ -3453,10 +3547,11 @@ class _WebViewShellState extends State<WebViewShell>
     queue.onQueueChanged = () {
       unawaited(_notifyWebPendingDraftsChanged());
     };
-    queue.onUploadSucceeded = () async {
+    queue.onUploadSucceeded = ({required flowKind}) async {
       final isDark = _ui.webPrefersDark.value;
       await VisitVideoPreviewScreen.showQueuedUploadSuccessFeedback(
         isDark: isDark,
+        flowKind: flowKind,
       );
       unawaited(_notifyWebPendingDraftsChanged());
     };
@@ -3783,21 +3878,28 @@ class _WebViewShellState extends State<WebViewShell>
     List<dynamic> args, {
     required String handlerName,
     required String uploadUrl,
+    String? visitType,
   }) async {
-    final isOnsite = handlerName == 'openOnsiteLogVisit';
+    final kindLabel = switch (handlerName) {
+      AppRoutes.openOnsiteLogVisit => 'onsite_patrol',
+      AppRoutes.createIssue => 'issue_report',
+      AppRoutes.createIncident => 'incident_report',
+      _ => 'standard_patrol',
+    };
     patrolLogDebugLog(
       '[SmartNPS360][JS Bridge] ================================\n'
       '[SmartNPS360][JS Bridge] CALLED FROM WEB\n'
       '[SmartNPS360][JS Bridge] route=$handlerName\n'
-      '[SmartNPS360][JS Bridge] kind=${isOnsite ? 'onsite_patrol' : 'standard_patrol'}\n'
+      '[SmartNPS360][JS Bridge] kind=$kindLabel\n'
       '[SmartNPS360][JS Bridge] uploadUrl=$uploadUrl\n'
       '[SmartNPS360][JS Bridge] argsCount=${args.length}\n'
       '[SmartNPS360][JS Bridge] ================================',
     );
     patrolLogDebugLog(
       '[SmartNPS360] $handlerName called argsCount=${args.length} '
-      'uploadUrl=$uploadUrl rawArgs=$args',
+      'uploadUrl=$uploadUrl',
     );
+    logJsBridgePayload('[SmartNPS360][JS Bridge] $handlerName payload', args);
 
     final currentHost = _ui.currentUri.value?.host;
     if (!AppConfig.isAllowedHost(currentHost)) {
@@ -3821,7 +3923,7 @@ class _WebViewShellState extends State<WebViewShell>
       if (fromContext != null) {
         patrolLogDebugLog(
           '[SmartNPS360] $handlerName using patrolDraftContext '
-          'keys=${fromContext.keys.toList()} context=$fromContext',
+          'keys=${fromContext.keys.toList()}',
         );
         payload = {...?payload, ...fromContext};
       }
@@ -3853,7 +3955,7 @@ class _WebViewShellState extends State<WebViewShell>
             '[SmartNPS360] $handlerName enriched checkpoint photos '
             'from getPatrolCheckpoints count=${fromWeb.length}',
           );
-          _logRawCheckpoints(payload!['checkpoints']);
+          _logRawCheckpoints(payload['checkpoints']);
         }
       }
     }
@@ -3889,12 +3991,15 @@ class _WebViewShellState extends State<WebViewShell>
       'uploadUrl=$uploadUrl',
     );
 
+    if (visitType != null && visitType.trim().isNotEmpty) {
+      payload = {...?payload, 'visit_type': visitType, 'visitType': visitType};
+    }
+
     final result = await _openLogVisitScreen(payload, uploadUrl: uploadUrl);
     patrolLogDebugLog(
       '[SmartNPS360] $handlerName ok=${result['ok']} '
       'reopenedPending=${result['reopenedPending']} '
-      'itemCount=${result['itemCount']} '
-      'result=$result',
+      'itemCount=${result['itemCount']}',
     );
     return result;
   }
@@ -3905,16 +4010,51 @@ class _WebViewShellState extends State<WebViewShell>
   }) async {
     final flow = VisitDraftResumeDialog.ensureFlowController();
     unawaited(VisitGpsSession.instance.start());
+    final bridgePayload = _normalizeBridgeMap(payload);
+    final resolvedUploadUrl = _resolveBridgeUploadUrl(
+      bridgePayload,
+      fallback: uploadUrl,
+    );
     final normalized = <String, dynamic>{
-      ...?_normalizeBridgeMap(payload),
-      'api_upload_url': uploadUrl,
-      'upload_url': uploadUrl,
-      'uploadUrl': uploadUrl,
+      ...?bridgePayload,
+      'api_upload_url': resolvedUploadUrl,
+      'upload_url': resolvedUploadUrl,
+      'uploadUrl': resolvedUploadUrl,
     };
 
     await _captureWebResumePoint();
 
     final reopenedPending = await flow.applyBridgePatrolContext(normalized);
+
+    if (Get.currentRoute == AppRoutes.visitVideoPreview) {
+      Get.back();
+    }
+
+    final needsReportContextPrep =
+        flow.isStructuredReport &&
+        flow.patrolContext.value?.hasReportContext != true;
+    if (needsReportContextPrep) {
+      flow.isPreparingReport.value = true;
+    }
+    _openLogVisitTab();
+
+    final contextError = await flow.ensureOperationalReportContext();
+    flow.isPreparingReport.value = false;
+    if (contextError != null) {
+      patrolLogDebugLog('[SmartNPS360] report context failed: $contextError');
+      await _closeLogVisit(openDashboard: true);
+      Get.closeAllSnackbars();
+      Get.snackbar(
+        'Cannot start report',
+        contextError,
+        snackPosition: SnackPosition.TOP,
+        duration: const Duration(seconds: 4),
+      );
+      return <String, dynamic>{
+        'ok': false,
+        'error': {'code': 'report_context_required', 'message': contextError},
+      };
+    }
     final ctx = flow.patrolContext.value;
 
     patrolLogDebugLog(
@@ -3925,17 +4065,12 @@ class _WebViewShellState extends State<WebViewShell>
       'siteId=${ctx?.siteId} regionId=${ctx?.regionId} '
       'siteName=${ctx?.siteName} regionName=${ctx?.regionName} '
       'clientDraftId=${ctx?.clientDraftId} '
+      'reportContextId=${ctx?.reportContextId} '
       'sitePatrolWindowId=${ctx?.sitePatrolWindowId} '
       'uploadUrl=${ctx?.uploadUrl} '
       'resumeUri=$_uriBeforeLogVisit '
-      'scrollY=$_scrollYBeforeLogVisit '
-      'payload=$normalized',
+      'scrollY=$_scrollYBeforeLogVisit',
     );
-
-    if (Get.currentRoute == AppRoutes.visitVideoPreview) {
-      Get.back();
-    }
-    _openLogVisitTab();
 
     return <String, dynamic>{
       'ok': true,
@@ -3946,6 +4081,7 @@ class _WebViewShellState extends State<WebViewShell>
       'siteName': ctx?.siteName,
       'regionName': ctx?.regionName,
       'clientDraftId': ctx?.clientDraftId,
+      'reportContextId': ctx?.reportContextId,
       'uploadUrl': ctx?.uploadUrl,
     };
   }
@@ -3982,6 +4118,22 @@ class _WebViewShellState extends State<WebViewShell>
       }
     }
     return out;
+  }
+
+  String _resolveBridgeUploadUrl(
+    Map<String, dynamic>? payload, {
+    required String fallback,
+  }) {
+    final siteCheckUrl = VisitUploadApi.resolveSiteCheckUploadUrl(
+      meta: payload,
+    );
+    if (siteCheckUrl != null) {
+      patrolLogDebugLog(
+        '[SmartNPS360] using site-check upload url=$siteCheckUrl',
+      );
+      return siteCheckUrl;
+    }
+    return fallback;
   }
 
   String? _stringFromPayload(Map? payload, List<String> keys) {
@@ -4148,7 +4300,7 @@ class _WebViewShellState extends State<WebViewShell>
   void _logRawCheckpoints(dynamic raw) {
     if (raw is! List) {
       patrolLogDebugLog(
-        '[SmartNPS360] checkpoints raw type=${raw.runtimeType} value=$raw',
+        '[SmartNPS360] checkpoints raw type=${raw.runtimeType}',
       );
       return;
     }
@@ -4156,7 +4308,7 @@ class _WebViewShellState extends State<WebViewShell>
       final entry = raw[i];
       if (entry is! Map) {
         patrolLogDebugLog(
-          '[SmartNPS360] checkpoint[$i] non-map type=${entry.runtimeType} value=$entry',
+          '[SmartNPS360] checkpoint[$i] non-map type=${entry.runtimeType}',
         );
         continue;
       }
@@ -4168,8 +4320,7 @@ class _WebViewShellState extends State<WebViewShell>
         'photo_url=${map['photo_url'] ?? map['photoUrl']} '
         'photo_path=${map['photo_path'] ?? map['photoPath']} '
         'image_url=${map['image_url'] ?? map['imageUrl']} '
-        'image=${map['image']} photo=${map['photo']} '
-        'raw=$map',
+        'image=${map['image']} photo=${map['photo']}',
       );
     }
   }
@@ -4323,7 +4474,7 @@ class _WebViewShellState extends State<WebViewShell>
       };
     }
 
-    final pending =
+    var pending =
         drafts ?? await VisitUploadQueue.instance.listEditablePendingDrafts();
     if (pending.isEmpty) {
       await VisitDraftResumeDialog.showEmptyState();
@@ -4338,47 +4489,103 @@ class _WebViewShellState extends State<WebViewShell>
     final flow = VisitDraftResumeDialog.ensureFlowController();
     await flow.ensureDraftLoaded();
 
-    final result = await VisitDraftResumeDialog.showPending(drafts: pending);
-    if (result == null) {
-      return <String, dynamic>{
-        'ok': true,
-        'count': pending.length,
-        'opened': true,
-        'dismissed': true,
-      };
+    var returnToSitePickerAfterDiscard = false;
+    while (true) {
+      final result = await VisitDraftResumeDialog.showPending(
+        drafts: pending,
+        forceSitePicker: returnToSitePickerAfterDiscard,
+      );
+      if (result == null) {
+        return <String, dynamic>{
+          'ok': true,
+          'count': pending.length,
+          'opened': true,
+          'dismissed': true,
+        };
+      }
+
+      await flow.activateDraft(result.draft.draftKey);
+
+      switch (result.action) {
+        case VisitDraftResumeAction.continueReport:
+        case VisitDraftResumeAction.submitReport:
+          final needsReportContextPrep =
+              flow.isStructuredReport &&
+              flow.patrolContext.value?.hasReportContext != true;
+          if (needsReportContextPrep) {
+            flow.isPreparingReport.value = true;
+          }
+          if (result.action == VisitDraftResumeAction.continueReport ||
+              needsReportContextPrep) {
+            _openLogVisitTab();
+          }
+          final resumeContextError = await flow
+              .ensureOperationalReportContext();
+          flow.isPreparingReport.value = false;
+          if (resumeContextError != null) {
+            await _closeLogVisit(openDashboard: true);
+            Get.closeAllSnackbars();
+            Get.snackbar(
+              'Cannot continue report',
+              resumeContextError,
+              snackPosition: SnackPosition.TOP,
+              duration: const Duration(seconds: 4),
+            );
+            return <String, dynamic>{
+              'ok': false,
+              'count': pending.length,
+              'opened': true,
+              'error': {
+                'code': 'report_context_required',
+                'message': resumeContextError,
+              },
+            };
+          }
+          if (result.action == VisitDraftResumeAction.submitReport) {
+            unawaited(
+              VisitVideoPreviewScreen.uploadCurrentDraft(
+                onSuccess: _finishLogVisitUploadSuccess,
+                onUploadStarted: _onPatrolUploadStarted,
+                onFailureOpenDraft: _onPatrolUploadFailureOpenDraft,
+                skipCompletionConfirm: true,
+              ),
+            );
+          }
+          final ctx = result.draft.context;
+          return <String, dynamic>{
+            'ok': true,
+            'count': pending.length,
+            'opened': true,
+            'action': result.action.name,
+            'siteId': result.draft.draftKey.siteId ?? ctx?.siteId,
+            'regionId': result.draft.draftKey.regionId ?? ctx?.regionId,
+            'visitType': ctx?.visitType,
+            'draftKey': result.draft.draftKey.folderName,
+            'flowKind': (ctx?.flowKind ?? VisitFlowKind.patrol).name,
+          };
+        case VisitDraftResumeAction.discardReport:
+          final discarded = result.draft;
+          final discardedCtx = discarded.context;
+          await flow.clearAll();
+          unawaited(_notifyWebPendingDraftsChanged());
+          pending = await VisitUploadQueue.instance.listEditablePendingDrafts();
+          if (pending.isEmpty) {
+            return <String, dynamic>{
+              'ok': true,
+              'count': 0,
+              'opened': true,
+              'action': result.action.name,
+              'siteId': discarded.draftKey.siteId ?? discardedCtx?.siteId,
+              'regionId': discarded.draftKey.regionId ?? discardedCtx?.regionId,
+              'visitType': discardedCtx?.visitType,
+              'draftKey': discarded.draftKey.folderName,
+              'flowKind': (discardedCtx?.flowKind ?? VisitFlowKind.patrol).name,
+            };
+          }
+          returnToSitePickerAfterDiscard = true;
+          continue;
+      }
     }
-
-    await flow.activateDraft(result.draft.draftKey);
-
-    switch (result.action) {
-      case VisitDraftResumeAction.continueReport:
-        _openLogVisitTab();
-        break;
-      case VisitDraftResumeAction.submitReport:
-        unawaited(
-          VisitVideoPreviewScreen.uploadCurrentDraft(
-            onSuccess: _finishLogVisitUploadSuccess,
-            onUploadStarted: _onPatrolUploadStarted,
-            onFailureOpenDraft: _onPatrolUploadFailureOpenDraft,
-            skipCompletionConfirm: true,
-          ),
-        );
-        break;
-      case VisitDraftResumeAction.discardReport:
-        await flow.clearAll();
-        unawaited(_notifyWebPendingDraftsChanged());
-        break;
-    }
-
-    final ctx = result.draft.context;
-    return <String, dynamic>{
-      'ok': true,
-      'count': pending.length,
-      'opened': true,
-      'action': result.action.name,
-      'siteId': result.draft.draftKey.siteId ?? ctx?.siteId,
-      'regionId': result.draft.draftKey.regionId ?? ctx?.regionId,
-    };
   }
 
   Future<void> _notifyWebPendingDraftsChanged() async {
@@ -4389,7 +4596,8 @@ class _WebViewShellState extends State<WebViewShell>
           .listEditablePendingDrafts();
       final payload = <String, dynamic>{'ok': true, 'count': pending.length};
       final json = jsonEncode(payload);
-      await controller.evaluateJavascript(
+      await _safeEvaluateJavascript(
+        controller,
         source:
             '''
 (function () {
@@ -4407,6 +4615,7 @@ class _WebViewShellState extends State<WebViewShell>
   } catch (_) {}
 })();
 ''',
+        debugLabel: 'pending-drafts',
       );
     } catch (e) {
       if (kDebugMode) {
@@ -4508,7 +4717,11 @@ class _WebViewShellState extends State<WebViewShell>
           );
           final js =
               'window.__smartnps_native_geo_emit($watchId, ${jsonEncode(initialPayload)});';
-          await controller.evaluateJavascript(source: js);
+          await _safeEvaluateJavascript(
+            controller,
+            source: js,
+            debugLabel: 'geo-initial-$watchId',
+          );
         }
 
         final Map? options = payload['options'] is Map
@@ -4548,16 +4761,32 @@ class _WebViewShellState extends State<WebViewShell>
             if (!position.latitude.isFinite || !position.longitude.isFinite) {
               return;
             }
+            if (!mounted || !identical(controller, _controller)) {
+              _cancelNativeGeoWatches();
+              return;
+            }
             final payload = _toWebGeolocationPayloadFromPosition(position);
             final js =
                 'window.__smartnps_native_geo_emit($watchId, ${jsonEncode(payload)});';
-            await controller.evaluateJavascript(source: js);
+            await _safeEvaluateJavascript(
+              controller,
+              source: js,
+              debugLabel: 'geo-emit-$watchId',
+            );
           },
           onError: (Object error) async {
+            if (!mounted || !identical(controller, _controller)) {
+              _cancelNativeGeoWatches();
+              return;
+            }
             final err = {'code': 2, 'message': error.toString()};
             final js =
                 'window.__smartnps_native_geo_error($watchId, ${jsonEncode(err)});';
-            await controller.evaluateJavascript(source: js);
+            await _safeEvaluateJavascript(
+              controller,
+              source: js,
+              debugLabel: 'geo-error-$watchId',
+            );
           },
         );
         _nativeGeoWatches[watchId] = sub;
@@ -4839,28 +5068,47 @@ class _WebViewShellState extends State<WebViewShell>
       },
     );
     controller.addJavaScriptHandler(
-      handlerName: 'openLogVisit',
+      handlerName: AppRoutes.openLogVisit,
       callback: (args) => _handleOpenLogVisitBridge(
         args,
-        handlerName: 'openLogVisit',
+        handlerName: AppRoutes.openLogVisit,
         uploadUrl: ApiUrls.visitsUploadUrl,
       ),
     );
     controller.addJavaScriptHandler(
-      handlerName: 'openOnsiteLogVisit',
+      handlerName: AppRoutes.openOnsiteLogVisit,
       callback: (args) => _handleOpenLogVisitBridge(
         args,
-        handlerName: 'openOnsiteLogVisit',
+        handlerName: AppRoutes.openOnsiteLogVisit,
         uploadUrl: ApiUrls.onsitePatrolVisitsUploadUrl,
       ),
     );
     controller.addJavaScriptHandler(
-      handlerName: 'getPendingDrafts',
+      handlerName: AppRoutes.createIssue,
+      callback: (args) => _handleOpenLogVisitBridge(
+        args,
+        handlerName: AppRoutes.createIssue,
+        uploadUrl: ApiUrls.issueReportsUploadUrl,
+        visitType: VisitFlowKind.issueReportVisitType,
+      ),
+    );
+    controller.addJavaScriptHandler(
+      handlerName: AppRoutes.createIncident,
+      callback: (args) => _handleOpenLogVisitBridge(
+        args,
+        handlerName: AppRoutes.createIncident,
+        uploadUrl: ApiUrls.incidentReportsUploadUrl,
+        visitType: VisitFlowKind.incidentReportVisitType,
+      ),
+    );
+    controller.addJavaScriptHandler(
+      handlerName: AppRoutes.getPendingDrafts,
       callback: (args) async {
         final currentHost = _ui.currentUri.value?.host;
         if (!AppConfig.isAllowedHost(currentHost)) {
           patrolLogDebugLog(
-            '[SmartNPS360] denied getPendingDrafts from host=$currentHost',
+            '[SmartNPS360] denied ${AppRoutes.getPendingDrafts} '
+            'from host=$currentHost',
           );
           return {
             'ok': false,
@@ -4871,10 +5119,13 @@ class _WebViewShellState extends State<WebViewShell>
           };
         }
 
-        patrolLogDebugLog('[SmartNPS360] getPendingDrafts opening dialogs');
+        patrolLogDebugLog(
+          '[SmartNPS360] ${AppRoutes.getPendingDrafts} opening dialogs',
+        );
         final result = await _presentPendingDraftDialogs();
         patrolLogDebugLog(
-          '[SmartNPS360] getPendingDrafts ok=${result['ok']} '
+          '[SmartNPS360] ${AppRoutes.getPendingDrafts} '
+          'ok=${result['ok']} '
           'count=${result['count']} opened=${result['opened']} '
           'action=${result['action']} dismissed=${result['dismissed']}',
         );
@@ -4929,6 +5180,11 @@ class _WebViewShellState extends State<WebViewShell>
             '[SmartNPS360][Auth] loginWithSanctum request host=$currentHost',
           );
         }
+
+        await AuthRepository.instance.saveCredentials(
+          employeeNo: username,
+          password: password,
+        );
 
         final ok = await _performSanctumLogin(
           username: username,
@@ -5103,6 +5359,11 @@ class _WebViewShellState extends State<WebViewShell>
     ApiClient.instance.ensureAuthInterceptorInstalled();
     final dio = ApiClient.instance.dio;
     try {
+      await AuthRepository.instance.saveCredentials(
+        employeeNo: username,
+        password: password,
+      );
+
       final deviceCheckExtras = await DeviceCheckService.authPayloadExtras();
       final response = await dio.postUri(
         Uri.parse(ApiUrls.sanctumLoginUrl),
@@ -5134,7 +5395,12 @@ class _WebViewShellState extends State<WebViewShell>
       final Map<String, dynamic>? map = body is Map
           ? Map<String, dynamic>.from(body)
           : null;
-      if (map == null || AuthRepository.extractAccessToken(map) == null) {
+      final accessToken = map == null
+          ? null
+          : AuthRepository.extractAccessToken(
+              AuthRepository.mergeAuthPayload(map),
+            );
+      if (map == null || accessToken == null || accessToken.isEmpty) {
         if (kDebugMode) {
           debugPrint(
             '[SmartNPS360][Auth] sanctum login missing token in response',
@@ -5640,7 +5906,7 @@ class _WebViewShellState extends State<WebViewShell>
   UnmodifiableListView<UserScript> _initialUserScripts() {
     final scripts = <UserScript>[
       UserScript(
-        source: _injectPlatformLocationLabels(_smartNpsBridgeScript.source),
+        source: _injectBridgeScript(_smartNpsBridgeScript.source),
         injectionTime: _smartNpsBridgeScript.injectionTime,
       ),
       UserScript(
@@ -6089,47 +6355,71 @@ class _WebViewShellState extends State<WebViewShell>
                                                 );
                                           }
                                         },
-                                        onReceivedError:
-                                            (controller, request, error) async {
-                                              _finishPullToRefreshChrome();
-                                              _finishBottomTabNavigation();
-                                              _endMainFrameNavigationChrome();
+                                        onReceivedError: (controller, request, error) async {
+                                          _finishPullToRefreshChrome();
+                                          _finishBottomTabNavigation();
+                                          _endMainFrameNavigationChrome();
 
-                                              if (error.type ==
-                                                  WebResourceErrorType
-                                                      .CANCELLED) {
-                                                return;
-                                              }
-                                              if (request.isForMainFrame ==
-                                                  false) {
-                                                return;
-                                              }
+                                          if (error.type ==
+                                              WebResourceErrorType.CANCELLED) {
+                                            return;
+                                          }
+                                          if (request.isForMainFrame == false) {
+                                            return;
+                                          }
 
-                                              if (await SiteReachability.canReachSite()) {
-                                                if (!mounted) return;
-                                                if (_recoveryInFlight ||
-                                                    _awaitingRecoveryLoad) {
-                                                  return;
-                                                }
-                                                unawaited(
-                                                  _recoverWebView(
-                                                    reason: 'main_frame_error',
-                                                  ),
-                                                );
-                                                return;
-                                              }
-                                              if (!mounted) return;
-                                              final wasRetrying =
-                                                  _ui.offlineRetrying.value;
-                                              _cancelOfflineConnectivityDebounce();
-                                              _holdOfflineUntilReload = true;
-                                              _ui.offlineRetrying.value = false;
-                                              if (wasRetrying) {
-                                                _ui.offlineStatusMessage.value =
-                                                    'Couldn\'t reconnect. Check your connection and try again.';
-                                              }
-                                              _showOffline(needsReload: true);
-                                            },
+                                          if (await _deviceHasNetworkInterface() ||
+                                              await SiteReachability.canReachSite()) {
+                                            if (!mounted) return;
+                                            if (_recoveryInFlight ||
+                                                _awaitingRecoveryLoad) {
+                                              return;
+                                            }
+                                            unawaited(
+                                              _recoverWebView(
+                                                reason: 'main_frame_error',
+                                              ),
+                                            );
+                                            return;
+                                          }
+                                          if (!mounted) return;
+                                          if (_isInOfflineStartupGrace()) {
+                                            if (!_recoveryInFlight &&
+                                                !_awaitingRecoveryLoad) {
+                                              unawaited(
+                                                _recoverWebView(
+                                                  reason:
+                                                      'main_frame_error_grace',
+                                                ),
+                                              );
+                                            }
+                                            return;
+                                          }
+                                          if (!await _isConfirmedOffline()) {
+                                            if (!mounted) return;
+                                            if (!_recoveryInFlight &&
+                                                !_awaitingRecoveryLoad) {
+                                              unawaited(
+                                                _recoverWebView(
+                                                  reason:
+                                                      'main_frame_error_recovered',
+                                                ),
+                                              );
+                                            }
+                                            return;
+                                          }
+                                          if (!mounted) return;
+                                          final wasRetrying =
+                                              _ui.offlineRetrying.value;
+                                          _cancelOfflineConnectivityDebounce();
+                                          _holdOfflineUntilReload = true;
+                                          _ui.offlineRetrying.value = false;
+                                          if (wasRetrying) {
+                                            _ui.offlineStatusMessage.value =
+                                                'Couldn\'t reconnect. Check your connection and try again.';
+                                          }
+                                          _showOffline(needsReload: true);
+                                        },
                                         onGeolocationPermissionsShowPrompt: (controller, origin) async {
                                           if (_ui.showLocationNotice.value) {
                                             return GeolocationPermissionShowPromptResponse(
@@ -6276,13 +6566,21 @@ class _WebViewShellState extends State<WebViewShell>
                                 return const SizedBox.shrink();
                               }
                               return Positioned.fill(
-                                child: VisitVideoPreviewScreen(
-                                  onBack: _dismissLogVisit,
-                                  onUploadSuccess: _finishLogVisitUploadSuccess,
-                                  onUploadStarted: _onPatrolUploadStarted,
-                                  onFailureOpenDraft:
-                                      _onPatrolUploadFailureOpenDraft,
-                                  bottomBarClearance: 0,
+                                child: Material(
+                                  color:
+                                      Theme.of(context).brightness ==
+                                          Brightness.dark
+                                      ? const Color(0xFF0F1724)
+                                      : const Color(0xFFF4F7FB),
+                                  child: VisitVideoPreviewScreen(
+                                    onBack: _dismissLogVisit,
+                                    onUploadSuccess:
+                                        _finishLogVisitUploadSuccess,
+                                    onUploadStarted: _onPatrolUploadStarted,
+                                    onFailureOpenDraft:
+                                        _onPatrolUploadFailureOpenDraft,
+                                    bottomBarClearance: 0,
+                                  ),
                                 ),
                               );
                             }),
@@ -6306,11 +6604,6 @@ class _WebViewShellState extends State<WebViewShell>
                                   !_ui.webHidesBottomBar.value &&
                                   (_isBottomBarRoute(_ui.currentUri.value) ||
                                       _ui.preserveBottomBarDuringLoad.value);
-                              _logBottomBarVisibility(
-                                show: showBottomBar,
-                                showPermissionBlocker: showPermissionBlocker,
-                                uploadingFromDialog: false,
-                              );
                               if (!showBottomBar) {
                                 return const SizedBox.shrink();
                               }
@@ -6438,7 +6731,14 @@ class _WebViewShellState extends State<WebViewShell>
     final controller = _controller;
     if (controller == null) return;
 
+    if (item == _BottomItem.actions) {
+      await _openWebActionMenu(controller);
+      return;
+    }
+
+    final currentPath = AppConfig.normalizeWebPath(_ui.currentUri.value);
     if (_ui.selectedBottomTabIndex.value == item.index &&
+        currentPath == item.normalizedPath &&
         !_ui.isNavigating.value &&
         !_ui.showingLogVisit.value) {
       return;
@@ -6467,6 +6767,26 @@ class _WebViewShellState extends State<WebViewShell>
       } catch (_) {}
     }
     await controller.loadUrl(urlRequest: URLRequest(url: WebUri(item.url)));
+  }
+
+  Future<void> _openWebActionMenu(InAppWebViewController controller) async {
+    final source = '''
+(function () {
+  try {
+    if (window.SmartNPS360 &&
+        typeof window.SmartNPS360.${AppRoutes.openActionMenu} === 'function') {
+      window.SmartNPS360.${AppRoutes.openActionMenu}();
+    } else {
+      window.dispatchEvent(new CustomEvent('${AppRoutes.openActionMenuEvent}'));
+    }
+  } catch (e) {}
+})();
+''';
+    await _safeEvaluateJavascript(
+      controller,
+      source: source,
+      debugLabel: AppRoutes.openActionMenu,
+    );
   }
 
   bool _isAuthRoute(Uri? uri) => AuthSessionManager.isLoginRoute(uri);
@@ -6547,6 +6867,12 @@ enum _BottomItem {
     'assets/list.png',
     '/officer/shift-log',
   ),
+  actions(
+    'Actions',
+    'assets/actions-grid-outline.png',
+    'assets/actions-grid.png',
+    '',
+  ),
   timesheet(
     'TimeSheet',
     'assets/schedule-outline.png',
@@ -6596,6 +6922,7 @@ class _BottomBar extends StatelessWidget {
     const visibleItems = <_BottomItem>[
       _BottomItem.dashboard,
       _BottomItem.shiftLog,
+      _BottomItem.actions,
       _BottomItem.timesheet,
       _BottomItem.profile,
     ];
@@ -6608,6 +6935,7 @@ class _BottomBar extends StatelessWidget {
           iosSymbolName: switch (item) {
             _BottomItem.dashboard => 'house.fill',
             _BottomItem.shiftLog => 'list.clipboard',
+            _BottomItem.actions => 'square.grid.2x2.fill',
             _BottomItem.timesheet => 'calendar',
             _BottomItem.profile => 'person.crop.circle.fill',
           },

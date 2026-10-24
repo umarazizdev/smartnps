@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Issue &amp; Incident Report Fields</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 820px; margin: 32px auto; padding: 0 16px; color: #1a1a1a; line-height: 1.4; }
+    h1 { font-size: 20px; margin: 0 0 6px; }
+    h2 { font-size: 16px; margin: 28px 0 10px; }
+    p { color: #555; font-size: 13px; margin: 0 0 16px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 8px; }
+    th, td { border: 1px solid #ddd; padding: 7px 9px; text-align: left; vertical-align: top; }
+    th { background: #f5f5f5; font-weight: 600; }
+    code { font-size: 12px; background: #f3f3f3; padding: 1px 4px; border-radius: 3px; }
+    .note { font-size: 12px; color: #666; margin: 4px 0 0; }
+    ul { font-size: 12px; color: #444; margin: 6px 0 0; padding-left: 18px; }
+  </style>
+</head>
+<body>
+  <h1>Issue &amp; Incident Report Fields</h1>
+  <p>Upload fields for Report an Issue and Incident Report. Media is the same for both.</p>
+
+  <h2>1. Report an Issue — <code>issue_report</code></h2>
+  <table>
+    <tr><th>Field</th><th>Required</th><th>Note</th></tr>
+    <tr><td><code>title</code></td><td>Yes</td><td>Short title</td></tr>
+    <tr><td><code>category</code></td><td>Yes</td><td>From list below</td></tr>
+    <tr><td><code>category_other</code></td><td>If Other</td><td>Custom type text</td></tr>
+    <tr><td><code>details</code></td><td>Yes</td><td>What / where / action taken</td></tr>
+    <tr><td><code>attention_to_property_management</code></td><td>No</td><td><code>yes</code> / <code>no</code></td></tr>
+    <tr><td><code>attention_to_nps</code></td><td>No</td><td><code>yes</code> / <code>no</code></td></tr>
+  </table>
+  <p class="note">Categories: Suspicious Activity, Suspicious Person, Suspicious Vehicle, Trespassing, Unauthorized Access, Homeless / Encampment, Theft / Attempted Theft, Vandalism / Property Damage, Disturbance / Fight, Noise Complaint, Safety Hazard, Medical Emergency, Fire / Fire Alarm, Accident / Injury, Parking Violation, Vehicle Incident, Access Control Issue, Door / Gate / Lock Issue, Maintenance Issue, Policy / Rule Violation, Guest / Resident Assistance, Visitor / Vendor Issue, Welfare Check, Delivery / Package Issue, Lost &amp; Found, Patrol Observation, Police / Fire / EMS Response, Follow-Up Required, Information Report, Other</p>
+
+  <h2>2. Incident Report — <code>incident_report</code></h2>
+  <table>
+    <tr><th>Field</th><th>Required</th><th>Note</th></tr>
+    <tr><td><code>title</code></td><td>Yes</td><td>Short title</td></tr>
+    <tr><td><code>category</code></td><td>No</td><td>Security, Medical, Fire, Theft, Property Damage, Accident, Other</td></tr>
+    <tr><td><code>occurred_at</code></td><td>No</td><td>ISO date-time (defaults to now)</td></tr>
+    <tr><td><code>location</code></td><td>No</td><td>Where it happened</td></tr>
+    <tr><td><code>people_involved</code></td><td>No</td><td>Names or descriptions</td></tr>
+    <tr><td><code>description</code></td><td>Yes</td><td>What happened</td></tr>
+    <tr><td><code>attention_to_property_management</code></td><td>No</td><td><code>yes</code> / <code>no</code></td></tr>
+    <tr><td><code>attention_to_nps</code></td><td>No</td><td><code>yes</code> / <code>no</code></td></tr>
+  </table>
+
+  <h2>3. Shared upload fields</h2>
+  <table>
+    <tr><th>Field</th><th>Required</th><th>Note</th></tr>
+    <tr><td><code>client_draft_id</code></td><td>Yes</td><td>Draft id</td></tr>
+    <tr><td><code>visit_type</code></td><td>Yes</td><td><code>issue_report</code> or <code>incident_report</code></td></tr>
+    <tr><td><code>site_id</code></td><td>Yes</td><td></td></tr>
+    <tr><td><code>region_id</code></td><td>Yes</td><td></td></tr>
+    <tr><td><code>site_name</code></td><td>No</td><td></td></tr>
+    <tr><td><code>region_name</code></td><td>No</td><td></td></tr>
+    <tr><td><code>officer_id</code></td><td>No</td><td></td></tr>
+    <tr><td><code>started_at</code></td><td>Yes</td><td>ISO date-time</td></tr>
+    <tr><td><code>submitted_at</code></td><td>Yes</td><td>ISO date-time</td></tr>
+  </table>
+
+  <h2>4. Media — <code>items[]</code></h2>
+  <table>
+    <tr><th>Field</th><th>Required</th><th>Note</th></tr>
+    <tr><td><code>client_index</code></td><td>Yes</td><td>0-based index</td></tr>
+    <tr><td><code>type</code></td><td>Yes</td><td><code>photo</code> or <code>video</code></td></tr>
+    <tr><td>file</td><td>Yes</td><td>Multipart media file</td></tr>
+    <tr><td><code>text_note</code></td><td>No</td><td></td></tr>
+    <tr><td><code>has_voice_note</code></td><td>No</td><td>bool — voice file sent separately if true</td></tr>
+    <tr><td><code>captured_at</code></td><td>No</td><td>ISO date-time</td></tr>
+    <tr><td><code>latitude</code></td><td>No</td><td></td></tr>
+    <tr><td><code>longitude</code></td><td>No</td><td></td></tr>
+    <tr><td><code>accuracy_meters</code></td><td>No</td><td></td></tr>
+    <tr><td><code>gps_missed</code></td><td>No</td><td><code>yes</code> / <code>no</code></td></tr>
+    <tr><td><code>attention_needed</code></td><td>No</td><td>Always <code>no</code> for issue/incident</td></tr>
+  </table>
+  <p class="note">No per-media Alert flag for issue/incident. Use report-level attention flags instead.</p>
+
+  <h2>5. Endpoints</h2>
+  <ul>
+    <li>Issue → <code>POST /api/issue-reports</code></li>
+    <li>Incident → <code>POST /api/incident-reports</code></li>
+  </ul>
+</body>
+</html>

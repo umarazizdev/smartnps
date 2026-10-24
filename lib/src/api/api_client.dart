@@ -74,10 +74,11 @@ class ApiClient {
   }
 
   static void logHttpResult(String method, Uri uri, int? statusCode) {
-    if (statusCode == null || statusCode < 400) return;
-    SessionDebugLogger.instance.log(
-      SessionDebugCategory.apiErrors,
-      '$method ${_safePath(uri)} status=$statusCode',
+    if (statusCode == null) return;
+    SessionDebugLogger.instance.logApiStatus(
+      method: method,
+      uri: uri,
+      statusCode: statusCode,
     );
   }
 
@@ -87,15 +88,12 @@ class ApiClient {
     int statusCode,
     String error,
   ) {
-    SessionDebugLogger.instance.log(
-      SessionDebugCategory.apiErrors,
-      '$method ${_safePath(uri)} status=$statusCode error=$error',
+    SessionDebugLogger.instance.logApiStatus(
+      method: method,
+      uri: uri,
+      statusCode: statusCode,
+      error: error,
     );
-  }
-
-  static String _safePath(Uri uri) {
-    final path = uri.path.isEmpty ? '/' : uri.path;
-    return path;
   }
 
   static String _errorMessage(DioException error) {

@@ -17,7 +17,7 @@ class IosSignificantLocationChangeService {
 
   static StreamSubscription<dynamic>? _subscription;
   static Future<void> Function(Position position, String source)? _onLocation;
-  /// Returns true when Flutter successfully started duty GPS for this wake.
+
   static Future<bool> Function()? _onLocationWake;
   static bool _nativeCallHandlerInstalled = false;
   static bool _nativeMonitoring = false;
@@ -66,7 +66,7 @@ class IosSignificantLocationChangeService {
       if (call.method == 'onLocationWake') {
         final handler = _onLocationWake;
         if (handler == null) {
-          // Let native DutyWakeUploader start GPS.
+
           return false;
         }
         try {

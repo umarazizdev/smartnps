@@ -6,15 +6,21 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../api/visit_upload_api.dart';
 import '../../app/app_navigator.dart';
 import '../../app/app_routes.dart';
+import '../../utilities/app_config.dart';
 import '../../widgets/dialogs/glass_action_dialog.dart';
+import '../capture/capture_review_controller.dart';
 import '../checkpoint/visit_checkpoint_screen.dart';
 import '../flow/cam_perf.dart';
 import '../flow/visit_checkpoint.dart';
+import '../flow/visit_flow_copy.dart';
+import '../flow/visit_flow_kind.dart';
 import '../flow/visit_gps_session.dart';
 import '../flow/visit_media_draft_store.dart';
 import '../flow/visit_media_geo.dart';
@@ -26,7 +32,10 @@ import '../notes/visit_batch_notes_panel.dart';
 import '../notes/visit_media_notes_sheet.dart';
 import '../notes/voice/inline_voice_note_player.dart';
 import '../record/visit_native_capture_launcher.dart';
+import 'visit_report_details_panel.dart';
 import 'visit_video_player_controller.dart';
+
+enum _StructuredMediaSource { camera, gallery }
 
 Color _visitCardColor(bool isDark) {
   return isDark
@@ -58,11 +67,21 @@ Color _visitPrimaryActionColor(bool isDark) {
   return isDark ? const Color(0xFF4F8DF7) : cPrimary;
 }
 
+bool _isSoftKeyboardOpen(BuildContext context) {
+  final view = View.of(context);
+  final inset = view.viewInsets.bottom / view.devicePixelRatio;
+  return inset > AppConfig.keyboardOpenThreshold;
+}
+
 enum _VisitMediaFilter { all, photos, videos }
 
 class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
   static final Rx<_VisitMediaFilter> _mediaFilter = _VisitMediaFilter.all.obs;
+
   static final RxBool _draftAutosaveNoticeDismissed = false.obs;
+  static final RxBool _orientationCoverVisible = false.obs;
+  static Orientation? _lastDraftOrientation;
+  static DateTime? _ignoreMediaPreviewUntil;
 
   const VisitVideoPreviewScreen({
     super.key,
@@ -88,6 +107,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
   }
 
   void _handleBack(BuildContext context) {
+    if (controller.isPreparingReport.value) return;
     if (onBack != null) {
       onBack!();
       return;
@@ -100,13 +120,16 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
   static String deleteMediaMessage({
     required bool isPhoto,
     required bool hasNotes,
+    bool isSiteCheck = false,
   }) {
-    final media = isPhoto ? 'photo' : 'video';
-    if (hasNotes) {
-      return 'This $media and its note will be removed from your patrol round report. This cannot be undone.';
-    }
-    return 'This $media will be removed from your patrol round report. This cannot be undone.';
+    return VisitFlowCopy(isSiteCheck: isSiteCheck).deleteMediaMessage(
+      isPhoto: isPhoto,
+      hasNotes: hasNotes,
+    );
   }
+
+  VisitFlowCopy get _copy =>
+      VisitFlowCopy.fromContext(controller.patrolContext.value);
 
   Future<void> _removeMedia(int index) async {
     await controller.removeAt(index);
@@ -126,6 +149,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       message: deleteMediaMessage(
         isPhoto: item.isPhoto,
         hasNotes: item.hasNotes,
+        isSiteCheck: controller.patrolContext.value?.isSiteCheck == true,
       ),
       secondaryLabel: 'Cancel',
       primaryLabel: 'Delete',
@@ -137,7 +161,32 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     }
   }
 
+  void _noteDraftOrientation(Orientation orientation) {
+    if (_lastDraftOrientation != null &&
+        _lastDraftOrientation != orientation) {
+      _ignoreMediaPreviewUntil =
+          DateTime.now().add(const Duration(milliseconds: 500));
+      _orientationCoverVisible.value = true;
+      Future<void>.delayed(const Duration(milliseconds: 280), () {
+        _orientationCoverVisible.value = false;
+      });
+      final route = Get.currentRoute;
+      final onReview =
+          route == AppRoutes.captureReview ||
+          route.contains(AppRoutes.captureReview);
+      if (!onReview && Get.isRegistered<CaptureReviewController>()) {
+        Get.delete<CaptureReviewController>(force: true);
+      }
+    }
+    _lastDraftOrientation = orientation;
+  }
+
   Future<void> _openMediaPreview(VisitMediaItem item, int index) async {
+    final ignoreUntil = _ignoreMediaPreviewUntil;
+    if (ignoreUntil != null && DateTime.now().isBefore(ignoreUntil)) {
+      return;
+    }
+
     if (item.isPhoto) {
       await Get.to(
         () => VisitPhotoViewer(
@@ -152,6 +201,9 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
           },
         ),
         routeName: AppRoutes.visitPhotoViewer,
+        transition: Transition.noTransition,
+        preventDuplicates: true,
+        opaque: true,
       );
       return;
     }
@@ -169,6 +221,9 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
         },
       ),
       routeName: AppRoutes.visitVideoPlayer,
+      transition: Transition.noTransition,
+      preventDuplicates: true,
+      opaque: true,
       binding: BindingsBuilder(() {
         Get.put(
           VisitVideoPlayerController(videoPath: item.path),
@@ -190,9 +245,252 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     );
   }
 
-  Future<void> _openCaptureScreen() async {
+  Future<void> _openCaptureScreen(BuildContext context) async {
     controller.endCheckpointCapture();
+    if (controller.isStructuredReport) {
+      final permitted = await _ensureStructuredCapturePermissions(context);
+      if (!permitted || !context.mounted) return;
+      await _openStructuredMediaSource(context);
+      return;
+    }
+    await openNativeCapture(flow: controller);
+  }
+
+  Future<void> _openStructuredMediaSource(BuildContext context) async {
+    if (!context.mounted) return;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final accent = _visitPrimaryActionColor(isDark);
+    final reportLabel =
+        controller.flowKind == VisitFlowKind.incidentReport
+        ? 'incident report'
+        : 'issue report';
+
+    final source = await GlassActionDialog.showWithActions<_StructuredMediaSource>(
+      context: context,
+      icon: Icons.add_a_photo_outlined,
+      iconColor: accent,
+      title: 'Add media',
+      message: 'Use the camera, or open your gallery to pick photos and '
+          'videos for this $reportLabel.',
+      barrierDismissible: true,
+      showCloseButton: true,
+      useRootNavigator: true,
+      actions: const [
+        GlassDialogAction(
+          label: 'Camera',
+          value: _StructuredMediaSource.camera,
+          tone: GlassDialogActionTone.primary,
+        ),
+        GlassDialogAction(
+          label: 'Gallery',
+          value: _StructuredMediaSource.gallery,
+          tone: GlassDialogActionTone.neutral,
+        ),
+      ],
+    );
+    if (source == null || !context.mounted) return;
+
+    if (source == _StructuredMediaSource.camera) {
+      await VisitNativeCaptureLauncher.open();
+      return;
+    }
+
+    await _importGalleryMedia(context);
+  }
+
+  Future<bool> _ensureStructuredCapturePermissions(BuildContext context) async {
+    final permissions = <Permission>[
+      Permission.camera,
+      Permission.microphone,
+      Permission.photos,
+      if (Platform.isAndroid) Permission.videos,
+    ];
+
+    Map<Permission, PermissionStatus> statuses;
+    try {
+      final pending = <Permission>[];
+      for (final permission in permissions) {
+        final status = await permission.status;
+        final ok = status.isGranted || status.isLimited;
+        if (!ok) pending.add(permission);
+      }
+      if (pending.isEmpty) return true;
+      statuses = await pending.request();
+    } on Exception catch (error) {
+      final message = error.toString();
+      if (message.contains('ALREADY_REQUESTING_PERMISSIONS')) {
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+        statuses = {
+          for (final permission in permissions)
+            permission: await permission.status,
+        };
+      } else {
+        rethrow;
+      }
+    }
+
+    Future<PermissionStatus> statusOf(Permission permission) async {
+      return statuses[permission] ?? await permission.status;
+    }
+
+    final camera = await statusOf(Permission.camera);
+    if (!camera.isGranted) {
+      if (!context.mounted) return false;
+      await _showStructuredPermissionDialog(
+        context: context,
+        icon: Icons.photo_camera_outlined,
+        title: 'Camera permission required',
+        message: camera.isPermanentlyDenied
+            ? 'Camera access is permanently denied. Enable it in Settings to '
+                'capture photos and videos for this report.'
+            : 'Camera access is required to capture photos and videos for this report.',
+      );
+      return false;
+    }
+
+    final mic = await statusOf(Permission.microphone);
+    if (!mic.isGranted) {
+      if (!context.mounted) return false;
+      await _showStructuredPermissionDialog(
+        context: context,
+        icon: Icons.mic_off_outlined,
+        title: 'Microphone permission required',
+        message: mic.isPermanentlyDenied
+            ? 'Microphone access is permanently denied. Enable it in Settings '
+                'to record video for this report.'
+            : 'Microphone access is required to record video for this report.',
+      );
+      return false;
+    }
+
+    final photos = await statusOf(Permission.photos);
+
+    final photosOk = photos.isGranted || photos.isLimited;
+    var galleryOk = photosOk;
+    if (Platform.isAndroid) {
+      final videos = await statusOf(Permission.videos);
+      final videosOk = videos.isGranted || videos.isLimited;
+
+      galleryOk = photosOk || videosOk;
+    }
+    if (!galleryOk) {
+      if (!context.mounted) return false;
+      await _showStructuredPermissionDialog(
+        context: context,
+        icon: Icons.photo_library_outlined,
+        title: 'Gallery permission required',
+        message: photos.isPermanentlyDenied
+            ? 'Photo library access is permanently denied. Enable it in '
+                'Settings to attach gallery media to this report.'
+            : 'Photo library access is required to attach gallery media to this report.',
+      );
+      return false;
+    }
+
+    return true;
+  }
+
+  Future<void> _showStructuredPermissionDialog({
+    required BuildContext context,
+    required IconData icon,
+    required String title,
+    required String message,
+  }) async {
+    if (!context.mounted) return;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final openSettings = await GlassActionDialog.show(
+      context: context,
+      icon: icon,
+      iconColor: _visitPrimaryActionColor(isDark),
+      title: title,
+      message: message,
+      primaryLabel: 'Open Settings',
+      secondaryLabel: 'Cancel',
+      barrierDismissible: true,
+      useRootNavigator: true,
+    );
+    if (openSettings == true) {
+      await openAppSettings();
+    }
+  }
+
+  Future<void> _importGalleryMedia(BuildContext context) async {
+    if (!context.mounted) return;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    final picker = ImagePicker();
+    try {
+
+      final files = await picker.pickMultipleMedia(
+        imageQuality: 100,
+        requestFullMetadata: true,
+      );
+      if (files.isEmpty || !context.mounted) return;
+
+      final geo = await VisitMediaGeo.captureFast();
+      var imported = 0;
+      for (final file in files) {
+        final path = file.path.trim();
+        if (path.isEmpty || !File(path).existsSync()) continue;
+        final item = _isGalleryVideo(file)
+            ? await controller.addVideo(path, geo: geo)
+            : await controller.addPhoto(path, geo: geo);
+        if (item != null) imported++;
+      }
+
+      if (imported == 0 && context.mounted) {
+        _showTopSnack(
+          title: 'No media added',
+          message:
+              'Could not import the selected photos or videos. Please try again.',
+          isDark: isDark,
+          isError: true,
+        );
+      }
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint('[VisitPreview] gallery import failed: $error');
+      }
+      if (!context.mounted) return;
+      _showTopSnack(
+        title: 'Gallery unavailable',
+        message: 'Unable to open the gallery. Check permissions and try again.',
+        isDark: isDark,
+        isError: true,
+      );
+    }
+  }
+
+  bool _isGalleryVideo(XFile file) {
+    final mime = file.mimeType?.trim().toLowerCase() ?? '';
+    if (mime.startsWith('video/')) return true;
+    if (mime.startsWith('image/')) return false;
+    final name = file.name.trim().toLowerCase();
+    final path = file.path.trim().toLowerCase();
+    const videoExts = <String>[
+      '.mp4',
+      '.mov',
+      '.m4v',
+      '.avi',
+      '.mkv',
+      '.webm',
+      '.3gp',
+    ];
+    for (final ext in videoExts) {
+      if (name.endsWith(ext) || path.endsWith(ext)) return true;
+    }
+    return false;
+  }
+
+  static Future<bool> openNativeCapture({
+    VisitVideoFlowController? flow,
+    bool endCheckpointCapture = false,
+  }) async {
+    if (flow != null && endCheckpointCapture) {
+      flow.endCheckpointCapture();
+    }
     await VisitNativeCaptureLauncher.open();
+    return true;
   }
 
   Future<void> _openCheckpoint(VisitCheckpoint checkpoint) async {
@@ -220,7 +518,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     if (flow.isUploading.value) return;
 
     final items = flow.visibleMediaItems;
-    if (items.isEmpty) {
+    if (items.isEmpty && !flow.isStructuredReport) {
       _showTopSnack(
         title: 'No media',
         message: 'Please capture at least one photo or video before upload.',
@@ -244,6 +542,36 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
 
     if (flow.hasIncompleteCheckpoints) return;
 
+    if (flow.isStructuredReport && !flow.hasCompleteReportDetails) {
+      final message = flow.reportDetails.value.validationMessageFor(
+        flow.flowKind,
+      );
+      _showTopSnack(
+        title: 'Report details needed',
+        message: message ?? 'Please complete the required report fields.',
+        isDark: isDark,
+        isError: true,
+      );
+      return;
+    }
+
+    if (flow.isStructuredReport &&
+        flow.patrolContext.value?.hasReportContext != true) {
+      final contextError = await flow.ensureOperationalReportContext();
+      if (contextError != null ||
+          flow.patrolContext.value?.hasReportContext != true) {
+        _showTopSnack(
+          title: 'Report not authorized',
+          message:
+              contextError ??
+              'This report is missing a server context. Open it again while online.',
+          isDark: isDark,
+          isError: true,
+        );
+        return;
+      }
+    }
+
     final minimumPhotos = ctx?.minimumPhotos;
     if (minimumPhotos != null &&
         minimumPhotos > 0 &&
@@ -263,16 +591,19 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
 
     final locationLabel = flow.locationSubtitle?.trim() ?? '';
     final movedToDashboard = onUploadStarted != null;
-    final draftKey =
-        flow.activeDraftKey.value ??
-        VisitDraftKey.fromContext(flow.patrolContext.value);
+
+    final uploadSnapshot = flow.captureDraftSnapshot();
+    final draftKey = uploadSnapshot.draftKey;
+    final progressTotal = uploadSnapshot.items.isEmpty
+        ? 1
+        : uploadSnapshot.items.length;
 
     void beginLeaveDraftUi({required bool showProgress}) {
       if (showProgress) {
         flow.isUploading.value = true;
         flow.isQueueUploading.value = false;
         flow.uploadProgressCurrent.value = 0;
-        flow.uploadProgressTotal.value = items.length;
+        flow.uploadProgressTotal.value = progressTotal;
         flow.uploadLocationLabel.value = locationLabel;
       } else {
         flow.isUploading.value = false;
@@ -284,15 +615,20 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       onUploadStarted?.call();
     }
 
-    // Move draft → queue as soon as upload is confirmed (Yes / skip confirm),
-    // so it leaves the editable drafts list before network check / API upload.
-    // Also detach the in-memory editor so reopening Log Visit looks fresh while
-    // the queued draft files remain on disk for upload.
     Future<void>? claimForQueueFuture;
     Future<void> claimDraftForQueue() {
       return claimForQueueFuture ??= () async {
-        await flow.persistCurrentDraft();
-        await flow.clearLastUploadIssue();
+        await VisitMediaDraftStore.instance.saveDraft(
+          uploadSnapshot.items,
+          key: draftKey,
+          startedAt: uploadSnapshot.startedAt,
+          siteName: uploadSnapshot.siteName,
+          context: uploadSnapshot.context,
+          generalNote: uploadSnapshot.generalNote,
+          reportDetails: uploadSnapshot.reportDetails,
+          lastUploadIssue: null,
+        );
+        await flow.clearLastUploadIssue(persist: false);
         await VisitUploadQueue.instance.markInFlight(draftKey);
         await flow.releaseEditorAfterQueuedClaim();
       }();
@@ -307,15 +643,15 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
         onYesPressed: () {
           leaveStarted = true;
           unawaited(claimDraftForQueue());
-          beginLeaveDraftUi(showProgress: false);
+          beginLeaveDraftUi(showProgress: true);
         },
       );
       if (!confirmed) return;
       if (!leaveStarted) {
-        beginLeaveDraftUi(showProgress: false);
+        beginLeaveDraftUi(showProgress: true);
       }
     } else {
-      beginLeaveDraftUi(showProgress: false);
+      beginLeaveDraftUi(showProgress: true);
     }
 
     await claimDraftForQueue();
@@ -326,54 +662,79 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       return;
     }
 
-    final snapshot = await VisitMediaDraftStore.instance.loadDraftSnapshot(
-      key: draftKey,
-    );
-    if (!snapshot.hasItems) {
+    if (!uploadSnapshot.canUpload) {
       _clearUploadProgress(flow);
       await VisitUploadQueue.instance.remove(draftKey);
+      _showTopSnack(
+        title: 'Upload not ready',
+        message: flow.isStructuredReport
+            ? (uploadSnapshot.reportDetails.validationMessageFor(
+                    uploadSnapshot.context?.flowKind ?? flow.flowKind,
+                  ) ??
+                  'Please complete the report fields and try again.')
+            : 'Please capture at least one photo or video before upload.',
+        isDark: isDark,
+        isError: true,
+      );
       return;
     }
 
     flow.isUploading.value = true;
     flow.isQueueUploading.value = false;
     flow.uploadProgressCurrent.value = 0;
-    flow.uploadProgressTotal.value = snapshot.items.length;
+    flow.uploadProgressTotal.value = progressTotal;
     flow.uploadLocationLabel.value =
-        snapshot.locationLabel?.trim().isNotEmpty == true
-        ? snapshot.locationLabel!.trim()
+        uploadSnapshot.locationLabel?.trim().isNotEmpty == true
+        ? uploadSnapshot.locationLabel!.trim()
         : locationLabel;
 
     try {
-      final meta = await VisitUploadMeta.buildFromSnapshot(snapshot);
-      if (kDebugMode) {
-        debugPrint('[VisitUpload] meta=$meta');
+      var activeSnapshot = uploadSnapshot;
+      Future<VisitUploadResult> runUpload(VisitMediaDraftSnapshot draft) async {
+        final meta = await VisitUploadMeta.buildFromSnapshot(draft);
+        if (kDebugMode) {
+          debugPrint('[VisitUpload] meta=$meta');
+        }
+        return VisitUploadApi.instance.uploadVisit(
+          meta: meta,
+          items: draft.items,
+          generalVoicePath: draft.generalNote.voiceNotePath,
+          uploadUrl:
+              VisitUploadApi.resolveSiteCheckUploadUrl(
+                visitType: draft.context?.visitType,
+                siteCheckTimeSheetId: draft.context?.siteCheckTimeSheetId,
+                timeSheetId: draft.context?.timeSheetId,
+              ) ??
+              draft.context?.uploadUrl,
+          onProgress: (current, total) {
+            flow.uploadProgressCurrent.value = current;
+            flow.uploadProgressTotal.value = total;
+          },
+        );
       }
 
-      final result = await VisitUploadApi.instance.uploadVisit(
-        meta: meta,
-        items: snapshot.items,
-        batchVoicePath: snapshot.batchNote.voiceNotePath,
-        generalVoicePath: snapshot.generalNote.voiceNotePath,
-        uploadUrl: snapshot.context?.uploadUrl,
-        onProgress: (current, total) {
-          flow.uploadProgressCurrent.value = current;
-          flow.uploadProgressTotal.value = total;
-        },
-      );
+      var result = await runUpload(activeSnapshot);
+
+      if (!result.success &&
+          !result.isNetworkFailure &&
+          result.isClientDraftReuseError) {
+        if (kDebugMode) {
+          debugPrint(
+            '[VisitUpload] client_draft_id reuse; rotating and retrying once',
+          );
+        }
+        activeSnapshot = await VisitMediaDraftStore.instance.rotateClientDraftId(
+          activeSnapshot,
+        );
+        result = await runUpload(activeSnapshot);
+      }
 
       if (Get.isSnackbarOpen) {
         Get.closeAllSnackbars();
       }
 
       if (result.success) {
-        if (kDebugMode) {
-          debugPrint(
-            '[VisitUpload] SUCCESS status=${result.statusCode} '
-            'visitId=${result.visitId} clientDraftId=${result.clientDraftId} '
-            'itemsSaved=${result.itemsSaved} message=${result.displayMessage}',
-          );
-        }
+
         _clearUploadProgress(flow);
         await VisitUploadQueue.instance.remove(draftKey);
         await VisitMediaDraftStore.instance.clearDraft(
@@ -381,7 +742,11 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
           key: draftKey,
         );
         unawaited(VisitGpsSession.instance.stop());
-        await _showUploadSuccessFeedback(isDark: isDark);
+        await _showUploadSuccessFeedback(
+          isDark: isDark,
+          flowKind:
+              activeSnapshot.context?.flowKind ?? VisitFlowKind.patrol,
+        );
         if (!movedToDashboard) {
           onSuccess?.call();
         }
@@ -405,8 +770,8 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       await VisitUploadQueue.instance.remove(draftKey);
       final presentation = VisitUploadFailure.present(
         result: result,
-        mediaItems: snapshot.items,
-        checkpoints: snapshot.context?.checkpoints ?? const [],
+        mediaItems: activeSnapshot.items,
+        checkpoints: activeSnapshot.context?.checkpoints ?? const [],
       );
       await flow.activateDraft(draftKey);
       await flow.recordLastUploadIssue(presentation.toDraftIssue());
@@ -432,7 +797,10 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       }
       _clearUploadProgress(flow);
       await VisitUploadQueue.instance.remove(draftKey);
-      final presentation = VisitUploadFailure.presentUnexpected(error);
+      final presentation = VisitUploadFailure.presentUnexpected(
+        error,
+        flowKind: uploadSnapshot.context?.flowKind ?? VisitFlowKind.patrol,
+      );
       await flow.activateDraft(draftKey);
       await flow.recordLastUploadIssue(presentation.toDraftIssue());
       await _showUploadFailureDialog(
@@ -459,7 +827,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     required VisitDraftKey draftKey,
   }) async {
     _clearUploadProgress(flow);
-    // Editor was already released; draft remains on disk for the queue worker.
+
     await VisitUploadQueue.instance.enqueue(draftKey);
     unawaited(VisitGpsSession.instance.stop());
     if (kDebugMode) {
@@ -538,6 +906,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     if (dialogContext == null || !dialogContext.mounted) return false;
 
     final place = _resolvePatrolLocationLabel(flow);
+    final copy = VisitFlowCopy.fromContext(flow.patrolContext.value);
     final accent = isDark ? const Color(0xFF93C5FD) : const Color(0xFF4F46E5);
     final viewport = MediaQuery.sizeOf(dialogContext);
     final isLandscape = viewport.width > viewport.height;
@@ -546,7 +915,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       context: dialogContext,
       icon: Icons.fact_check_outlined,
       iconColor: accent,
-      title: 'Patrol Round completed?',
+      title: copy.completionTitle,
       titleColor: const Color(0xFFDC2626),
       barrierDismissible: true,
       showCloseButton: true,
@@ -557,7 +926,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
           ? const EdgeInsets.symmetric(horizontal: 24, vertical: 12)
           : const EdgeInsets.symmetric(horizontal: 28),
       content: _PatrolCompleteDialogBody(
-        message: 'Have you done your patrol round at $place',
+        message: copy.completionMessage(place),
         flow: flow,
         isDark: isDark,
       ),
@@ -568,7 +937,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
           tone: GlassDialogActionTone.neutral,
         ),
         GlassDialogAction(
-          label: 'Yes, patrol completed upload report',
+          label: copy.yesUploadLabel,
           value: true,
           tone: GlassDialogActionTone.primary,
           beforePop: () {
@@ -652,17 +1021,28 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     );
   }
 
-  static Future<void> showQueuedUploadSuccessFeedback({required bool isDark}) {
-    return _showUploadSuccessFeedback(isDark: isDark);
+  static Future<void> showQueuedUploadSuccessFeedback({
+    required bool isDark,
+    VisitFlowKind flowKind = VisitFlowKind.patrol,
+    bool isSiteCheck = false,
+  }) {
+    return _showUploadSuccessFeedback(
+      isDark: isDark,
+      flowKind: isSiteCheck ? VisitFlowKind.siteCheck : flowKind,
+    );
   }
 
-  static Future<void> _showUploadSuccessFeedback({required bool isDark}) async {
+  static Future<void> _showUploadSuccessFeedback({
+    required bool isDark,
+    VisitFlowKind flowKind = VisitFlowKind.patrol,
+  }) async {
     if (Get.isSnackbarOpen) {
       Get.closeAllSnackbars();
     }
 
     final bg = isDark ? const Color(0xFF059669) : const Color(0xFF047857);
     const duration = Duration(seconds: 3);
+    final copy = VisitFlowCopy(kind: flowKind);
 
     Get.rawSnackbar(
       snackPosition: SnackPosition.TOP,
@@ -690,28 +1070,28 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
             ),
           ),
           const SizedBox(width: 10),
-          const Expanded(
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  'Site Patrol Done',
+                  copy.successTitle,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
+                  style: const TextStyle(
                     color: Colors.white,
                     fontSize: 14,
                     fontWeight: FontWeight.w700,
                     height: 1.2,
                   ),
                 ),
-                SizedBox(height: 2),
+                const SizedBox(height: 2),
                 Text(
-                  'Your report was sent successfully.',
+                  copy.successMessage,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
+                  style: const TextStyle(
                     color: Colors.white,
                     fontSize: 12,
                     fontWeight: FontWeight.w500,
@@ -823,7 +1203,13 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     }
 
     flow.endCheckpointCapture();
-    await VisitNativeCaptureLauncher.open();
+    final dialogContext =
+        AppNavigator.key.currentContext ?? Get.context;
+    if (dialogContext == null || !dialogContext.mounted) {
+      await VisitNativeCaptureLauncher.open();
+      return;
+    }
+    await openNativeCapture(flow: flow);
   }
 
   static Future<void> queueUploadFeedback({
@@ -836,17 +1222,23 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final isLandscape =
-        MediaQuery.orientationOf(context) == Orientation.landscape;
+    final mediaQuery = MediaQuery.of(context);
+    final orientation = mediaQuery.orientation;
+    final isLandscape = orientation == Orientation.landscape;
 
-    return Scaffold(
-      backgroundColor: isDark ? cDarkBackground : cMainBg,
-      body: SafeArea(
+    mediaQuery.size;
+    _noteDraftOrientation(orientation);
+    final scaffoldBg = isDark ? cDarkBackground : cMainBg;
+
+    final body = SafeArea(
         child: Stack(
           fit: StackFit.expand,
           children: [
+            ColoredBox(color: scaffoldBg),
             VisitPageBackground(isDark: isDark),
             Obx(() {
+
+              final keyboardOpen = _isSoftKeyboardOpen(context);
               final allMedia = controller.visibleMediaItems;
               final checkpoints = controller.checkpoints;
               final hasCheckpoints = checkpoints.isNotEmpty;
@@ -864,11 +1256,122 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                 _VisitMediaFilter.videos =>
                   additionalMedia.where((e) => e.isVideo).toList(),
               };
+
               final locationLabel = controller.locationSubtitle;
               controller.patrolContext.value;
               controller.draftSiteName.value;
               controller.draftRegionName.value;
               final completedCheckpoints = controller.completedCheckpointCount;
+              final showFilters =
+                  !hasCheckpoints || additionalMedia.isNotEmpty;
+
+              Widget? reportDetailsHeader() {
+                if (!controller.isStructuredReport) return null;
+                final titleColor = _visitTitleColor(isDark);
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    VisitReportDetailsPanel(
+                      flow: controller,
+                      isDark: isDark,
+                      compact: isLandscape,
+                    ),
+                    Padding(
+                      padding: EdgeInsets.fromLTRB(
+                        isLandscape ? 18 : 16,
+                        isLandscape ? 2 : 4,
+                        isLandscape ? 18 : 16,
+                        isLandscape ? 4 : 6,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Text(
+                            'Captured Media (${additionalMedia.length})',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.titleSmall
+                                ?.copyWith(
+                                  color: titleColor,
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: isLandscape ? 13 : null,
+                                ),
+                          ),
+                          if (showFilters) ...[
+                            SizedBox(height: isLandscape ? 6 : 8),
+                            _MediaFilterBar(
+                              isDark: isDark,
+                              activeFilter: activeFilter,
+                              totalCount: additionalMedia.length,
+                              photoCount: photoCount,
+                              videoCount: videoCount,
+                              onChanged: (filter) =>
+                                  _mediaFilter.value = filter,
+                              compact: isLandscape,
+                            ),
+                          ],
+                          SizedBox(height: isLandscape ? 6 : 8),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+              }
+
+              Widget? scrollLeading() => reportDetailsHeader();
+
+              Widget mediaBody() {
+                final leading = scrollLeading();
+                if (!hasMedia) {
+                  return _buildEmptyState(
+                    context,
+                    isDark,
+                    locationLabel: locationLabel,
+                    isLandscape: isLandscape,
+                    leading: leading,
+                  );
+                }
+                if (visibleMedia.isEmpty) {
+                  return _buildScrollableWithLeading(
+                    leading: leading,
+                    child: _buildFilteredEmptyState(
+                      context,
+                      isDark,
+                      activeFilter,
+                    ),
+                  );
+                }
+                return _buildMediaGrid(
+                  context,
+                  visibleMedia,
+                  isDark,
+                  isLandscape: isLandscape,
+                  leading: leading,
+                );
+              }
+
+              _VisitHeader header() {
+                return _VisitHeader(
+                  isDark: isDark,
+                  isLandscape: isLandscape,
+                  totalCount: additionalMedia.length,
+                  photoCount: photoCount,
+                  videoCount: videoCount,
+                  activeFilter: activeFilter,
+                  onFilterChanged: (filter) => _mediaFilter.value = filter,
+                  locationLabel: locationLabel,
+                  minimumPhotos: controller.patrolContext.value?.minimumPhotos,
+                  onBack: () => _handleBack(context),
+                  hasCheckpoints: hasCheckpoints,
+                  checkpointCompleted: completedCheckpoints,
+                  checkpointTotal: checkpoints.length,
+                  showMediaFilters:
+                      showFilters && !controller.isStructuredReport,
+                  flowKind: controller.flowKind,
+                  deferCapturedMediaSection: controller.isStructuredReport,
+                );
+              }
 
               return isLandscape
                   ? Row(
@@ -877,28 +1380,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                         Expanded(
                           child: Column(
                             children: [
-                              _VisitHeader(
-                                isDark: isDark,
-                                isLandscape: isLandscape,
-                                totalCount: additionalMedia.length,
-                                photoCount: photoCount,
-                                videoCount: videoCount,
-                                activeFilter: activeFilter,
-                                onFilterChanged: (filter) =>
-                                    _mediaFilter.value = filter,
-                                locationLabel: locationLabel,
-                                minimumPhotos: controller
-                                    .patrolContext
-                                    .value
-                                    ?.minimumPhotos,
-                                onBack: () => _handleBack(context),
-                                hasCheckpoints: hasCheckpoints,
-                                checkpointCompleted: completedCheckpoints,
-                                checkpointTotal: checkpoints.length,
-                                showMediaFilters:
-                                    !hasCheckpoints ||
-                                    additionalMedia.isNotEmpty,
-                              ),
+                              header(),
                               Expanded(
                                 child: Column(
                                   children: [
@@ -914,25 +1396,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                                               activeFilter: activeFilter,
                                               locationLabel: locationLabel,
                                             )
-                                          : hasMedia
-                                          ? visibleMedia.isEmpty
-                                                ? _buildFilteredEmptyState(
-                                                    context,
-                                                    isDark,
-                                                    activeFilter,
-                                                  )
-                                                : _buildMediaGrid(
-                                                    context,
-                                                    visibleMedia,
-                                                    isDark,
-                                                    isLandscape: isLandscape,
-                                                  )
-                                          : _buildEmptyState(
-                                              context,
-                                              isDark,
-                                              locationLabel: locationLabel,
-                                              isLandscape: isLandscape,
-                                            ),
+                                          : mediaBody(),
                                     ),
                                     _DraftAutosaveNotice(
                                       isDark: isDark,
@@ -944,36 +1408,19 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                             ],
                           ),
                         ),
-                        _DraftLandscapeSidebar(
-                          isDark: isDark,
-                          hasMedia: hasMedia,
-                          hasCheckpoints: hasCheckpoints,
-                          onCapture: _openCaptureScreen,
-                          onComplete: () => _uploadAllMedia(context),
-                        ),
+                        if (!keyboardOpen)
+                          _DraftLandscapeSidebar(
+                            isDark: isDark,
+                            hasMedia: hasMedia,
+                            hasCheckpoints: hasCheckpoints,
+                            onCapture: () => _openCaptureScreen(context),
+                            onComplete: () => _uploadAllMedia(context),
+                          ),
                       ],
                     )
                   : Column(
                       children: [
-                        _VisitHeader(
-                          isDark: isDark,
-                          isLandscape: isLandscape,
-                          totalCount: additionalMedia.length,
-                          photoCount: photoCount,
-                          videoCount: videoCount,
-                          activeFilter: activeFilter,
-                          onFilterChanged: (filter) =>
-                              _mediaFilter.value = filter,
-                          locationLabel: locationLabel,
-                          minimumPhotos:
-                              controller.patrolContext.value?.minimumPhotos,
-                          onBack: () => _handleBack(context),
-                          hasCheckpoints: hasCheckpoints,
-                          checkpointCompleted: completedCheckpoints,
-                          checkpointTotal: checkpoints.length,
-                          showMediaFilters:
-                              !hasCheckpoints || additionalMedia.isNotEmpty,
-                        ),
+                        header(),
                         Expanded(
                           child: hasCheckpoints
                               ? _buildCheckpointAwareBody(
@@ -986,40 +1433,77 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                                   activeFilter: activeFilter,
                                   locationLabel: locationLabel,
                                 )
-                              : hasMedia
-                              ? visibleMedia.isEmpty
-                                    ? _buildFilteredEmptyState(
-                                        context,
-                                        isDark,
-                                        activeFilter,
-                                      )
-                                    : _buildMediaGrid(
-                                        context,
-                                        visibleMedia,
-                                        isDark,
-                                        isLandscape: isLandscape,
-                                      )
-                              : _buildEmptyState(
-                                  context,
-                                  isDark,
-                                  locationLabel: locationLabel,
-                                  isLandscape: isLandscape,
-                                ),
+                              : mediaBody(),
                         ),
-                        _DraftAutosaveNotice(isDark: isDark),
-                        _buildBottomActions(
-                          context,
-                          hasMedia,
-                          hasCheckpoints: hasCheckpoints,
-                        ),
-                        if (bottomBarClearance > 0)
-                          SizedBox(height: bottomBarClearance),
+                        if (!keyboardOpen) ...[
+                          _DraftAutosaveNotice(isDark: isDark),
+                          _buildBottomActions(
+                            context,
+                            hasMedia,
+                            hasCheckpoints: hasCheckpoints,
+                          ),
+                          if (bottomBarClearance > 0)
+                            SizedBox(height: bottomBarClearance),
+                        ],
                       ],
                     );
             }),
+            Obx(() {
+              if (!_orientationCoverVisible.value) {
+                return const SizedBox.shrink();
+              }
+              return Positioned.fill(
+                child: ColoredBox(color: scaffoldBg),
+              );
+            }),
+            Obx(() {
+              if (!controller.isPreparingReport.value) {
+                return const SizedBox.shrink();
+              }
+              return Positioned.fill(
+                child: _ReportPreparingOverlay(
+                  isDark: isDark,
+                  copy: VisitFlowCopy.fromContext(
+                    controller.patrolContext.value,
+                  ),
+                ),
+              );
+            }),
           ],
         ),
-      ),
+    );
+
+    final content = controller.isStructuredReport
+        ? GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
+            child: body,
+          )
+        : body;
+
+    return Scaffold(
+      backgroundColor: scaffoldBg,
+      body: content,
+    );
+  }
+
+  Widget _buildScrollableWithLeading({
+    required Widget child,
+    Widget? leading,
+  }) {
+    if (leading == null) return child;
+    return CustomScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      keyboardDismissBehavior: controller.isStructuredReport
+          ? ScrollViewKeyboardDismissBehavior.onDrag
+          : ScrollViewKeyboardDismissBehavior.manual,
+      slivers: [
+        SliverToBoxAdapter(child: leading),
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: child,
+        ),
+      ],
     );
   }
 
@@ -1028,98 +1512,127 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     bool isDark, {
     String? locationLabel,
     bool isLandscape = false,
+    Widget? leading,
   }) {
     final location = locationLabel?.trim();
     final hasLocation = location != null && location.isNotEmpty;
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        return SingleChildScrollView(
-          padding: EdgeInsets.fromLTRB(
-            22,
-            isLandscape ? 12 : 28,
-            22,
-            isLandscape ? 12 : 22,
-          ),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(minHeight: constraints.maxHeight),
-            child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Material(
+    final readyTitle = _copy.readyToStart;
+    final captureHint = _copy.emptyCaptureHint;
+    final compact = leading != null || isLandscape;
+    final buttonSize = compact ? 72.0 : 92.0;
+    final emptyContent = Padding(
+      padding: EdgeInsets.fromLTRB(
+        22,
+        compact ? 8 : 28,
+        22,
+        compact ? 8 : 22,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Material(
+            color: isDark
+                ? cDarkCardColor.withValues(alpha: 0.82)
+                : Colors.white.withValues(alpha: 0.94),
+            shape: const CircleBorder(),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: () => _openCaptureScreen(context),
+              child: Container(
+                width: buttonSize,
+                height: buttonSize,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
                     color: isDark
-                        ? cDarkCardColor.withValues(alpha: 0.82)
-                        : Colors.white.withValues(alpha: 0.94),
-                    shape: const CircleBorder(),
-                    clipBehavior: Clip.antiAlias,
-                    child: InkWell(
-                      onTap: _openCaptureScreen,
-                      child: Container(
-                        width: isLandscape ? 72 : 92,
-                        height: isLandscape ? 72 : 92,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: isDark
-                                ? Colors.white.withValues(alpha: 0.10)
-                                : Colors.white,
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(
-                                alpha: isDark ? 0.28 : 0.10,
-                              ),
-                              blurRadius: isLandscape ? 18 : 28,
-                              offset: Offset(0, isLandscape ? 8 : 14),
-                            ),
-                          ],
-                        ),
-                        child: Icon(
-                          Icons.add_a_photo_outlined,
-                          size: isLandscape ? 30 : 38,
-                          color: isDark ? const Color(0xFF38BDF8) : cPrimary,
-                        ),
-                      ),
-                    ),
+                        ? Colors.white.withValues(alpha: 0.10)
+                        : Colors.white,
                   ),
-                  SizedBox(height: isLandscape ? 12 : 18),
-                  Text(
-                    'Ready to start patrol',
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.w700,
-                      fontSize: isLandscape ? 20 : null,
-                      color: isDark ? cDarkTextPrimary : cDarkText,
-                    ),
-                  ),
-                  if (hasLocation) ...[
-                    SizedBox(height: isLandscape ? 6 : 8),
-                    Text(
-                      location,
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w700,
-                        color: isDark ? const Color(0xFF38BDF8) : cPrimary,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(
+                        alpha: isDark ? 0.28 : 0.10,
                       ),
+                      blurRadius: compact ? 18 : 28,
+                      offset: Offset(0, compact ? 8 : 14),
                     ),
                   ],
-                  SizedBox(height: isLandscape ? 6 : 8),
-                  Text(
-                    'Capture a clear photo or hold the capture button to record a patrol round video.',
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      height: 1.45,
-                      color: isDark
-                          ? cDarkTextSecondary
-                          : const Color(0xFF667085),
-                    ),
-                  ),
-                ],
+                ),
+                child: Icon(
+                  Icons.add_a_photo_outlined,
+                  size: compact ? 30 : 38,
+                  color: isDark ? const Color(0xFF38BDF8) : cPrimary,
+                ),
               ),
             ),
           ),
-        );
-      },
+          SizedBox(height: compact ? 10 : 18),
+          Text(
+            readyTitle,
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+              fontSize: compact ? 20 : null,
+              color: isDark ? cDarkTextPrimary : cDarkText,
+            ),
+          ),
+          if (hasLocation && leading == null) ...[
+            SizedBox(height: compact ? 6 : 8),
+            Text(
+              location,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+                color: isDark ? const Color(0xFF38BDF8) : cPrimary,
+              ),
+            ),
+          ],
+          SizedBox(height: compact ? 6 : 8),
+          Text(
+            captureHint,
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              height: 1.35,
+              fontSize: compact ? 13 : null,
+              color: isDark
+                  ? cDarkTextSecondary
+                  : const Color(0xFF667085),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (leading == null) {
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          final minHeight = constraints.hasBoundedHeight &&
+                  constraints.maxHeight.isFinite
+              ? constraints.maxHeight
+              : 0.0;
+          return SingleChildScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: minHeight),
+              child: Center(child: emptyContent),
+            ),
+          );
+        },
+      );
+    }
+
+    return CustomScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      keyboardDismissBehavior: controller.isStructuredReport
+          ? ScrollViewKeyboardDismissBehavior.onDrag
+          : ScrollViewKeyboardDismissBehavior.manual,
+      slivers: [
+        SliverToBoxAdapter(child: leading),
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Center(child: emptyContent),
+        ),
+      ],
     );
   }
 
@@ -1128,12 +1641,14 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     bool isDark,
     _VisitMediaFilter filter,
   ) {
-    final isVideoFilter = filter == _VisitMediaFilter.videos;
+    final message = filter == _VisitMediaFilter.videos
+        ? 'No videos captured yet'
+        : 'No photos captured yet';
     return Center(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 28),
         child: Text(
-          isVideoFilter ? 'No videos captured yet' : 'No photos captured yet',
+          message,
           textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.bodyMedium?.copyWith(
             color: _visitBodyColor(isDark),
@@ -1163,7 +1678,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       ),
       children: [
         Text(
-          'Patrol Checkpoints',
+          _copy.checkpointsTitle,
           style: TextStyle(
             color: _visitTitleColor(isDark),
             fontSize: isLandscape ? 13 : 14,
@@ -1205,7 +1720,8 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
           _AdditionalMediaEmptyCard(
             isDark: isDark,
             isLandscape: isLandscape,
-            onCapture: _openCaptureScreen,
+            isSiteCheck: controller.patrolContext.value?.isSiteCheck == true,
+            onCapture: () => _openCaptureScreen(context),
           )
         else if (visibleMedia.isEmpty)
           Padding(
@@ -1258,6 +1774,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     List<VisitMediaItem> media,
     bool isDark, {
     bool isLandscape = false,
+    Widget? leading,
   }) {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -1269,10 +1786,13 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
         }
 
         final isWide = constraints.maxWidth >= 720;
-        final useGrid = isWide && !isLandscape;
-        final crossAxisCount = isWide ? 2 : 1;
+        final useTwoColumns = isLandscape || isWide;
         final horizontalInset = isWide || isLandscape ? 18.0 : 16.0;
         final gap = 8.0;
+        final topPad = isLandscape ? 4.0 : 6.0;
+        final bottomPad = isLandscape ? 10.0 : 14.0;
+        final rowCount =
+            media.isEmpty ? 0 : (useTwoColumns ? (media.length + 1) ~/ 2 : media.length);
 
         Widget cardFor(int index) {
           final item = media[index];
@@ -1282,7 +1802,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
             index: index,
             isDark: isDark,
             featured: !isLandscape && isWide,
-            compact: isLandscape,
+            compact: isLandscape || useTwoColumns,
             thumbnailFuture: item.isVideo
                 ? controller.videoThumbnail(item.path)
                 : null,
@@ -1298,46 +1818,81 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
           );
         }
 
-        if (!useGrid || crossAxisCount <= 1) {
-          final list = ListView.separated(
-            key: ValueKey(
-              isLandscape ? 'visit-media-list-land' : 'visit-media-list',
-            ),
-            padding: EdgeInsets.fromLTRB(
-              horizontalInset,
-              isLandscape ? 4 : 6,
-              horizontalInset,
-              isLandscape ? 10 : 14,
-            ),
-            itemCount: media.length,
-            separatorBuilder: (_, index) => SizedBox(height: gap),
-            itemBuilder: (context, index) => cardFor(index),
-          );
-
-          if (!isLandscape || constraints.maxWidth < 900) {
-            return list;
+        Widget rowFor(int rowIndex) {
+          if (!useTwoColumns) {
+            return cardFor(rowIndex);
           }
-
-          return Align(
-            alignment: Alignment.topCenter,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 980),
-              child: list,
-            ),
+          final leftIndex = rowIndex * 2;
+          final rightIndex = leftIndex + 1;
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: cardFor(leftIndex)),
+              SizedBox(width: gap),
+              Expanded(
+                child: rightIndex < media.length
+                    ? cardFor(rightIndex)
+                    : const SizedBox.shrink(),
+              ),
+            ],
           );
         }
 
-        return GridView.builder(
-          key: const ValueKey('visit-media-grid'),
-          padding: EdgeInsets.fromLTRB(horizontalInset, 6, horizontalInset, 14),
-          itemCount: media.length,
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: crossAxisCount,
-            crossAxisSpacing: gap,
-            mainAxisSpacing: gap,
-            childAspectRatio: 1.55,
+        final scrollView = CustomScrollView(
+          key: ValueKey(
+            isLandscape
+                ? 'visit-media-scroll-land'
+                : useTwoColumns
+                ? 'visit-media-scroll-wide'
+                : 'visit-media-scroll',
           ),
-          itemBuilder: (context, index) => cardFor(index),
+          physics: const AlwaysScrollableScrollPhysics(),
+          keyboardDismissBehavior: controller.isStructuredReport
+              ? ScrollViewKeyboardDismissBehavior.onDrag
+              : ScrollViewKeyboardDismissBehavior.manual,
+          slivers: [
+            if (leading != null) SliverToBoxAdapter(child: leading),
+            SliverPadding(
+              padding: EdgeInsets.fromLTRB(
+                horizontalInset,
+                topPad,
+                horizontalInset,
+                bottomPad,
+              ),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) {
+                    if (useTwoColumns) {
+                      return Padding(
+                        padding: EdgeInsets.only(
+                          bottom: index < rowCount - 1 ? gap : 0,
+                        ),
+                        child: rowFor(index),
+                      );
+                    }
+                    final itemIndex = index ~/ 2;
+                    if (index.isOdd) return SizedBox(height: gap);
+                    return cardFor(itemIndex);
+                  },
+                  childCount: useTwoColumns
+                      ? rowCount
+                      : (media.isEmpty ? 0 : media.length * 2 - 1),
+                ),
+              ),
+            ),
+          ],
+        );
+
+        if (!isLandscape || constraints.maxWidth < 900) {
+          return scrollView;
+        }
+
+        return Align(
+          alignment: Alignment.topCenter,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 980),
+            child: scrollView,
+          ),
         );
       },
     );
@@ -1352,7 +1907,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final captureLabel = hasCheckpoints
         ? 'Add More'
-        : (hasMedia ? 'Capture More' : 'Capture');
+        : _copy.mediaActionLabel(hasMedia: hasMedia);
     return Container(
       padding: EdgeInsets.fromLTRB(
         isLandscape ? 16 : 18,
@@ -1398,7 +1953,8 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                   ],
                 ),
                 child: ElevatedButton.icon(
-                  onPressed: uploading ? null : _openCaptureScreen,
+                  onPressed:
+                      uploading ? null : () => _openCaptureScreen(context),
                   icon: const Icon(Icons.camera_alt_rounded, size: 18),
                   label: Text(
                     captureLabel,
@@ -1443,12 +1999,15 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
               controller.patrolContext.value;
               controller.isUploading.value;
               final canComplete = controller.canCompleteReport;
+              final copy = VisitFlowCopy.fromContext(
+                controller.patrolContext.value,
+              );
               final completeAccent = _visitPrimaryActionColor(isDark);
               return ElevatedButton.icon(
-                onPressed: canComplete ? () => _uploadAllMedia(context) : null,
+                onPressed:
+                    canComplete ? () => _uploadAllMedia(context) : null,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: completeAccent,
-
                   disabledBackgroundColor: isDark
                       ? const Color(0xFF2A3548)
                       : const Color(0xFFC5D0E3),
@@ -1473,7 +2032,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                 ),
                 icon: const Icon(Icons.cloud_upload_rounded, size: 18),
                 label: Text(
-                  'Complete Report',
+                  copy.completeReportButton,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
@@ -1848,11 +2407,13 @@ class _AdditionalMediaEmptyCard extends StatelessWidget {
     required this.isDark,
     required this.onCapture,
     this.isLandscape = false,
+    this.isSiteCheck = false,
   });
 
   final bool isDark;
   final VoidCallback onCapture;
   final bool isLandscape;
+  final bool isSiteCheck;
 
   @override
   Widget build(BuildContext context) {
@@ -1911,7 +2472,9 @@ class _AdditionalMediaEmptyCard extends StatelessWidget {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        'Optional photos or videos for this patrol',
+                        VisitFlowCopy(
+                          isSiteCheck: isSiteCheck,
+                        ).additionalMediaSubtitle,
                         style: TextStyle(
                           color: _visitBodyColor(isDark),
                           fontSize: 12,
@@ -1951,6 +2514,7 @@ class _PatrolCompleteDialogBody extends StatelessWidget {
     final bodyColor = isDark
         ? Colors.white.withValues(alpha: 0.78)
         : const Color(0xFF475467);
+    final copy = VisitFlowCopy.fromContext(flow.patrolContext.value);
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1965,15 +2529,16 @@ class _PatrolCompleteDialogBody extends StatelessWidget {
             fontWeight: FontWeight.w500,
           ),
         ),
-        const SizedBox(height: 14),
-        VisitBatchNotesPanel(
-          flow: flow,
-          isDark: isDark,
-          scope: VisitBatchNoteScope.generalNote,
-          titleOverride: 'Additional note',
-          showToggle: false,
-          alwaysShowActions: true,
-        ),
+        if (!copy.isStructuredReport) ...[
+          const SizedBox(height: 14),
+          VisitBatchNotesPanel(
+            flow: flow,
+            isDark: isDark,
+            titleOverride: 'Additional note',
+            showToggle: false,
+            alwaysShowActions: true,
+          ),
+        ],
       ],
     );
   }
@@ -2045,7 +2610,9 @@ class _DraftLandscapeSidebar extends StatelessWidget {
                     filled: true,
                     accent: primary,
                     icon: Icons.check_rounded,
-                    label: 'Complete report',
+                    label: VisitFlowCopy.fromContext(
+                      controller.patrolContext.value,
+                    ).completeReportButtonShort,
                     onPressed: canComplete ? onComplete : null,
                   ),
                 ),
@@ -2168,6 +2735,101 @@ class _DraftLandscapeRailButton extends StatelessWidget {
   }
 }
 
+class _ReportPreparingOverlay extends StatelessWidget {
+  const _ReportPreparingOverlay({
+    required this.isDark,
+    required this.copy,
+  });
+
+  final bool isDark;
+  final VisitFlowCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final titleColor = isDark ? cDarkTextPrimary : const Color(0xFF0F172A);
+    final bodyColor = isDark
+        ? Colors.white.withValues(alpha: 0.72)
+        : const Color(0xFF475467);
+    final cardColor = isDark
+        ? const Color(0xFF151E2F).withValues(alpha: 0.98)
+        : Colors.white.withValues(alpha: 0.98);
+    final accent = _visitPrimaryActionColor(isDark);
+
+    return AbsorbPointer(
+      child: ColoredBox(
+        color: (isDark ? const Color(0xFF0B1220) : const Color(0xFFF4F7FB))
+            .withValues(alpha: 0.92),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 320),
+            child: Material(
+              color: cardColor,
+              elevation: 0,
+              borderRadius: BorderRadius.circular(22),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.fromLTRB(22, 26, 22, 24),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(22),
+                  border: Border.all(
+                    color: isDark
+                        ? Colors.white.withValues(alpha: 0.10)
+                        : const Color(0xFFD8E0EA),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(
+                        alpha: isDark ? 0.28 : 0.08,
+                      ),
+                      blurRadius: 24,
+                      offset: const Offset(0, 10),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 42,
+                      height: 42,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 3.2,
+                        color: accent,
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    Text(
+                      copy.preparingReportTitle,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: titleColor,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w800,
+                        height: 1.25,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      copy.preparingReportMessage,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: bodyColor,
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w500,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _VisitHeader extends StatelessWidget {
   const _VisitHeader({
     required this.isDark,
@@ -2184,6 +2846,8 @@ class _VisitHeader extends StatelessWidget {
     this.checkpointCompleted = 0,
     this.checkpointTotal = 0,
     this.showMediaFilters = true,
+    this.flowKind = VisitFlowKind.patrol,
+    this.deferCapturedMediaSection = false,
   });
 
   final bool isDark;
@@ -2200,12 +2864,15 @@ class _VisitHeader extends StatelessWidget {
   final int checkpointCompleted;
   final int checkpointTotal;
   final bool showMediaFilters;
+  final VisitFlowKind flowKind;
+  final bool deferCapturedMediaSection;
 
   @override
   Widget build(BuildContext context) {
     final location = locationLabel?.trim();
     final hasLocation = location != null && location.isNotEmpty;
     final titleColor = _visitTitleColor(isDark);
+    final copy = VisitFlowCopy(kind: flowKind);
 
     return Padding(
       padding: EdgeInsets.fromLTRB(
@@ -2231,7 +2898,7 @@ class _VisitHeader extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Patrol Draft',
+                      copy.draftTitle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -2253,7 +2920,7 @@ class _VisitHeader extends StatelessWidget {
                           const SizedBox(width: 4),
                           Expanded(
                             child: Text(
-                              hasLocation ? location : 'No patrol location',
+                              hasLocation ? location : copy.noLocation,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
@@ -2318,7 +2985,7 @@ class _VisitHeader extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          hasLocation ? location : 'No patrol location',
+                          hasLocation ? location : copy.noLocation,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
@@ -2342,9 +3009,10 @@ class _VisitHeader extends StatelessWidget {
               compact: isLandscape,
               minimumPhotos: minimumPhotos,
               embedded: true,
+              isSiteCheck: flowKind == VisitFlowKind.siteCheck,
             ),
           ],
-          if (!hasCheckpoints) ...[
+          if (!hasCheckpoints && !deferCapturedMediaSection) ...[
             SizedBox(height: isLandscape ? 6 : 10),
             Row(
               children: [
@@ -2363,7 +3031,9 @@ class _VisitHeader extends StatelessWidget {
               ],
             ),
           ],
-          if (showMediaFilters && !hasCheckpoints) ...[
+          if (showMediaFilters &&
+              !hasCheckpoints &&
+              !deferCapturedMediaSection) ...[
             SizedBox(height: isLandscape ? 6 : 8),
             _MediaFilterBar(
               isDark: isDark,
@@ -2455,7 +3125,9 @@ class _MediaFilterChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final selectedColor = _visitPrimaryActionColor(isDark);
+    final selectedColor = isDark
+        ? const Color(0xFF93C5FD)
+        : _visitPrimaryActionColor(isDark);
     return Material(
       color: selected
           ? selectedColor
@@ -2472,7 +3144,9 @@ class _MediaFilterChip extends StatelessWidget {
             border: Border.all(
               color: selected
                   ? selectedColor
-                  : _visitBorderColor(isDark).withValues(alpha: 0.95),
+                  : (isDark
+                        ? const Color(0xFF60718B)
+                        : _visitBorderColor(false).withValues(alpha: 0.95)),
             ),
             boxShadow: selected
                 ? [
@@ -2490,7 +3164,9 @@ class _MediaFilterChip extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              color: selected ? Colors.white : _visitTitleColor(isDark),
+              color: selected
+                  ? (isDark ? const Color(0xFF111B2B) : Colors.white)
+                  : _visitTitleColor(isDark),
               fontSize: compact ? 11 : 12,
               fontWeight: FontWeight.w700,
             ),
@@ -2557,6 +3233,11 @@ class VisitMediaPreviewCard extends StatelessWidget {
   final bool compact;
   final Future<Uint8List?>? thumbnailFuture;
 
+  bool get _hideMediaAttentionToggle {
+    if (!Get.isRegistered<VisitVideoFlowController>()) return false;
+    return Get.find<VisitVideoFlowController>().isStructuredReport;
+  }
+
   @override
   Widget build(BuildContext context) {
     final thumbnailSize = compact
@@ -2566,7 +3247,8 @@ class VisitMediaPreviewCard extends StatelessWidget {
         : 92.0;
     final title = item.isPhoto ? 'Photo ${index + 1}' : 'Video ${index + 1}';
     const attentionAccent = Color(0xFFE11D48);
-    final attentionOn = item.attentionNeeded;
+    final attentionOn =
+        item.attentionNeeded && !_hideMediaAttentionToggle;
 
     return Material(
       color: _visitCardColor(isDark),
@@ -2575,7 +3257,15 @@ class VisitMediaPreviewCard extends StatelessWidget {
       child: Ink(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: _visitBorderColor(isDark)),
+          border: Border(
+            top: BorderSide(color: _visitBorderColor(isDark)),
+            right: BorderSide(color: _visitBorderColor(isDark)),
+            bottom: BorderSide(color: _visitBorderColor(isDark)),
+            left: BorderSide(
+              color: attentionOn ? attentionAccent : _visitBorderColor(isDark),
+              width: attentionOn ? 3 : 1,
+            ),
+          ),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withValues(alpha: isDark ? 0.14 : 0.04),
@@ -2584,42 +3274,40 @@ class VisitMediaPreviewCard extends StatelessWidget {
             ),
           ],
         ),
-        child: IntrinsicHeight(
-          child: Row(
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+            compact ? 8 : (featured ? 12 : 10),
+            compact ? 8 : (featured ? 12 : 10),
+            compact ? 8 : (featured ? 12 : 10),
+            compact ? 8 : (featured ? 12 : 10),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 160),
-                width: attentionOn ? 3 : 0,
-                color: attentionAccent,
-              ),
-              Expanded(
-                child: Padding(
-                  padding: EdgeInsets.fromLTRB(
-                    compact ? 8 : (featured ? 12 : 10),
-                    compact ? 8 : (featured ? 12 : 10),
-                    compact ? 8 : (featured ? 12 : 10),
-                    compact ? 8 : (featured ? 12 : 10),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _MediaThumbnail(
+                    item: item,
+                    isDark: isDark,
+                    size: thumbnailSize,
+                    thumbnailFuture: thumbnailFuture,
+                    onPreview: onPreview,
                   ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _MediaThumbnail(
-                        item: item,
-                        isDark: isDark,
-                        size: thumbnailSize,
-                        thumbnailFuture: thumbnailFuture,
-                        onPreview: onPreview,
-                      ),
-                      SizedBox(width: compact ? 10 : (featured ? 12 : 11)),
-                      Expanded(
-                        child: Column(
+                  SizedBox(width: compact ? 10 : (featured ? 12 : 11)),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
                                     title,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
@@ -2630,99 +3318,97 @@ class VisitMediaPreviewCard extends StatelessWidget {
                                       height: 1.15,
                                     ),
                                   ),
-                                ),
-                                const SizedBox(width: 8),
-                                Tooltip(
-                                  message: item.isPhoto
-                                      ? 'Delete photo'
-                                      : 'Delete video',
-                                  child: Material(
-                                    color: isDark
-                                        ? Colors.white.withValues(alpha: 0.06)
-                                        : const Color(0xFFF8FAFC),
-                                    borderRadius: BorderRadius.circular(10),
-                                    clipBehavior: Clip.antiAlias,
-                                    child: InkWell(
-                                      onTap: onDelete,
-                                      child: SizedBox(
-                                        width: featured ? 34 : 32,
-                                        height: featured ? 34 : 32,
-                                        child: Center(
-                                          child: VisitDeleteIcon(
-                                            size: featured ? 15 : 14,
-                                            color: cRed.withValues(
-                                              alpha: isDark ? 0.92 : 0.88,
-                                            ),
-                                          ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Tooltip(
+                              message: item.isPhoto
+                                  ? 'Delete photo'
+                                  : 'Delete video',
+                              child: Material(
+                                color: isDark
+                                    ? Colors.white.withValues(alpha: 0.06)
+                                    : const Color(0xFFF8FAFC),
+                                borderRadius: BorderRadius.circular(10),
+                                clipBehavior: Clip.antiAlias,
+                                child: InkWell(
+                                  onTap: onDelete,
+                                  child: SizedBox(
+                                    width: featured ? 34 : 32,
+                                    height: featured ? 34 : 32,
+                                    child: Center(
+                                      child: VisitDeleteIcon(
+                                        size: featured ? 15 : 14,
+                                        color: cRed.withValues(
+                                          alpha: isDark ? 0.92 : 0.88,
                                         ),
                                       ),
                                     ),
                                   ),
                                 ),
-                              ],
-                            ),
-                            SizedBox(height: compact ? 8 : 10),
-                            _MediaAttentionToggle(
-                              item: item,
-                              isDark: isDark,
-                              compact: compact,
-                            ),
-                            SizedBox(height: compact ? 7 : 8),
-                            _InlineNotePanel(
-                              item: item,
-                              isDark: isDark,
-                              compact: compact,
-                              featured: featured,
-                              attentionNeeded: attentionOn,
-                            ),
-                            SizedBox(height: compact ? 8 : 9),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: _MediaNoteButton(
-                                    label: item.hasTextNote
-                                        ? 'Edit Text'
-                                        : 'Text',
-                                    icon: item.hasTextNote
-                                        ? Icons.edit_note_rounded
-                                        : Icons.sticky_note_2_outlined,
-                                    isDark: isDark,
-                                    dense: !featured,
-                                    alertStyle: attentionOn,
-                                    onPressed: () => openVisitMediaNotesSheet(
-                                      context: context,
-                                      item: item,
-                                      kind: VisitMediaNoteKind.text,
-                                    ),
-                                  ),
-                                ),
-                                SizedBox(width: featured ? 8 : 7),
-                                Expanded(
-                                  child: _MediaNoteButton(
-                                    label: item.hasVoiceNote
-                                        ? 'Edit Voice'
-                                        : 'Voice',
-                                    icon: item.hasVoiceNote
-                                        ? Icons.mic_rounded
-                                        : Icons.mic_none_rounded,
-                                    isDark: isDark,
-                                    dense: !featured,
-                                    alertStyle: attentionOn,
-                                    onPressed: () => openVisitMediaNotesSheet(
-                                      context: context,
-                                      item: item,
-                                      kind: VisitMediaNoteKind.voice,
-                                    ),
-                                  ),
-                                ),
-                              ],
+                              ),
                             ),
                           ],
                         ),
-                      ),
-                    ],
+                        if (!_hideMediaAttentionToggle) ...[
+                          SizedBox(height: compact ? 8 : 10),
+                          _MediaAttentionToggle(
+                            item: item,
+                            isDark: isDark,
+                            compact: compact,
+                          ),
+                        ],
+                      ],
+                    ),
                   ),
-                ),
+                ],
+              ),
+              SizedBox(height: compact ? 7 : 8),
+              _InlineNotePanel(
+                item: item,
+                isDark: isDark,
+                compact: compact,
+                featured: featured,
+                attentionNeeded: attentionOn && !_hideMediaAttentionToggle,
+              ),
+              SizedBox(height: compact ? 8 : 9),
+              Row(
+                children: [
+                  Expanded(
+                    child: _MediaNoteButton(
+                      label: item.hasTextNote ? 'Edit Text' : 'Text',
+                      icon: item.hasTextNote
+                          ? Icons.edit_note_rounded
+                          : Icons.sticky_note_2_outlined,
+                      isDark: isDark,
+                      dense: !featured,
+                      alertStyle: attentionOn,
+                      onPressed: () => openVisitMediaNotesSheet(
+                        context: context,
+                        item: item,
+                        kind: VisitMediaNoteKind.text,
+                      ),
+                    ),
+                  ),
+                  SizedBox(width: featured ? 8 : 7),
+                  Expanded(
+                    child: _MediaNoteButton(
+                      label: item.hasVoiceNote ? 'Edit Voice' : 'Voice',
+                      icon: item.hasVoiceNote
+                          ? Icons.mic_rounded
+                          : Icons.mic_none_rounded,
+                      isDark: isDark,
+                      dense: !featured,
+                      alertStyle: attentionOn,
+                      onPressed: () => openVisitMediaNotesSheet(
+                        context: context,
+                        item: item,
+                        kind: VisitMediaNoteKind.voice,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -2751,8 +3437,12 @@ class _MediaAttentionToggle extends StatelessWidget {
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 160),
-      height: compact ? 34 : 36,
-      padding: const EdgeInsets.only(left: 10, right: 4),
+      padding: EdgeInsets.fromLTRB(
+        compact ? 8 : 10,
+        compact ? 5 : 6,
+        compact ? 2 : 4,
+        compact ? 5 : 6,
+      ),
       decoration: BoxDecoration(
         color: on
             ? accent.withValues(alpha: isDark ? 0.16 : 0.08)
@@ -2762,11 +3452,13 @@ class _MediaAttentionToggle extends StatelessWidget {
         borderRadius: BorderRadius.circular(10),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Expanded(
             child: Text(
               'Attention needed/Urgent',
-              maxLines: 1,
+              maxLines: 2,
+              softWrap: true,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 color: on
@@ -2776,26 +3468,31 @@ class _MediaAttentionToggle extends StatelessWidget {
                     : _visitTitleColor(isDark),
                 fontSize: compact ? 11 : 12,
                 fontWeight: FontWeight.w600,
-                height: 1.1,
+                height: 1.2,
               ),
             ),
           ),
-          Transform.scale(
-            scale: 0.62,
-            alignment: Alignment.centerRight,
-            child: Switch.adaptive(
-              value: on,
-              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              activeTrackColor: accent.withValues(alpha: 0.55),
-              activeThumbColor: accent,
-              onChanged: (value) {
-                unawaited(
-                  flow.setMediaAttentionNeeded(
-                    mediaPath: item.path,
-                    attentionNeeded: value,
-                  ),
-                );
-              },
+          const SizedBox(width: 2),
+          SizedBox(
+            width: compact ? 34 : 36,
+            height: compact ? 20 : 22,
+            child: FittedBox(
+              fit: BoxFit.contain,
+              alignment: Alignment.centerRight,
+              child: Switch.adaptive(
+                value: on,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                activeTrackColor: accent.withValues(alpha: 0.55),
+                activeThumbColor: accent,
+                onChanged: (value) {
+                  unawaited(
+                    flow.setMediaAttentionNeeded(
+                      mediaPath: item.path,
+                      attentionNeeded: value,
+                    ),
+                  );
+                },
+              ),
             ),
           ),
         ],
@@ -2848,24 +3545,27 @@ class _InlineNotePanel extends StatelessWidget {
         children: [
           if (item.hasTextNote || !item.hasVoiceNote)
             Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(
-                  Icons.sticky_note_2_outlined,
-                  size: compact ? 13 : 14,
-                  color: bodyColor.withValues(alpha: 0.85),
+                Padding(
+                  padding: const EdgeInsets.only(top: 1),
+                  child: Icon(
+                    Icons.sticky_note_2_outlined,
+                    size: compact ? 13 : 14,
+                    color: bodyColor.withValues(alpha: 0.85),
+                  ),
                 ),
                 const SizedBox(width: 7),
                 Expanded(
                   child: Text(
                     item.hasTextNote ? item.textNote : 'No note added',
-                    maxLines: item.hasTextNote && !compact ? 2 : 1,
-                    overflow: TextOverflow.ellipsis,
+                    softWrap: true,
                     style: TextStyle(
                       color: item.hasTextNote
                           ? _visitTitleColor(isDark)
                           : bodyColor,
                       fontSize: compact ? 11 : (featured ? 12.5 : 12),
-                      height: 1.25,
+                      height: 1.35,
                       fontWeight: item.hasTextNote
                           ? FontWeight.w600
                           : FontWeight.w500,
@@ -3141,6 +3841,12 @@ class VisitPhotoViewer extends StatelessWidget {
       message: VisitVideoPreviewScreen.deleteMediaMessage(
         isPhoto: true,
         hasNotes: hasNotes,
+        isSiteCheck: Get.isRegistered<VisitVideoFlowController>() &&
+            Get.find<VisitVideoFlowController>()
+                    .patrolContext
+                    .value
+                    ?.isSiteCheck ==
+                true,
       ),
       secondaryLabel: 'Cancel',
       primaryLabel: 'Delete',
@@ -3161,22 +3867,140 @@ class VisitPhotoViewer extends StatelessWidget {
         return Scaffold(
           backgroundColor: Colors.black,
           body: SafeArea(
-            child: Stack(
-              children: [
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    if (constraints.maxWidth < 8 || constraints.maxHeight < 8) {
-                      return const ColoredBox(color: Colors.black);
-                    }
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                if (!constraints.hasBoundedWidth ||
+                    !constraints.hasBoundedHeight ||
+                    !constraints.maxWidth.isFinite ||
+                    !constraints.maxHeight.isFinite ||
+                    constraints.maxWidth < 8 ||
+                    constraints.maxHeight < 8) {
+                  return const ColoredBox(color: Colors.black);
+                }
 
-                    return Column(
-                      children: [
-                        Padding(
+                final coverLandscape = isLandscape;
+                return Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Positioned.fill(
+                      child: InteractiveViewer(
+                        minScale: 1,
+                        maxScale: 4,
+                        child: SizedBox(
+                          width: constraints.maxWidth,
+                          height: constraints.maxHeight,
+                          child: coverLandscape
+                              ? Stack(
+                                  fit: StackFit.expand,
+                                  alignment: Alignment.bottomCenter,
+                                  children: [
+                                    Image.file(
+                                      File(imagePath),
+                                      fit: BoxFit.cover,
+                                      alignment: Alignment.center,
+                                      width: constraints.maxWidth,
+                                      height: constraints.maxHeight,
+                                      gaplessPlayback: true,
+                                      cacheWidth:
+                                          (MediaQuery.sizeOf(context)
+                                                      .longestSide *
+                                                  MediaQuery.devicePixelRatioOf(
+                                                    context,
+                                                  ))
+                                              .round()
+                                              .clamp(720, 2560),
+                                      errorBuilder:
+                                          (context, error, stackTrace) =>
+                                              const Center(
+                                                child: Text(
+                                                  'Unable to load this photo',
+                                                  style: TextStyle(
+                                                    color: Colors.white70,
+                                                  ),
+                                                ),
+                                              ),
+                                    ),
+                                    if (stampLabel.isNotEmpty)
+                                      Positioned(
+                                        left: 0,
+                                        right: 0,
+                                        bottom: 0,
+                                        child: VisitMediaStampBar(
+                                          label: stampLabel,
+                                        ),
+                                      ),
+                                  ],
+                                )
+                              : Center(
+                                  child: ConstrainedBox(
+                                    constraints: BoxConstraints(
+                                      maxWidth: constraints.maxWidth,
+                                      maxHeight: constraints.maxHeight,
+                                    ),
+                                    child: Stack(
+                                      alignment: Alignment.bottomCenter,
+                                      children: [
+                                        Image.file(
+                                          File(imagePath),
+                                          fit: BoxFit.contain,
+                                          gaplessPlayback: true,
+                                          cacheWidth:
+                                              (MediaQuery.sizeOf(context)
+                                                          .longestSide *
+                                                      MediaQuery
+                                                          .devicePixelRatioOf(
+                                                            context,
+                                                          ))
+                                                  .round()
+                                                  .clamp(720, 2560),
+                                          errorBuilder:
+                                              (context, error, stackTrace) =>
+                                                  const Text(
+                                                    'Unable to load this photo',
+                                                    style: TextStyle(
+                                                      color: Colors.white70,
+                                                    ),
+                                                  ),
+                                        ),
+                                        if (stampLabel.isNotEmpty)
+                                          Positioned(
+                                            left: 0,
+                                            right: 0,
+                                            bottom: 0,
+                                            child: VisitMediaStampBar(
+                                              label: stampLabel,
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.black.withValues(alpha: 0.55),
+                              Colors.black.withValues(alpha: 0.28),
+                              Colors.black.withValues(alpha: 0.0),
+                            ],
+                            stops: const [0.0, 0.55, 1.0],
+                          ),
+                        ),
+                        child: Padding(
                           padding: EdgeInsets.fromLTRB(
                             8,
                             isLandscape ? 2 : 4,
                             8,
-                            isLandscape ? 4 : 8,
+                            isLandscape ? 18 : 22,
                           ),
                           child: Row(
                             children: [
@@ -3211,51 +4035,26 @@ class VisitPhotoViewer extends StatelessWidget {
                             ],
                           ),
                         ),
-                        Expanded(
-                          child: InteractiveViewer(
-                            minScale: 1,
-                            maxScale: 4,
-                            child: Center(
-                              child: Stack(
-                                alignment: Alignment.bottomCenter,
-                                children: [
-                                  Image.file(
-                                    File(imagePath),
-                                    fit: BoxFit.contain,
-                                    gaplessPlayback: true,
-                                    cacheWidth:
-                                        (MediaQuery.sizeOf(context).width *
-                                                MediaQuery.devicePixelRatioOf(
-                                                  context,
-                                                ))
-                                            .round()
-                                            .clamp(720, 2560),
-                                    errorBuilder:
-                                        (context, error, stackTrace) =>
-                                            const Text(
-                                              'Unable to load this photo',
-                                              style: TextStyle(
-                                                color: Colors.white70,
-                                              ),
-                                            ),
-                                  ),
-                                  if (stampLabel.isNotEmpty)
-                                    Positioned(
-                                      left: 0,
-                                      right: 0,
-                                      bottom: 0,
-                                      child: VisitMediaStampBar(
-                                        label: stampLabel,
-                                      ),
-                                    ),
-                                ],
-                              ),
+                      ),
+                    ),
+                    if (onDelete != null && !isLandscape)
+                      Positioned(
+                        left: 16,
+                        right: 16,
+                        bottom: 16,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.bottomCenter,
+                              end: Alignment.topCenter,
+                              colors: [
+                                Colors.black.withValues(alpha: 0.45),
+                                Colors.black.withValues(alpha: 0.0),
+                              ],
                             ),
                           ),
-                        ),
-                        if (onDelete != null && !isLandscape)
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                          child: Padding(
+                            padding: const EdgeInsets.only(top: 20),
                             child: SizedBox(
                               width: double.infinity,
                               height: 48,
@@ -3263,6 +4062,8 @@ class VisitPhotoViewer extends StatelessWidget {
                                 onPressed: () => _confirmDelete(context),
                                 style: OutlinedButton.styleFrom(
                                   foregroundColor: cRed,
+                                  backgroundColor:
+                                      Colors.black.withValues(alpha: 0.35),
                                   side: BorderSide(
                                     color: cRed.withValues(alpha: 0.7),
                                   ),
@@ -3275,11 +4076,11 @@ class VisitPhotoViewer extends StatelessWidget {
                               ),
                             ),
                           ),
-                      ],
-                    );
-                  },
-                ),
-              ],
+                        ),
+                      ),
+                  ],
+                );
+              },
             ),
           ),
         );
@@ -3319,7 +4120,12 @@ class VisitVideoPlayerDialog extends GetView<VisitVideoPlayerController> {
           body: SafeArea(
             child: LayoutBuilder(
               builder: (context, constraints) {
-                if (constraints.maxWidth < 8 || constraints.maxHeight < 8) {
+                if (!constraints.hasBoundedWidth ||
+                    !constraints.hasBoundedHeight ||
+                    !constraints.maxWidth.isFinite ||
+                    !constraints.maxHeight.isFinite ||
+                    constraints.maxWidth < 8 ||
+                    constraints.maxHeight < 8) {
                   return const ColoredBox(color: Colors.black);
                 }
 
@@ -3393,9 +4199,11 @@ class VisitVideoPlayerDialog extends GetView<VisitVideoPlayerController> {
                                       begin: Alignment.topCenter,
                                       end: Alignment.bottomCenter,
                                       colors: [
-                                        Colors.black.withAlpha(170),
-                                        Colors.black.withAlpha(0),
+                                        Colors.black.withValues(alpha: 0.55),
+                                        Colors.black.withValues(alpha: 0.28),
+                                        Colors.black.withValues(alpha: 0.0),
                                       ],
+                                      stops: const [0.0, 0.55, 1.0],
                                     ),
                                   ),
                                   child: _buildTopBar(context, fileName),
@@ -3465,6 +4273,12 @@ class VisitVideoPlayerDialog extends GetView<VisitVideoPlayerController> {
       message: VisitVideoPreviewScreen.deleteMediaMessage(
         isPhoto: false,
         hasNotes: hasNotes,
+        isSiteCheck: Get.isRegistered<VisitVideoFlowController>() &&
+            Get.find<VisitVideoFlowController>()
+                    .patrolContext
+                    .value
+                    ?.isSiteCheck ==
+                true,
       ),
       secondaryLabel: 'Cancel',
       primaryLabel: 'Delete',
@@ -3485,31 +4299,42 @@ class VisitVideoPlayerDialog extends GetView<VisitVideoPlayerController> {
         color: Colors.black,
         child: LayoutBuilder(
           builder: (context, constraints) {
-            if (constraints.maxWidth < 8 || constraints.maxHeight < 8) {
+            if (!constraints.hasBoundedWidth ||
+                !constraints.hasBoundedHeight ||
+                !constraints.maxWidth.isFinite ||
+                !constraints.maxHeight.isFinite ||
+                constraints.maxWidth < 8 ||
+                constraints.maxHeight < 8) {
               return const SizedBox.expand();
             }
 
+            final isLandscape =
+                MediaQuery.orientationOf(context) == Orientation.landscape;
             final videoSize = videoCtrl.value.size;
             final aspect = (videoSize.width <= 0 || videoSize.height <= 0)
                 ? 16 / 9
                 : videoSize.width / videoSize.height;
 
-            var width = constraints.maxWidth;
-            var height = width / aspect;
-            if (height > constraints.maxHeight) {
-              height = constraints.maxHeight;
-              width = height * aspect;
-            }
-
-            return Center(
-              child: SizedBox(
+            Widget playerStack({required double width, required double height}) {
+              return SizedBox(
                 width: width,
                 height: height,
                 child: Stack(
                   fit: StackFit.expand,
                   alignment: Alignment.center,
                   children: [
-                    VideoPlayer(videoCtrl),
+                    if (isLandscape)
+                      FittedBox(
+                        fit: BoxFit.cover,
+                        clipBehavior: Clip.hardEdge,
+                        child: SizedBox(
+                          width: videoSize.width <= 0 ? 16 : videoSize.width,
+                          height: videoSize.height <= 0 ? 9 : videoSize.height,
+                          child: VideoPlayer(videoCtrl),
+                        ),
+                      )
+                    else
+                      VideoPlayer(videoCtrl),
                     Obx(() {
                       final showPlayButton =
                           controller.showControls.value &&
@@ -3534,7 +4359,25 @@ class VisitVideoPlayerDialog extends GetView<VisitVideoPlayerController> {
                       ),
                   ],
                 ),
-              ),
+              );
+            }
+
+            if (isLandscape) {
+              return playerStack(
+                width: constraints.maxWidth,
+                height: constraints.maxHeight,
+              );
+            }
+
+            var width = constraints.maxWidth;
+            var height = width / aspect;
+            if (height > constraints.maxHeight) {
+              height = constraints.maxHeight;
+              width = height * aspect;
+            }
+
+            return Center(
+              child: playerStack(width: width, height: height),
             );
           },
         ),
@@ -3863,12 +4706,14 @@ class _MinimumPhotosNotice extends StatelessWidget {
     required this.minimumPhotos,
     this.compact = false,
     this.embedded = false,
+    this.isSiteCheck = false,
   });
 
   final bool isDark;
   final int? minimumPhotos;
   final bool compact;
   final bool embedded;
+  final bool isSiteCheck;
 
   @override
   Widget build(BuildContext context) {
@@ -3891,6 +4736,9 @@ class _MinimumPhotosNotice extends StatelessWidget {
     final bodyColor = isDark
         ? Colors.white.withValues(alpha: 0.75)
         : const Color(0xFF9A3412);
+    final bodyText = VisitFlowCopy(
+      isSiteCheck: isSiteCheck,
+    ).minimumPhotosBody(count, photoLabel);
 
     final card = DecoratedBox(
       decoration: BoxDecoration(
@@ -3933,7 +4781,7 @@ class _MinimumPhotosNotice extends StatelessWidget {
                   ),
                   SizedBox(height: compact ? 2 : 3),
                   Text(
-                    'This site requires $count $photoLabel for the patrol report.',
+                    bodyText,
                     style: TextStyle(
                       color: bodyColor,
                       fontSize: compact ? 11 : 12,

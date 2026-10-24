@@ -12,6 +12,7 @@ import 'firebase_options.dart';
 import 'src/app/smart_nps_app.dart';
 import 'src/background/location/android_duty_location_health.dart';
 import 'src/background/location/background_location_service.dart';
+import 'src/crashlytics/crashlytics_identity.dart';
 import 'src/crashlytics/crashlytics_reporter.dart';
 import 'src/push/notifications/push_notification_service.dart';
 import 'src/api/api_client.dart';
@@ -38,6 +39,7 @@ Future<void> main() async {
   await AppUpgradeReconciler.reconcileIfNeeded();
   ApiClient.instance.ensureAuthInterceptorInstalled();
   unawaited(AuthRepository.instance.warmAccessTokenCache());
+  unawaited(CrashlyticsIdentity.syncFromStoredSession());
   unawaited(_initPostUiServices());
   runApp(const SmartNpsApp());
 }
@@ -68,10 +70,10 @@ Future<void> _initPostUiServices() async {
 }
 
 void _disableWebViewDebugLogging() {
-  PlatformInAppWebViewController.debugLoggingSettings.enabled = false;
-  PlatformInAppBrowser.debugLoggingSettings.enabled = false;
-  PlatformChromeSafariBrowser.debugLoggingSettings.enabled = false;
-  PlatformWebAuthenticationSession.debugLoggingSettings.enabled = false;
-  PlatformPullToRefreshController.debugLoggingSettings.enabled = false;
-  PlatformFindInteractionController.debugLoggingSettings.enabled = false;
+  PlatformInAppWebViewController.debugLoggingSettings.enabled = true;
+  PlatformInAppBrowser.debugLoggingSettings.enabled = true;
+  PlatformChromeSafariBrowser.debugLoggingSettings.enabled = true;
+  PlatformWebAuthenticationSession.debugLoggingSettings.enabled = true;
+  PlatformPullToRefreshController.debugLoggingSettings.enabled = true;
+  PlatformFindInteractionController.debugLoggingSettings.enabled = true;
 }

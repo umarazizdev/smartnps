@@ -311,10 +311,6 @@ class PushNotificationService {
     await clearPushTokenOnLogout();
   }
 
-  /// Unregisters the device push token with the backend, then deletes the
-  /// local FCM/APNs registration so this device stops receiving account pushes.
-  ///
-  /// Call while auth credentials are still available.
   Future<void> clearPushTokenOnLogout() async {
     try {
       await deletePushToken();

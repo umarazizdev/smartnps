@@ -717,8 +717,16 @@
         <tr><td><code>smartnps360:background-location</code></td><td><code>getBackgroundLocationStatus</code> result</td><td>Permission changes, page load</td></tr>
         <tr><td><code>smartnps360:push-notifications</code></td><td>Push status object</td><td>Page load, app resume</td></tr>
         <tr><td><code>smartnps360:push-token</code></td><td><code>{ "token": "fcm..." }</code></td><td>iOS after login / token sync</td></tr>
+        <tr><td><code>smartnps360:open-action-menu</code></td><td>None</td><td>User taps the native bottom-bar Actions tab</td></tr>
       </tbody>
     </table>
+    <p>
+      When the user taps the native bottom-bar Actions tab, the app calls
+      <code>window.SmartNPS360.openActionMenu()</code> if it is defined;
+      otherwise it dispatches the <code>smartnps360:open-action-menu</code>
+      DOM event. The web app owns the resulting actions popup/menu UI. The tab
+      is action-only and does not change the selected tab or navigate.
+    </p>
 
     <h3>Callback hooks on <code>window.SmartNPS360</code></h3>
     <table>
@@ -729,6 +737,7 @@
         <tr><td><code>onBackgroundLocationStatusChanged(status)</code></td><td>Background location status object</td></tr>
         <tr><td><code>onPushNotificationStatusChanged(status)</code></td><td>Push status object</td></tr>
         <tr><td><code>onPushTokenReady(token)</code></td><td>FCM token string (iOS)</td></tr>
+        <tr><td><code>openActionMenu()</code></td><td>None — opens the web actions popup/menu when the Actions tab is tapped</td></tr>
       </tbody>
     </table>
 

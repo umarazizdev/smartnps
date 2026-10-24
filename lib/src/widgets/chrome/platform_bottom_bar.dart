@@ -57,8 +57,7 @@ class PlatformBottomBar extends StatelessWidget {
         (defaultTargetPlatform == TargetPlatform.iOS ||
             defaultTargetPlatform == TargetPlatform.macOS);
 
-    final activeTint =
-        tint ?? const Color(AppConfig.cBottomBarActive);
+    final activeTint = tint ?? const Color(AppConfig.cBottomBarActive);
 
     return isApplePlatform
         ? _CupertinoNativeBottomBar(
@@ -152,13 +151,9 @@ class _ClassicBottomBar extends StatelessWidget {
       return _buildAndroidBar(context, effectiveIsDark: effectiveIsDark);
     }
 
-    return _buildLegacyFloatingBar(
-      context,
-      effectiveIsDark: effectiveIsDark,
-    );
+    return _buildLegacyFloatingBar(context, effectiveIsDark: effectiveIsDark);
   }
 
-  /// Flat edge-to-edge Android bar (no glass / no floating pill).
   Widget _buildAndroidBar(
     BuildContext context, {
     required bool effectiveIsDark,
@@ -171,7 +166,7 @@ class _ClassicBottomBar extends StatelessWidget {
     final topHairline = effectiveIsDark
         ? Colors.white.withValues(alpha: 0.10)
         : const Color(0x0D000000);
-    // Match web header: soft elevation edge (header casts down; bar casts up).
+
     final edgeShadow = effectiveIsDark
         ? Colors.black.withValues(alpha: 0.20)
         : Colors.black.withValues(alpha: 0.035);
@@ -227,8 +222,9 @@ class _ClassicBottomBar extends StatelessWidget {
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             fontSize: 11,
-                            fontWeight:
-                                isActive ? FontWeight.w600 : FontWeight.w500,
+                            fontWeight: isActive
+                                ? FontWeight.w600
+                                : FontWeight.w500,
                             height: 1.1,
                             color: color,
                           ),
@@ -245,15 +241,15 @@ class _ClassicBottomBar extends StatelessWidget {
     );
   }
 
-  /// Previous floating glass bar (non-Android platforms).
   Widget _buildLegacyFloatingBar(
     BuildContext context, {
     required bool effectiveIsDark,
   }) {
     final bottomInset = MediaQuery.paddingOf(context).bottom;
     final activeColor = tint;
-    final inactiveColor =
-        effectiveIsDark ? Colors.white : const Color(0xFF272527);
+    final inactiveColor = effectiveIsDark
+        ? Colors.white
+        : const Color(0xFF272527);
     final bgColor = effectiveIsDark
         ? (darkSurface ?? const Color(0xFF1A2332)).withAlpha(210)
         : (surface ?? const Color(0xFFFBFBFD)).withAlpha(245);

@@ -25,15 +25,11 @@ object AndroidDutyUiState {
     }
   }
 
-  /**
-   * True when the activity has been away long enough that this is likely a
-   * real swipe-kill / long background — not a brief Settings permission jump.
-   */
   fun isAwayLongEnoughForNativeFgs(minAwayMs: Long = 45_000L): Boolean {
     if (isUiResumed) return false
     val pausedAt = lastBecamePausedAtElapsedMs
     if (pausedAt <= 0L) {
-      // Process restarted with no UI (or never resumed) — treat as killed.
+
       return true
     }
     return SystemClock.elapsedRealtime() - pausedAt >= minAwayMs

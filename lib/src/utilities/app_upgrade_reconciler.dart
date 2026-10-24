@@ -77,7 +77,7 @@ class AppUpgradeReconciler {
             'code=${e.code} ${e.message}',
           );
         }
-        // Leave _storageReconcileDone false so a later unlock/resume can retry.
+
         return;
       }
       rethrow;

@@ -8,8 +8,7 @@ import '../log_visit_theme.dart';
 import 'visit_media_notes_controller.dart';
 import 'voice/voice_waveform_painter.dart';
 
-export 'visit_media_notes_controller.dart'
-    show VisitMediaNoteKind, VisitBatchNoteScope;
+export 'visit_media_notes_controller.dart' show VisitMediaNoteKind;
 
 Future<void> openVisitMediaNotesSheet({
   required BuildContext context,
@@ -47,30 +46,20 @@ Future<void> openVisitMediaNotesSheet({
 Future<void> openVisitBatchNotesSheet({
   required BuildContext context,
   VisitMediaNoteKind kind = VisitMediaNoteKind.text,
-  VisitBatchNoteScope scope = VisitBatchNoteScope.attentionNeeded,
 }) async {
-  final isGeneral = scope == VisitBatchNoteScope.generalNote;
-  final label = isGeneral ? 'Additional' : 'Attention Needed';
   await _openNotesDialog(
     context: context,
     kind: kind,
-    tag: isGeneral ? 'notes-general' : 'notes-batch',
+    tag: 'notes-general',
     item: null,
     batchMode: true,
-    batchScope: scope,
     title: kind == VisitMediaNoteKind.text
-        ? '$label Text Note'
-        : '$label Voice Note',
+        ? 'Additional Text Note'
+        : 'Additional Voice Note',
     subtitle: kind == VisitMediaNoteKind.text
-        ? (isGeneral
-              ? 'Add an additional text note.'
-              : 'Add an attention needed text note.')
-        : (isGeneral
-              ? 'Record an additional voice note.'
-              : 'Record an attention needed voice note.'),
-    textHint: isGeneral
-        ? 'Type your additional note...'
-        : 'Type your attention needed note...',
+        ? 'Add an additional text note.'
+        : 'Record an additional voice note.',
+    textHint: 'Type your additional note...',
   );
 }
 
@@ -80,7 +69,6 @@ Future<void> _openNotesDialog({
   required String tag,
   required VisitMediaItem? item,
   required bool batchMode,
-  VisitBatchNoteScope batchScope = VisitBatchNoteScope.attentionNeeded,
   required String title,
   required String subtitle,
   required String textHint,
@@ -91,10 +79,7 @@ Future<void> _openNotesDialog({
   }
 
   final isDark = Theme.of(context).brightness == Brightness.dark;
-  final useAlertAccent =
-      forceAlertAccent ||
-      (batchMode && batchScope == VisitBatchNoteScope.attentionNeeded);
-  final accentColor = useAlertAccent
+  final accentColor = forceAlertAccent
       ? const Color(0xFFDC2626)
       : (isDark ? const Color(0xFF93C5FD) : const Color(0xFF4F46E5));
   var didSave = false;
@@ -138,7 +123,6 @@ Future<void> _openNotesDialog({
       mediaPath: item?.path ?? '',
       kind: kind,
       batchMode: batchMode,
-      batchScope: batchScope,
     ),
     tag: tag,
   );

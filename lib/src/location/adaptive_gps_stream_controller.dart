@@ -19,7 +19,6 @@ class AdaptiveGpsStreamController {
   static const double minCornerBearingDegrees = 12;
   static const double minBearingDistanceMeters = 2;
 
-  /// Curve boost is for real turns while moving; skip below walking speed.
   static const double minCurveBoostSpeedKmh = 2;
 
   SpeedAdaptiveGpsPolicyBand _band = SpeedAdaptiveGpsPolicyBand.bands.first;
@@ -78,7 +77,6 @@ class AdaptiveGpsStreamController {
     return false;
   }
 
-  /// Skip when stationary band or GPS speed is below walking threshold.
   static bool _shouldSkipCurveBoost(
     Position position,
     SpeedAdaptiveGpsPolicyBand band,

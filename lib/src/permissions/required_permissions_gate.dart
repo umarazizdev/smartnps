@@ -74,6 +74,7 @@ class RequiredPermissionsGate {
   Timer? _pollTimer;
   String? _lastFingerprint;
   int _actionSerial = 0;
+  Future<void>? _handleActionInFlight;
 
   static const Set<String> clockInPermissionIds = {
     'locationServices',
@@ -251,6 +252,15 @@ class RequiredPermissionsGate {
       return;
     }
 
+    final previous = _handleActionInFlight;
+    final gate = Completer<void>();
+    _handleActionInFlight = gate.future;
+    if (previous != null) {
+      try {
+        await previous;
+      } catch (_) {}
+    }
+
     final serial = ++_actionSerial;
     try {
       switch (item.action) {
@@ -267,6 +277,10 @@ class RequiredPermissionsGate {
           break;
       }
     } finally {
+      if (!gate.isCompleted) gate.complete();
+      if (identical(_handleActionInFlight, gate.future)) {
+        _handleActionInFlight = null;
+      }
       if (serial == _actionSerial) {
         await refresh(force: true);
         unawaited(
@@ -365,9 +379,8 @@ class RequiredPermissionsGate {
         );
       }
       if (permission == LocationPermission.denied) {
-        permission = await OverlayPromptGuard.runDuringOsPermissionPrompt(
-          Geolocator.requestPermission,
-        );
+        permission =
+            await PermissionSettingsHelper.requestGeolocatorPermission();
         if (kDebugMode) {
           debugPrint(
             '[RequiredPermissionsGate] backgroundLocation iOS after whenInUse '

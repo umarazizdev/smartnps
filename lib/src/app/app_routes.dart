@@ -10,6 +10,14 @@ class AppRoutes {
   static const visitVideoPlayer = '/visit-video-player';
   static const visitCheckpoint = '/visit-checkpoint';
 
+  static const openLogVisit = 'openLogVisit';
+  static const openOnsiteLogVisit = 'openOnsiteLogVisit';
+  static const createIssue = 'createIssue';
+  static const createIncident = 'createIncident';
+  static const getPendingDrafts = 'getPendingDrafts';
+  static const openActionMenu = 'openActionMenu';
+  static const openActionMenuEvent = 'smartnps360:open-action-menu';
+
   static String get webBaseUrl => DebugEnvConfig.instance.webBaseUrl;
 
   static String get webLoginUrl {
@@ -33,6 +41,7 @@ class AppRoutes {
 
   static const bottomBarWebPaths = <String>[
     '/officer/dashboard',
+    '/officer/site-checks',
     '/officer/timesheet/monthly',
     '/officer/profile',
   ];

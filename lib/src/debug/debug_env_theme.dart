@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../utilities/app_config.dart';
 
-/// Shared palette for Debug Environment screens.
 class DebugEnvColors {
   const DebugEnvColors({
     required this.background,

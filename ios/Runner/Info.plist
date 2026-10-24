@@ -29,17 +29,17 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Camera access is required to capture photos and videos for patrol round reports, and for profile/ID attachments.</string>
+	<string>Camera access is required to capture photos and videos for patrol, issue, and incident reports, and for profile/ID attachments.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Microphone access is required to record audio with patrol round report videos and to record voice notes on patrol round report photos and videos.</string>
+	<string>Microphone access is required to record audio with patrol, issue, and incident report videos, and to record voice notes on report photos and videos.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>SmartNPS360 uses background location while you are clocked in on an active shift, including when the app is in the background, to verify attendance and site presence. Tracking stops when you clock out. Location is not collected while you are off duty, logged out, or not clocked in.</string>
+	<string>SmartNPS360 uses background location while you are clocked in on an active shift, including when the app is in the background, to verify attendance and site presence. Tracking pauses during unpaid meal breaks and stops when you clock out. Location is not collected while you are off duty, logged out, or not clocked in.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Location access is used only while you are clocked in to verify attendance, breaks, and site presence.</string>
+	<string>Location access is used only while you are clocked in to verify attendance, breaks, and site presence. Tracking pauses during unpaid meal breaks.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>SmartNPS360 uses motion activity to detect whether you are walking, running, driving, cycling, or stationary while on duty, so patrol and attendance tracking can adapt to your physical activity.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Photo library access is required to select profile and ID images during registration and to attach images to patrol round reports.</string>
+	<string>Photo library access is required to select profile and ID images during registration and to attach photos or videos from your gallery to patrol, issue, and incident reports.</string>
 	<key>NSUserNotificationsUsageDescription</key>
 	<string>Enable notifications to receive important updates and messages related to your account and activity.</string>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>

@@ -1,5 +1,7 @@
 import '../../api/visit_upload_api.dart';
 import 'visit_checkpoint.dart';
+import 'visit_flow_copy.dart';
+import 'visit_flow_kind.dart';
 import 'visit_media_draft_store.dart';
 import 'visit_video_flow_controller.dart';
 
@@ -44,10 +46,14 @@ class VisitUploadFailure {
   }) {
     final errors = result.errors;
     if (errors == null || errors.isEmpty) {
+      final summary = _cleanMessage(result.displayMessage);
+      final missingVisitId = summary.toLowerCase().contains('missing visit_id');
       return VisitUploadFailurePresentation(
         title: 'Upload failed',
-        summary: _cleanMessage(result.displayMessage),
-        guidance: 'Please review your report and try again.',
+        summary: summary,
+        guidance: missingVisitId
+            ? 'The server did not confirm this report. Try uploading again.'
+            : 'Please review your report and try again.',
       );
     }
 
@@ -133,10 +139,15 @@ class VisitUploadFailure {
     );
   }
 
-  static VisitUploadFailurePresentation presentUnexpected(Object _) {
-    return const VisitUploadFailurePresentation(
+  static VisitUploadFailurePresentation presentUnexpected(
+    Object _, {
+    VisitFlowKind flowKind = VisitFlowKind.patrol,
+    bool isSiteCheck = false,
+  }) {
+    final kind = isSiteCheck ? VisitFlowKind.siteCheck : flowKind;
+    return VisitUploadFailurePresentation(
       title: 'Upload failed',
-      summary: 'Something went wrong while uploading this patrol report.',
+      summary: VisitFlowCopy(kind: kind).uploadFailureSummary,
       guidance: 'Please review your report and try again.',
     );
   }
@@ -188,9 +199,7 @@ class VisitUploadFailure {
     final completed = <VisitCheckpoint>[];
     for (final checkpoint in checkpoints) {
       final hasMedia = mediaItems.any(
-        (e) =>
-            e.siteCheckpointId == checkpoint.id &&
-            (e.isPhoto || e.isVideo),
+        (e) => e.siteCheckpointId == checkpoint.id && (e.isPhoto || e.isVideo),
       );
       if (hasMedia) completed.add(checkpoint);
     }

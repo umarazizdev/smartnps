@@ -37,8 +37,57 @@ class PermissionSettingsHelper {
   static bool _dialogVisible = false;
   static bool _awaitingSettingsReturn = false;
   static final Map<String, DateTime> _lastPromptAtByKey = {};
+  static Future<LocationPermission>? _geolocatorPermissionRequest;
 
   static final ValueNotifier<bool> settingsPromptVisible = ValueNotifier(false);
+
+  static Future<LocationPermission> requestGeolocatorPermission() async {
+    final existing = _geolocatorPermissionRequest;
+    if (existing != null) return existing;
+
+    final future = _requestGeolocatorPermissionImpl();
+    _geolocatorPermissionRequest = future;
+    try {
+      return await future;
+    } finally {
+      if (identical(_geolocatorPermissionRequest, future)) {
+        _geolocatorPermissionRequest = null;
+      }
+    }
+  }
+
+  static Future<LocationPermission> _requestGeolocatorPermissionImpl() async {
+    try {
+      return await OverlayPromptGuard.runDuringOsPermissionPrompt(
+        Geolocator.requestPermission,
+      );
+    } catch (error, stack) {
+      if (_isLocationPermissionAlreadyRunning(error)) {
+        if (kDebugMode) {
+          debugPrint(
+            '[PermissionSettingsHelper] geolocator request already running; '
+            'returning checkPermission()',
+          );
+        }
+        return Geolocator.checkPermission();
+      }
+      if (kDebugMode) {
+        debugPrint(
+          '[PermissionSettingsHelper] geolocator request failed: $error\n$stack',
+        );
+      }
+      rethrow;
+    }
+  }
+
+  static bool _isLocationPermissionAlreadyRunning(Object error) {
+    final message = switch (error) {
+      PlatformException(:final message, :final code) =>
+        '${message ?? ''} $code',
+      _ => error.toString(),
+    };
+    return message.toLowerCase().contains('already running');
+  }
 
   static bool get isAwaitingSettingsReturn => _awaitingSettingsReturn;
 
@@ -259,9 +308,7 @@ class PermissionSettingsHelper {
       if (permission == LocationPermission.deniedForever) {
         return LocationPermissionRequestResult.promptShown;
       }
-      await OverlayPromptGuard.runDuringOsPermissionPrompt(
-        Geolocator.requestPermission,
-      );
+      await requestGeolocatorPermission();
 
       unawaited(
         NativePermissionStatusService.instance
@@ -334,9 +381,7 @@ class PermissionSettingsHelper {
     }
 
     if (permission == LocationPermission.denied) {
-      await OverlayPromptGuard.runDuringOsPermissionPrompt(
-        Geolocator.requestPermission,
-      );
+      await requestGeolocatorPermission();
       unawaited(
         NativePermissionStatusService.instance
             .syncForegroundLocationAfterOsPrompt(),

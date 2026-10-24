@@ -5,10 +5,6 @@ import android.util.Log
 import androidx.exifinterface.media.ExifInterface
 import java.io.File
 
-/**
- * Landscape validation for captured stills (EXIF-aware) and videos
- * (display size after rotation metadata).
- */
 object NativeCameraOrientation {
   data class MediaSize(
     val width: Int,
@@ -32,7 +28,7 @@ object NativeCameraOrientation {
       var width = rawW
       var height = rawH
       if (width <= 0 || height <= 0) {
-        // Some OEMs omit EXIF pixel size; decode bounds only (no full decode).
+
         val bounds = android.graphics.BitmapFactory.Options().apply {
           inJustDecodeBounds = true
         }
@@ -104,13 +100,13 @@ object NativeCameraOrientation {
   }
 
   fun isLandscapePhoto(file: File): Boolean {
-    // FAIL CLOSED: unverifiable EXIF/dimensions must reject evidence.
+
     val size = readPhotoSize(file) ?: return false
     return size.isLandscape
   }
 
   fun isLandscapeVideo(file: File): Boolean {
-    // FAIL CLOSED: unverifiable video track must reject evidence.
+
     val size = readVideoSize(file) ?: return false
     return size.isLandscape
   }

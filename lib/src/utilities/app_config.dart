@@ -108,8 +108,17 @@ class AppConfig {
   static int? bottomTabIndexForUri(Uri? uri) {
     final path = normalizeWebPath(uri);
     if (path == null) return null;
-    for (var i = 0; i < AppRoutes.bottomTabWebPaths.length; i++) {
-      if (AppRoutes.bottomTabWebPaths[i] == path) return i;
+
+    switch (path) {
+      case '/officer/site-checks':
+      case '/officer/dashboard':
+        return 0;
+      case '/officer/shift-log':
+        return 1;
+      case '/officer/timesheet/monthly':
+        return 3;
+      case '/officer/profile':
+        return 4;
     }
     return null;
   }

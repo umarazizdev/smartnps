@@ -1,0 +1,11 @@
+---
+description: Do not add comments to source files
+alwaysApply: true
+---
+
+# No code comments
+
+- Do not add comments, doc comments (`///`), or explanatory inline comments to source files.
+- Prefer clear names and structure over comments.
+- Do not leave TODO/FIXME/NOTE comments unless the user explicitly asks for them.
+- When editing existing files, do not introduce new comments. Leave pre-existing comments untouched unless the user asks to remove them.

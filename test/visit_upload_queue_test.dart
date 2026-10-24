@@ -298,7 +298,6 @@ void main() {
       );
       expect(onDisk.hasItems, isTrue);
 
-      // Restore must not pull the in-flight draft back into the editor.
       await flow.reloadForAccountChange();
       expect(flow.mediaItems, isEmpty);
     });

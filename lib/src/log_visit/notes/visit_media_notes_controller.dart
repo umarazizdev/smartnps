@@ -13,8 +13,6 @@ import '../flow/visit_video_flow_controller.dart';
 
 enum VisitMediaNoteKind { text, voice }
 
-enum VisitBatchNoteScope { attentionNeeded, generalNote }
-
 typedef NotesConfirmCallback =
     Future<bool> Function({
       required String title,
@@ -28,14 +26,12 @@ class VisitMediaNotesController extends GetxController {
     this.mediaPath = '',
     required this.kind,
     this.batchMode = false,
-    this.batchScope = VisitBatchNoteScope.attentionNeeded,
   });
 
   final String mediaPath;
   final VisitMediaNoteKind kind;
 
   final bool batchMode;
-  final VisitBatchNoteScope batchScope;
 
   NotesConfirmCallback? confirm;
 
@@ -110,9 +106,7 @@ class VisitMediaNotesController extends GetxController {
   }
 
   void _initFromBatchNote() {
-    final note = batchScope == VisitBatchNoteScope.generalNote
-        ? _flowController.generalNote.value
-        : _flowController.batchNote.value;
+    final note = _flowController.generalNote.value;
     if (isTextMode) {
       _initialText = note.textNote;
       textController.text = _initialText;
@@ -593,11 +587,7 @@ class VisitMediaNotesController extends GetxController {
       final text = textController.text.trim();
       _committed = true;
       if (batchMode) {
-        if (batchScope == VisitBatchNoteScope.generalNote) {
-          await _flowController.updateGeneralTextNote(text);
-        } else {
-          await _flowController.updateBatchTextNote(text);
-        }
+        await _flowController.updateGeneralTextNote(text);
       } else {
         await _flowController.updateTextNote(
           mediaPath: mediaPath,
@@ -613,11 +603,7 @@ class VisitMediaNotesController extends GetxController {
     _committed = true;
     if (voice != null && voice.trim().isNotEmpty) {
       if (batchMode) {
-        if (batchScope == VisitBatchNoteScope.generalNote) {
-          await _flowController.updateGeneralVoiceNote(voice);
-        } else {
-          await _flowController.updateBatchVoiceNote(voice);
-        }
+        await _flowController.updateGeneralVoiceNote(voice);
       } else {
         await _flowController.updateVoiceNote(
           mediaPath: mediaPath,
@@ -627,11 +613,7 @@ class VisitMediaNotesController extends GetxController {
       _tempVoicePaths.remove(voice);
     } else if (_initialVoicePath != null) {
       if (batchMode) {
-        if (batchScope == VisitBatchNoteScope.generalNote) {
-          await _flowController.updateGeneralVoiceNote(null);
-        } else {
-          await _flowController.updateBatchVoiceNote(null);
-        }
+        await _flowController.updateGeneralVoiceNote(null);
       } else {
         await _flowController.updateVoiceNote(
           mediaPath: mediaPath,
