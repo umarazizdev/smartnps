@@ -3992,7 +3992,6 @@ class _WebViewShellState extends State<WebViewShell>
     );
 
     if (visitType != null && visitType.trim().isNotEmpty) {
-
       payload = {...?payload, 'visit_type': visitType, 'visitType': visitType};
     }
 
@@ -4053,10 +4052,7 @@ class _WebViewShellState extends State<WebViewShell>
       );
       return <String, dynamic>{
         'ok': false,
-        'error': {
-          'code': 'report_context_required',
-          'message': contextError,
-        },
+        'error': {'code': 'report_context_required', 'message': contextError},
       };
     }
     final ctx = flow.patrolContext.value;
@@ -4523,7 +4519,8 @@ class _WebViewShellState extends State<WebViewShell>
               needsReportContextPrep) {
             _openLogVisitTab();
           }
-          final resumeContextError = await flow.ensureOperationalReportContext();
+          final resumeContextError = await flow
+              .ensureOperationalReportContext();
           flow.isPreparingReport.value = false;
           if (resumeContextError != null) {
             await _closeLogVisit(openDashboard: true);
@@ -4571,8 +4568,7 @@ class _WebViewShellState extends State<WebViewShell>
           final discardedCtx = discarded.context;
           await flow.clearAll();
           unawaited(_notifyWebPendingDraftsChanged());
-          pending =
-              await VisitUploadQueue.instance.listEditablePendingDrafts();
+          pending = await VisitUploadQueue.instance.listEditablePendingDrafts();
           if (pending.isEmpty) {
             return <String, dynamic>{
               'ok': true,
@@ -4583,8 +4579,7 @@ class _WebViewShellState extends State<WebViewShell>
               'regionId': discarded.draftKey.regionId ?? discardedCtx?.regionId,
               'visitType': discardedCtx?.visitType,
               'draftKey': discarded.draftKey.folderName,
-              'flowKind':
-                  (discardedCtx?.flowKind ?? VisitFlowKind.patrol).name,
+              'flowKind': (discardedCtx?.flowKind ?? VisitFlowKind.patrol).name,
             };
           }
           returnToSitePickerAfterDiscard = true;
@@ -6360,75 +6355,71 @@ class _WebViewShellState extends State<WebViewShell>
                                                 );
                                           }
                                         },
-                                        onReceivedError:
-                                            (controller, request, error) async {
-                                              _finishPullToRefreshChrome();
-                                              _finishBottomTabNavigation();
-                                              _endMainFrameNavigationChrome();
+                                        onReceivedError: (controller, request, error) async {
+                                          _finishPullToRefreshChrome();
+                                          _finishBottomTabNavigation();
+                                          _endMainFrameNavigationChrome();
 
-                                              if (error.type ==
-                                                  WebResourceErrorType
-                                                      .CANCELLED) {
-                                                return;
-                                              }
-                                              if (request.isForMainFrame ==
-                                                  false) {
-                                                return;
-                                              }
+                                          if (error.type ==
+                                              WebResourceErrorType.CANCELLED) {
+                                            return;
+                                          }
+                                          if (request.isForMainFrame == false) {
+                                            return;
+                                          }
 
-                                              if (await _deviceHasNetworkInterface() ||
-                                                  await SiteReachability
-                                                      .canReachSite()) {
-                                                if (!mounted) return;
-                                                if (_recoveryInFlight ||
-                                                    _awaitingRecoveryLoad) {
-                                                  return;
-                                                }
-                                                unawaited(
-                                                  _recoverWebView(
-                                                    reason: 'main_frame_error',
-                                                  ),
-                                                );
-                                                return;
-                                              }
-                                              if (!mounted) return;
-                                              if (_isInOfflineStartupGrace()) {
-                                                if (!_recoveryInFlight &&
-                                                    !_awaitingRecoveryLoad) {
-                                                  unawaited(
-                                                    _recoverWebView(
-                                                      reason:
-                                                          'main_frame_error_grace',
-                                                    ),
-                                                  );
-                                                }
-                                                return;
-                                              }
-                                              if (!await _isConfirmedOffline()) {
-                                                if (!mounted) return;
-                                                if (!_recoveryInFlight &&
-                                                    !_awaitingRecoveryLoad) {
-                                                  unawaited(
-                                                    _recoverWebView(
-                                                      reason:
-                                                          'main_frame_error_recovered',
-                                                    ),
-                                                  );
-                                                }
-                                                return;
-                                              }
-                                              if (!mounted) return;
-                                              final wasRetrying =
-                                                  _ui.offlineRetrying.value;
-                                              _cancelOfflineConnectivityDebounce();
-                                              _holdOfflineUntilReload = true;
-                                              _ui.offlineRetrying.value = false;
-                                              if (wasRetrying) {
-                                                _ui.offlineStatusMessage.value =
-                                                    'Couldn\'t reconnect. Check your connection and try again.';
-                                              }
-                                              _showOffline(needsReload: true);
-                                            },
+                                          if (await _deviceHasNetworkInterface() ||
+                                              await SiteReachability.canReachSite()) {
+                                            if (!mounted) return;
+                                            if (_recoveryInFlight ||
+                                                _awaitingRecoveryLoad) {
+                                              return;
+                                            }
+                                            unawaited(
+                                              _recoverWebView(
+                                                reason: 'main_frame_error',
+                                              ),
+                                            );
+                                            return;
+                                          }
+                                          if (!mounted) return;
+                                          if (_isInOfflineStartupGrace()) {
+                                            if (!_recoveryInFlight &&
+                                                !_awaitingRecoveryLoad) {
+                                              unawaited(
+                                                _recoverWebView(
+                                                  reason:
+                                                      'main_frame_error_grace',
+                                                ),
+                                              );
+                                            }
+                                            return;
+                                          }
+                                          if (!await _isConfirmedOffline()) {
+                                            if (!mounted) return;
+                                            if (!_recoveryInFlight &&
+                                                !_awaitingRecoveryLoad) {
+                                              unawaited(
+                                                _recoverWebView(
+                                                  reason:
+                                                      'main_frame_error_recovered',
+                                                ),
+                                              );
+                                            }
+                                            return;
+                                          }
+                                          if (!mounted) return;
+                                          final wasRetrying =
+                                              _ui.offlineRetrying.value;
+                                          _cancelOfflineConnectivityDebounce();
+                                          _holdOfflineUntilReload = true;
+                                          _ui.offlineRetrying.value = false;
+                                          if (wasRetrying) {
+                                            _ui.offlineStatusMessage.value =
+                                                'Couldn\'t reconnect. Check your connection and try again.';
+                                          }
+                                          _showOffline(needsReload: true);
+                                        },
                                         onGeolocationPermissionsShowPrompt: (controller, origin) async {
                                           if (_ui.showLocationNotice.value) {
                                             return GeolocationPermissionShowPromptResponse(
