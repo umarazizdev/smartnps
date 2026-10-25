@@ -4,7 +4,6 @@ import 'package:flutter/services.dart';
 
 import '../api/api_urls.dart';
 import '../auth/auth_repository.dart';
-import '../push/notifications/push_notification_preferences.dart';
 import '../utilities/app_debug_log.dart';
 import '../utilities/app_version_info.dart';
 import '../utilities/device_identity.dart';
@@ -39,7 +38,6 @@ class AndroidPermissionStatusWatch {
     final access = await AuthRepository.instance.getAccessToken();
     if (access == null || access.isEmpty) return;
     final refresh = await AuthRepository.instance.getRefreshToken();
-    final pushEnabled = await PushNotificationPreferences.readEnabled();
 
     try {
       await _channel.invokeMethod<void>('arm', {
@@ -50,7 +48,6 @@ class AndroidPermissionStatusWatch {
         'deviceName': await DeviceIdentity.getDeviceName(),
         'appVersion': AppVersionInfo.version,
         'build': AppVersionInfo.buildNumber,
-        'pushStatus': pushEnabled ? 'enabled' : 'disabled',
         'markSynced': markSynced,
       });
     } on MissingPluginException {
@@ -74,13 +71,11 @@ class AndroidPermissionStatusWatch {
       return;
     }
     final refresh = await AuthRepository.instance.getRefreshToken();
-    final pushEnabled = await PushNotificationPreferences.readEnabled();
     try {
       await _channel.invokeMethod<void>('syncSession', {
         'accessToken': access,
         'refreshToken': refresh,
         'apiBaseUrl': ApiUrls.baseUrl,
-        'pushStatus': pushEnabled ? 'enabled' : 'disabled',
         'markSynced': markSynced,
       });
     } on MissingPluginException {

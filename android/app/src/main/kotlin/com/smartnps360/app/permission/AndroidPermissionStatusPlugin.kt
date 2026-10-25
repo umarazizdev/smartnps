@@ -55,7 +55,6 @@ class AndroidPermissionStatusPlugin : FlutterPlugin, MethodChannel.MethodCallHan
           deviceName = call.argument<String>("deviceName"),
           appVersion = appVersion,
           build = build,
-          pushStatus = call.argument<String>("pushStatus") ?: "enabled",
           fingerprint = null,
         )
         if (call.argument<Boolean>("markSynced") == true) {
@@ -74,7 +73,6 @@ class AndroidPermissionStatusPlugin : FlutterPlugin, MethodChannel.MethodCallHan
           accessToken = access,
           refreshToken = call.argument<String>("refreshToken"),
           apiBaseUrl = call.argument<String>("apiBaseUrl"),
-          pushStatus = call.argument<String>("pushStatus"),
         )
         if (call.argument<Boolean>("markSynced") == true) {
           AndroidPermissionStatusWatch.noteCurrentSynced(context)

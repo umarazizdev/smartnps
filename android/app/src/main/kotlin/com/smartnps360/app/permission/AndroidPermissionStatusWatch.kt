@@ -27,7 +27,6 @@ internal object AndroidPermissionStatusWatch {
     deviceName: String?,
     appVersion: String,
     build: String,
-    pushStatus: String,
     fingerprint: String?,
   ) {
     AndroidPermissionStatusStore.arm(
@@ -39,7 +38,6 @@ internal object AndroidPermissionStatusWatch {
       deviceName = deviceName,
       appVersion = appVersion,
       build = build,
-      pushStatus = pushStatus,
       fingerprint = fingerprint,
     )
     schedule(context, FIRST_CHECK_AFTER_KILL_MS)
@@ -52,14 +50,12 @@ internal object AndroidPermissionStatusWatch {
     accessToken: String,
     refreshToken: String?,
     apiBaseUrl: String?,
-    pushStatus: String?,
   ) {
     AndroidPermissionStatusStore.syncSession(
       context = context,
       accessToken = accessToken,
       refreshToken = refreshToken,
       apiBaseUrl = apiBaseUrl,
-      pushStatus = pushStatus,
       fingerprint = null,
     )
   }
