@@ -243,10 +243,10 @@ def inventory_features():
         ["F-23", "Device info bridge", "getDeviceInfo (brand/model/OS)", "js_bridge.dart"],
         ["F-24", "Push notifications (FCM)", "Firebase Messaging + local notifications + sound", "push_notification_service.dart"],
         ["F-25", "Push token register/delete", "POST/DELETE /api/push-token", "push_notification_service.dart"],
-        ["F-26", "In-app push enable/disable", "setPushNotificationsEnabled + prefs + permission-status sync", "push_notification_preferences.dart"],
+        ["F-26", "In-app push enable/disable", "App settings preference", "push_notification_preferences.dart"],
         ["F-27", "Officer announcement push", "type=officer_announcement → WebView recipient UUID", "officer_announcement_*.dart"],
         ["F-28", "Notification tap deep link", "Opens trusted smartnps360 URL (default officer/dashboard)", "push_notification_service.dart"],
-        ["F-29", "Native permission status sync", "POST /api/native-app/permission-status (location, push, battery)", "native_permission_status_service.dart"],
+        ["F-29", "Native permission status sync", "POST /api/native-app/permission-status (location, notifications, battery)", "native_permission_status_service.dart"],
         ["F-30", "Battery monitoring upload", "Periodic battery % + low power mode while logged in", "native_permission_status_service.dart"],
         ["F-31", "Theme sync (light/dark)", "themeChanged JS → NativeThemeController", "native_theme_controller.dart"],
         ["F-32", "Offline / connectivity handling", "OfflineScreen + Retry when no network", "offline_screen.dart, webview_shell.dart"],
@@ -673,11 +673,11 @@ def all_test_cases():
     add(
         id="TC-PUSH-003",
         feature="F-26 Toggle push off/on",
-        src="setPushNotificationsEnabled; PushNotificationPreferences",
+        src="PushNotificationPreferences; PushNotificationService.setNotificationsEnabled",
         role="Officer",
         pre="Logged in.",
-        steps="1. Disable push via web bridge.\n2. Send FCM.\n3. Re-enable.",
-        exp="Preference persists; permission-status push field updates; enabled state restores token registration behavior.",
+        steps="1. Disable push in app settings.\n2. Send FCM.\n3. Re-enable.",
+        exp="Preference persists; enabled state restores token registration behavior.",
     )
     add(
         id="TC-PUSH-004",
@@ -1036,8 +1036,8 @@ def build():
     story.append(
         p(
             "NativePermissionStatusService reports: <b>foregroundLocation</b>, <b>backgroundLocation</b>, "
-            "<b>preciseLocation</b>, <b>notifications</b>, <b>batteryOptimization</b>, <b>push</b> (in-app toggle), "
-            "plus battery_percentage and low_power_mode.",
+            "<b>preciseLocation</b>, <b>notifications</b>, <b>motionActivity</b>, <b>batteryOptimization</b>, "
+            "<b>backgroundAppRefresh</b>, plus battery_percentage and low_power_mode.",
             st["body"],
         )
     )
@@ -1144,7 +1144,6 @@ def build():
                 "pickFile, pickImage, takePhoto",
                 "getCurrentLocation, startLocationWatch, clearLocationWatch",
                 "getDeviceInfo, openExternalUrl, shareContent, downloadFile",
-                "getPushNotificationToken, getPushNotificationStatus, setPushNotificationsEnabled",
                 "getBackgroundLocationStatus, prepareClockIn",
                 "themeChanged, loginWithSanctum, authEvent",
                 "iosPopoverFixDebug (iOS diagnostic)",

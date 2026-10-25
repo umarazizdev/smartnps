@@ -18,7 +18,6 @@ import '../background/location/background_location_permissions.dart';
 import '../debug/kill_cycle_debug_service.dart';
 import '../debug/session_debug_logger.dart';
 import '../motion/motion_activity_service.dart';
-import '../push/notifications/push_notification_preferences.dart';
 import 'android_permission_status_watch.dart';
 import 'os_notification_permission.dart';
 import 'permission_status_api_contract.dart';
@@ -356,16 +355,6 @@ class NativePermissionStatusService {
       } while (_syncCoalescePending);
     });
     return didUpload;
-  }
-
-  Future<bool> uploadPushToggle({required bool enabled}) async {
-    if (!Platform.isAndroid && !Platform.isIOS) return false;
-
-    final accessToken = await _accessTokenForLoggedInOfficer();
-    if (accessToken == null || accessToken.isEmpty) return false;
-
-    _debugLog('push state upload push=${enabled ? 'enabled' : 'disabled'}');
-    return syncIfChanged(force: true);
   }
 
   Future<bool> uploadAppCycle({
@@ -800,14 +789,7 @@ class NativePermissionStatusService {
       'motionActivity': await _motionActivityStatus(),
       'batteryOptimization': await _batteryOptimizationStatus(),
       'backgroundAppRefresh': await _backgroundAppRefreshStatus(),
-      'push': await _pushToggleStatus(),
     };
-  }
-
-  Future<String> _pushToggleStatus() async {
-    if (!Platform.isAndroid && !Platform.isIOS) return 'disabled';
-    final enabled = await PushNotificationPreferences.readEnabled();
-    return enabled ? 'enabled' : 'disabled';
   }
 
   Future<String> _foregroundLocationStatus() async {
