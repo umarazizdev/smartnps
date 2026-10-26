@@ -517,6 +517,11 @@ enum SessionDebugApiSuccessTarget {
     'Onsite patrol visits',
     '/onsite-patrol/visits',
   ),
+  siteCheckVisits(
+    'site_check_visits',
+    'Site-check visits',
+    '/site-checks/shifts',
+  ),
   issueReports('issue_reports', 'Issue reports', '/issue-reports'),
   incidentReports(
     'incident_reports',
@@ -534,9 +539,15 @@ enum SessionDebugApiSuccessTarget {
   bool matches(Uri uri) {
     if (this == SessionDebugApiSuccessTarget.all) return true;
     final path = uri.path.isEmpty ? '/' : uri.path;
-    if (path == pathSuffix) return true;
+    if (_pathMatchesSuffix(path, pathSuffix)) return true;
+    if (_pathMatchesSuffix(path, '/api$pathSuffix')) return true;
+    return false;
+  }
 
-    return path.startsWith('$pathSuffix/');
+  static bool _pathMatchesSuffix(String path, String suffix) {
+    if (suffix.isEmpty) return true;
+    if (path == suffix) return true;
+    return path.startsWith('$suffix/');
   }
 
   static SessionDebugApiSuccessTarget? tryParse(String raw) {

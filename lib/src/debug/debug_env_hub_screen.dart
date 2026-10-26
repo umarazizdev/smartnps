@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../app/native_theme_controller.dart';
 import '../utilities/app_config.dart';
+import 'debug_env_api_responses_screen.dart';
 import 'debug_env_logs_screen.dart';
 import 'debug_env_theme.dart';
 import 'debug_env_urls_screen.dart';
@@ -48,6 +49,13 @@ class DebugEnvHubScreen extends StatelessWidget {
             icon: Icons.terminal_rounded,
             title: 'Diagnostic logging',
             onTap: () => _open(context, const DebugEnvLogsScreen()),
+          ),
+          const SizedBox(height: 14),
+          _HubCard(
+            colors: colors,
+            icon: Icons.data_object_rounded,
+            title: 'API response logging',
+            onTap: () => _open(context, const DebugEnvApiResponsesScreen()),
           ),
           const SizedBox(height: 14),
           _HubCard(

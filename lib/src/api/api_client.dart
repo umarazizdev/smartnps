@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 
 import '../auth/auth_repository.dart';
+import '../debug/api_response_debug_logger.dart';
 import '../debug/session_debug_logger.dart';
 
 class ApiClient {
@@ -35,12 +36,20 @@ class ApiClient {
               !AuthRepository.isLoginRequest(response.requestOptions)) {
             final retried = await _refreshAndRetryRequest(response.requestOptions);
             if (retried != null) {
-              _logApiResult(retried.requestOptions, retried.statusCode);
+              _logApiResult(
+                retried.requestOptions,
+                retried.statusCode,
+                body: retried.data,
+              );
               handler.resolve(retried);
               return;
             }
           }
-          _logApiResult(response.requestOptions, response.statusCode);
+          _logApiResult(
+            response.requestOptions,
+            response.statusCode,
+            body: response.data,
+          );
           handler.next(response);
         },
         onError: (error, handler) async {
@@ -48,7 +57,11 @@ class ApiClient {
               !AuthRepository.isLoginRequest(error.requestOptions)) {
             final retried = await _refreshAndRetryRequest(error.requestOptions);
             if (retried != null) {
-              _logApiResult(retried.requestOptions, retried.statusCode);
+              _logApiResult(
+                retried.requestOptions,
+                retried.statusCode,
+                body: retried.data,
+              );
               handler.resolve(retried);
               return;
             }
@@ -60,16 +73,34 @@ class ApiClient {
     );
   }
 
-  static void _logApiResult(RequestOptions options, int? statusCode) {
+  static void _logApiResult(
+    RequestOptions options,
+    int? statusCode, {
+    dynamic body,
+  }) {
     logHttpResult(options.method, options.uri, statusCode);
+    ApiResponseDebugLogger.instance.capture(
+      method: options.method,
+      uri: options.uri,
+      statusCode: statusCode,
+      body: body,
+    );
   }
 
   static void _logApiError(DioException error) {
+    final message = _errorMessage(error);
     logHttpError(
       error.requestOptions.method,
       error.requestOptions.uri,
       error.response?.statusCode ?? 0,
-      _errorMessage(error),
+      message,
+    );
+    ApiResponseDebugLogger.instance.capture(
+      method: error.requestOptions.method,
+      uri: error.requestOptions.uri,
+      statusCode: error.response?.statusCode ?? 0,
+      body: error.response?.data,
+      error: message,
     );
   }
 
