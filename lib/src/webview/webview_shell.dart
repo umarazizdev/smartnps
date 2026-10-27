@@ -266,6 +266,7 @@ class _WebViewShellState extends State<WebViewShell>
 
   Future<void> _pauseNativeSessionForLoginScreen() async {
     _suppressResidualKeyboardInsetAfterLogin = false;
+    AuthState.instance.clearNeedsReauth();
     if (!_pendingLocationNoticeAfterLogin) {
       _cancelPendingLocationNoticeActivateTimer();
       _ui.showLocationNotice.value = false;
@@ -498,27 +499,10 @@ class _WebViewShellState extends State<WebViewShell>
     AuthState.instance.markNeedsReauth();
     if (kDebugMode) {
       debugPrint(
-        '[SmartNPS360][Auth] refresh failed → token unavailable snackbar '
-        '(no logout, tokens kept)',
+        '[SmartNPS360][Auth] refresh failed → soft re-auth '
+        '(no logout, tokens kept, no snackbar)',
       );
     }
-    _showTokenUnavailableSnackbar();
-  }
-
-  void _showTokenUnavailableSnackbar() {
-    Get.closeAllSnackbars();
-    Get.snackbar(
-      '',
-      '',
-      snackPosition: SnackPosition.BOTTOM,
-      margin: const EdgeInsets.all(12),
-      duration: const Duration(seconds: 4),
-      titleText: const SizedBox.shrink(),
-      messageText: const Text(
-        'Token is not available. It will be available shortly.',
-        style: TextStyle(color: Colors.white),
-      ),
-    );
   }
 
   void _clearSoftReauthAfterSuccessfulLogin() {
