@@ -266,9 +266,10 @@ class _WebViewShellState extends State<WebViewShell>
 
   Future<void> _pauseNativeSessionForLoginScreen() async {
     _suppressResidualKeyboardInsetAfterLogin = false;
-    _cancelPendingLocationNoticeActivateTimer();
-    _pendingLocationNoticeAfterLogin = false;
-    _ui.showLocationNotice.value = false;
+    if (!_pendingLocationNoticeAfterLogin) {
+      _cancelPendingLocationNoticeActivateTimer();
+      _ui.showLocationNotice.value = false;
+    }
     _ui.setOfficerLoggedIn(false);
     _setNativeAuthSession(false);
     _clearWebBottomBarHide();
@@ -2049,17 +2050,14 @@ class _WebViewShellState extends State<WebViewShell>
 
     unawaited(AppUpgradeReconciler.reconcileOsAfterEngineReady());
     RequiredPermissionsGate.privacyNoticeVisibleChecker = () =>
-        _ui.showLocationNotice.value ||
-        (_pendingLocationNoticeAfterLogin &&
-            AuthSessionManager.isLoginRoute(_ui.currentUri.value));
+        _ui.showLocationNotice.value || _pendingLocationNoticeAfterLogin;
     OffDutyPushPromptService.currentUriChecker = () => _ui.currentUri.value;
     OnDutyPermissionsPromptService.currentUriChecker = () =>
         _ui.currentUri.value;
     PushNotificationService.instance.setDeferPermissionPromptWhile(
       () =>
           _ui.showLocationNotice.value ||
-          (_pendingLocationNoticeAfterLogin &&
-              AuthSessionManager.isLoginRoute(_ui.currentUri.value)) ||
+          _pendingLocationNoticeAfterLogin ||
           (_isAuthRoute(_ui.currentUri.value) && !_ui.officerLoggedIn.value),
     );
     _ui.webPrefersDark.value = false;
