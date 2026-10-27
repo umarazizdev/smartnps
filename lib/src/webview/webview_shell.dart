@@ -12,6 +12,7 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:get/get.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../utilities/app_config.dart';
@@ -265,9 +266,10 @@ class _WebViewShellState extends State<WebViewShell>
 
   Future<void> _pauseNativeSessionForLoginScreen() async {
     _suppressResidualKeyboardInsetAfterLogin = false;
-    _cancelPendingLocationNoticeActivateTimer();
-    _pendingLocationNoticeAfterLogin = false;
-    _ui.showLocationNotice.value = false;
+    if (!_pendingLocationNoticeAfterLogin) {
+      _cancelPendingLocationNoticeActivateTimer();
+      _ui.showLocationNotice.value = false;
+    }
     _ui.setOfficerLoggedIn(false);
     _setNativeAuthSession(false);
     _clearWebBottomBarHide();
@@ -462,7 +464,7 @@ class _WebViewShellState extends State<WebViewShell>
 
     if (syncPush && Platform.isIOS) {
       await _prepareIosPushAuthFromWeb();
-      await _notifyWebPushTokenReady();
+      await PushNotificationService.instance.syncPushTokenAfterLogin();
     }
 
     if (!mounted || !_ui.officerLoggedIn.value) return;
@@ -1007,334 +1009,6 @@ class _WebViewShellState extends State<WebViewShell>
               );
             });
         };
-        window.SmartNPS360.getPushNotificationStatus = function () {
-          return ensureFlutterBridge()
-            .then(function () {
-              return window.flutter_inappwebview.callHandler(
-                'getPushNotificationStatus'
-              );
-            });
-        };
-        window.SmartNPS360.setPushNotificationsEnabled = function (enabled) {
-          var next =
-            enabled === true ||
-            enabled === 1 ||
-            enabled === '1' ||
-            enabled === 'true';
-          return ensureFlutterBridge()
-            .then(function () {
-              return window.flutter_inappwebview.callHandler(
-                'setPushNotificationsEnabled',
-                { enabled: next }
-              );
-            })
-            .then(function (status) {
-              if (
-                window.SmartNPS360 &&
-                typeof window.SmartNPS360.broadcastPushNotificationStatus ===
-                  'function'
-              ) {
-                window.SmartNPS360.broadcastPushNotificationStatus(status);
-              }
-              return status;
-            });
-        };
-        window.SmartNPS360._syncAlpinePushNotificationState = function (
-          enabled
-        ) {
-          if (!window.Alpine || typeof window.Alpine.$data !== 'function') {
-            return;
-          }
-          try {
-            var nodes = document.querySelectorAll('[x-data]');
-            for (var i = 0; i < nodes.length; i++) {
-              var data = window.Alpine.$data(nodes[i]);
-              if (
-                data &&
-                Object.prototype.hasOwnProperty.call(
-                  data,
-                  'pushNotificationsEnabled'
-                )
-              ) {
-                data.pushNotificationsEnabled = enabled === true;
-              }
-            }
-          } catch (_) {}
-        };
-        function findAlpinePushNotificationButtons() {
-          var byTitle = document.querySelectorAll(
-            'button[title*="push notification" i]'
-          );
-          if (byTitle.length) {
-            return Array.prototype.slice.call(byTitle);
-          }
-          var buttons = document.querySelectorAll('button[type="button"]');
-          var found = [];
-          for (var i = 0; i < buttons.length; i++) {
-            var btn = buttons[i];
-            var labels = btn.querySelectorAll('span');
-            for (var j = 0; j < labels.length; j++) {
-              var text = String(labels[j].textContent || '').trim();
-              if (/^notifications$/i.test(text)) {
-                found.push(btn);
-                break;
-              }
-            }
-          }
-          return found;
-        }
-        window.SmartNPS360.broadcastPushNotificationStatus = function (
-          status
-        ) {
-          if (!status || status.ok !== true) return;
-          var enabled = status.enabled === true;
-          window.SmartNPS360._syncAlpinePushNotificationState(enabled);
-          var toggles = document.querySelectorAll(
-            '[data-smartnps-push-toggle]'
-          );
-          for (var i = 0; i < toggles.length; i++) {
-            window.SmartNPS360._applyPushNotificationToggleState(
-              toggles[i],
-              status
-            );
-          }
-          var alpineButtons = findAlpinePushNotificationButtons();
-          for (var k = 0; k < alpineButtons.length; k++) {
-            window.SmartNPS360._applyAlpinePushNotificationToggleState(
-              alpineButtons[k],
-              enabled
-            );
-          }
-          window.dispatchEvent(
-            new CustomEvent('smartnps360:push-notifications', {
-              detail: status,
-            })
-          );
-          if (
-            typeof window.SmartNPS360.onPushNotificationStatusChanged ===
-            'function'
-          ) {
-            window.SmartNPS360.onPushNotificationStatusChanged(status);
-          }
-        };
-        window.SmartNPS360.syncPushNotifications = function () {
-          if (!window.SmartNPS360.isNativeApp()) {
-            return Promise.resolve({ ok: false, reason: 'not_native' });
-          }
-          return window.SmartNPS360.getPushNotificationStatus().then(function (
-            status
-          ) {
-            window.SmartNPS360.broadcastPushNotificationStatus(status);
-            return status;
-          });
-        };
-        window.SmartNPS360._applyPushNotificationToggleState = function (
-          input,
-          status
-        ) {
-          if (!input || !status || status.ok !== true) return;
-          input.checked = status.enabled === true;
-          input.setAttribute(
-            'aria-checked',
-            status.enabled === true ? 'true' : 'false'
-          );
-        };
-        window.SmartNPS360.bindPushNotificationToggle = function (
-          input,
-          options
-        ) {
-          if (!input) return;
-          options = options || {};
-
-          function refresh() {
-            if (!window.SmartNPS360.isNativeApp()) return;
-            return window.SmartNPS360.syncPushNotifications().catch(function (
-              err
-            ) {
-              if (typeof options.onError === 'function') {
-                options.onError(err);
-              }
-            });
-          }
-
-          if (input.dataset.smartnpsPushBound !== '1') {
-            input.dataset.smartnpsPushBound = '1';
-            input.addEventListener('change', function () {
-              if (!window.SmartNPS360.isNativeApp()) return;
-              var next = input.checked === true;
-              input.disabled = true;
-              window.SmartNPS360.setPushNotificationsEnabled(next)
-                .then(function (status) {
-                  window.SmartNPS360._applyPushNotificationToggleState(
-                    input,
-                    status
-                  );
-                  if (typeof options.onChanged === 'function') {
-                    options.onChanged(status);
-                  }
-                })
-                .catch(function (err) {
-                  input.checked = !next;
-                  if (typeof options.onError === 'function') {
-                    options.onError(err);
-                  }
-                })
-                .finally(function () {
-                  input.disabled = false;
-                });
-            });
-            document.addEventListener('visibilitychange', function () {
-              if (document.visibilityState === 'visible') refresh();
-            });
-          }
-
-          refresh();
-        };
-        window.SmartNPS360._applyAlpinePushNotificationToggleState = function (
-          button,
-          enabled
-        ) {
-          if (!button) return;
-          var on = enabled === true;
-          button.setAttribute('aria-pressed', on ? 'true' : 'false');
-          button.title = on
-            ? 'Turn push notifications off'
-            : 'Turn push notifications on';
-          var spans = button.querySelectorAll('span');
-          var track = spans.length > 1 ? spans[1] : null;
-          var knob = spans.length > 2 ? spans[2] : null;
-          if (track) {
-            track.classList.toggle('bg-teal-600', on);
-            track.classList.toggle('bg-slate-300', !on);
-            track.classList.toggle('dark:bg-slate-700', !on);
-          }
-          if (knob) {
-            knob.classList.toggle('translate-x-[18px]', on);
-            knob.classList.toggle('translate-x-0.5', !on);
-          }
-        };
-        window.SmartNPS360.bindAlpinePushNotificationToggle = function (
-          button,
-          options
-        ) {
-          if (!button || button.dataset.smartnpsAlpinePushBound === '1') return;
-          options = options || {};
-          button.dataset.smartnpsAlpinePushBound = '1';
-
-          function refresh() {
-            if (!window.SmartNPS360.isNativeApp()) return;
-            return window.SmartNPS360.syncPushNotifications().catch(function (
-              err
-            ) {
-              if (typeof options.onError === 'function') {
-                options.onError(err);
-              }
-            });
-          }
-
-          function patchTogglePushNotifications() {
-            if (window.__smartnps_toggle_push_patched === true) return;
-            window.__smartnps_toggle_push_patched = true;
-            window.togglePushNotifications = function () {
-              if (!window.SmartNPS360.isNativeApp()) {
-                return false;
-              }
-              return window.SmartNPS360.getPushNotificationStatus().then(
-                function (status) {
-                  var next = !(status && status.enabled === true);
-                  return window.SmartNPS360.setPushNotificationsEnabled(next);
-                }
-              );
-            };
-          }
-
-          patchTogglePushNotifications();
-
-          button.addEventListener(
-            'click',
-            function (e) {
-              if (!window.SmartNPS360.isNativeApp()) return;
-              e.preventDefault();
-              e.stopImmediatePropagation();
-              var current = button.getAttribute('aria-pressed') === 'true';
-              var next = !current;
-              button.disabled = true;
-              window.SmartNPS360.setPushNotificationsEnabled(next)
-                .then(function (status) {
-                  if (!(status && status.ok === true)) {
-                    window.SmartNPS360._applyAlpinePushNotificationToggleState(
-                      button,
-                      current
-                    );
-                  }
-                  if (typeof options.onChanged === 'function') {
-                    options.onChanged(status);
-                  }
-                })
-                .catch(function (err) {
-                  window.SmartNPS360._applyAlpinePushNotificationToggleState(
-                    button,
-                    current
-                  );
-                  if (typeof options.onError === 'function') {
-                    options.onError(err);
-                  }
-                })
-                .finally(function () {
-                  button.disabled = false;
-                });
-            },
-            true
-          );
-
-          document.addEventListener('visibilitychange', function () {
-            if (document.visibilityState === 'visible') refresh();
-          });
-
-          refresh();
-        };
-        function bindPushNotificationToggles() {
-          if (!window.SmartNPS360.isNativeApp()) return;
-          var toggles = document.querySelectorAll(
-            '[data-smartnps-push-toggle]'
-          );
-          for (var i = 0; i < toggles.length; i++) {
-            window.SmartNPS360.bindPushNotificationToggle(toggles[i]);
-          }
-          var alpineButtons = findAlpinePushNotificationButtons();
-          for (var k = 0; k < alpineButtons.length; k++) {
-            window.SmartNPS360.bindAlpinePushNotificationToggle(alpineButtons[k]);
-          }
-          window.SmartNPS360.syncPushNotifications();
-        }
-        function startPushNotificationToggleObserver() {
-          if (!window.SmartNPS360.isNativeApp()) return;
-          if (window.__smartnps_push_toggle_observer) return;
-          window.__smartnps_push_toggle_observer = true;
-          var timer = null;
-          var observer = new MutationObserver(function () {
-            if (timer) clearTimeout(timer);
-            timer = setTimeout(bindPushNotificationToggles, 250);
-          });
-          if (document.documentElement) {
-            observer.observe(document.documentElement, {
-              childList: true,
-              subtree: true
-            });
-          }
-        }
-        if (document.readyState === 'loading') {
-          document.addEventListener(
-            'DOMContentLoaded',
-            function () {
-              bindPushNotificationToggles();
-              startPushNotificationToggleObserver();
-            }
-          );
-        } else {
-          bindPushNotificationToggles();
-          startPushNotificationToggleObserver();
-        }
         window.SmartNPS360.ensureCanClockIn = function () {
           if (window.SmartNPS360) {
             window.SmartNPS360._clockInGeoUnlocked = false;
@@ -2376,17 +2050,14 @@ class _WebViewShellState extends State<WebViewShell>
 
     unawaited(AppUpgradeReconciler.reconcileOsAfterEngineReady());
     RequiredPermissionsGate.privacyNoticeVisibleChecker = () =>
-        _ui.showLocationNotice.value ||
-        (_pendingLocationNoticeAfterLogin &&
-            AuthSessionManager.isLoginRoute(_ui.currentUri.value));
+        _ui.showLocationNotice.value || _pendingLocationNoticeAfterLogin;
     OffDutyPushPromptService.currentUriChecker = () => _ui.currentUri.value;
     OnDutyPermissionsPromptService.currentUriChecker = () =>
         _ui.currentUri.value;
     PushNotificationService.instance.setDeferPermissionPromptWhile(
       () =>
           _ui.showLocationNotice.value ||
-          (_pendingLocationNoticeAfterLogin &&
-              AuthSessionManager.isLoginRoute(_ui.currentUri.value)) ||
+          _pendingLocationNoticeAfterLogin ||
           (_isAuthRoute(_ui.currentUri.value) && !_ui.officerLoggedIn.value),
     );
     _ui.webPrefersDark.value = false;
@@ -2435,14 +2106,6 @@ class _WebViewShellState extends State<WebViewShell>
       isDeliveryReady: _isReadyForAnnouncementDelivery,
       ensureOfficerWebViewVisible: _ensureOfficerWebViewForAnnouncement,
     );
-    if (Platform.isIOS) {
-      PushNotificationService.instance.setIosWebPushUploadHandler(
-        _uploadPushTokenViaWebView,
-      );
-      PushNotificationService.instance.setIosWebPushDeleteHandler(
-        _deletePushTokenViaWebView,
-      );
-    }
   }
 
   void _onPushNotificationTap(String url) {
@@ -2562,61 +2225,6 @@ class _WebViewShellState extends State<WebViewShell>
           '[SmartNPS360] notify web background location status failed: $e',
         );
       }
-    }
-  }
-
-  Future<void> _notifyWebPushNotificationStatus({bool reconcile = true}) async {
-    if (!_shouldUploadNativePermissionStatus) return;
-    final controller = _controller;
-    if (controller == null) return;
-    if (!Platform.isAndroid && !Platform.isIOS) return;
-
-    try {
-      final result = reconcile
-          ? await PushNotificationService.instance.reconcileOnAppResume()
-          : await PushNotificationService.instance.getNotificationStatus();
-      final encoded = jsonEncode(result);
-      await controller.evaluateJavascript(
-        source:
-            '''
-        (function () {
-          try {
-            var status = $encoded;
-            if (
-              window.SmartNPS360 &&
-              typeof window.SmartNPS360.broadcastPushNotificationStatus === 'function'
-            ) {
-              window.SmartNPS360.broadcastPushNotificationStatus(status);
-            } else {
-              window.dispatchEvent(
-                new CustomEvent('smartnps360:push-notifications', { detail: status })
-              );
-            }
-          } catch (e) {}
-        })();
-      ''',
-      );
-    } catch (e) {}
-  }
-
-  Future<void> _promptAfterWebPushDisabled() async {
-    if (!Platform.isAndroid && !Platform.isIOS) return;
-    if (_ui.showLocationNotice.value) return;
-    if (AuthSessionManager.isLoginRoute(_ui.currentUri.value)) return;
-    if (AppConfig.isAuthEntryRoute(_ui.currentUri.value)) return;
-
-    await RequiredPermissionsGate.instance.refresh(force: true);
-
-    await OnDutyPermissionsPromptService.instance.maybeShow(
-      fromResume: false,
-      forceImmediate: true,
-    );
-
-    if (_ui.officerLoggedIn.value && !_ui.showLocationNotice.value) {
-      await OffDutyPushPromptService.instance.maybeShow(
-        fromResume: false,
-        forceImmediate: true,
-      );
     }
   }
 
@@ -2769,7 +2377,7 @@ class _WebViewShellState extends State<WebViewShell>
         if (!ClockInGateService.instance.isPrepareInFlight &&
             !ClockInPermissionsDialog.isVisible) {
           await _notifyWebBackgroundLocationStatus();
-          await _notifyWebPushNotificationStatus();
+          await PushNotificationService.instance.reconcileOnAppResume();
         }
 
         await NativePermissionStatusService.instance
@@ -2803,10 +2411,6 @@ class _WebViewShellState extends State<WebViewShell>
     OfficerAnnouncementCoordinator.instance.detach();
     PushNotificationService.instance.setDeferPermissionPromptWhile(null);
     PushNotificationService.instance.setOnNotificationTap(null);
-    if (Platform.isIOS) {
-      PushNotificationService.instance.setIosWebPushUploadHandler(null);
-      PushNotificationService.instance.setIosWebPushDeleteHandler(null);
-    }
     _connectivitySub?.cancel();
     _offlineConnectivityDebounce?.cancel();
     _cancelPendingLoginTrackingStop();
@@ -4829,37 +4433,6 @@ class _WebViewShellState extends State<WebViewShell>
           _bridge.downloadFile(args.isEmpty ? null : args.first),
     );
     controller.addJavaScriptHandler(
-      handlerName: 'getPushNotificationToken',
-      callback: (args) =>
-          _bridge.getPushNotificationToken(args.isEmpty ? null : args.first),
-    );
-    controller.addJavaScriptHandler(
-      handlerName: 'getPushNotificationStatus',
-      callback: (args) =>
-          _bridge.getPushNotificationStatus(args.isEmpty ? null : args.first),
-    );
-    controller.addJavaScriptHandler(
-      handlerName: 'setPushNotificationsEnabled',
-      callback: (args) async {
-        final result = await _bridge.setPushNotificationsEnabled(
-          args.isEmpty ? null : args.first,
-        );
-        if (kDebugMode) {
-          debugPrint(
-            '[SmartNPS360] setPushNotificationsEnabled ok=${result['ok'] == true}',
-          );
-        }
-        final disabled =
-            result['ok'] == true &&
-            result['enabled'] == false &&
-            result['unchanged'] != true;
-        if (disabled) {
-          unawaited(_promptAfterWebPushDisabled());
-        }
-        return result;
-      },
-    );
-    controller.addJavaScriptHandler(
       handlerName: 'getBackgroundLocationStatus',
       callback: (args) async {
         final result = await _bridge.getBackgroundLocationStatus(
@@ -5637,155 +5210,6 @@ class _WebViewShellState extends State<WebViewShell>
     }
   }
 
-  Future<bool> _uploadPushTokenViaWebView(Map<String, dynamic> payload) async {
-    final controller = _controller;
-    if (controller == null) return false;
-
-    try {
-      final encodedPayload = jsonEncode(payload);
-      final pushTokenUrl = ApiUrls.pushTokenUrl;
-      final result = await controller.evaluateJavascript(
-        source:
-            '''
-        (function () {
-          try {
-            var body = $encodedPayload;
-            var csrf = '';
-            var meta = document.querySelector('meta[name="csrf-token"]');
-            if (meta) csrf = meta.getAttribute('content') || '';
-            var xsrf = '';
-            try {
-              var parts = document.cookie.split(';');
-              for (var i = 0; i < parts.length; i++) {
-                var part = parts[i].trim();
-                if (part.indexOf('XSRF-TOKEN=') === 0) {
-                  xsrf = decodeURIComponent(part.substring('XSRF-TOKEN='.length));
-                  break;
-                }
-              }
-            } catch (e) {}
-            var xhr = new XMLHttpRequest();
-            xhr.open('POST', '$pushTokenUrl', false);
-            xhr.withCredentials = true;
-            xhr.setRequestHeader('Content-Type', 'application/json');
-            xhr.setRequestHeader('Accept', 'application/json');
-            xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
-            if (csrf) xhr.setRequestHeader('X-CSRF-TOKEN', csrf);
-            else if (xsrf) xhr.setRequestHeader('X-XSRF-TOKEN', xsrf);
-            xhr.send(JSON.stringify(body));
-            return JSON.stringify({
-              ok: xhr.status >= 200 && xhr.status < 300,
-              status: xhr.status
-            });
-          } catch (e) {
-            return JSON.stringify({ ok: false, error: String(e) });
-          }
-        })();
-      ''',
-      );
-
-      if (result is String) {
-        final decoded = jsonDecode(result);
-        if (decoded is Map) {
-          if (decoded['ok'] == true) {
-            return true;
-          }
-        }
-      }
-    } catch (e) {}
-    return false;
-  }
-
-  Future<bool> _deletePushTokenViaWebView(Map<String, dynamic> payload) async {
-    final controller = _controller;
-    if (controller == null) return false;
-
-    try {
-      final encodedPayload = jsonEncode(payload);
-      final pushTokenUrl = ApiUrls.pushTokenUrl;
-      final result = await controller.evaluateJavascript(
-        source:
-            '''
-        (function () {
-          try {
-            var body = $encodedPayload;
-            var csrf = '';
-            var meta = document.querySelector('meta[name="csrf-token"]');
-            if (meta) csrf = meta.getAttribute('content') || '';
-            var xsrf = '';
-            try {
-              var parts = document.cookie.split(';');
-              for (var i = 0; i < parts.length; i++) {
-                var part = parts[i].trim();
-                if (part.indexOf('XSRF-TOKEN=') === 0) {
-                  xsrf = decodeURIComponent(part.substring('XSRF-TOKEN='.length));
-                  break;
-                }
-              }
-            } catch (e) {}
-            var xhr = new XMLHttpRequest();
-            xhr.open('DELETE', '$pushTokenUrl', false);
-            xhr.withCredentials = true;
-            xhr.setRequestHeader('Content-Type', 'application/json');
-            xhr.setRequestHeader('Accept', 'application/json');
-            xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
-            if (csrf) xhr.setRequestHeader('X-CSRF-TOKEN', csrf);
-            else if (xsrf) xhr.setRequestHeader('X-XSRF-TOKEN', xsrf);
-            xhr.send(JSON.stringify(body));
-            return JSON.stringify({
-              ok: xhr.status >= 200 && xhr.status < 300,
-              status: xhr.status
-            });
-          } catch (e) {
-            return JSON.stringify({ ok: false, error: String(e) });
-          }
-        })();
-      ''',
-      );
-
-      if (result is String) {
-        final decoded = jsonDecode(result);
-        if (decoded is Map) {
-          if (decoded['ok'] == true) {
-            return true;
-          }
-        }
-      }
-    } catch (e) {}
-    return false;
-  }
-
-  Future<void> _notifyWebPushTokenReady() async {
-    if (!Platform.isIOS) return;
-    final controller = _controller;
-    final fcmToken = PushNotificationService.instance.lastFcmToken;
-    if (controller == null || fcmToken == null || fcmToken.isEmpty) return;
-
-    try {
-      final encodedToken = jsonEncode(fcmToken);
-      await controller.evaluateJavascript(
-        source:
-            '''
-        (function () {
-          try {
-            var token = $encodedToken;
-            var detail = { token: token };
-            window.dispatchEvent(
-              new CustomEvent('smartnps360:push-token', { detail: detail })
-            );
-            if (
-              window.SmartNPS360 &&
-              typeof window.SmartNPS360.onPushTokenReady === 'function'
-            ) {
-              window.SmartNPS360.onPushTokenReady(token);
-            }
-          } catch (e) {}
-        })();
-      ''',
-      );
-    } catch (e) {}
-  }
-
   Future<void> _installThemeListener(InAppWebViewController controller) async {
     await controller.evaluateJavascript(
       source: '''
@@ -5954,6 +5378,54 @@ class _WebViewShellState extends State<WebViewShell>
       ''',
       );
     } catch (_) {}
+  }
+
+  Future<PermissionResponse> _handleWebPermissionRequest(
+    PermissionRequest request,
+  ) async {
+    if (!AppConfig.isAllowedHost(request.origin.host)) {
+      return PermissionResponse(
+        resources: request.resources,
+        action: PermissionResponseAction.DENY,
+      );
+    }
+
+    final resources = request.resources;
+    final needsMicrophone = resources.any(
+      (resource) =>
+          resource == PermissionResourceType.MICROPHONE ||
+          resource == PermissionResourceType.CAMERA_AND_MICROPHONE,
+    );
+    final needsCamera = resources.any(
+      (resource) =>
+          resource == PermissionResourceType.CAMERA ||
+          resource == PermissionResourceType.CAMERA_AND_MICROPHONE,
+    );
+
+    if (needsMicrophone) {
+      final status = await Permission.microphone.request();
+      if (!status.isGranted) {
+        return PermissionResponse(
+          resources: resources,
+          action: PermissionResponseAction.DENY,
+        );
+      }
+    }
+
+    if (needsCamera) {
+      final status = await Permission.camera.request();
+      if (!status.isGranted) {
+        return PermissionResponse(
+          resources: resources,
+          action: PermissionResponseAction.DENY,
+        );
+      }
+    }
+
+    return PermissionResponse(
+      resources: resources,
+      action: PermissionResponseAction.GRANT,
+    );
   }
 
   InAppWebViewSettings _createWebViewSettings() {
@@ -6307,7 +5779,8 @@ class _WebViewShellState extends State<WebViewShell>
                                                         );
                                                   }
                                                   await _notifyWebBackgroundLocationStatus();
-                                                  await _notifyWebPushNotificationStatus();
+                                                  await PushNotificationService.instance
+                                                      .reconcileOnAppResume();
                                                   await NativePermissionStatusService
                                                       .instance
                                                       .syncIfChanged();
@@ -6420,6 +5893,11 @@ class _WebViewShellState extends State<WebViewShell>
                                           }
                                           _showOffline(needsReload: true);
                                         },
+                                        onPermissionRequest:
+                                            (controller, request) =>
+                                                _handleWebPermissionRequest(
+                                                  request,
+                                                ),
                                         onGeolocationPermissionsShowPrompt: (controller, origin) async {
                                           if (_ui.showLocationNotice.value) {
                                             return GeolocationPermissionShowPromptResponse(

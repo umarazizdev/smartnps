@@ -16,7 +16,6 @@ import '../../api/api_urls.dart';
 import '../../app/app_routes.dart';
 import '../../auth/auth_repository.dart';
 import '../../auth/auth_state.dart';
-import '../../permissions/native_permission_status_service.dart';
 import '../../permissions/os_notification_permission.dart';
 import '../../permissions/required_permissions_gate.dart';
 import '../announcements/officer_announcement_coordinator.dart';
@@ -185,21 +184,6 @@ class PushNotificationService {
     _iosXsrfToken = xsrfToken;
   }
 
-  Future<bool> Function(Map<String, dynamic> payload)? _iosWebPushUpload;
-  Future<bool> Function(Map<String, dynamic> payload)? _iosWebPushDelete;
-
-  void setIosWebPushUploadHandler(
-    Future<bool> Function(Map<String, dynamic> payload)? handler,
-  ) {
-    _iosWebPushUpload = handler;
-  }
-
-  void setIosWebPushDeleteHandler(
-    Future<bool> Function(Map<String, dynamic> payload)? handler,
-  ) {
-    _iosWebPushDelete = handler;
-  }
-
   String? get lastFcmToken => _lastFcmToken;
 
   bool get pushNotificationsEnabled => _pushNotificationsEnabled ?? true;
@@ -263,19 +247,7 @@ class PushNotificationService {
 
     _onPushPreferenceChanged?.call();
 
-    final status = await getNotificationStatus();
-    await syncPushStateToPermissionApi();
-    return status;
-  }
-
-  Future<void> syncPushStateToPermissionApi() async {
-    if (!Platform.isAndroid && !Platform.isIOS) return;
-    if (!await AuthRepository.instance.isOfficerLoggedIn()) return;
-
-    await _loadPushEnabledPreference();
-    await NativePermissionStatusService.instance.uploadPushToggle(
-      enabled: pushNotificationsEnabled,
-    );
+    return getNotificationStatus();
   }
 
   Future<Map<String, dynamic>> reconcileOnAppResume() async {
@@ -651,7 +623,6 @@ class PushNotificationService {
     final token = _lastFcmToken;
     if (token == null || token.isEmpty) return;
 
-    final payload = await _buildPushTokenPayload(pushToken: token);
     final accessToken = await _resolveAccessToken();
     if (accessToken != null && accessToken.isNotEmpty) {
       _iosPendingTokenUpload = false;
@@ -660,15 +631,6 @@ class PushNotificationService {
     }
 
     if (Platform.isIOS) {
-      final webUpload = _iosWebPushUpload;
-      if (webUpload != null) {
-        final uploaded = await webUpload(payload);
-        if (uploaded) {
-          _iosPendingTokenUpload = false;
-          return;
-        }
-      }
-
       if (_iosSessionCookieHeader != null &&
           _iosSessionCookieHeader!.isNotEmpty) {
         final uploaded = await uploadPushToken(useSessionCookies: true);
@@ -778,13 +740,7 @@ class PushNotificationService {
     }
 
     if (!deleted && Platform.isIOS) {
-      final webDelete = _iosWebPushDelete;
-      if (webDelete != null) {
-        deleted = await webDelete(payload);
-      }
-
-      if (!deleted &&
-          _iosSessionCookieHeader != null &&
+      if (_iosSessionCookieHeader != null &&
           _iosSessionCookieHeader!.isNotEmpty) {
         deleted = await _deletePushTokenViaApi(
           payload: payload,

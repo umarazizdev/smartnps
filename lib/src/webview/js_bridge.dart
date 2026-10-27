@@ -18,7 +18,6 @@ import '../background/duty/duty_heartbeat_service.dart';
 import '../utilities/app_config.dart';
 import '../location/mock_location_detection.dart';
 import '../location/mock_location_guard.dart';
-import '../push/notifications/push_notification_service.dart';
 import '../utilities/permission_settings_helper.dart';
 
 class JsBridge {
@@ -529,48 +528,6 @@ class JsBridge {
       return result;
     } catch (e) {
       return _err('download_failed', e.toString());
-    }
-  }
-
-  Future<Map<String, dynamic>> getPushNotificationToken([dynamic args]) async {
-    if (!_isTrustedCaller()) return _deny();
-    final token = PushNotificationService.instance.lastFcmToken;
-    return _ok({'token': token});
-  }
-
-  Future<Map<String, dynamic>> getPushNotificationStatus([dynamic args]) async {
-    if (!_isTrustedCaller()) return _deny();
-    return PushNotificationService.instance.getNotificationStatus();
-  }
-
-  Future<Map<String, dynamic>> setPushNotificationsEnabled([
-    dynamic args,
-  ]) async {
-    if (!_isTrustedCaller()) return _deny();
-
-    bool? enabled;
-    if (args is bool) {
-      enabled = args;
-    } else if (args is Map) {
-      final raw = args['enabled'];
-      if (raw is bool) {
-        enabled = raw;
-      } else if (raw != null) {
-        final text = raw.toString().toLowerCase();
-        enabled = text == 'true' || text == '1';
-      }
-    }
-
-    if (enabled == null) {
-      return _err('invalid_args', 'Missing enabled boolean');
-    }
-
-    try {
-      return await PushNotificationService.instance.setNotificationsEnabled(
-        enabled,
-      );
-    } catch (e) {
-      return _err('push_toggle_failed', e.toString());
     }
   }
 

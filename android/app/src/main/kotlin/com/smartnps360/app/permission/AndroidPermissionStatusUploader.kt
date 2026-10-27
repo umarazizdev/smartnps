@@ -22,10 +22,7 @@ internal object AndroidPermissionStatusUploader {
   )
 
   fun buildSnapshot(context: Context): Snapshot {
-    val permissions = AndroidPermissionStatusReader.buildPermissionsJson(
-      context,
-      AndroidPermissionStatusStore.pushStatus(context),
-    )
+    val permissions = AndroidPermissionStatusReader.buildPermissionsJson(context)
     val battery = AndroidPermissionStatusReader.batteryPercentage(context)
     val payload = JSONObject()
       .put("platform", "android")
@@ -66,7 +63,6 @@ internal object AndroidPermissionStatusUploader {
         "motionActivity",
         "batteryOptimization",
         "backgroundAppRefresh",
-        "push",
       )) {
         if (perms.has(key)) ordered.put(key, perms.get(key))
       }
@@ -167,17 +163,12 @@ internal object AndroidPermissionStatusUploader {
     killedAt: String?,
     openedAt: String?,
   ): JSONObject {
-    val push = AndroidPermissionStatusStore.pushStatus(context).let {
-      if (it == "disabled") "disabled" else "enabled"
-    }
     val cached = AndroidPermissionStatusStore.readFullPermissionsCache(context)
     val permissions = JSONObject()
     if (cached != null) {
       for ((key, value) in cached) {
+        if (key == "push") continue
         permissions.put(key, value)
-      }
-      if (!permissions.has("push")) {
-        permissions.put("push", push)
       }
     } else {
       permissions
@@ -188,7 +179,6 @@ internal object AndroidPermissionStatusUploader {
         .put("motionActivity", "unknown")
         .put("batteryOptimization", "unknown")
         .put("backgroundAppRefresh", "unknown")
-        .put("push", push)
     }
     val payload = JSONObject()
       .put("platform", "android")

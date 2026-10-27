@@ -22,7 +22,7 @@ internal object AndroidPermissionStatusReader {
   private const val BG_DENIED =
     "flutter.permission.background_location.user_denied.v1"
 
-  fun buildPermissionsJson(context: Context, pushStatus: String): JSONObject {
+  fun buildPermissionsJson(context: Context): JSONObject {
     return JSONObject()
       .put("foregroundLocation", foregroundLocation(context))
       .put("backgroundLocation", backgroundLocation(context))
@@ -31,7 +31,6 @@ internal object AndroidPermissionStatusReader {
       .put("motionActivity", motionActivity(context))
       .put("batteryOptimization", batteryOptimization(context))
       .put("backgroundAppRefresh", backgroundAppRefresh(context))
-      .put("push", pushStatus)
   }
 
   fun lowPowerModeStatus(context: Context): String {

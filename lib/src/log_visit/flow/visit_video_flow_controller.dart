@@ -393,12 +393,8 @@ class VisitVideoFlowController extends GetxController {
 
   Future<void> updateReportDetails(VisitReportDetails details) async {
     reportDetails.value = details;
-    if (mediaItems.isNotEmpty ||
-        (isStructuredReport && details.hasUserContent)) {
+    if (mediaItems.isNotEmpty || isStructuredReport) {
       await persistCurrentDraft();
-    } else if (isStructuredReport && !details.hasUserContent) {
-
-      await persistCurrentDraft(force: true);
     }
   }
 
@@ -471,10 +467,14 @@ class VisitVideoFlowController extends GetxController {
   Future<void> persistCurrentDraft({bool force = false}) async {
     if (_restoring) return;
     final keepStructured =
-        isStructuredReport &&
-        (reportDetails.value.hasUserContent ||
-            patrolContext.value?.hasReportContext == true);
-    if (!force && mediaItems.isEmpty && !keepStructured) return;
+        isStructuredReport && reportDetails.value.hasUserContent;
+    if (!force && mediaItems.isEmpty && !keepStructured) {
+      if (!isStructuredReport &&
+          !generalNote.value.hasContent &&
+          lastUploadIssue.value == null) {
+        return;
+      }
+    }
     await _persistDraft();
     await _flushPersistQueue();
   }
@@ -628,7 +628,8 @@ class VisitVideoFlowController extends GetxController {
         (mediaItems.isNotEmpty ||
             generalNote.value.hasContent ||
             reportDetails.value.hasUserContent ||
-            currentBeforeSwitch?.hasReportContext == true)) {
+            currentBeforeSwitch?.isStructuredReport == true ||
+            lastUploadIssue.value != null)) {
       await persistCurrentDraft(force: true);
     }
 
@@ -720,8 +721,8 @@ class VisitVideoFlowController extends GetxController {
     final reopenedPending =
         mediaItems.isNotEmpty ||
         generalNote.value.hasContent ||
-        (merged.isStructuredReport &&
-            (reportDetails.value.hasUserContent || merged.hasReportContext));
+        lastUploadIssue.value != null ||
+        (merged.isStructuredReport && reportDetails.value.hasUserContent);
 
     patrolLogDebugLog(
       '[VisitDraft] bridge open key=$targetKey '

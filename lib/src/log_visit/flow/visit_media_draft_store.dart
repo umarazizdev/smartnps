@@ -120,9 +120,7 @@ class VisitMediaDraftSnapshot {
       hasItems ||
       generalNote.hasContent ||
       lastUploadIssue != null ||
-      (isStructuredReport &&
-          (reportDetails.hasUserContent ||
-              context?.hasReportContext == true));
+      (isStructuredReport && reportDetails.hasUserContent);
 
   String? get displaySiteName {
     final fromContext = context?.displayPlaceName;
@@ -664,7 +662,9 @@ class VisitMediaDraftStore {
     final keepEmptyStructured =
         items.isEmpty &&
         structured &&
-        (reportDetails.hasUserContent || context?.hasReportContext == true);
+        (reportDetails.hasUserContent ||
+            generalNote.hasContent ||
+            lastUploadIssue != null);
 
     if (items.isEmpty && !keepEmptyStructured) {
       await clearDraft(deleteFiles: true, key: draftKey);

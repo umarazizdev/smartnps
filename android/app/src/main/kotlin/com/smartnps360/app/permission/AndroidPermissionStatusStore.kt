@@ -12,7 +12,6 @@ internal object AndroidPermissionStatusStore {
   private const val KEY_DEVICE_NAME = "device_name"
   private const val KEY_APP_VERSION = "app_version"
   private const val KEY_BUILD = "build"
-  private const val KEY_PUSH = "push_status"
   private const val KEY_FINGERPRINT = "last_fingerprint"
   private const val KEY_FULL_PERMISSIONS_JSON = "full_permissions_json"
   private const val KEY_CACHED_BATTERY_PERCENTAGE = "cached_battery_percentage"
@@ -27,7 +26,6 @@ internal object AndroidPermissionStatusStore {
     deviceName: String?,
     appVersion: String,
     build: String,
-    pushStatus: String,
     fingerprint: String?,
   ) {
     val editor = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -40,7 +38,7 @@ internal object AndroidPermissionStatusStore {
       .putString(KEY_DEVICE_NAME, deviceName ?: "")
       .putString(KEY_APP_VERSION, appVersion)
       .putString(KEY_BUILD, build)
-      .putString(KEY_PUSH, pushStatus)
+      .remove("push_status")
     if (!fingerprint.isNullOrEmpty()) {
       editor.putString(KEY_FINGERPRINT, fingerprint)
     }
@@ -52,7 +50,6 @@ internal object AndroidPermissionStatusStore {
     accessToken: String,
     refreshToken: String?,
     apiBaseUrl: String?,
-    pushStatus: String?,
     fingerprint: String?,
   ) {
     val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -60,11 +57,9 @@ internal object AndroidPermissionStatusStore {
     val editor = prefs.edit()
       .putString(KEY_ACCESS, accessToken)
       .putString(KEY_REFRESH, refreshToken ?: "")
+      .remove("push_status")
     if (!apiBaseUrl.isNullOrEmpty()) {
       editor.putString(KEY_API_BASE, apiBaseUrl)
-    }
-    if (!pushStatus.isNullOrEmpty()) {
-      editor.putString(KEY_PUSH, pushStatus)
     }
     if (!fingerprint.isNullOrEmpty()) {
       editor.putString(KEY_FINGERPRINT, fingerprint)
@@ -144,13 +139,6 @@ internal object AndroidPermissionStatusStore {
       ?: "1"
   }
 
-  fun pushStatus(context: Context): String {
-    return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-      .getString(KEY_PUSH, null)
-      ?.takeIf { it.isNotEmpty() }
-      ?: "enabled"
-  }
-
   fun lastFingerprint(context: Context): String? {
     return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
       .getString(KEY_FINGERPRINT, null)
@@ -168,13 +156,15 @@ internal object AndroidPermissionStatusStore {
     if (permissions.isEmpty()) return
     val obj = org.json.JSONObject()
     for ((key, value) in permissions) {
+      if (key == "push") continue
       obj.put(key, value)
     }
+    if (obj.length() == 0) return
     context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
       .edit()
       .putString(KEY_FULL_PERMISSIONS_JSON, obj.toString())
       .apply()
-    android.util.Log.i("AndroidPermStatus", "cached full permission snapshot (${permissions.size} keys)")
+    android.util.Log.i("AndroidPermStatus", "cached full permission snapshot (${obj.length()} keys)")
   }
 
   fun readFullPermissionsCache(context: Context): Map<String, String>? {
@@ -188,6 +178,7 @@ internal object AndroidPermissionStatusStore {
       val keys = obj.keys()
       while (keys.hasNext()) {
         val key = keys.next()
+        if (key == "push") continue
         val value = obj.optString(key, "").trim()
         if (value.isNotEmpty()) out[key] = value
       }
