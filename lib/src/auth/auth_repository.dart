@@ -494,7 +494,14 @@ class AuthRepository {
           completer.complete(silent);
           return silent;
         }
-        await _notifyRefreshSessionExpired();
+        if (await isOfficerLoggedIn()) {
+          await _notifyRefreshSessionExpired();
+        } else if (kDebugMode) {
+          debugPrint(
+            '[SmartNPS360][AuthRepo] refresh skipped (no session); '
+            'soft re-auth notify suppressed',
+          );
+        }
         completer.complete(null);
         return null;
       }
