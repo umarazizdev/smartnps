@@ -1698,6 +1698,15 @@ class DutyHeartbeatService {
         }
       } else {
         _locationSharingArmedThisDuty = true;
+        unawaited(
+          LocationSharingStatusNotification.ensureSharingVisible().catchError((
+            Object e,
+          ) {
+            locationDebugLog(
+              '[DutyHeartbeatService] ensureSharingVisible failed: $e',
+            );
+          }),
+        );
       }
       await refreshBackgroundLocationPermissionBannerState();
       _onDutyAutoPromptComplete = true;
@@ -1749,6 +1758,18 @@ class DutyHeartbeatService {
       '[DutyHeartbeatService] ensureStarted ok=${result['ok'] == true}'
       '${clockInFastStart ? ' clockInFastStart=true' : ''}',
     );
+
+    if (alreadyHealthy) {
+      unawaited(
+        LocationSharingStatusNotification.ensureSharingVisible().catchError((
+          Object e,
+        ) {
+          locationDebugLog(
+            '[DutyHeartbeatService] ensureSharingVisible failed: $e',
+          );
+        }),
+      );
+    }
 
     if (result['ok'] == true) {
       locationDebugLog('[DutyLocation] on_duty → location ensureStarted OK');

@@ -65,10 +65,10 @@ class ClockInLocationDisclosureDialog extends StatelessWidget {
             : '$alwaysAccessLabel is enabled. Location is ready for shift attendance.',
       LocationPermissionPhase.none =>
         compact
-            ? 'Allow $foregroundStepLabel, then $alwaysAccessLabel.'
+            ? 'Choose $foregroundStepLabel, then $alwaysAccessLabel.'
             : 'You will be asked in two steps:\n'
                   '1. Allow location ($foregroundStepLabel)\n'
-                  '2. Then allow $alwaysAccessLabel access so tracking works when the '
+                  '2. Then choose $alwaysAccessLabel so tracking works when the '
                   'app is in the background or not on screen.',
     };
     final iosNote = !compact && Platform.isIOS

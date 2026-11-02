@@ -1437,4 +1437,78 @@ import flutter_background_service_ios
     NSLog("[SmartNPS360][Push] APNs registration failed: \(error.localizedDescription)")
     super.application(application, didFailToRegisterForRemoteNotificationsWithError: error)
   }
+
+  override func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    willPresent notification: UNNotification,
+    withCompletionHandler completionHandler:
+      @escaping (UNNotificationPresentationOptions) -> Void
+  ) {
+    let userInfo = notification.request.content.userInfo
+    let hasFlutterLocalFlags =
+      userInfo["presentList"] != nil
+      || userInfo["presentBanner"] != nil
+      || userInfo["presentAlert"] != nil
+      || userInfo["notificationId"] != nil
+
+    if hasFlutterLocalFlags {
+      func flag(_ key: String) -> Bool {
+        if let number = userInfo[key] as? NSNumber {
+          return number.boolValue
+        }
+        if let boolValue = userInfo[key] as? Bool {
+          return boolValue
+        }
+        return false
+      }
+
+      var options: UNNotificationPresentationOptions = []
+      let presentBanner = flag("presentBanner")
+      let presentList = flag("presentList")
+      let presentAlert = flag("presentAlert")
+      let presentSound = flag("presentSound")
+      let presentBadge = flag("presentBadge")
+
+      if #available(iOS 14.0, *) {
+        if presentBanner {
+          options.insert(.banner)
+        }
+        if presentList {
+          options.insert(.list)
+        }
+        if options.isEmpty && presentAlert {
+          options.insert(.list)
+        }
+      } else if presentAlert || presentList {
+        options.insert(.alert)
+      }
+
+      let identifier = notification.request.identifier
+      if options.isEmpty
+        && (identifier == "9911" || identifier == "9912" || identifier == "9914")
+      {
+        if #available(iOS 14.0, *) {
+          options.insert(.list)
+        } else {
+          options.insert(.alert)
+        }
+      }
+
+      if presentSound {
+        options.insert(.sound)
+      }
+      if presentBadge {
+        options.insert(.badge)
+      }
+
+      completionHandler(options)
+      return
+    }
+
+    super.userNotificationCenter(
+      center,
+      willPresent: notification,
+      withCompletionHandler: completionHandler
+    )
+  }
 }
