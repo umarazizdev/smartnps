@@ -64,7 +64,18 @@ class IosDutyLocationPinger {
 
   static Future<void> start() async {
     if (!Platform.isIOS) return;
-    if (_running && _subscription != null) return;
+    if (_running && _subscription != null) {
+      unawaited(
+        LocationSharingStatusNotification.ensureSharingVisible().catchError((
+          Object e,
+        ) {
+          locationDebugLog(
+            '[IosDutyLocationPinger] ensureSharingVisible failed: $e',
+          );
+        }),
+      );
+      return;
+    }
     if (_running) {
       await stop();
     }

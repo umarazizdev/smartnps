@@ -8,6 +8,21 @@ import '../../utilities/app_debug_log.dart';
 
 enum LocationSharingStopReason { shiftEnded, signedOut }
 
+class LocationSharingNotificationPolicy {
+  LocationSharingNotificationPolicy._();
+
+  static bool shouldRepostSharing({
+    required bool trackingActive,
+    required bool markedShown,
+    required bool deliveredInNotificationCenter,
+  }) {
+    if (!trackingActive) return false;
+    if (!markedShown) return true;
+    if (!deliveredInNotificationCenter) return true;
+    return false;
+  }
+}
+
 class LocationSharingStatusNotification {
   LocationSharingStatusNotification._();
 
@@ -15,6 +30,11 @@ class LocationSharingStatusNotification {
   static const int stoppedNotificationId = 9912;
   static const int bgStartTestNotificationId = 9913;
   static const int breakStartedNotificationId = 9914;
+
+  static const String sharingPayload = 'location_sharing_active';
+  static const String stoppedPayload = 'location_sharing_stopped';
+  static const String breakPayload = 'duty_break_started';
+  static const String bgStartTestPayload = 'location_bg_start_test';
 
   static const String iosAppTitle = 'SmartNPS360';
   static const String androidSharingTitle = 'On Duty • Location Active';
@@ -207,6 +227,7 @@ class LocationSharingStatusNotification {
       id: breakStartedNotificationId,
       title: title,
       body: body,
+      payload: breakPayload,
       notificationDetails: NotificationDetails(
         iOS: const DarwinNotificationDetails(
           presentAlert: true,
@@ -247,7 +268,7 @@ class LocationSharingStatusNotification {
 
   static const NotificationDetails _sharingDetails = NotificationDetails(
     iOS: DarwinNotificationDetails(
-      presentAlert: false,
+      presentAlert: true,
       presentBanner: false,
       presentList: true,
       presentBadge: false,
@@ -294,6 +315,7 @@ class LocationSharingStatusNotification {
       id: bgStartTestNotificationId,
       title: sharingTitleForPlatform(),
       body: '$platformLabel started (test) at $startedAt',
+      payload: bgStartTestPayload,
       notificationDetails: NotificationDetails(
         iOS: const DarwinNotificationDetails(
           presentAlert: true,
@@ -324,8 +346,39 @@ class LocationSharingStatusNotification {
     );
   }
 
-  static Future<void> showSharing() async {
-    if (!Platform.isIOS || _sharingShown) return;
+  static Future<bool> _isSharingDelivered() async {
+    if (!Platform.isIOS) return false;
+    try {
+      final plugin = await _ensurePlugin();
+      final active = await plugin.getActiveNotifications();
+      return active.any((n) => n.id == sharingNotificationId);
+    } catch (e) {
+      locationDebugLog(
+        '[LocationSharingStatusNotification] getActiveNotifications failed: $e',
+      );
+      return false;
+    }
+  }
+
+  static Future<void> showSharing() => ensureSharingVisible(force: false);
+
+  static Future<void> ensureSharingVisible({bool force = false}) async {
+    if (!Platform.isIOS) return;
+
+    final delivered = force ? false : await _isSharingDelivered();
+    final shouldShow = force
+        ? true
+        : LocationSharingNotificationPolicy.shouldRepostSharing(
+            trackingActive: true,
+            markedShown: _sharingShown,
+            deliveredInNotificationCenter: delivered,
+          );
+    if (!shouldShow) {
+      locationDebugLog(
+        '[LocationSharingStatusNotification] sharing already visible; skip',
+      );
+      return;
+    }
 
     final plugin = await _ensurePlugin();
 
@@ -335,11 +388,15 @@ class LocationSharingStatusNotification {
       id: sharingNotificationId,
       title: sharingTitleForPlatform(),
       body: sharingBodyForPlatform(),
+      payload: sharingPayload,
       notificationDetails: _sharingDetails,
     );
     _sharingShown = true;
 
-    locationDebugLog('[LocationSharingStatusNotification] sharing shown');
+    locationDebugLog(
+      '[LocationSharingStatusNotification] sharing shown '
+      'force=$force deliveredWas=$delivered',
+    );
   }
 
   static Future<void> dismissSharing() async {
@@ -369,6 +426,7 @@ class LocationSharingStatusNotification {
       id: stoppedNotificationId,
       title: titleFor(reason),
       body: bodyFor(reason),
+      payload: stoppedPayload,
       notificationDetails: _stoppedDetails,
     );
 

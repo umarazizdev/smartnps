@@ -198,6 +198,18 @@ class BackgroundLocationController {
 
   static Future<void> notifyAppForegrounded() async {
     _uiBackgrounded = false;
+    if (Platform.isIOS) {
+      if (IosDutyLocationPinger.isRunning) {
+        unawaited(
+          LocationSharingStatusNotification.ensureSharingVisible().catchError((
+            Object e,
+          ) {
+            _log('ensureSharingVisible on foreground failed: $e');
+          }),
+        );
+      }
+      return;
+    }
     if (!Platform.isAndroid) return;
     if (!await FlutterBackgroundService().isRunning()) return;
     FlutterBackgroundService().invoke('app_foregrounded');
@@ -253,6 +265,13 @@ class BackgroundLocationController {
           } else {
             _log('RUNNING already (iOS pinger active)');
           }
+          unawaited(
+            LocationSharingStatusNotification.ensureSharingVisible().catchError((
+              Object e,
+            ) {
+              _log('ensureSharingVisible failed: $e');
+            }),
+          );
           return {'ok': true, 'started': false, 'running': true};
         }
       } else if (Platform.isAndroid) {
