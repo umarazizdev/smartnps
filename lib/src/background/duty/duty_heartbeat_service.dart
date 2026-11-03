@@ -40,6 +40,8 @@ import '../../debug/session_debug_logger.dart';
 
 class DutyHeartbeatService {
   DutyHeartbeatService._() {
+    PermissionSettingsHelper.shouldSuppressAutomaticLocationOsPrompt =
+        shouldDeferLocationOsPromptToPermissionsDialog;
     BackgroundLocationController.confirmOnDutyBeforeStart = () {
       return confirmOnDutyFromApiForTracking(stopIfNotOnDuty: true);
     };
@@ -661,6 +663,17 @@ class DutyHeartbeatService {
     unawaited(_hydrateConsentFromStorage());
     unawaited(_pollOnce());
     _scheduleNextPoll();
+  }
+
+  Future<bool> shouldDeferLocationOsPromptToPermissionsDialog() async {
+    if (ClockInPermissionsDialog.isVisible ||
+        OnDutyPermissionsDialog.isVisible) {
+      return true;
+    }
+    if (!await confirmOnDutyFromApiForTracking()) {
+      return false;
+    }
+    return !await BackgroundLocationPermissions.hasForegroundLocationAccess();
   }
 
   void pollAfterClockInSuccess() {
@@ -1882,8 +1895,7 @@ class DutyHeartbeatService {
     if (!accepted) return false;
 
     if (_requestPermissionAfterDisclosure) {
-
-      if (!_permissionsDialogOwnsOsPrompts) {
+      if (!await shouldDeferLocationOsPromptToPermissionsDialog()) {
         await PermissionSettingsHelper.requestForegroundLocationStep();
       }
       _requestPermissionAfterDisclosure = false;
@@ -1969,7 +1981,9 @@ class DutyHeartbeatService {
           await showSettingsDialog();
           return;
         }
-        await PermissionSettingsHelper.requestForegroundLocationStep();
+        await PermissionSettingsHelper.requestForegroundLocationStep(
+          allowWhenDialogOwns: true,
+        );
         await BackgroundLocationPermissions.refreshPermissionStateFromOs();
         if (await BackgroundLocationPermissions.hasSufficientBackgroundAccess() &&
             await BackgroundLocationPermissions.hasPreciseLocationAccess()) {
@@ -1989,7 +2003,9 @@ class DutyHeartbeatService {
             await BackgroundLocationPermissions.currentPermissionPhase();
         if (phase == LocationPermissionPhase.none &&
             !await PermissionSettingsHelper.foregroundRequiresSettingsPrompt()) {
-          await PermissionSettingsHelper.requestForegroundLocationStep();
+          await PermissionSettingsHelper.requestForegroundLocationStep(
+            allowWhenDialogOwns: true,
+          );
           await BackgroundLocationPermissions.refreshPermissionStateFromOs();
           if (await BackgroundLocationPermissions.hasSufficientBackgroundAccess() &&
               await BackgroundLocationPermissions.hasPreciseLocationAccess()) {
@@ -2077,7 +2093,13 @@ class DutyHeartbeatService {
     final phase = await BackgroundLocationPermissions.currentPermissionPhase();
     switch (phase) {
       case LocationPermissionPhase.none:
-        await PermissionSettingsHelper.requestForegroundLocationStep();
+        if (!userInitiated &&
+            await shouldDeferLocationOsPromptToPermissionsDialog()) {
+          return false;
+        }
+        await PermissionSettingsHelper.requestForegroundLocationStep(
+          allowWhenDialogOwns: userInitiated,
+        );
         break;
       case LocationPermissionPhase.foregroundOnly:
       case LocationPermissionPhase.backgroundReady:
@@ -2085,6 +2107,11 @@ class DutyHeartbeatService {
     }
 
     if (await BackgroundLocationPermissions.hasSufficientBackgroundAccess()) {
+      return false;
+    }
+
+    if (!userInitiated &&
+        await shouldDeferLocationOsPromptToPermissionsDialog()) {
       return false;
     }
 

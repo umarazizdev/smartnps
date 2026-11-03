@@ -112,9 +112,20 @@ class _ClockInPermissionsBlockerScreenState
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      if (_busyId != null || _didPop) return;
-      unawaited(_reload(closeIfReady: true));
+      if (_didPop) return;
+      unawaited(_reloadAfterResume());
     }
+  }
+
+  Future<void> _reloadAfterResume() async {
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    if (!mounted || _didPop) return;
+    await _reload(closeIfReady: true);
+    if (!mounted || _didPop) return;
+    if (!_items.any((e) => e.needsAction)) return;
+    await Future<void>.delayed(const Duration(milliseconds: 450));
+    if (!mounted || _didPop) return;
+    await _reload(closeIfReady: true);
   }
 
   void _safePop(bool result) {
@@ -125,8 +136,13 @@ class _ClockInPermissionsBlockerScreenState
     Navigator.of(context, rootNavigator: true).pop(result);
   }
 
-  Future<void> _reload({bool closeIfReady = false}) async {
-    final items = await _gate.buildClockInPermissionItems();
+  Future<void> _reload({
+    bool closeIfReady = false,
+    bool preferCached = false,
+  }) async {
+    final items = preferCached && _gate.items.value.isNotEmpty
+        ? _gate.cachedClockInPermissionItems()
+        : await _gate.buildClockInPermissionItems();
     final missing = items.where((e) => e.needsAction).toList(growable: false);
     if (!mounted || _didPop) return;
 

@@ -130,7 +130,7 @@ class PermissionSettingsHelper {
       }
 
       if (shouldWaitForReturn) {
-        await AppLifecycleResumeGate.waitForResume();
+        await AppLifecycleResumeGate.waitForStableResume();
         if (Platform.isAndroid) {
           clearPopupRoutesImmediately();
           await WidgetsBinding.instance.endOfFrame;
@@ -141,10 +141,13 @@ class PermissionSettingsHelper {
           }
           clearPopupRoutesImmediately();
         }
+        await Future<void>.delayed(const Duration(milliseconds: 250));
         await BackgroundLocationPermissions.refreshPermissionStateFromOs();
+        await RequiredPermissionsGate.instance.refresh(force: true);
 
-        await NativePermissionStatusService.instance
-            .ensureLatestPermissionsSynced();
+        unawaited(
+          NativePermissionStatusService.instance.ensureLatestPermissionsSynced(),
+        );
       }
     } finally {
       if (!keepLock) {
@@ -263,10 +266,21 @@ class PermissionSettingsHelper {
     await Geolocator.openAppSettings();
   }
 
+  static Future<bool> Function()? shouldSuppressAutomaticLocationOsPrompt;
+
   static Future<LocationPermissionRequestResult>
-  requestForegroundLocationStep() async {
+  requestForegroundLocationStep({
+    bool allowWhenDialogOwns = false,
+  }) async {
     if (RequiredPermissionsGate.isPrivacyNoticeVisible) {
       return LocationPermissionRequestResult.promptShown;
+    }
+
+    if (!allowWhenDialogOwns) {
+      final suppress = shouldSuppressAutomaticLocationOsPrompt;
+      if (suppress != null && await suppress()) {
+        return LocationPermissionRequestResult.promptShown;
+      }
     }
 
     if (await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled()) {
@@ -454,7 +468,9 @@ class PermissionSettingsHelper {
     }
 
     if (!skipOverlayWait) {
-      await OverlayPromptGuard.waitUntilReady();
+      await OverlayPromptGuard.waitUntilReady(
+        ignoreBlockingOverlays: OverlayPromptGuard.hasBlockingNativeOverlay,
+      );
     }
 
     final readyContext = resolveDialogContext(initialContext);
