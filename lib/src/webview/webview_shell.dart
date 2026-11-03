@@ -303,9 +303,22 @@ class _WebViewShellState extends State<WebViewShell>
     if (kDebugMode) {
       debugPrint(
         '[SmartNPS360][Auth] login route stable '
-        '(${_loginTrackingStopDelay.inSeconds}s) → stop duty GPS',
+        '(${_loginTrackingStopDelay.inSeconds}s) → stop duty GPS + clear push token',
       );
     }
+    try {
+      await PushNotificationService.instance.clearPushTokenOnLogout();
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint(
+          '[SmartNPS360][Auth] login-route push token clear failed: $e',
+        );
+      }
+    }
+    if (generation != _loginTrackingStopGeneration) return;
+    if (!mounted) return;
+    if (!AuthSessionManager.isLoginRoute(_ui.currentUri.value)) return;
+
     await AuthRepository.instance.setOfficerLoggedIn(false);
     await _stopDutyHeartbeat(stopBackgroundLocation: true);
   }
@@ -469,12 +482,12 @@ class _WebViewShellState extends State<WebViewShell>
     }
 
     if (!mounted || !_ui.officerLoggedIn.value) return;
-    await _maybeStartDutyHeartbeat();
 
     await OnDutyPermissionsPromptService.instance.maybeShow(
       fromResume: false,
       forceImmediate: true,
     );
+    await _maybeStartDutyHeartbeat();
     await DutyHeartbeatService.instance.recheckOnDutyPrompts();
     if (_ui.officerLoggedIn.value &&
         !_ui.showLocationNotice.value &&
@@ -2267,6 +2280,7 @@ class _WebViewShellState extends State<WebViewShell>
         unawaited(BackgroundLocationController.notifyAppBackgrounded());
       } else if (state == AppLifecycleState.paused ||
           state == AppLifecycleState.hidden) {
+        AppLifecycleResumeGate.notifyBackgrounded();
         _lastBackgroundedAt = DateTime.now();
         _cancelNativeGeoWatches();
         unawaited(BackgroundLocationController.notifyAppBackgrounded());
@@ -2335,14 +2349,13 @@ class _WebViewShellState extends State<WebViewShell>
         }
         DutyHeartbeatService.instance.beginResumeDutyReconcile();
         try {
-          await _maybeStartDutyHeartbeat();
-          await DutyHeartbeatService.instance.recheckOnDutyPrompts(
-            fromResume: true,
-          );
-
           await OnDutyPermissionsPromptService.instance.maybeShow(
             fromResume: true,
             forceImmediate: true,
+          );
+          await _maybeStartDutyHeartbeat();
+          await DutyHeartbeatService.instance.recheckOnDutyPrompts(
+            fromResume: true,
           );
           if (_ui.officerLoggedIn.value &&
               !_ui.showLocationNotice.value &&
@@ -5735,17 +5748,17 @@ class _WebViewShellState extends State<WebViewShell>
                                                   await _requestNotificationPermissionForRoute(
                                                     nextUri,
                                                   );
+                                                  await OnDutyPermissionsPromptService
+                                                      .instance
+                                                      .maybeShow(
+                                                        fromResume: false,
+                                                      );
                                                   await _maybeStartDutyHeartbeat();
                                                   await DutyHeartbeatService
                                                       .instance
                                                       .recheckOnDutyPrompts(
                                                         pageReload:
                                                             isSamePageReload,
-                                                      );
-                                                  await OnDutyPermissionsPromptService
-                                                      .instance
-                                                      .maybeShow(
-                                                        fromResume: false,
                                                       );
                                                   if (_ui
                                                           .officerLoggedIn
@@ -5919,8 +5932,16 @@ class _WebViewShellState extends State<WebViewShell>
 
                                           if (!await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled()) {
                                             if (!await BackgroundLocationPermissions.hasForegroundLocationAccess()) {
-                                              await PermissionSettingsHelper.requestForegroundLocationStep();
-                                              await BackgroundLocationPermissions.refreshPermissionStateFromOs();
+                                              final defer =
+                                                  await DutyHeartbeatService
+                                                      .instance
+                                                      .shouldDeferLocationOsPromptToPermissionsDialog();
+                                              if (!defer) {
+                                                await PermissionSettingsHelper
+                                                    .requestForegroundLocationStep();
+                                                await BackgroundLocationPermissions
+                                                    .refreshPermissionStateFromOs();
+                                              }
                                             }
                                           }
 

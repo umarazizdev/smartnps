@@ -69,10 +69,19 @@ class OverlayPromptGuard {
     return !isKeyboardVisible(context);
   }
 
-  static Future<void> waitUntilReady({Duration timeout = _maxWait}) async {
+  static Future<void> waitUntilReady({
+    Duration timeout = _maxWait,
+    bool ignoreBlockingOverlays = false,
+  }) async {
     final deadline = DateTime.now().add(timeout);
     while (DateTime.now().isBefore(deadline)) {
-      if (canShowOverlay() && !blocksTopBanner) return;
+      final overlaysClear =
+          ignoreBlockingOverlays || !hasBlockingNativeOverlay;
+      if (canShowOverlay() &&
+          !osPermissionPromptInFlight.value &&
+          overlaysClear) {
+        return;
+      }
       await Future<void>.delayed(_pollInterval);
     }
   }

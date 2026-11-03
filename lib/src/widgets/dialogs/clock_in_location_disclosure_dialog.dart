@@ -81,7 +81,10 @@ class ClockInLocationDisclosureDialog extends StatelessWidget {
     return '$core\n\n$steps\n\n$requirement$iosNote';
   }
 
-  static String _titleForPermission(String permissionId) {
+  static String _titleForPermission(
+    String permissionId, {
+    String? backgroundAppRefreshStatus,
+  }) {
     return switch (permissionId) {
       'locationServices' => 'Location Services required',
       'preciseLocation' => 'Precise location required',
@@ -93,7 +96,9 @@ class ClockInLocationDisclosureDialog extends StatelessWidget {
       'backgroundAppRefresh' =>
         Platform.isAndroid
             ? 'Background activity required'
-            : 'Background App Refresh required',
+            : backgroundAppRefreshStatus == 'restricted'
+                ? 'Background App Refresh restricted'
+                : 'Background App Refresh required',
       'foregroundLocation' => title,
       _ => title,
     };
@@ -118,9 +123,47 @@ class ClockInLocationDisclosureDialog extends StatelessWidget {
         'You are not tracked off duty.';
   }
 
+  static String _backgroundAppRefreshMessage({
+    required String status,
+  }) {
+    if (Platform.isAndroid) {
+      return 'Background activity must be allowed so SmartNPS360 can keep '
+          'verifying attendance while you are on duty and the app is not on '
+          'screen. Tracking may be unreliable until this is fixed.';
+    }
+
+    if (status == 'restricted') {
+      return 'Background App Refresh is blocked on this phone, so SmartNPS360 '
+          'cannot turn it on by itself.\n\n'
+          'Please follow these steps:\n'
+          '1. Open Settings → Screen Time\n'
+          '2. Tap Content & Privacy Restrictions (enter the passcode if asked)\n'
+          '3. Turn Content & Privacy Restrictions Off, or allow Background '
+          'App Refresh\n'
+          '4. Open Settings → General → Background App Refresh and turn it On\n'
+          '5. Open Settings → SmartNPS360 and turn on Background App Refresh\n\n'
+          'If you cannot change Screen Time, ask the person who set the '
+          'passcode on this phone.\n\n'
+          'Tap Continue to open SmartNPS360 settings.';
+    }
+
+    return 'Background App Refresh must be on so SmartNPS360 can keep tracking '
+        'attendance while you are on duty.\n\n'
+        'Tap Continue to open SmartNPS360 settings. Then look at the '
+        'Background App Refresh switch:\n\n'
+        'If the switch is gray and you cannot tap it:\n'
+        'It is turned off for the whole phone. Do this:\n'
+        '1. Open Settings → General → Background App Refresh and turn it On\n'
+        '2. Open Settings → SmartNPS360 and turn on Background App Refresh\n\n'
+        'If the switch looks normal but is Off:\n'
+        'Only this app is off. On the SmartNPS360 settings screen, turn '
+        'Background App Refresh On.';
+  }
+
   static String _messageForPermission(
     String permissionId, {
     required LocationPermissionPhase phase,
+    String? backgroundAppRefreshStatus,
   }) {
     return switch (permissionId) {
       'locationServices' =>
@@ -135,16 +178,9 @@ class ClockInLocationDisclosureDialog extends StatelessWidget {
         'SmartNPS360 uses motion activity while you are on duty to detect '
             'walking, driving, or stationary movement so background location pings '
             'and route polylines stay accurate. Used only during your shift.',
-      'backgroundAppRefresh' =>
-        Platform.isAndroid
-            ? 'Background activity must be allowed so SmartNPS360 can keep verifying '
-                  'attendance while you are on duty and the app is not on screen. '
-                  'Tracking may be unreliable until this is fixed.'
-            : 'Background App Refresh must be enabled so SmartNPS360 can keep verifying '
-                  'attendance while you are on duty and the app is not on screen. '
-                  'Tracking may be unreliable until this is fixed.\n\n'
-                  'Tap Continue to open Settings → Apps → SmartNPS360, then turn on '
-                  'Background App Refresh.',
+      'backgroundAppRefresh' => _backgroundAppRefreshMessage(
+          status: backgroundAppRefreshStatus ?? 'disabled',
+        ),
       _ => _messageForPhase(compact: false, phase: phase),
     };
   }
@@ -202,11 +238,27 @@ class ClockInLocationDisclosureDialog extends StatelessWidget {
     final phase = await BackgroundLocationPermissions.currentPermissionPhase();
     if (!context.mounted) return false;
 
+    final backgroundAppRefreshStatus = permissionId == 'backgroundAppRefresh'
+        ? await RequiredPermissionsGate.readBackgroundAppRefreshStatus()
+        : null;
+    if (!context.mounted) return false;
+
+    final isBackgroundAppRefresh = permissionId == 'backgroundAppRefresh';
     final allowed = await _present(
       context: context,
       icon: _iconForPermission(permissionId),
-      title: _titleForPermission(permissionId),
-      message: _messageForPermission(permissionId, phase: phase),
+      title: _titleForPermission(
+        permissionId,
+        backgroundAppRefreshStatus: backgroundAppRefreshStatus,
+      ),
+      message: _messageForPermission(
+        permissionId,
+        phase: phase,
+        backgroundAppRefreshStatus: backgroundAppRefreshStatus,
+      ),
+      messageMaxHeightFactor: isBackgroundAppRefresh
+          ? 0.74
+          : _messageMaxHeightFactor,
     );
 
     if (allowed && isLocationPermission) {
@@ -220,6 +272,7 @@ class ClockInLocationDisclosureDialog extends StatelessWidget {
     required IconData icon,
     required String title,
     required String message,
+    double messageMaxHeightFactor = _messageMaxHeightFactor,
   }) async {
     final result = await GlassActionDialog.show(
       context: context,
@@ -229,7 +282,7 @@ class ClockInLocationDisclosureDialog extends StatelessWidget {
       secondaryLabel: ClockInBlockedDialog.cancelClockInLabel,
       primaryLabel: 'Continue',
       destructiveSecondary: true,
-      messageMaxHeightFactor: _messageMaxHeightFactor,
+      messageMaxHeightFactor: messageMaxHeightFactor,
     );
     return result == true;
   }
