@@ -27,8 +27,7 @@ class MotionActivitySettingsDialog {
       ];
     }
     return const [
-      'Open Settings',
-      'Tap SmartNPS360',
+      'Open Settings (SmartNPS360)',
       'Turn on Motion & Fitness',
     ];
   }
@@ -55,9 +54,11 @@ class MotionActivitySettingsDialog {
       return false;
     }
 
-    await OverlayPromptGuard.waitUntilReady();
+    await OverlayPromptGuard.waitUntilReady(
+      ignoreBlockingOverlays: OverlayPromptGuard.hasBlockingNativeOverlay,
+    );
 
-    final readyContext = PermissionSettingsHelper.resolveDialogContext();
+    final readyContext = PermissionSettingsHelper.resolveDialogContext(context);
     if (readyContext == null || !readyContext.mounted) return false;
 
     PermissionSettingsHelper.settingsPromptVisible.value = true;
@@ -125,9 +126,14 @@ class _MotionActivitySettingsContent extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
-          'SmartNPS360 needs $permissionName to detect walking, driving, and '
-          'other activity while you are on duty.\n\n'
-          'You can turn it back on using either path below.',
+          Platform.isIOS
+              ? 'SmartNPS360 needs $permissionName to detect walking, driving, '
+                  'and other activity while you are on duty.\n\n'
+                  'Tap Open Settings to open SmartNPS360 settings, then follow '
+                  'either path below.'
+              : 'SmartNPS360 needs $permissionName to detect walking, driving, '
+                  'and other activity while you are on duty.\n\n'
+                  'You can turn it back on using either path below.',
           textAlign: TextAlign.center,
           style: TextStyle(
             color: bodyColor,

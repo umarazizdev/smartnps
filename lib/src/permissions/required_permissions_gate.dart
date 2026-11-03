@@ -106,6 +106,14 @@ class RequiredPermissionsGate {
     );
   }
 
+  List<RequiredPermissionItem> cachedClockInPermissionItems() {
+    return _sortMissingFirst(
+      items.value
+          .where((item) => clockInPermissionIds.contains(item.id))
+          .toList(growable: false),
+    );
+  }
+
   Future<List<RequiredPermissionItem>> missingClockInPermissionItems() async {
     final items = await buildClockInPermissionItems();
     return items.where((item) => item.needsAction).toList(growable: false);
@@ -126,6 +134,14 @@ class RequiredPermissionsGate {
     );
   }
 
+  List<RequiredPermissionItem> cachedOnDutyPermissionItems() {
+    return _sortMissingFirst(
+      items.value
+          .where((item) => onDutyPermissionIds.contains(item.id))
+          .toList(growable: false),
+    );
+  }
+
   Future<List<RequiredPermissionItem>> missingOnDutyPermissionItems() async {
     final items = await buildOnDutyPermissionItems();
     return items.where((item) => item.needsAction).toList(growable: false);
@@ -140,6 +156,14 @@ class RequiredPermissionsGate {
     final all = await _buildItems();
     return _sortMissingFirst(
       all
+          .where((item) => offDutyPushPermissionIds.contains(item.id))
+          .toList(growable: false),
+    );
+  }
+
+  List<RequiredPermissionItem> cachedOffDutyPushPermissionItems() {
+    return _sortMissingFirst(
+      items.value
           .where((item) => offDutyPushPermissionIds.contains(item.id))
           .toList(growable: false),
     );
@@ -340,7 +364,9 @@ class RequiredPermissionsGate {
   Future<void> _requestOsPermission(String id) async {
     switch (id) {
       case 'foregroundLocation':
-        await PermissionSettingsHelper.requestForegroundLocationStep();
+        await PermissionSettingsHelper.requestForegroundLocationStep(
+          allowWhenDialogOwns: true,
+        );
         break;
       case 'backgroundLocation':
         await _requestBackgroundLocationStep();
@@ -426,7 +452,9 @@ class RequiredPermissionsGate {
     if (Platform.isAndroid) {
       final fg = await Permission.location.status;
       if (!fg.isGranted && !fg.isLimited && !fg.isProvisional) {
-        await PermissionSettingsHelper.requestForegroundLocationStep();
+        await PermissionSettingsHelper.requestForegroundLocationStep(
+          allowWhenDialogOwns: true,
+        );
       }
       final bgBefore = await Permission.locationAlways.status;
       if (kDebugMode) {
@@ -642,17 +670,27 @@ class RequiredPermissionsGate {
     return list;
   }
 
-  Future<bool> _backgroundAppRefreshEnabled() async {
-    if (!Platform.isAndroid && !Platform.isIOS) return true;
+  static Future<String> readBackgroundAppRefreshStatus() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return 'enabled';
     try {
       final status = await _settingsChannel.invokeMethod<String>(
         'backgroundAppRefreshStatus',
       );
-      if (status == 'disabled' || status == 'restricted') return false;
-      return true;
+      if (status == 'enabled' ||
+          status == 'disabled' ||
+          status == 'restricted') {
+        return status!;
+      }
+      return 'unknown';
     } catch (_) {
-      return true;
+      return 'unknown';
     }
+  }
+
+  Future<bool> _backgroundAppRefreshEnabled() async {
+    final status = await readBackgroundAppRefreshStatus();
+    if (status == 'disabled' || status == 'restricted') return false;
+    return true;
   }
 
   Future<bool> _motionGranted() async {
