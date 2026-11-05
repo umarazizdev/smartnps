@@ -13,6 +13,7 @@ import 'package:video_player/video_player.dart';
 import '../../api/visit_upload_api.dart';
 import '../../app/app_navigator.dart';
 import '../../app/app_routes.dart';
+import '../../permissions/os_gallery_permission.dart';
 import '../../utilities/app_config.dart';
 import '../../widgets/dialogs/glass_action_dialog.dart';
 import '../capture/capture_review_controller.dart';
@@ -248,8 +249,6 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
   Future<void> _openCaptureScreen(BuildContext context) async {
     controller.endCheckpointCapture();
     if (controller.isStructuredReport) {
-      final permitted = await _ensureStructuredCapturePermissions(context);
-      if (!permitted || !context.mounted) return;
       await _openStructuredMediaSource(context);
       return;
     }
@@ -295,99 +294,28 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       return;
     }
 
+    final galleryOk = await _ensureStructuredGalleryPermission(context);
+    if (!galleryOk || !context.mounted) return;
     await _importGalleryMedia(context);
   }
 
-  Future<bool> _ensureStructuredCapturePermissions(BuildContext context) async {
-    final permissions = <Permission>[
-      Permission.camera,
-      Permission.microphone,
-      Permission.photos,
-      if (Platform.isAndroid) Permission.videos,
-    ];
+  Future<bool> _ensureStructuredGalleryPermission(BuildContext context) async {
+    if (await OsGalleryPermission.isGranted()) return true;
 
-    Map<Permission, PermissionStatus> statuses;
-    try {
-      final pending = <Permission>[];
-      for (final permission in permissions) {
-        final status = await permission.status;
-        final ok = status.isGranted || status.isLimited;
-        if (!ok) pending.add(permission);
-      }
-      if (pending.isEmpty) return true;
-      statuses = await pending.request();
-    } on Exception catch (error) {
-      final message = error.toString();
-      if (message.contains('ALREADY_REQUESTING_PERMISSIONS')) {
-        await Future<void>.delayed(const Duration(milliseconds: 400));
-        statuses = {
-          for (final permission in permissions)
-            permission: await permission.status,
-        };
-      } else {
-        rethrow;
-      }
-    }
+    final status = await OsGalleryPermission.request();
+    if (status.isGranted || status.isLimited) return true;
 
-    Future<PermissionStatus> statusOf(Permission permission) async {
-      return statuses[permission] ?? await permission.status;
-    }
-
-    final camera = await statusOf(Permission.camera);
-    if (!camera.isGranted) {
-      if (!context.mounted) return false;
-      await _showStructuredPermissionDialog(
-        context: context,
-        icon: Icons.photo_camera_outlined,
-        title: 'Camera permission required',
-        message: camera.isPermanentlyDenied
-            ? 'Camera access is permanently denied. Enable it in Settings to '
-                'capture photos and videos for this report.'
-            : 'Camera access is required to capture photos and videos for this report.',
-      );
-      return false;
-    }
-
-    final mic = await statusOf(Permission.microphone);
-    if (!mic.isGranted) {
-      if (!context.mounted) return false;
-      await _showStructuredPermissionDialog(
-        context: context,
-        icon: Icons.mic_off_outlined,
-        title: 'Microphone permission required',
-        message: mic.isPermanentlyDenied
-            ? 'Microphone access is permanently denied. Enable it in Settings '
-                'to record video for this report.'
-            : 'Microphone access is required to record video for this report.',
-      );
-      return false;
-    }
-
-    final photos = await statusOf(Permission.photos);
-
-    final photosOk = photos.isGranted || photos.isLimited;
-    var galleryOk = photosOk;
-    if (Platform.isAndroid) {
-      final videos = await statusOf(Permission.videos);
-      final videosOk = videos.isGranted || videos.isLimited;
-
-      galleryOk = photosOk || videosOk;
-    }
-    if (!galleryOk) {
-      if (!context.mounted) return false;
-      await _showStructuredPermissionDialog(
-        context: context,
-        icon: Icons.photo_library_outlined,
-        title: 'Gallery permission required',
-        message: photos.isPermanentlyDenied
-            ? 'Photo library access is permanently denied. Enable it in '
-                'Settings to attach gallery media to this report.'
-            : 'Photo library access is required to attach gallery media to this report.',
-      );
-      return false;
-    }
-
-    return true;
+    if (!context.mounted) return false;
+    await _showStructuredPermissionDialog(
+      context: context,
+      icon: Icons.photo_library_outlined,
+      title: 'Gallery permission required',
+      message: status.isPermanentlyDenied
+          ? 'Photo library access is permanently denied. Enable it in '
+              'Settings to attach gallery media to this report.'
+          : 'Photo library access is required to attach gallery media to this report.',
+    );
+    return false;
   }
 
   Future<void> _showStructuredPermissionDialog({
