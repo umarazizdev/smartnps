@@ -15,6 +15,7 @@ import '../background/location/background_location_permissions.dart';
 import '../background/duty/clock_in_gate_service.dart';
 import '../background/duty/location_disclosure_consent.dart';
 import '../background/duty/duty_heartbeat_service.dart';
+import '../permissions/os_gallery_permission.dart';
 import '../utilities/app_config.dart';
 import '../location/mock_location_detection.dart';
 import '../location/mock_location_guard.dart';
@@ -122,8 +123,9 @@ class JsBridge {
   Future<Map<String, dynamic>> pickImage([dynamic args]) async {
     if (!_isTrustedCaller()) return _deny();
     try {
-      final status = await Permission.photos.request();
-      if (!status.isGranted && Platform.isIOS) {
+      final status = await OsGalleryPermission.request();
+      final galleryOk = status.isGranted || status.isLimited;
+      if (!galleryOk && (Platform.isIOS || Platform.isAndroid)) {
         return _err('permission_denied', 'Photos permission denied');
       }
       final picker = ImagePicker();
