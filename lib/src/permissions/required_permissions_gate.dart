@@ -10,7 +10,6 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../background/location/background_location_permissions.dart';
 import '../motion/motion_activity_service.dart';
-import '../push/notifications/push_notification_preferences.dart';
 import '../push/notifications/push_notification_service.dart';
 import '../utilities/overlay_prompt_guard.dart';
 import '../utilities/permission_settings_helper.dart';
@@ -88,12 +87,10 @@ class RequiredPermissionsGate {
     ...clockInPermissionIds,
     'backgroundAppRefresh',
     'notifications',
-    'push',
   };
 
   static const Set<String> offDutyPushPermissionIds = {
     'notifications',
-    'push',
   };
 
   Future<List<RequiredPermissionItem>> buildClockInPermissionItems() async {
@@ -295,8 +292,6 @@ class RequiredPermissionsGate {
           await _openSettingsFor(item.id);
           break;
         case RequiredPermissionAction.enable:
-          await _enableInApp(item.id);
-          break;
         case RequiredPermissionAction.none:
           break;
       }
@@ -343,19 +338,6 @@ class RequiredPermissionsGate {
         await handleAction(item);
         await Future<void>.delayed(const Duration(milliseconds: 350));
       }
-
-      final enableItems = items.value
-          .where(
-            (item) =>
-                !item.enabled &&
-                item.action == RequiredPermissionAction.enable &&
-                item.id == 'push',
-          )
-          .toList();
-      for (final item in enableItems) {
-        if (!_active || isPrivacyNoticeVisible) return;
-        await handleAction(item);
-      }
     } finally {
       _autoOsPromptInFlight = false;
     }
@@ -364,9 +346,7 @@ class RequiredPermissionsGate {
   Future<void> _requestOsPermission(String id) async {
     switch (id) {
       case 'foregroundLocation':
-        await PermissionSettingsHelper.requestForegroundLocationStep(
-          allowWhenDialogOwns: true,
-        );
+        await PermissionSettingsHelper.requestForegroundLocationStep();
         break;
       case 'backgroundLocation':
         await _requestBackgroundLocationStep();
@@ -452,9 +432,7 @@ class RequiredPermissionsGate {
     if (Platform.isAndroid) {
       final fg = await Permission.location.status;
       if (!fg.isGranted && !fg.isLimited && !fg.isProvisional) {
-        await PermissionSettingsHelper.requestForegroundLocationStep(
-          allowWhenDialogOwns: true,
-        );
+        await PermissionSettingsHelper.requestForegroundLocationStep();
       }
       final bgBefore = await Permission.locationAlways.status;
       if (kDebugMode) {
@@ -564,18 +542,12 @@ class RequiredPermissionsGate {
     );
   }
 
-  Future<void> _enableInApp(String id) async {
-    if (id != 'push') return;
-    await PushNotificationService.instance.setNotificationsEnabled(true);
-  }
-
   Future<List<RequiredPermissionItem>> _buildItems() async {
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     final foreground = await _foregroundGranted(serviceEnabled);
     final background = await _backgroundGranted(serviceEnabled);
     final precise = await _preciseGranted(serviceEnabled, foreground);
     final notifications = await OsNotificationPermission.isGranted();
-    final pushEnabled = await PushNotificationPreferences.readEnabled();
     final motionAvailable = await MotionActivityService.isAvailable();
     final motionGranted = motionAvailable ? await _motionGranted() : true;
     final backgroundAppRefresh = await _backgroundAppRefreshEnabled();
@@ -654,16 +626,6 @@ class RequiredPermissionsGate {
             ? RequiredPermissionAction.none
             : await _notificationAction(),
         icon: Icons.notifications_rounded,
-      ),
-      RequiredPermissionItem(
-        id: 'push',
-        name: 'Push alerts',
-        description: 'In-app push messages.',
-        enabled: pushEnabled,
-        action: pushEnabled
-            ? RequiredPermissionAction.none
-            : RequiredPermissionAction.enable,
-        icon: Icons.send_rounded,
       ),
     ];
 

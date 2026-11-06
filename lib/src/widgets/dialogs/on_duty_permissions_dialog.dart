@@ -136,7 +136,7 @@ class _OnDutyPermissionsDialogPanelState
   bool get _onlyAlertsMissing {
     final missing = _missingItems;
     if (missing.isEmpty) return false;
-    return missing.every((e) => e.id == 'notifications' || e.id == 'push');
+    return missing.every((e) => e.id == 'notifications');
   }
 
   bool get _onlyMotionMissing {
@@ -271,7 +271,6 @@ class _OnDutyPermissionsDialogPanelState
           permissionId: item.id,
         );
       case 'notifications':
-      case 'push':
         return true;
       default:
         return true;

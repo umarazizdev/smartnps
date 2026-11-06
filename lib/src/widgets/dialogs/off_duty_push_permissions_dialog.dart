@@ -177,7 +177,7 @@ class _OffDutyPushPermissionsDialogPanelState
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    'Enable push alerts',
+                    'Enable notifications',
                     style: TextStyle(
                       color: colors.title,
                       fontSize: 20,
