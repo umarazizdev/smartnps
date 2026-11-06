@@ -266,21 +266,10 @@ class PermissionSettingsHelper {
     await Geolocator.openAppSettings();
   }
 
-  static Future<bool> Function()? shouldSuppressAutomaticLocationOsPrompt;
-
   static Future<LocationPermissionRequestResult>
-  requestForegroundLocationStep({
-    bool allowWhenDialogOwns = false,
-  }) async {
+  requestForegroundLocationStep() async {
     if (RequiredPermissionsGate.isPrivacyNoticeVisible) {
       return LocationPermissionRequestResult.promptShown;
-    }
-
-    if (!allowWhenDialogOwns) {
-      final suppress = shouldSuppressAutomaticLocationOsPrompt;
-      if (suppress != null && await suppress()) {
-        return LocationPermissionRequestResult.promptShown;
-      }
     }
 
     if (await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled()) {

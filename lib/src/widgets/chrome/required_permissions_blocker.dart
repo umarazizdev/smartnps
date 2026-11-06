@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
@@ -248,7 +247,7 @@ class _PermissionAccent {
   final Color iconBg;
 
   static _PermissionAccent forItem(String id, bool isDark) {
-    final isBlue = id == 'notifications' || id == 'push';
+    final isBlue = id == 'notifications';
     if (isDark) {
       return _PermissionAccent(
         icon: isBlue ? const Color(0xFF93C5FD) : const Color(0xFF34D399),
@@ -313,12 +312,7 @@ class _PermissionRow extends StatelessWidget {
                 color: accent.iconBg,
                 shape: BoxShape.circle,
               ),
-              child: item.id == 'push'
-                  ? Transform.rotate(
-                      angle: -math.pi / 4,
-                      child: Icon(item.icon, size: 20, color: accent.icon),
-                    )
-                  : Icon(item.icon, size: 20, color: accent.icon),
+              child: Icon(item.icon, size: 20, color: accent.icon),
             ),
             const SizedBox(width: 12),
             Expanded(

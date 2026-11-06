@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 
 import '../../app/native_theme_controller.dart';
@@ -85,7 +83,7 @@ class PermissionBlockerAccent {
   final Color iconBg;
 
   static PermissionBlockerAccent forItem(String id, bool isDark) {
-    final isBlue = id == 'notifications' || id == 'push';
+    final isBlue = id == 'notifications';
     if (isDark) {
       return PermissionBlockerAccent(
         icon: isBlue ? const Color(0xFF93C5FD) : const Color(0xFF34D399),
@@ -151,12 +149,7 @@ class PermissionBlockerRow extends StatelessWidget {
                 color: accent.iconBg,
                 shape: BoxShape.circle,
               ),
-              child: item.id == 'push'
-                  ? Transform.rotate(
-                      angle: -math.pi / 4,
-                      child: Icon(item.icon, size: 18, color: accent.icon),
-                    )
-                  : Icon(item.icon, size: 18, color: accent.icon),
+              child: Icon(item.icon, size: 18, color: accent.icon),
             ),
             const SizedBox(width: 10),
             Expanded(

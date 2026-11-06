@@ -482,12 +482,12 @@ class _WebViewShellState extends State<WebViewShell>
     }
 
     if (!mounted || !_ui.officerLoggedIn.value) return;
+    await _maybeStartDutyHeartbeat();
 
     await OnDutyPermissionsPromptService.instance.maybeShow(
       fromResume: false,
       forceImmediate: true,
     );
-    await _maybeStartDutyHeartbeat();
     await DutyHeartbeatService.instance.recheckOnDutyPrompts();
     if (_ui.officerLoggedIn.value &&
         !_ui.showLocationNotice.value &&
@@ -2349,13 +2349,13 @@ class _WebViewShellState extends State<WebViewShell>
         }
         DutyHeartbeatService.instance.beginResumeDutyReconcile();
         try {
-          await OnDutyPermissionsPromptService.instance.maybeShow(
-            fromResume: true,
-            forceImmediate: true,
-          );
           await _maybeStartDutyHeartbeat();
           await DutyHeartbeatService.instance.recheckOnDutyPrompts(
             fromResume: true,
+          );
+          await OnDutyPermissionsPromptService.instance.maybeShow(
+            fromResume: true,
+            forceImmediate: true,
           );
           if (_ui.officerLoggedIn.value &&
               !_ui.showLocationNotice.value &&
@@ -5748,17 +5748,17 @@ class _WebViewShellState extends State<WebViewShell>
                                                   await _requestNotificationPermissionForRoute(
                                                     nextUri,
                                                   );
-                                                  await OnDutyPermissionsPromptService
-                                                      .instance
-                                                      .maybeShow(
-                                                        fromResume: false,
-                                                      );
                                                   await _maybeStartDutyHeartbeat();
                                                   await DutyHeartbeatService
                                                       .instance
                                                       .recheckOnDutyPrompts(
                                                         pageReload:
                                                             isSamePageReload,
+                                                      );
+                                                  await OnDutyPermissionsPromptService
+                                                      .instance
+                                                      .maybeShow(
+                                                        fromResume: false,
                                                       );
                                                   if (_ui
                                                           .officerLoggedIn
@@ -5932,16 +5932,10 @@ class _WebViewShellState extends State<WebViewShell>
 
                                           if (!await BackgroundLocationPermissions.isBackgroundLocationFullyEnabled()) {
                                             if (!await BackgroundLocationPermissions.hasForegroundLocationAccess()) {
-                                              final defer =
-                                                  await DutyHeartbeatService
-                                                      .instance
-                                                      .shouldDeferLocationOsPromptToPermissionsDialog();
-                                              if (!defer) {
-                                                await PermissionSettingsHelper
-                                                    .requestForegroundLocationStep();
-                                                await BackgroundLocationPermissions
-                                                    .refreshPermissionStateFromOs();
-                                              }
+                                              await PermissionSettingsHelper
+                                                  .requestForegroundLocationStep();
+                                              await BackgroundLocationPermissions
+                                                  .refreshPermissionStateFromOs();
                                             }
                                           }
 
