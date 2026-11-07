@@ -248,6 +248,10 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
 
   Future<void> _openCaptureScreen(BuildContext context) async {
     controller.endCheckpointCapture();
+    if (!controller.canAddMoreMedia) {
+      await _showMediaLimitDialog(context);
+      return;
+    }
     if (controller.isStructuredReport) {
       await _openStructuredMediaSource(context);
       return;
@@ -255,14 +259,40 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     await openNativeCapture(flow: controller);
   }
 
+  Future<void> _showMediaLimitDialog(BuildContext context) async {
+    if (!context.mounted) return;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final maxCount =
+        controller.maxAllowedMediaItems ??
+        VisitVideoFlowController.maxReportMediaItems;
+    await GlassActionDialog.show(
+      context: context,
+      icon: Icons.photo_library_outlined,
+      iconColor: _visitPrimaryActionColor(isDark),
+      title: _copy.mediaLimitReachedTitle,
+      message: _copy.mediaLimitReachedMessage(maxCount),
+      primaryLabel: 'OK',
+      barrierDismissible: true,
+      useRootNavigator: true,
+    );
+  }
+
   Future<void> _openStructuredMediaSource(BuildContext context) async {
     if (!context.mounted) return;
+    if (!controller.canAddMoreMedia) {
+      await _showMediaLimitDialog(context);
+      return;
+    }
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final accent = _visitPrimaryActionColor(isDark);
     final reportLabel =
         controller.flowKind == VisitFlowKind.incidentReport
         ? 'incident report'
         : 'issue report';
+    final remaining = controller.remainingMediaSlots;
+    final remainingHint = remaining < VisitVideoFlowController.maxReportMediaItems
+        ? ' You can add up to $remaining more.'
+        : '';
 
     final source = await GlassActionDialog.showWithActions<_StructuredMediaSource>(
       context: context,
@@ -270,7 +300,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       iconColor: accent,
       title: 'Add media',
       message: 'Use the camera, or open your gallery to pick photos and '
-          'videos for this $reportLabel.',
+          'videos for this $reportLabel.$remainingHint',
       barrierDismissible: true,
       showCloseButton: true,
       useRootNavigator: true,
@@ -288,6 +318,11 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       ],
     );
     if (source == null || !context.mounted) return;
+
+    if (!controller.canAddMoreMedia) {
+      await _showMediaLimitDialog(context);
+      return;
+    }
 
     if (source == _StructuredMediaSource.camera) {
       await VisitNativeCaptureLauncher.open();
@@ -345,34 +380,64 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
   Future<void> _importGalleryMedia(BuildContext context) async {
     if (!context.mounted) return;
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final remainingSlots = controller.remainingMediaSlots;
+    if (remainingSlots <= 0) {
+      await _showMediaLimitDialog(context);
+      return;
+    }
 
     final picker = ImagePicker();
     try {
-
       final files = await picker.pickMultipleMedia(
         imageQuality: 100,
         requestFullMetadata: true,
+        limit: remainingSlots,
       );
       if (files.isEmpty || !context.mounted) return;
 
       final geo = await VisitMediaGeo.captureFast();
       var imported = 0;
+      var skippedForLimit = 0;
       for (final file in files) {
+        if (!controller.canAddMoreMedia) {
+          skippedForLimit++;
+          continue;
+        }
         final path = file.path.trim();
         if (path.isEmpty || !File(path).existsSync()) continue;
         final item = _isGalleryVideo(file)
             ? await controller.addVideo(path, geo: geo)
             : await controller.addPhoto(path, geo: geo);
-        if (item != null) imported++;
+        if (item != null) {
+          imported++;
+        }
       }
 
-      if (imported == 0 && context.mounted) {
+      if (!context.mounted) return;
+      if (imported == 0) {
         _showTopSnack(
-          title: 'No media added',
-          message:
-              'Could not import the selected photos or videos. Please try again.',
+          title: skippedForLimit > 0
+              ? _copy.mediaLimitReachedTitle
+              : 'No media added',
+          message: skippedForLimit > 0
+              ? _copy.mediaLimitReachedMessage(
+                  controller.maxAllowedMediaItems ??
+                      VisitVideoFlowController.maxReportMediaItems,
+                )
+              : 'Could not import the selected photos or videos. Please try again.',
           isDark: isDark,
           isError: true,
+        );
+      } else if (skippedForLimit > 0) {
+        final maxCount =
+            controller.maxAllowedMediaItems ??
+            VisitVideoFlowController.maxReportMediaItems;
+        _showTopSnack(
+          title: 'Media limit reached',
+          message:
+              'Added $imported item${imported == 1 ? '' : 's'}. '
+              'Reports can include up to $maxCount photos or videos.',
+          isDark: isDark,
         );
       }
     } catch (error) {
@@ -1216,7 +1281,8 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           Text(
-                            'Captured Media (${additionalMedia.length})',
+                            'Captured Media (${additionalMedia.length}/'
+                            '${VisitFlowKind.maxReportMediaItems})',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: Theme.of(context).textTheme.titleSmall
@@ -2946,7 +3012,8 @@ class _VisitHeader extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    'Captured Media ($totalCount)',
+                    'Captured Media ($totalCount/'
+                    '${VisitFlowKind.maxReportMediaItems})',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.titleSmall?.copyWith(

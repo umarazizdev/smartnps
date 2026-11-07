@@ -4,10 +4,13 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../../debug/session_debug_logger.dart';
 import 'cam_perf.dart';
 import 'visit_flow_kind.dart';
 import 'visit_patrol_context.dart';
+import 'visit_photo_compressor.dart';
 import 'visit_report_details.dart';
+import 'visit_video_compressor.dart';
 import 'visit_video_flow_controller.dart';
 
 class VisitDraftKey {
@@ -475,10 +478,9 @@ class VisitMediaDraftStore {
       detail: dir.path,
       usePhotoClock: true,
     );
-    final ext = _extensionFor(
-      sourcePath,
-      fallback: type == VisitMediaType.photo ? '.jpg' : '.mp4',
-    );
+    final ext = type == VisitMediaType.photo
+        ? '.jpg'
+        : '.mp4';
     final fileId = (id != null && id.isNotEmpty)
         ? id
         : 'media_${DateTime.now().microsecondsSinceEpoch}_'
@@ -502,7 +504,9 @@ class VisitMediaDraftStore {
       return finalPath;
     }
 
-    final tmpPath = '$finalPath.tmp';
+    final tmpPath = type == VisitMediaType.photo
+        ? '${dir.path}/media_$fileId.part.jpg'
+        : '${dir.path}/media_$fileId.part.mp4';
     final tmp = File(tmpPath);
     try {
       if (await tmp.exists()) {
@@ -510,23 +514,73 @@ class VisitMediaDraftStore {
       }
       CamPerf.stage(id, 'DURABLE_TEMP_COPY_START', usePhotoClock: true);
       final copyStarted = DateTime.now().millisecondsSinceEpoch;
-      await source.copy(tmpPath);
+      var photoCompressed = false;
+      var videoCompressed = false;
+      if (type == VisitMediaType.photo) {
+        try {
+          await VisitPhotoCompressor.compressForUpload(
+            sourcePath: sourcePath,
+            targetPath: tmpPath,
+          );
+          photoCompressed = true;
+        } catch (error) {
+          if (kDebugMode) {
+            debugPrint(
+              '[VisitMediaDraftStore] photo compress failed, copying raw: $error',
+            );
+          }
+          SessionDebugLogger.instance.log(
+            SessionDebugCategory.media,
+            'photo compress failed, copying raw: $error',
+          );
+          if (await tmp.exists()) {
+            await tmp.delete();
+          }
+          await source.copy(tmpPath);
+        }
+      } else {
+        try {
+          await VisitVideoCompressor.compressForUpload(
+            sourcePath: sourcePath,
+            targetPath: tmpPath,
+          );
+          videoCompressed = true;
+        } catch (error) {
+          if (kDebugMode) {
+            debugPrint(
+              '[VisitMediaDraftStore] video compress failed, copying raw: $error',
+            );
+          }
+          SessionDebugLogger.instance.log(
+            SessionDebugCategory.media,
+            'video compress failed, copying raw: $error',
+          );
+          if (await tmp.exists()) {
+            await tmp.delete();
+          }
+          await source.copy(tmpPath);
+        }
+      }
       final copyElapsed = DateTime.now().millisecondsSinceEpoch - copyStarted;
       final copiedBytes = await tmp.length();
+      final compressTag = photoCompressed
+          ? ' compressed=jpeg85'
+          : (videoCompressed ? ' compressed=720p' : '');
       CamPerf.stage(
         id,
         'DURABLE_TEMP_COPY_END',
         detail:
             'bytes=$copiedBytes mb=${CamPerf.mb(copiedBytes)} '
             'elapsed=${copyElapsed}ms '
-            'throughput=${CamPerf.throughput(copiedBytes, copyElapsed)}',
+            'throughput=${CamPerf.throughput(copiedBytes, copyElapsed)}'
+            '$compressTag',
         usePhotoClock: true,
       );
       if (copiedBytes <= 0) {
         await deleteQuietly(tmpPath);
         throw StateError('Copied media file empty: $tmpPath');
       }
-      if (type == VisitMediaType.photo) {
+      if (type == VisitMediaType.photo && photoCompressed) {
         CamPerf.stage(id, 'DURABLE_FILE_VALIDATION_START', usePhotoClock: true);
         await _assertJpegHeader(tmp);
         CamPerf.stage(id, 'DURABLE_FILE_VALIDATION_END', usePhotoClock: true);

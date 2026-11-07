@@ -7,6 +7,7 @@ import '../../app/app_routes.dart';
 import '../../widgets/dialogs/glass_action_dialog.dart';
 import '../flow/visit_checkpoint.dart';
 import '../flow/visit_flow_copy.dart';
+import '../flow/visit_flow_kind.dart';
 import '../flow/visit_video_flow_controller.dart';
 import '../log_visit_theme.dart';
 import '../preview/visit_video_player_controller.dart';
@@ -92,6 +93,24 @@ class _VisitCheckpointScreenState extends State<VisitCheckpointScreen> {
       flow.patrolContext.value?.checkpointById(widget.checkpointId);
 
   Future<void> _openCapture() async {
+    if (!flow.canAddMoreMedia) {
+      if (!mounted) return;
+      final isDark = Theme.of(context).brightness == Brightness.dark;
+      final copy = VisitFlowCopy.fromContext(flow.patrolContext.value);
+      final maxCount =
+          flow.maxAllowedMediaItems ?? VisitFlowKind.maxReportMediaItems;
+      await GlassActionDialog.show(
+        context: context,
+        icon: Icons.photo_library_outlined,
+        iconColor: _cpPrimaryColor(isDark),
+        title: copy.mediaLimitReachedTitle,
+        message: copy.mediaLimitReachedMessage(maxCount),
+        primaryLabel: 'OK',
+        barrierDismissible: true,
+        useRootNavigator: true,
+      );
+      return;
+    }
     flow.beginCheckpointCapture(widget.checkpointId);
     await VisitVideoPreviewScreen.openNativeCapture(flow: flow);
     flow.beginCheckpointCapture(widget.checkpointId);
