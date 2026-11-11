@@ -6,6 +6,8 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:dio/dio.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -77,6 +79,28 @@ Future<void> ensurePushLocalNotificationsReady(
   }
 }
 
+bool isUnauthorizedLocalNotificationError(Object error) {
+  if (error is PlatformException) {
+    final code = error.code.toLowerCase();
+    final message = (error.message ?? '').toLowerCase();
+    final details = '${error.details ?? ''}'.toLowerCase();
+    if (code.contains('2003') ||
+        message.contains('source is not authorized') ||
+        details.contains('unerrordomain') ||
+        message.contains('notifications permission') ||
+        message.contains('notification permission') ||
+        code.contains('permission')) {
+      return true;
+    }
+  }
+  final text = error.toString().toLowerCase();
+  return text.contains('error 2003') ||
+      text.contains('source is not authorized') ||
+      text.contains('unerrordomain') ||
+      text.contains('notifications_permission') ||
+      (text.contains('notification') && text.contains('permission denied'));
+}
+
 Future<void> showPushLocalNotification({
   required FlutterLocalNotificationsPlugin plugin,
   required String title,
@@ -84,6 +108,15 @@ Future<void> showPushLocalNotification({
   required Map<String, dynamic> data,
   String? messageId,
 }) async {
+  if (!await OsNotificationPermission.isGranted()) {
+    if (kDebugMode) {
+      debugPrint(
+        '[PushNotification] skip local notification; permission not granted',
+      );
+    }
+    return;
+  }
+
   final payload = jsonEncode({'messageId': messageId, 'data': data});
 
   final androidDetails = AndroidNotificationDetails(
@@ -96,16 +129,28 @@ Future<void> showPushLocalNotification({
   );
   const iosDetails = kPushIosNotificationDetails;
 
-  await plugin.show(
-    id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-    title: title,
-    body: body,
-    notificationDetails: NotificationDetails(
-      android: androidDetails,
-      iOS: iosDetails,
-    ),
-    payload: payload,
-  );
+  try {
+    await plugin.show(
+      id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      title: title,
+      body: body,
+      notificationDetails: NotificationDetails(
+        android: androidDetails,
+        iOS: iosDetails,
+      ),
+      payload: payload,
+    );
+  } catch (error) {
+    if (isUnauthorizedLocalNotificationError(error)) {
+      if (kDebugMode) {
+        debugPrint(
+          '[PushNotification] local notification unauthorized/denied: $error',
+        );
+      }
+      return;
+    }
+    rethrow;
+  }
 }
 
 @pragma('vm:entry-point')

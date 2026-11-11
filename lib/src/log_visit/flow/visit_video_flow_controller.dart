@@ -217,6 +217,7 @@ class VisitVideoFlowController extends GetxController {
   final activeCheckpointId = RxnInt();
 
   final lastUploadIssue = Rxn<VisitDraftLastUploadIssue>();
+  final lastPersistErrorMessage = RxnString();
 
   final _store = VisitMediaDraftStore.instance;
   bool _restoring = false;
@@ -920,9 +921,15 @@ class VisitVideoFlowController extends GetxController {
     if (activeDraftKey.value != key) {
       activeDraftKey.value = key;
     }
-    _persistQueue = (_persistQueue ?? Future<void>.value()).then((_) async {
+    final previous = _persistQueue;
+    _persistQueue = () async {
+      if (previous != null) {
+        try {
+          await previous;
+        } catch (_) {}
+      }
       CamPerf.stage(null, 'PERSIST_QUEUE_WAIT_END', usePhotoClock: true);
-      await _store.saveDraft(
+      await _runSaveDraft(
         snapshot,
         startedAt: startedAt,
         siteName: siteName,
@@ -932,7 +939,7 @@ class VisitVideoFlowController extends GetxController {
         reportDetails: report,
         lastUploadIssue: issue,
       );
-    });
+    }();
     await _persistQueue;
   }
 
@@ -962,9 +969,15 @@ class VisitVideoFlowController extends GetxController {
     if (activeDraftKey.value != key) {
       activeDraftKey.value = key;
     }
-    _persistQueue = (_persistQueue ?? Future<void>.value()).then((_) async {
+    final previous = _persistQueue;
+    _persistQueue = () async {
+      if (previous != null) {
+        try {
+          await previous;
+        } catch (_) {}
+      }
       CamPerf.stage(null, 'PERSIST_QUEUE_WAIT_END', usePhotoClock: true);
-      await _store.saveDraft(
+      await _runSaveDraft(
         snapshot,
         startedAt: startedAt,
         siteName: siteName,
@@ -974,8 +987,55 @@ class VisitVideoFlowController extends GetxController {
         reportDetails: report,
         lastUploadIssue: issue,
       );
-    });
+    }();
     await _persistQueue;
+  }
+
+  Future<void> _runSaveDraft(
+    List<VisitMediaItem> snapshot, {
+    required DateTime? startedAt,
+    required String? siteName,
+    required VisitPatrolContext? context,
+    required VisitDraftKey key,
+    required VisitBatchNote generalNote,
+    required VisitReportDetails reportDetails,
+    required VisitDraftLastUploadIssue? lastUploadIssue,
+  }) async {
+    try {
+      await _store.saveDraft(
+        snapshot,
+        startedAt: startedAt,
+        siteName: siteName,
+        context: context,
+        key: key,
+        generalNote: generalNote,
+        reportDetails: reportDetails,
+        lastUploadIssue: lastUploadIssue,
+      );
+      lastPersistErrorMessage.value = null;
+    } on VisitDraftPersistException catch (error) {
+      lastPersistErrorMessage.value = error.userMessage;
+      if (kDebugMode) {
+        debugPrint('[VisitDraft] persist failed: $error');
+      }
+      if (!error.isInsufficientStorage) rethrow;
+    } catch (error) {
+      if (VisitMediaDraftStore.isInsufficientStorageError(error)) {
+        final mapped = VisitDraftPersistException.insufficientStorage(error);
+        lastPersistErrorMessage.value = mapped.userMessage;
+        if (kDebugMode) {
+          debugPrint('[VisitDraft] persist storage full: $error');
+        }
+        return;
+      }
+      rethrow;
+    }
+  }
+
+  String? takeLastPersistErrorMessage() {
+    final message = lastPersistErrorMessage.value;
+    lastPersistErrorMessage.value = null;
+    return message;
   }
 
   Future<VisitMediaItem?> addVideo(String path, {VisitMediaGeo? geo}) {
@@ -1687,6 +1747,7 @@ class VisitVideoFlowController extends GetxController {
     generalNote.value = const VisitBatchNote();
     reportDetails.value = const VisitReportDetails();
     lastUploadIssue.value = null;
+    lastPersistErrorMessage.value = null;
     activeCheckpointId.value = null;
     _startedAt = null;
     draftSiteName.value = null;
