@@ -25,6 +25,7 @@ import '../app/site_reachability.dart';
 import '../widgets/chrome/platform_bottom_bar.dart';
 import '../widgets/dialogs/clock_in_blocked_dialog.dart';
 import '../widgets/dialogs/clock_in_permissions_dialog.dart';
+import '../widgets/dialogs/glass_action_dialog.dart';
 import '../location/mock_location_detection.dart';
 import '../location/mock_location_guard.dart';
 import '../app/app_routes.dart';
@@ -3126,7 +3127,38 @@ class _WebViewShellState extends State<WebViewShell>
   Future<void> _persistActivePatrolDraft() async {
     if (!Get.isRegistered<VisitVideoFlowController>()) return;
     final flow = Get.find<VisitVideoFlowController>();
-    await flow.persistCurrentDraft();
+    try {
+      await flow.persistCurrentDraft();
+    } on VisitDraftPersistException catch (error) {
+      await _showDraftPersistFailureDialog(error.userMessage);
+      return;
+    } catch (error) {
+      if (VisitMediaDraftStore.isInsufficientStorageError(error)) {
+        await _showDraftPersistFailureDialog(
+          VisitDraftPersistException.insufficientStorage(error).userMessage,
+        );
+        return;
+      }
+      rethrow;
+    }
+    final message = flow.takeLastPersistErrorMessage();
+    if (message != null && message.isNotEmpty) {
+      await _showDraftPersistFailureDialog(message);
+    }
+  }
+
+  Future<void> _showDraftPersistFailureDialog(String message) async {
+    if (!mounted) return;
+    await GlassActionDialog.show(
+      context: context,
+      icon: Icons.sd_card_alert_outlined,
+      iconColor: const Color(0xFFE53935),
+      title: 'Could not save draft',
+      message: message,
+      primaryLabel: 'OK',
+      variant: GlassActionDialogVariant.error,
+      barrierDismissible: true,
+    );
   }
 
   void _finishLogVisitUploadSuccess() {

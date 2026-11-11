@@ -215,6 +215,33 @@ class VisitDraftLastUploadIssue {
   }
 }
 
+class VisitDraftPersistException implements Exception {
+  VisitDraftPersistException({
+    required this.userMessage,
+    required this.isInsufficientStorage,
+    this.cause,
+  });
+
+  factory VisitDraftPersistException.insufficientStorage([Object? cause]) {
+    return VisitDraftPersistException(
+      userMessage:
+          'Device storage is full. Free up space and try saving again.',
+      isInsufficientStorage: true,
+      cause: cause,
+    );
+  }
+
+  final String userMessage;
+  final bool isInsufficientStorage;
+  final Object? cause;
+
+  @override
+  String toString() {
+    final causeText = cause == null ? '' : ' ($cause)';
+    return 'VisitDraftPersistException: $userMessage$causeText';
+  }
+}
+
 class VisitMediaDraftStore {
   VisitMediaDraftStore._();
 
@@ -224,6 +251,34 @@ class VisitMediaDraftStore {
   static const _activeKeyFileName = 'active_key.json';
   static const _rootFolder = 'visit_media_draft';
   static const _legacyAccountsFolder = 'accounts';
+
+  static bool isInsufficientStorageError(Object error) {
+    if (error is VisitDraftPersistException) {
+      return error.isInsufficientStorage;
+    }
+    if (error is FileSystemException) {
+      final os = error.osError;
+      if (os?.errorCode == 28) return true;
+      final combined = '${error.message} ${os?.message ?? ''} ${error.path ?? ''}'
+          .toLowerCase();
+      return combined.contains('no space left') ||
+          combined.contains('not enough space') ||
+          combined.contains('enospc');
+    }
+    if (error is OSError) {
+      if (error.errorCode == 28) return true;
+      final message = error.message.toLowerCase();
+      return message.contains('no space left') ||
+          message.contains('not enough space') ||
+          message.contains('enospc');
+    }
+    final text = error.toString().toLowerCase();
+    return text.contains('no space left') ||
+        text.contains('not enough space') ||
+        text.contains('enospc') ||
+        text.contains('errno = 28') ||
+        text.contains('errno=28');
+  }
 
   Directory? _root;
   VisitDraftKey _activeKey = VisitDraftKey.unscoped;
@@ -721,60 +776,76 @@ class VisitMediaDraftStore {
             lastUploadIssue != null);
 
     if (items.isEmpty && !keepEmptyStructured) {
-      await clearDraft(deleteFiles: true, key: draftKey);
-      await setActiveKey(draftKey);
+      try {
+        await clearDraft(deleteFiles: true, key: draftKey);
+        await setActiveKey(draftKey);
+      } catch (error) {
+        if (isInsufficientStorageError(error)) {
+          throw VisitDraftPersistException.insufficientStorage(error);
+        }
+        rethrow;
+      }
       return;
     }
 
-    await setActiveKey(draftKey);
+    try {
+      await setActiveKey(draftKey);
 
-    CamPerf.stage(null, 'DRAFT_FILE_RESOLVE_START', usePhotoClock: true);
-    final file = await _draftFile(draftKey);
-    CamPerf.stage(null, 'DRAFT_FILE_RESOLVE_END', usePhotoClock: true);
-    CamPerf.stage(null, 'DRAFT_PAYLOAD_BUILD_START', usePhotoClock: true);
-    final effectiveStartedAt =
-        startedAt ??
-        items.map((e) => e.capturedAt).whereType<DateTime>().fold<DateTime?>(
-          null,
-          (best, value) {
-            if (best == null || value.isBefore(best)) return value;
-            return best;
-          },
-        ) ??
-        (keepEmptyStructured ? DateTime.now() : null);
-    final effectiveSiteName = context?.siteName?.trim().isNotEmpty == true
-        ? context!.siteName
-        : siteName;
-    final payload = <String, dynamic>{
-      'version': 9,
-      'draftKey': draftKey.folderName,
-      'savedAt': DateTime.now().toIso8601String(),
-      'startedAt': effectiveStartedAt?.toIso8601String(),
-      'siteName': effectiveSiteName,
-      'context': context?.toJson(),
-      'generalNote': generalNote.toJson(),
-      'reportDetails': reportDetails.toJson(),
-      if (lastUploadIssue != null) 'lastUploadIssue': lastUploadIssue.toJson(),
-      'items': items.map(_itemToJson).toList(),
-    };
-    final encoded = jsonEncode(payload);
-    CamPerf.stage(
-      null,
-      'DRAFT_PAYLOAD_BUILD_END',
-      detail: 'jsonBytes=${encoded.length}',
-      usePhotoClock: true,
-    );
-    CamPerf.stage(null, 'DRAFT_PERSIST_START', usePhotoClock: true);
-    final started = DateTime.now().millisecondsSinceEpoch;
-    await file.writeAsString(encoded, flush: true);
-    final elapsed = DateTime.now().millisecondsSinceEpoch - started;
-    CamPerf.stage(
-      null,
-      'DRAFT_PERSIST_END',
-      detail:
-          'items=${items.length} jsonBytes=${encoded.length} duration=${elapsed}ms',
-      usePhotoClock: true,
-    );
+      CamPerf.stage(null, 'DRAFT_FILE_RESOLVE_START', usePhotoClock: true);
+      final file = await _draftFile(draftKey);
+      CamPerf.stage(null, 'DRAFT_FILE_RESOLVE_END', usePhotoClock: true);
+      CamPerf.stage(null, 'DRAFT_PAYLOAD_BUILD_START', usePhotoClock: true);
+      final effectiveStartedAt =
+          startedAt ??
+          items.map((e) => e.capturedAt).whereType<DateTime>().fold<DateTime?>(
+            null,
+            (best, value) {
+              if (best == null || value.isBefore(best)) return value;
+              return best;
+            },
+          ) ??
+          (keepEmptyStructured ? DateTime.now() : null);
+      final effectiveSiteName = context?.siteName?.trim().isNotEmpty == true
+          ? context!.siteName
+          : siteName;
+      final payload = <String, dynamic>{
+        'version': 9,
+        'draftKey': draftKey.folderName,
+        'savedAt': DateTime.now().toIso8601String(),
+        'startedAt': effectiveStartedAt?.toIso8601String(),
+        'siteName': effectiveSiteName,
+        'context': context?.toJson(),
+        'generalNote': generalNote.toJson(),
+        'reportDetails': reportDetails.toJson(),
+        if (lastUploadIssue != null) 'lastUploadIssue': lastUploadIssue.toJson(),
+        'items': items.map(_itemToJson).toList(),
+      };
+      final encoded = jsonEncode(payload);
+      CamPerf.stage(
+        null,
+        'DRAFT_PAYLOAD_BUILD_END',
+        detail: 'jsonBytes=${encoded.length}',
+        usePhotoClock: true,
+      );
+      CamPerf.stage(null, 'DRAFT_PERSIST_START', usePhotoClock: true);
+      final started = DateTime.now().millisecondsSinceEpoch;
+      await file.writeAsString(encoded, flush: true);
+      final elapsed = DateTime.now().millisecondsSinceEpoch - started;
+      CamPerf.stage(
+        null,
+        'DRAFT_PERSIST_END',
+        detail:
+            'items=${items.length} jsonBytes=${encoded.length} duration=${elapsed}ms',
+        usePhotoClock: true,
+      );
+    } on VisitDraftPersistException {
+      rethrow;
+    } catch (error) {
+      if (isInsufficientStorageError(error)) {
+        throw VisitDraftPersistException.insufficientStorage(error);
+      }
+      rethrow;
+    }
   }
 
   Future<VisitMediaDraftSnapshot> loadDraftSnapshot({

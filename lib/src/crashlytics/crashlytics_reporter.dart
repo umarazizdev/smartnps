@@ -71,11 +71,16 @@ class CrashlyticsReporter {
         error is HandshakeException ||
         error is TlsException ||
         error is TimeoutException ||
-        error is OSError) {
+        error is OSError ||
+        error is FileSystemException) {
       return true;
     }
 
     final text = error.toString();
+    if (_looksLikeInsufficientStorage(text) ||
+        _looksLikeUnauthorizedNotification(text)) {
+      return true;
+    }
     if (_looksLikeLayoutOverflow(text) || _looksLikeLayoutConstraintNoise(text)) {
       return true;
     }
@@ -92,6 +97,8 @@ class CrashlyticsReporter {
     final text = '${details.exceptionAsString()} ${details.library ?? ''}';
     return _looksLikeLayoutOverflow(text) ||
         _looksLikeLayoutConstraintNoise(text) ||
+        _looksLikeInsufficientStorage(text) ||
+        _looksLikeUnauthorizedNotification(text) ||
         SecureStorageAccess.isRecoverableKeychainError(text) ||
         _looksLikeNetworkNoise(text) ||
         _looksLikeHotReloadNoise(text);
@@ -120,6 +127,27 @@ class CrashlyticsReporter {
         lower.contains('unsolicited response') ||
         lower.contains('failed host lookup') ||
         lower.contains('network is unreachable');
+  }
+
+  static bool _looksLikeInsufficientStorage(String text) {
+    final lower = text.toLowerCase();
+    return lower.contains('no space left') ||
+        lower.contains('not enough space') ||
+        lower.contains('enospc') ||
+        lower.contains('errno = 28') ||
+        lower.contains('errno=28') ||
+        lower.contains('visitdraftpersistexception');
+  }
+
+  static bool _looksLikeUnauthorizedNotification(String text) {
+    final lower = text.toLowerCase();
+    return lower.contains('error 2003') ||
+        lower.contains('source is not authorized') ||
+        lower.contains('unerrordomain') ||
+        (lower.contains('notification') &&
+            (lower.contains('permission denied') ||
+                lower.contains('not authorized') ||
+                lower.contains('notifications_permission')));
   }
 
   static bool _looksLikeLayoutOverflow(String text) {

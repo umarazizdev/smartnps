@@ -21,7 +21,7 @@ class OsGalleryPermission {
       return const [];
     }
     if (await _androidSdk() >= 33) {
-      return const [Permission.photos, Permission.videos];
+      return const [];
     }
     return const [Permission.storage];
   }

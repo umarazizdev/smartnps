@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import '../../permissions/os_notification_permission.dart';
+import '../../push/notifications/push_notification_service.dart';
 import '../../utilities/app_config.dart';
 import '../../utilities/app_debug_log.dart';
 
@@ -204,6 +206,41 @@ class LocationSharingStatusNotification {
     return plugin;
   }
 
+  static Future<bool> _showSafely({
+    required FlutterLocalNotificationsPlugin plugin,
+    required int id,
+    required String? title,
+    required String? body,
+    required String? payload,
+    required NotificationDetails notificationDetails,
+  }) async {
+    if (!await OsNotificationPermission.isGranted()) {
+      locationDebugLog(
+        '[LocationSharingStatusNotification] skip show id=$id; '
+        'notification permission not granted',
+      );
+      return false;
+    }
+    try {
+      await plugin.show(
+        id: id,
+        title: title,
+        body: body,
+        payload: payload,
+        notificationDetails: notificationDetails,
+      );
+      return true;
+    } catch (error) {
+      if (isUnauthorizedLocalNotificationError(error)) {
+        locationDebugLog(
+          '[LocationSharingStatusNotification] show unauthorized id=$id: $error',
+        );
+        return false;
+      }
+      rethrow;
+    }
+  }
+
   static Future<void> showBreakStarted({
     required bool unpaid,
     required int minutes,
@@ -223,7 +260,8 @@ class LocationSharingStatusNotification {
         : 'Stay onsite. GPS remains active. Approval is required before leaving site.';
 
     final plugin = await _ensurePlugin();
-    await plugin.show(
+    final shown = await _showSafely(
+      plugin: plugin,
       id: breakStartedNotificationId,
       title: title,
       body: body,
@@ -251,6 +289,7 @@ class LocationSharingStatusNotification {
         ),
       ),
     );
+    if (!shown) return;
 
     locationDebugLog(
       '[LocationSharingStatusNotification] break started shown '
@@ -311,7 +350,8 @@ class LocationSharingStatusNotification {
     final startedAt = DateTime.now().toLocal().toIso8601String();
     final platformLabel = Platform.isAndroid ? 'Android FGS' : 'iOS bg location';
 
-    await plugin.show(
+    final shown = await _showSafely(
+      plugin: plugin,
       id: bgStartTestNotificationId,
       title: sharingTitleForPlatform(),
       body: '$platformLabel started (test) at $startedAt',
@@ -339,6 +379,7 @@ class LocationSharingStatusNotification {
         ),
       ),
     );
+    if (!shown) return;
 
     locationDebugLog(
       '[LocationSharingStatusNotification] bg start test alert shown '
@@ -384,13 +425,15 @@ class LocationSharingStatusNotification {
 
     await plugin.cancel(id: stoppedNotificationId);
 
-    await plugin.show(
+    final shown = await _showSafely(
+      plugin: plugin,
       id: sharingNotificationId,
       title: sharingTitleForPlatform(),
       body: sharingBodyForPlatform(),
       payload: sharingPayload,
       notificationDetails: _sharingDetails,
     );
+    if (!shown) return;
     _sharingShown = true;
 
     locationDebugLog(
@@ -422,13 +465,15 @@ class LocationSharingStatusNotification {
       _sharingShown = false;
     }
 
-    await plugin.show(
+    final shown = await _showSafely(
+      plugin: plugin,
       id: stoppedNotificationId,
       title: titleFor(reason),
       body: bodyFor(reason),
       payload: stoppedPayload,
       notificationDetails: _stoppedDetails,
     );
+    if (!shown) return;
 
     locationDebugLog(
       '[LocationSharingStatusNotification] stopped shown reason=$reason',

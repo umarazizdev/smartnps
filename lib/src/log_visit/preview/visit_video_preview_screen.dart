@@ -611,16 +611,35 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     Future<void>? claimForQueueFuture;
     Future<void> claimDraftForQueue() {
       return claimForQueueFuture ??= () async {
-        await VisitMediaDraftStore.instance.saveDraft(
-          uploadSnapshot.items,
-          key: draftKey,
-          startedAt: uploadSnapshot.startedAt,
-          siteName: uploadSnapshot.siteName,
-          context: uploadSnapshot.context,
-          generalNote: uploadSnapshot.generalNote,
-          reportDetails: uploadSnapshot.reportDetails,
-          lastUploadIssue: null,
-        );
+        try {
+          await VisitMediaDraftStore.instance.saveDraft(
+            uploadSnapshot.items,
+            key: draftKey,
+            startedAt: uploadSnapshot.startedAt,
+            siteName: uploadSnapshot.siteName,
+            context: uploadSnapshot.context,
+            generalNote: uploadSnapshot.generalNote,
+            reportDetails: uploadSnapshot.reportDetails,
+            lastUploadIssue: null,
+          );
+        } on VisitDraftPersistException catch (error) {
+          await _showDraftPersistFailureDialog(
+            context: context,
+            message: error.userMessage,
+          );
+          rethrow;
+        } catch (error) {
+          if (VisitMediaDraftStore.isInsufficientStorageError(error)) {
+            final mapped =
+                VisitDraftPersistException.insufficientStorage(error);
+            await _showDraftPersistFailureDialog(
+              context: context,
+              message: mapped.userMessage,
+            );
+            throw mapped;
+          }
+          rethrow;
+        }
         await flow.clearLastUploadIssue(persist: false);
         await VisitUploadQueue.instance.markInFlight(draftKey);
         await flow.releaseEditorAfterQueuedClaim();
@@ -647,7 +666,12 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       beginLeaveDraftUi(showProgress: true);
     }
 
-    await claimDraftForQueue();
+    try {
+      await claimDraftForQueue();
+    } on VisitDraftPersistException {
+      _clearUploadProgress(flow);
+      return;
+    }
 
     final online = await _hasNetworkInterface();
     if (!online) {
@@ -967,6 +991,24 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     if (subtitle != null && subtitle.isNotEmpty) return subtitle;
 
     return 'this site';
+  }
+
+  static Future<void> _showDraftPersistFailureDialog({
+    BuildContext? context,
+    required String message,
+  }) async {
+    final ctx = context ?? Get.context;
+    if (ctx == null || !ctx.mounted) return;
+    await GlassActionDialog.show(
+      context: ctx,
+      icon: Icons.sd_card_alert_outlined,
+      iconColor: const Color(0xFFE53935),
+      title: 'Could not save draft',
+      message: message,
+      primaryLabel: 'OK',
+      variant: GlassActionDialogVariant.error,
+      barrierDismissible: true,
+    );
   }
 
   static void _showTopSnack({
