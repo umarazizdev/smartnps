@@ -1213,21 +1213,22 @@ final class NativeCameraSession: NSObject {
     from formats: [AVCaptureDevice.Format],
     quality: NativeCameraCaptureQuality
   ) -> AVCaptureDevice.Format {
-    let prefer4K = quality == .maximum
-    let targetHeight: Int32 = prefer4K ? 2160 : 1080
+    _ = quality
+    let targetHeight: Int32 = 720
     let fallbackHeight: Int32 = 1080
 
     func rank(_ format: AVCaptureDevice.Format) -> (Int, Int32, Int32, Float) {
       let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
       let height = dims.height
       let width = dims.width
-      let exact = height == targetHeight || (prefer4K && height == 2160)
-      let ok1080 = height == fallbackHeight
+      let exact = height == targetHeight
+      let okFallback = height == fallbackHeight
       let tier: Int
       if exact { tier = 0 }
-      else if ok1080 { tier = 1 }
-      else if height <= targetHeight { tier = 2 }
-      else { tier = 3 }
+      else if height < targetHeight { tier = 1 }
+      else if okFallback { tier = 2 }
+      else if height <= fallbackHeight { tier = 3 }
+      else { tier = 4 }
 
       return (tier, -height, -width, -format.videoFieldOfView)
     }

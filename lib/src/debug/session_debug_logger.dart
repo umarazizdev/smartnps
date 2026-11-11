@@ -10,8 +10,8 @@ class SessionDebugLogger extends ChangeNotifier {
   static final SessionDebugLogger instance = SessionDebugLogger._();
 
   static const int maxLogs = 150;
-  static const int maxMessageChars = 280;
-  static const int maxAppendsPerSecond = 5;
+  static const int maxMessageChars = 320;
+  static const int maxAppendsPerSecond = 12;
 
   static const String _prefsLogsKey = 'session_debug_logs_v1';
   static const String _prefsEndsAtKey = 'session_debug_ends_at_ms_v1';
@@ -472,6 +472,7 @@ enum SessionDebugCategory {
   apiErrors('api'),
   apiSuccess('api_ok'),
   uploads('uploads'),
+  media('media'),
   duty('duty'),
   permissions('permissions'),
   kill('kill');
@@ -484,6 +485,7 @@ enum SessionDebugCategory {
         SessionDebugCategory.apiErrors => 'API errors',
         SessionDebugCategory.apiSuccess => 'API success',
         SessionDebugCategory.uploads => 'Uploads',
+        SessionDebugCategory.media => 'Media compress',
         SessionDebugCategory.duty => 'Duty',
         SessionDebugCategory.permissions => 'Permissions',
         SessionDebugCategory.kill => 'Kill cycle',

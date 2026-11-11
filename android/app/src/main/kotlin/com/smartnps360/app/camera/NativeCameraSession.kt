@@ -1066,11 +1066,7 @@ class NativeCameraSession(
   }
 
   private fun videoBindAttempts(): List<BindAttempt> {
-    val tiers = if (quality == NativeCameraContract.QUALITY_BALANCED) {
-      listOf(Quality.FHD, Quality.HD)
-    } else {
-      listOf(Quality.UHD, Quality.FHD, Quality.HD)
-    }
+    val tiers = listOf(Quality.HD, Quality.SD, Quality.FHD)
     val attempts = mutableListOf<BindAttempt>()
     for (tier in tiers) {
       val level = when (tier) {
@@ -1612,11 +1608,7 @@ class NativeCameraSession(
 
     attempt.videoQuality?.let { return QualitySelector.from(it) }
 
-    val ordered = if (quality == NativeCameraContract.QUALITY_BALANCED) {
-      listOf(Quality.FHD, Quality.HD, Quality.SD)
-    } else {
-      listOf(Quality.HD, Quality.SD, Quality.FHD)
-    }
+    val ordered = listOf(Quality.HD, Quality.SD, Quality.FHD)
     return QualitySelector.fromOrderedList(
       ordered,
       FallbackStrategy.lowerQualityOrHigherThan(Quality.HD),

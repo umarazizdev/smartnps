@@ -113,13 +113,13 @@ class VisitFlowCopy {
   String get emptyCaptureHint {
     switch (kind) {
       case VisitFlowKind.siteCheck:
-        return 'Capture a clear photo or hold the capture button to record a site check video.';
+        return 'Capture up to ${VisitFlowKind.maxReportMediaItems} photos or videos for this site check.';
       case VisitFlowKind.issueReport:
-        return 'Add photos or videos from the camera or gallery, then fill in the report fields above.';
+        return 'Add up to ${VisitFlowKind.maxReportMediaItems} photos or videos from the camera or gallery, then fill in the report fields above.';
       case VisitFlowKind.incidentReport:
-        return 'Add photos or videos from the camera or gallery, then fill in the report fields above.';
+        return 'Add up to ${VisitFlowKind.maxReportMediaItems} photos or videos from the camera or gallery, then fill in the report fields above.';
       case VisitFlowKind.patrol:
-        return 'Capture a clear photo or hold the capture button to record a patrol round video.';
+        return 'Capture up to ${VisitFlowKind.maxReportMediaItems} photos or videos for this patrol round.';
     }
   }
 
@@ -128,6 +128,25 @@ class VisitFlowCopy {
       return hasMedia ? 'Add More' : 'Add';
     }
     return hasMedia ? 'Capture More' : 'Capture';
+  }
+
+  String get mediaLimitReachedTitle => 'Media limit reached';
+
+  String mediaLimitReachedMessage(int maxCount) {
+    switch (kind) {
+      case VisitFlowKind.issueReport:
+        return 'Issue reports can include up to $maxCount photos or videos. '
+            'Remove an item to add another.';
+      case VisitFlowKind.incidentReport:
+        return 'Incident reports can include up to $maxCount photos or videos. '
+            'Remove an item to add another.';
+      case VisitFlowKind.siteCheck:
+        return 'Onsite / site check reports can include up to $maxCount photos or videos. '
+            'Remove an item to add another.';
+      case VisitFlowKind.patrol:
+        return 'Patrol reports can include up to $maxCount photos or videos. '
+            'Remove an item to add another.';
+    }
   }
 
   String get noLocation {
@@ -149,13 +168,13 @@ class VisitFlowCopy {
   String get additionalMediaSubtitle {
     switch (kind) {
       case VisitFlowKind.siteCheck:
-        return 'Optional photos or videos for this site check';
+        return 'Up to ${VisitFlowKind.maxReportMediaItems} photos or videos for this site check';
       case VisitFlowKind.issueReport:
-        return 'Photos or videos for this issue report';
+        return 'Up to ${VisitFlowKind.maxReportMediaItems} photos or videos for this issue report';
       case VisitFlowKind.incidentReport:
-        return 'Photos or videos for this incident report';
+        return 'Up to ${VisitFlowKind.maxReportMediaItems} photos or videos for this incident report';
       case VisitFlowKind.patrol:
-        return 'Optional photos or videos for this patrol';
+        return 'Up to ${VisitFlowKind.maxReportMediaItems} photos or videos for this patrol';
     }
   }
 

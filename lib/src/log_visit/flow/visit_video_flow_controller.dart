@@ -271,6 +271,21 @@ class VisitVideoFlowController extends GetxController {
   int get capturedPhotoCount =>
       visibleMediaItems.where((e) => e.isPhoto).length;
 
+  static const int maxReportMediaItems = VisitFlowKind.maxReportMediaItems;
+
+  int? get maxAllowedMediaItems => maxReportMediaItems;
+
+  int get remainingMediaSlots {
+    final max = maxAllowedMediaItems;
+    if (max == null) return 1 << 20;
+    final remaining = max - mediaItems.length;
+    return remaining < 0 ? 0 : remaining;
+  }
+
+  bool get hasReachedMediaLimit => remainingMediaSlots <= 0;
+
+  bool get canAddMoreMedia => !hasReachedMediaLimit;
+
   bool get meetsMinimumPhotoRequirement {
     final minimum = patrolContext.value?.minimumPhotos;
     if (minimum == null || minimum <= 0) return true;
@@ -1004,6 +1019,18 @@ class VisitVideoFlowController extends GetxController {
       }
     }
 
+    final existingIndex = _indexForCapture(
+      captureId: item.captureId,
+      path: item.path,
+    );
+    if (existingIndex < 0 && hasReachedMediaLimit) {
+      _txnLog(
+        'MEDIA_LIMIT_REACHED max=$maxAllowedMediaItems '
+        'count=${mediaItems.length} path=${item.path}',
+      );
+      return null;
+    }
+
     String durablePath = item.path;
     if (persistToDraftStore) {
       try {
@@ -1316,6 +1343,13 @@ class VisitVideoFlowController extends GetxController {
     );
     final index = _indexForCapture(captureId: item.captureId, path: item.path);
     if (index < 0) {
+      if (hasReachedMediaLimit) {
+        _txnLog(
+          'MEDIA_LIMIT_REACHED max=$maxAllowedMediaItems '
+          'count=${mediaItems.length} path=${item.path}',
+        );
+        return;
+      }
       mediaItems.add(item);
     } else {
       mediaItems[index] = item;

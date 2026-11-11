@@ -10,6 +10,8 @@ import 'package:path/path.dart' as p;
 import '../debug/session_debug_logger.dart';
 import '../log_visit/flow/visit_flow_copy.dart';
 import '../log_visit/flow/visit_flow_kind.dart';
+import '../log_visit/flow/visit_photo_compressor.dart';
+import '../log_visit/flow/visit_video_compressor.dart';
 import '../log_visit/flow/visit_video_flow_controller.dart';
 import '../utilities/app_debug_log.dart';
 import 'api_client.dart';
@@ -276,119 +278,162 @@ class VisitUploadApi {
     form.fields.add(MapEntry('meta', jsonEncode(meta)));
 
     final itemByteWeights = List<int>.filled(items.length, 0);
+    final tempOptimizedPaths = <String>[];
 
-    for (var i = 0; i < items.length; i++) {
-      final item = items[i];
-      final mediaFile = File(item.path);
-      if (!await mediaFile.exists()) {
-        final result = VisitUploadResult(
-          success: false,
-          message: 'Media file missing for item $i.',
-        );
-        _logResult(result);
-        return result;
-      }
+    try {
+      for (var i = 0; i < items.length; i++) {
+        final item = items[i];
+        var uploadPath = item.path;
+        if (item.isPhoto) {
+          try {
+            final optimized = await VisitPhotoCompressor.ensureUploadReady(
+              item.path,
+            );
+            if (optimized != item.path) {
+              tempOptimizedPaths.add(optimized);
+            }
+            uploadPath = optimized;
+          } catch (error) {
+            if (kDebugMode) {
+              debugPrint(
+                '[VisitUploadApi] photo optimize failed for item $i: $error',
+              );
+            }
+          }
+        } else if (item.isVideo) {
+          try {
+            final optimized = await VisitVideoCompressor.ensureUploadReady(
+              item.path,
+            );
+            if (optimized != item.path) {
+              tempOptimizedPaths.add(optimized);
+            }
+            uploadPath = optimized;
+          } catch (error) {
+            if (kDebugMode) {
+              debugPrint(
+                '[VisitUploadApi] video optimize failed for item $i: $error',
+              );
+            }
+          }
+        }
 
-      final mediaBytes = await mediaFile.length();
-      itemByteWeights[i] = mediaBytes;
-
-      final mediaName = _mediaFileName(item, i);
-      await _logMediaQuality(item: item, index: i, file: mediaFile);
-      form.files.add(
-        MapEntry(
-          'media[$i]',
-          await MultipartFile.fromFile(
-            item.path,
-            filename: mediaName,
-            contentType: _mediaContentType(item),
-          ),
-        ),
-      );
-
-      final hasVoice = item.hasVoiceNote;
-      final metaItem = _metaItemAt(meta, i);
-      final metaWantsVoice = metaItem?['has_voice_note'] == true;
-      if (hasVoice || metaWantsVoice) {
-        final voicePath = item.voiceNotePath?.trim();
-        if (voicePath == null || voicePath.isEmpty) {
+        final mediaFile = File(uploadPath);
+        if (!await mediaFile.exists()) {
           final result = VisitUploadResult(
             success: false,
-            message: 'Voice note missing for client_index $i.',
+            message: 'Media file missing for item $i.',
           );
           _logResult(result);
           return result;
         }
-        final voiceFile = File(voicePath);
-        if (!await voiceFile.exists()) {
-          final result = VisitUploadResult(
-            success: false,
-            message: 'Voice note file missing for client_index $i.',
-          );
-          _logResult(result);
-          return result;
-        }
-        itemByteWeights[i] += await voiceFile.length();
+
+        final mediaBytes = await mediaFile.length();
+        itemByteWeights[i] = mediaBytes;
+
+        final preparedItem = item.path == uploadPath
+            ? item
+            : item.copyWith(path: uploadPath);
+        final mediaName = _mediaFileName(preparedItem, i);
+        await _logMediaQuality(item: preparedItem, index: i, file: mediaFile);
         form.files.add(
           MapEntry(
-            'voice[$i]',
+            'media[$i]',
             await MultipartFile.fromFile(
-              voicePath,
-              filename: _voiceFileName(voicePath, i),
-              contentType: _voiceContentType(voicePath),
+              uploadPath,
+              filename: mediaName,
+              contentType: _mediaContentType(preparedItem),
             ),
           ),
         );
-      }
-    }
 
-    final generalVoiceResult = await _attachGeneralVoice(
-      form: form,
-      meta: meta,
-      generalVoicePath: generalVoicePath,
-    );
-    if (generalVoiceResult != null) {
-      _logResult(generalVoiceResult);
-      return generalVoiceResult;
-    }
-
-    final resolvedUploadUrl = _resolveUploadUrl(uploadUrl, meta: meta);
-    final flowKind = _resolveFlowKind(meta: meta, uploadUrl: resolvedUploadUrl);
-
-    if (kDebugMode) {
-      debugPrint(
-        '[VisitUploadApi] POST $resolvedUploadUrl '
-        'items=${items.length} metaKeys=${meta.keys.toList()}',
-      );
-    }
-
-    onProgress?.call(0, items.length);
-
-    try {
-      final response = await ApiClient.instance.dio.post<dynamic>(
-        resolvedUploadUrl,
-        data: form,
-        options: Options(
-          headers: const {'Accept': 'application/json'},
-          contentType: 'multipart/form-data',
-          sendTimeout: const Duration(minutes: 10),
-          receiveTimeout: const Duration(minutes: 3),
-          validateStatus: (status) => status != null && status < 600,
-        ),
-        onSendProgress: (sent, total) {
-          final current = _itemProgressFromBytes(
-            sent: sent,
-            totalHint: total,
-            itemByteWeights: itemByteWeights,
+        final hasVoice = item.hasVoiceNote;
+        final metaItem = _metaItemAt(meta, i);
+        final metaWantsVoice = metaItem?['has_voice_note'] == true;
+        if (hasVoice || metaWantsVoice) {
+          final voicePath = item.voiceNotePath?.trim();
+          if (voicePath == null || voicePath.isEmpty) {
+            final result = VisitUploadResult(
+              success: false,
+              message: 'Voice note missing for client_index $i.',
+            );
+            _logResult(result);
+            return result;
+          }
+          final voiceFile = File(voicePath);
+          if (!await voiceFile.exists()) {
+            final result = VisitUploadResult(
+              success: false,
+              message: 'Voice note file missing for client_index $i.',
+            );
+            _logResult(result);
+            return result;
+          }
+          itemByteWeights[i] += await voiceFile.length();
+          form.files.add(
+            MapEntry(
+              'voice[$i]',
+              await MultipartFile.fromFile(
+                voicePath,
+                filename: _voiceFileName(voicePath, i),
+                contentType: _voiceContentType(voicePath),
+              ),
+            ),
           );
-          onProgress?.call(current, items.length);
-        },
+        }
+      }
+
+      final generalVoiceResult = await _attachGeneralVoice(
+        form: form,
+        meta: meta,
+        generalVoicePath: generalVoicePath,
+      );
+      if (generalVoiceResult != null) {
+        _logResult(generalVoiceResult);
+        return generalVoiceResult;
+      }
+
+      final resolvedUploadUrl = _resolveUploadUrl(uploadUrl, meta: meta);
+      final flowKind = _resolveFlowKind(
+        meta: meta,
+        uploadUrl: resolvedUploadUrl,
       );
 
-      onProgress?.call(items.length, items.length);
-      final result = _parseResponse(response, flowKind: flowKind);
-      _logResult(result, responseBody: response.data);
-      return result;
-    } on DioException catch (error) {
+      if (kDebugMode) {
+        debugPrint(
+          '[VisitUploadApi] POST $resolvedUploadUrl '
+          'items=${items.length} metaKeys=${meta.keys.toList()}',
+        );
+      }
+
+      onProgress?.call(0, items.length);
+
+      try {
+        final response = await ApiClient.instance.dio.post<dynamic>(
+          resolvedUploadUrl,
+          data: form,
+          options: Options(
+            headers: const {'Accept': 'application/json'},
+            contentType: 'multipart/form-data',
+            sendTimeout: const Duration(minutes: 10),
+            receiveTimeout: const Duration(minutes: 3),
+            validateStatus: (status) => status != null && status < 600,
+          ),
+          onSendProgress: (sent, total) {
+            final current = _itemProgressFromBytes(
+              sent: sent,
+              totalHint: total,
+              itemByteWeights: itemByteWeights,
+            );
+            onProgress?.call(current, items.length);
+          },
+        );
+
+        onProgress?.call(items.length, items.length);
+        final result = _parseResponse(response, flowKind: flowKind);
+        _logResult(result, responseBody: response.data);
+        return result;
+      } on DioException catch (error) {
       ApiClient.logHttpError(
         error.requestOptions.method,
         error.requestOptions.uri,
@@ -436,6 +481,20 @@ class VisitUploadApi {
       );
       _logResult(fallback);
       return fallback;
+      }
+    } finally {
+      await _cleanupTempFiles(tempOptimizedPaths);
+    }
+  }
+
+  Future<void> _cleanupTempFiles(List<String> paths) async {
+    for (final path in paths) {
+      try {
+        final file = File(path);
+        if (await file.exists()) {
+          await file.delete();
+        }
+      } catch (_) {}
     }
   }
 
@@ -626,19 +685,22 @@ class VisitUploadApi {
     required int index,
     required File file,
   }) async {
-    if (!kDebugMode) return;
+    final mediaLogging = SessionDebugLogger.instance.isCategoryActive(
+      SessionDebugCategory.media,
+    );
+    if (!kDebugMode && !mediaLogging) return;
 
     final bytes = await file.length();
     final kb = (bytes / 1024).toStringAsFixed(1);
     final name = p.basename(item.path);
 
     if (item.isVideo) {
+      final summary =
+          'upload media[$index] video bytes=$bytes (${kb}KB) file=$name';
       if (kDebugMode) {
-        debugPrint(
-          '[VisitUploadApi] media[$index] video '
-          'bytes=$bytes (${kb}KB) file=$name',
-        );
+        debugPrint('[VisitUploadApi] $summary');
       }
+      SessionDebugLogger.instance.log(SessionDebugCategory.media, summary);
       return;
     }
 
@@ -647,12 +709,13 @@ class VisitUploadApi {
     final warn = size != null && (size.$1 < 1600 || size.$2 < 900)
         ? ' LOW_RES'
         : '';
+    final summary =
+        'upload media[$index] photo pixels=$pixels '
+        'bytes=$bytes (${kb}KB) file=$name$warn';
     if (kDebugMode) {
-      debugPrint(
-        '[VisitUploadApi] media[$index] photo '
-        'pixels=$pixels bytes=$bytes (${kb}KB) file=$name$warn',
-      );
+      debugPrint('[VisitUploadApi] $summary');
     }
+    SessionDebugLogger.instance.log(SessionDebugCategory.media, summary);
   }
 
   Future<(int, int)?> _photoPixelSize(File file) async {
