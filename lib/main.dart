@@ -70,10 +70,10 @@ Future<void> _initPostUiServices() async {
 }
 
 void _disableWebViewDebugLogging() {
-  PlatformInAppWebViewController.debugLoggingSettings.enabled = false;
-  PlatformInAppBrowser.debugLoggingSettings.enabled = false;
-  PlatformChromeSafariBrowser.debugLoggingSettings.enabled = false;
-  PlatformWebAuthenticationSession.debugLoggingSettings.enabled = false;
-  PlatformPullToRefreshController.debugLoggingSettings.enabled = false;
-  PlatformFindInteractionController.debugLoggingSettings.enabled = false;
+  PlatformInAppWebViewController.debugLoggingSettings.enabled = true;
+  PlatformInAppBrowser.debugLoggingSettings.enabled = true;
+  PlatformChromeSafariBrowser.debugLoggingSettings.enabled = true;
+  PlatformWebAuthenticationSession.debugLoggingSettings.enabled = true;
+  PlatformPullToRefreshController.debugLoggingSettings.enabled = true;
+  PlatformFindInteractionController.debugLoggingSettings.enabled = true;
 }

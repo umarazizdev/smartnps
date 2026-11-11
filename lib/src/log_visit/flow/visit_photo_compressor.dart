@@ -11,7 +11,8 @@ import '../../debug/session_debug_logger.dart';
 class VisitPhotoCompressor {
   VisitPhotoCompressor._();
 
-  static const int maxLongSidePx = 2560;
+  static const int maxWidthPx = 1920;
+  static const int maxHeightPx = 1080;
   static const int jpegQuality = 85;
 
   static Future<String> compressForUpload({
@@ -37,7 +38,7 @@ class VisitPhotoCompressor {
 
     final inBytes = await source.length();
     final sourceSize = await _readPixelSize(source);
-    var bounds = _fitInsideMaxLongSide(
+    var bounds = _fitInsideBox(
       width: sourceSize?.$1,
       height: sourceSize?.$2,
     );
@@ -49,11 +50,8 @@ class VisitPhotoCompressor {
       bounds: bounds,
     );
 
-    final longSide = result.size == null
-        ? 0
-        : math.max(result.size!.$1, result.size!.$2);
-    if (longSide > maxLongSidePx && result.size != null) {
-      bounds = _fitInsideMaxLongSide(
+    if (result.size != null && !_sizeWithinBox(result.size!.$1, result.size!.$2)) {
+      bounds = _fitInsideBox(
         width: result.size!.$1,
         height: result.size!.$2,
       );
@@ -65,7 +63,7 @@ class VisitPhotoCompressor {
       );
       if (refined.bytes <= result.bytes ||
           (refined.size != null &&
-              math.max(refined.size!.$1, refined.size!.$2) <= maxLongSidePx)) {
+              _sizeWithinBox(refined.size!.$1, refined.size!.$2))) {
         if (refined.path != result.path) {
           await _deleteQuietly(result.path);
         }
@@ -87,7 +85,7 @@ class VisitPhotoCompressor {
         result.size == null ? 'unknown' : '${result.size!.$1}x${result.size!.$2}';
     final summary =
         'photo compress in=${_kb(inBytes)} out=${_kb(outBytes)} '
-        'pixels=$pixels q=$jpegQuality maxLong=$maxLongSidePx '
+        'pixels=$pixels q=$jpegQuality max=${maxWidthPx}x$maxHeightPx '
         'bound=${bounds.$1}x${bounds.$2}';
     if (kDebugMode) {
       debugPrint('[VisitPhotoCompressor] $summary');
@@ -196,18 +194,26 @@ class VisitPhotoCompressor {
     }
   }
 
-  static (int, int) _fitInsideMaxLongSide({int? width, int? height}) {
+  static (int, int) _fitInsideBox({int? width, int? height}) {
     if (width == null || height == null || width <= 0 || height <= 0) {
-      return (maxLongSidePx, maxLongSidePx);
+      return (maxWidthPx, maxHeightPx);
     }
-    final longSide = math.max(width, height);
-    if (longSide <= maxLongSidePx) {
+    final boxW = width >= height ? maxWidthPx : maxHeightPx;
+    final boxH = width >= height ? maxHeightPx : maxWidthPx;
+    if (width <= boxW && height <= boxH) {
       return (width, height);
     }
-    final scale = maxLongSidePx / longSide;
-    final targetW = math.max(1, (width * scale).round());
-    final targetH = math.max(1, (height * scale).round());
-    return (targetW, targetH);
+    final scale = math.min(boxW / width, boxH / height);
+    return (
+      math.max(1, (width * scale).round()),
+      math.max(1, (height * scale).round()),
+    );
+  }
+
+  static bool _sizeWithinBox(int width, int height) {
+    final boxW = width >= height ? maxWidthPx : maxHeightPx;
+    final boxH = width >= height ? maxHeightPx : maxWidthPx;
+    return width <= boxW && height <= boxH;
   }
 
   static Future<bool> _alreadyMeetsSpec(File file) async {
@@ -221,7 +227,7 @@ class VisitPhotoCompressor {
   static Future<bool> _dimensionsOk(File file) async {
     final size = await _readPixelSize(file);
     if (size == null) return false;
-    return math.max(size.$1, size.$2) <= maxLongSidePx;
+    return _sizeWithinBox(size.$1, size.$2);
   }
 
   static Future<(int, int)?> _readPixelSize(File file) async {
