@@ -7,6 +7,7 @@ enum VisitFlowKind {
   static const issueReportVisitType = 'issue_report';
   static const incidentReportVisitType = 'incident_report';
   static const siteCheckVisitType = 'site_check';
+  static const int maxReportMediaItems = 20;
 
   bool get isStructuredReport =>
       this == VisitFlowKind.issueReport || this == VisitFlowKind.incidentReport;
