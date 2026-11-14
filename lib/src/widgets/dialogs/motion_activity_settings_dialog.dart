@@ -58,6 +58,10 @@ class MotionActivitySettingsDialog {
       ignoreBlockingOverlays: OverlayPromptGuard.hasBlockingNativeOverlay,
     );
 
+    if (context != null && !context.mounted) {
+      return false;
+    }
+
     final readyContext = PermissionSettingsHelper.resolveDialogContext(context);
     if (readyContext == null || !readyContext.mounted) return false;
 

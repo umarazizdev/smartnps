@@ -107,7 +107,7 @@ void main() {
       }
     });
 
-    Future<VisitDraftKey> _seedDraft() async {
+    Future<VisitDraftKey> seedDraft() async {
       final key = const VisitDraftKey(regionId: 7, siteId: 11);
       final photos = Directory('${tempRoot.path}/photos')
         ..createSync(recursive: true);
@@ -138,7 +138,7 @@ void main() {
     }
 
     test('keeps offline failures queued and uploads when online', () async {
-      final key = await _seedDraft();
+      final key = await seedDraft();
       var attempts = 0;
       final queue = VisitUploadQueue.forTest(
         connectivity: connectivity,
@@ -180,7 +180,7 @@ void main() {
     });
 
     test('removes from queue and reports non-network failures', () async {
-      final key = await _seedDraft();
+      final key = await seedDraft();
       VisitDraftKey? failedKey;
       connectivity.results = const [ConnectivityResult.mobile];
 
@@ -227,7 +227,7 @@ void main() {
     });
 
     test('hides queued drafts from editable pending list', () async {
-      final key = await _seedDraft();
+      final key = await seedDraft();
       final queue = VisitUploadQueue.forTest(
         connectivity: connectivity,
         uploadRunner: (_) async {
@@ -248,7 +248,7 @@ void main() {
 
     test('markInFlight hides draft and skips silent process until cleared',
         () async {
-      final key = await _seedDraft();
+      final key = await seedDraft();
       var attempts = 0;
       connectivity.results = const [ConnectivityResult.wifi];
 
@@ -277,7 +277,7 @@ void main() {
 
     test('releaseEditorAfterQueuedClaim clears UI but keeps draft files',
         () async {
-      final key = await _seedDraft();
+      final key = await seedDraft();
       final queue = VisitUploadQueue.instance;
       queue.debugResetForTest();
 

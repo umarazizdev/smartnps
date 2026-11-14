@@ -200,6 +200,10 @@ class ClockInLocationDisclosureDialog extends StatelessWidget {
       return true;
     }
 
+    if (!context.mounted) {
+      return false;
+    }
+
     return _present(
       context: context,
       icon: Icons.location_on_rounded,

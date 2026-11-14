@@ -50,6 +50,7 @@ class ClockInPermissionsDialog {
       final gate = RequiredPermissionsGate.instance;
       final missing = await gate.missingClockInPermissionItems();
       if (missing.isEmpty) return true;
+      if (!readyContext.mounted) return false;
 
       OverlayPromptGuard.registerBlockingOverlay();
       try {

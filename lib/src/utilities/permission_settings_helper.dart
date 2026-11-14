@@ -446,6 +446,10 @@ class PermissionSettingsHelper {
       return PermissionSettingsPromptResult.skipped;
     }
 
+    if (context != null && !context.mounted) {
+      return PermissionSettingsPromptResult.skipped;
+    }
+
     final initialContext = resolveDialogContext(context);
     if (initialContext == null) {
       if (kDebugMode) {
@@ -462,8 +466,12 @@ class PermissionSettingsHelper {
       );
     }
 
+    if (!initialContext.mounted) {
+      return PermissionSettingsPromptResult.skipped;
+    }
+
     final readyContext = resolveDialogContext(initialContext);
-    if (readyContext == null) {
+    if (readyContext == null || !readyContext.mounted) {
       if (kDebugMode) {
         debugPrint(
           '[PermissionSettings] skip dialog key=$dialogKey (no context after wait)',

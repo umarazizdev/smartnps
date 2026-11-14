@@ -936,7 +936,7 @@ class DutyHeartbeatService {
     }
 
     if (status != onDuty) {
-      if (heartbeatResult?.outcome ==
+      if (heartbeatResult.outcome ==
           DutyHeartbeatFetchOutcome.unrecognizableBody) {
         dutyHeartbeatDebugLog(
           '[DutyHeartbeatService] recheck: 2xx body unrecognizable — '
@@ -949,8 +949,7 @@ class DutyHeartbeatService {
         await refreshBackgroundLocationPermissionBannerState();
         return;
       }
-      if (heartbeatResult != null &&
-          !heartbeatResult.allowsOfflineSnapshotFallback) {
+      if (!heartbeatResult.allowsOfflineSnapshotFallback) {
         dutyHeartbeatDebugLog(
           '[DutyHeartbeatService] recheck skipped snapshot; '
           'outcome=${heartbeatResult.outcome.name}',
@@ -1532,11 +1531,6 @@ class DutyHeartbeatService {
     return _locationPausedForUnpaidBreak;
   }
 
-  Future<DutyHeartbeatPayload?> _fetchHeartbeat() async {
-    final result = await _fetchHeartbeatResult();
-    return result.payload;
-  }
-
   Future<DutyHeartbeatFetchResult> _fetchHeartbeatResult() async {
     try {
       final response = await _dio.getUri(
@@ -1912,10 +1906,12 @@ class DutyHeartbeatService {
     _resetOnDutyAutoPromptState();
     await DutyTrackingPreferences.clearSettingsPromptDeferred();
     PermissionSettingsHelper.clearCooldown('background_location');
+    if (!context.mounted) return;
     final proceed = await prepareBannerLocationPermissionRequest(context);
     if (!proceed) return;
 
     await BackgroundLocationPermissions.refreshPermissionStateFromOs();
+    if (!context.mounted) return;
     await _advanceBannerLocationPermissionStep(context);
 
     if (!await confirmOnDutyFromApiForTracking()) {
@@ -1947,6 +1943,9 @@ class DutyHeartbeatService {
         await BackgroundLocationPermissions.settingsDeniedReasonIfAny();
 
     Future<void> showSettingsDialog() {
+      if (!context.mounted) {
+        return Future.value();
+      }
       return _showBackgroundLocationSettingsDialogIfNeeded(
         deniedReason: deniedReason,
         respectCooldown: false,
@@ -1976,6 +1975,7 @@ class DutyHeartbeatService {
         }
         deniedReason =
             await BackgroundLocationPermissions.settingsDeniedReasonIfAny();
+        if (!context.mounted) return;
         await _showBackgroundLocationSettingsDialogIfNeeded(
           deniedReason: deniedReason,
           respectCooldown: false,
@@ -1997,6 +1997,7 @@ class DutyHeartbeatService {
         }
         deniedReason =
             await BackgroundLocationPermissions.settingsDeniedReasonIfAny();
+        if (!context.mounted) return;
         await _showBackgroundLocationSettingsDialogIfNeeded(
           deniedReason: deniedReason,
           respectCooldown: false,
@@ -2026,12 +2027,14 @@ class DutyHeartbeatService {
     _disclosureDeferred = false;
 
     await OverlayPromptGuard.waitUntilReady();
+    if (!context.mounted) return false;
     final dialogContext = PermissionSettingsHelper.resolveDialogContext(
       context,
     );
-    if (dialogContext == null) return false;
+    if (dialogContext == null || !dialogContext.mounted) return false;
 
     final phase = await BackgroundLocationPermissions.currentPermissionPhase();
+    if (!dialogContext.mounted) return false;
     final accepted = await LocationTrackingDisclosureDialog.show(
       dialogContext,
       phase: phase,
@@ -2395,6 +2398,7 @@ class DutyHeartbeatService {
 
     final phase = await BackgroundLocationPermissions.currentPermissionPhase();
 
+    if (!context.mounted) return false;
     final allowed = await LocationTrackingDisclosureDialog.show(
       context,
       phase: phase,
@@ -2460,7 +2464,7 @@ class DutyHeartbeatService {
         secondaryLabel: LocationTrackingDisclosureDialog.cancelDutyLabel,
         destructiveSecondary: true,
         skipOverlayWait: userInitiated,
-        context: context,
+        context: (context == null || context.mounted) ? context : null,
       );
 
       if (result == PermissionSettingsPromptResult.skipped) {
@@ -2533,7 +2537,7 @@ class DutyHeartbeatService {
       respectCooldown: respectCooldown,
       ignoreDeferred: !respectCooldown,
       userInitiated: userInitiated,
-      context: context,
+      context: (context == null || context.mounted) ? context : null,
     );
     await refreshBackgroundLocationPermissionBannerState();
     return shown;

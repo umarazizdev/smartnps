@@ -154,7 +154,7 @@ class NativePermissionStatusService {
     return {
       'platform': DeviceIdentity.platformName(),
       'deviceId': await DeviceIdentity.getDeviceId(),
-      if (deviceName != null) 'deviceName': deviceName,
+      'deviceName': ?deviceName,
       'appVersion': AppVersionInfo.version,
       'build': AppVersionInfo.buildNumber,
       'battery_percentage': batteryPercentage,
@@ -1294,7 +1294,6 @@ class NativePermissionStatusService {
 
       if (status == 'denied') return 'unknown';
       if (status != null) return 'unknown';
-    } on MissingPluginException {
     } catch (error) {
       _debugLog('battery optimization status check failed: $error');
     }

@@ -5183,7 +5183,9 @@ class _WebViewShellState extends State<WebViewShell>
         _setNativeAuthSession(true);
         return result;
       }
-    } catch (e) {}
+    } catch (_) {
+      // Best-effort credential recovery; fall through to null token.
+    }
     return null;
   }
 
@@ -5228,7 +5230,7 @@ class _WebViewShellState extends State<WebViewShell>
         return false;
       }
 
-      return _performSanctumLogin(
+      return await _performSanctumLogin(
         username: username,
         password: password,
         syncPush: false,

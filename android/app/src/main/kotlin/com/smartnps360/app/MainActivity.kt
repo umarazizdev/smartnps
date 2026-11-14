@@ -9,11 +9,14 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.media.AudioAttributes
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import android.view.WindowManager
+import androidx.core.view.WindowCompat
 import com.smartnps360.app.camera.NativeCameraPlugin
 import com.smartnps360.app.duty.AndroidDutyKillPlugin
 import com.smartnps360.app.duty.AndroidDutyUiState
@@ -37,6 +40,19 @@ class MainActivity : FlutterActivity() {
 
   override fun onCreate(savedInstanceState: android.os.Bundle?) {
     super.onCreate(savedInstanceState)
+    WindowCompat.setDecorFitsSystemWindows(window, false)
+    window.statusBarColor = Color.TRANSPARENT
+    window.navigationBarColor = Color.TRANSPARENT
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      window.isNavigationBarContrastEnforced = false
+      window.isStatusBarContrastEnforced = false
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+      window.attributes = window.attributes.apply {
+        layoutInDisplayCutoutMode =
+          WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+      }
+    }
     AndroidAppKillCycleReporter.onActivityCreated(this)
     observePowerSaveModeChanges()
 

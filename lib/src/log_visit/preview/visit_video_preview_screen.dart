@@ -623,6 +623,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
             lastUploadIssue: null,
           );
         } on VisitDraftPersistException catch (error) {
+          if (context != null && !context.mounted) rethrow;
           await _showDraftPersistFailureDialog(
             context: context,
             message: error.userMessage,
@@ -632,6 +633,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
           if (VisitMediaDraftStore.isInsufficientStorageError(error)) {
             final mapped =
                 VisitDraftPersistException.insufficientStorage(error);
+            if (context != null && !context.mounted) throw mapped;
             await _showDraftPersistFailureDialog(
               context: context,
               message: mapped.userMessage,
@@ -648,6 +650,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
 
     if (!skipCompletionConfirm) {
       var leaveStarted = false;
+      if (context != null && !context.mounted) return;
       final confirmed = await _confirmPatrolUploadCompletion(
         flow: flow,
         isDark: isDark,
@@ -792,6 +795,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       );
       await flow.activateDraft(draftKey);
       await flow.recordLastUploadIssue(presentation.toDraftIssue());
+      if (context != null && !context.mounted) return;
       await _showUploadFailureDialog(
         flow: flow,
         presentation: presentation,
@@ -820,6 +824,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       );
       await flow.activateDraft(draftKey);
       await flow.recordLastUploadIssue(presentation.toDraftIssue());
+      if (context != null && !context.mounted) return;
       await _showUploadFailureDialog(
         flow: flow,
         presentation: presentation,
@@ -885,13 +890,16 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     await flow.persistCurrentDraft();
 
     final dialogContext = await _waitForDialogContext();
-    final isDark = dialogContext != null
-        ? Theme.of(dialogContext).brightness == Brightness.dark
-        : (Get.context != null &&
-              Theme.of(Get.context!).brightness == Brightness.dark);
+    var isDark = false;
+    if (dialogContext != null && dialogContext.mounted) {
+      isDark = Theme.of(dialogContext).brightness == Brightness.dark;
+    }
     final locationLabel =
         snapshot.locationLabel?.trim() ?? flow.locationSubtitle?.trim() ?? '';
 
+    if (dialogContext != null && !dialogContext.mounted) {
+      return;
+    }
     await _showUploadFailureDialog(
       flow: flow,
       presentation: presentation,

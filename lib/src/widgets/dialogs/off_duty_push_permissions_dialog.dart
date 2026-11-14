@@ -35,6 +35,7 @@ class OffDutyPushPermissionsDialog {
     final gate = RequiredPermissionsGate.instance;
     final missing = await gate.missingOffDutyPushPermissionItems();
     if (missing.isEmpty) return false;
+    if (!readyContext.mounted) return false;
 
     _visible = true;
     OverlayPromptGuard.registerBlockingOverlay();

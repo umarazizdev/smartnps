@@ -40,7 +40,7 @@ class JsBridge {
 
   Map<String, dynamic> _ok([Map<String, dynamic>? data]) => {
     'ok': true,
-    if (data != null) ...data,
+    ...?data,
   };
 
   Map<String, dynamic> _err(String code, String message) => {

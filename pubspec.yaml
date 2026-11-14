@@ -72,7 +72,22 @@ dependencies:
   crypto: ^3.0.7
   flutter_image_compress: ^2.5.1
   video_compress: ^3.1.4
+  intl: ^0.20.2
+  get_storage: ^2.1.1
+  flutter_easyloading: ^3.0.5
+  shimmer: ^3.0.0
+  dropdown_button2: ^2.3.9
+  camera: ^0.11.0+2
+  dotted_border: ^3.1.0
+  map_launcher: ^4.4.2
+  google_maps_flutter: ^2.10.0
+  syncfusion_flutter_signaturepad: ^27.2.5
+  signature: ^6.3.0
+  timezone: ^0.11.0
+  flutter_timezone: ^5.0.1
+  http_parser: ^4.1.2
 
+  path: any
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -119,6 +134,9 @@ flutter:
   assets:
     - assets/
     - assets/images/
+    - assets/Icons/
+    - assets/Icons/form/
+    - assets/fonts/
 
 flutter_icons:
   android: true
@@ -139,17 +157,24 @@ flutter_icons:
   # "family" key with the font family name, and a "fonts" key with a
   # list giving the asset and other descriptors for the font. For
   # example:
-  # fonts:
-  #   - family: Schyler
-  #     fonts:
-  #       - asset: fonts/Schyler-Regular.ttf
-  #       - asset: fonts/Schyler-Italic.ttf
-  #         style: italic
-  #   - family: Trajan Pro
-  #     fonts:
-  #       - asset: fonts/TrajanPro.ttf
-  #       - asset: fonts/TrajanPro_Bold.ttf
-  #         weight: 700
-  #
-  # For details regarding fonts from package dependencies,
-  # see https://flutter.dev/to/font-from-package
+  fonts:
+    - family: PTSans
+      fonts:
+        - asset: assets/fonts/pt-sans_narrow-regular.ttf
+          weight: 300
+        - asset: assets/fonts/pt-sans_regular.ttf
+          weight: 400
+        - asset: assets/fonts/pt-sans_caption-regular.ttf
+          weight: 500
+        - asset: assets/fonts/pt-sans_narrow-bold.ttf
+          weight: 600
+        - asset: assets/fonts/pt-sans_bold.ttf
+          weight: 700
+        - asset: assets/fonts/pt-sans_caption-bold.ttf
+          weight: 800
+        - asset: assets/fonts/pt-sans_italic.ttf
+          weight: 400
+          style: italic
+        - asset: assets/fonts/pt-sans_bold-italic.ttf
+          weight: 700
+          style: italic

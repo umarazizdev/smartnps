@@ -506,7 +506,7 @@ class BackgroundLocationController {
         _log(
           'iOS tracking stopped while UI backgrounded; starting without hard-stop',
         );
-        return ensureStarted();
+        return await ensureStarted();
       }
       if (Platform.isIOS) {
         if (IosDutyLocationPinger.isRunning) {
@@ -522,7 +522,7 @@ class BackgroundLocationController {
         }
         AndroidDutyLocationHealth.markStopped();
       }
-      return ensureStarted();
+      return await ensureStarted();
     } catch (e) {
       return {
         'ok': false,

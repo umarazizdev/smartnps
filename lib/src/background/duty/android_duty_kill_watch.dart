@@ -73,7 +73,6 @@ class AndroidDutyKillWatch {
     } catch (_) {}
     try {
       await _channel.invokeMethod<void>('setUnpaidBreak', {'unpaid': unpaid});
-    } on MissingPluginException {
     } catch (e) {
       locationDebugLog('[AndroidDutyKill] setUnpaidBreak failed: $e');
     }
@@ -99,8 +98,6 @@ class AndroidDutyKillWatch {
     }
     try {
       await _channel.invokeMethod<void>('disarm', {'forceOff': forceOff});
-    } on MissingPluginException {
-
     } catch (e) {
       locationDebugLog('[AndroidDutyKill] disarm failed: $e');
     }
@@ -121,8 +118,6 @@ class AndroidDutyKillWatch {
         'apiBaseUrl': ApiUrls.baseUrl,
       });
       _lastArmedAccessToken = access;
-    } on MissingPluginException {
-
     } catch (e) {
       locationDebugLog('[AndroidDutyKill] syncSession failed: $e');
     }

@@ -617,7 +617,9 @@ class PushNotificationService {
       if (uploadIfAuthenticated) {
         await _maybeUploadToken();
       }
-    } catch (e) {}
+    } catch (_) {
+      // Token refresh is best-effort; keep last known token on failure.
+    }
   }
 
   Future<String?> _resolveAccessToken() async {
@@ -917,7 +919,9 @@ class PushNotificationService {
           return;
         }
       }
-    } catch (e) {}
+    } catch (_) {
+      // Fall through to the default push destination.
+    }
 
     _dispatchNotificationTap(AppRoutes.defaultPushUrl);
   }

@@ -78,7 +78,6 @@ class AndroidPermissionStatusWatch {
         'apiBaseUrl': ApiUrls.baseUrl,
         'markSynced': markSynced,
       });
-    } on MissingPluginException {
     } catch (e) {
       locationDebugLog('[AndroidPermStatus] syncSession failed: $e');
     }
@@ -88,7 +87,6 @@ class AndroidPermissionStatusWatch {
     if (!Platform.isAndroid) return;
     try {
       await _channel.invokeMethod<void>('noteCurrentSynced');
-    } on MissingPluginException {
     } catch (e) {
       locationDebugLog('[AndroidPermStatus] noteCurrentSynced failed: $e');
     }
@@ -98,7 +96,6 @@ class AndroidPermissionStatusWatch {
     if (!Platform.isAndroid) return;
     try {
       await _channel.invokeMethod<void>('disarm');
-    } on MissingPluginException {
     } catch (e) {
       locationDebugLog('[AndroidPermStatus] disarm failed: $e');
     }
