@@ -47,10 +47,15 @@ class NewCalendarMonth {
 
 class NewCalendarController extends GetxController {
   final selectedView = NewCalendarView.today.obs;
-  final selectedMonth = 5.obs;
-  final selectedYear = 2026.obs;
-  final selectedDay = 19.obs;
+  final selectedMonth = DateTime.now().month.obs;
+  final selectedYear = DateTime.now().year.obs;
+  final selectedDay = DateTime.now().day.obs;
   final shifts = <NewCalendarShift>[].obs;
+
+  DateTime get _today {
+    final now = DateTime.now();
+    return DateTime(now.year, now.month, now.day);
+  }
 
   static const monthNames = [
     'January',
@@ -148,13 +153,34 @@ class NewCalendarController extends GetxController {
   }
 
   List<NewCalendarShift> get filteredShifts {
+    final today = _today;
+    final tomorrow = today.add(const Duration(days: 1));
     switch (selectedView.value) {
       case NewCalendarView.today:
-        return shifts.where((e) => _shiftMonth(e.dateText) == 5 && _shiftDay(e.dateText) == 19).toList();
+        return shifts
+            .where(
+              (e) =>
+                  _shiftMonth(e.dateText) == today.month &&
+                  _shiftDay(e.dateText) == today.day,
+            )
+            .toList();
       case NewCalendarView.tomorrow:
-        return shifts.where((e) => _shiftMonth(e.dateText) == 5 && _shiftDay(e.dateText) == 20).toList();
+        return shifts
+            .where(
+              (e) =>
+                  _shiftMonth(e.dateText) == tomorrow.month &&
+                  _shiftDay(e.dateText) == tomorrow.day,
+            )
+            .toList();
       case NewCalendarView.week:
-        return shifts.where((e) => _shiftMonth(e.dateText) == 5 && [19, 20, 22].contains(_shiftDay(e.dateText))).toList();
+        final end = today.add(const Duration(days: 6));
+        return shifts.where((e) {
+          final month = _shiftMonth(e.dateText);
+          final day = _shiftDay(e.dateText);
+          if (month <= 0 || day <= 0) return false;
+          final date = DateTime(today.year, month, day);
+          return !date.isBefore(today) && !date.isAfter(end);
+        }).toList();
       case NewCalendarView.month:
         return shiftsForDay(selectedMonth.value, selectedDay.value);
       case NewCalendarView.year:
@@ -217,7 +243,7 @@ class NewCalendarController extends GetxController {
         month: month,
         year: year,
         inMonth: true,
-        isToday: month == 5 && year == 2026 && day == 19,
+        isToday: year == _today.year && month == _today.month && day == _today.day,
         isSelected: selectedDay != null && day == selectedDay,
         hasShift: hasShiftOnDay(month, day),
         hasFirewatch: hasFirewatchOnDay(month, day),

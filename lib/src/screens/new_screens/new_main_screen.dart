@@ -16,6 +16,7 @@ class NewMainScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final controller = Get.put(NewMainController());
     final dashboardController = Get.put(NewDashboardController(), permanent: true);
+    Future.microtask(dashboardController.healShortcuts);
     final connectivityController = Get.isRegistered<ConnectivityController>() ? Get.find<ConnectivityController>() : null;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final overlay = SystemUiOverlayStyle(

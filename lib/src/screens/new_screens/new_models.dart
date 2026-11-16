@@ -1,5 +1,11 @@
 enum NewOfficerStatus { standby, onShift, onBreak }
 
+enum NewLiveStatusMode { idle, active, breakMode, standby }
+
+enum NewTimerBlinkTier { none, yellow, orange, red }
+
+enum NewArrivalStatus { pending, early, onTime, slight, late }
+
 enum NewWarningTab { late, complaints, writeUps }
 
 enum NewReminderTab { upcoming, all, completed }
@@ -8,7 +14,17 @@ enum NewReminderRepeat { once, daily, weekdays, weekly, monthly, custom }
 
 enum NewCalendarView { today, tomorrow, week, month, year }
 
-enum NewLogFilter { all, today, yesterday, week, month, range, officer, attention, incident }
+enum NewLogFilter {
+  all,
+  today,
+  yesterday,
+  week,
+  month,
+  range,
+  officer,
+  attention,
+  incident,
+}
 
 class NewShortcutItem {
   const NewShortcutItem({
@@ -258,7 +274,11 @@ class NewChatThread {
   final int unreadCount;
   final bool online;
 
-  NewChatThread copyWith({String? lastMessage, String? timeText, int? unreadCount}) {
+  NewChatThread copyWith({
+    String? lastMessage,
+    String? timeText,
+    int? unreadCount,
+  }) {
     return NewChatThread(
       id: id,
       name: name,

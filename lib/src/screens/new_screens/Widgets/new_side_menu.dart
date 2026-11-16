@@ -1,4 +1,3 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import '../Dashboard/new_dashboard_controller.dart';
@@ -15,20 +14,17 @@ class NewSideMenu extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return Stack(
       children: [
-        IgnorePointer(
-          ignoring: !open,
-          child: AnimatedOpacity(
-            opacity: open ? 1 : 0,
-            duration: const Duration(milliseconds: 300),
+        if (open)
+          Positioned.fill(
             child: GestureDetector(
               onTap: onClose,
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 4, sigmaY: 4),
-                child: Container(color: isDark ? Colors.black.withAlpha(150) : const Color(0xFF0F172A).withAlpha(90)),
+              child: ColoredBox(
+                color: isDark
+                    ? Colors.black.withAlpha(150)
+                    : const Color(0xFF0F172A).withAlpha(90),
               ),
             ),
           ),
-        ),
         AnimatedPositioned(
           duration: const Duration(milliseconds: 350),
           curve: Curves.easeOutCubic,
@@ -69,14 +65,14 @@ class _SideContent extends StatelessWidget {
             initials: c.initials,
             name: c.officerName.value,
             role: 'Security Officer',
-            onTap: c.openEditProfile,
+            onTap: c.openProfileScreen,
           ),
         ),
         const _MenuSection('Quick Access'),
         _MenuItem(Icons.home_work_rounded, 'On-Site SCH', c.showInfoOnsite),
         _MenuItem(Icons.location_on_rounded, 'Patrol Officer SCH', c.showInfoPatrol),
         const _MenuSection('Account'),
-        _MenuItem(Icons.person_rounded, 'Profile', c.openEditProfile),
+        _MenuItem(Icons.person_rounded, 'Profile', c.openProfileScreen),
         _MenuItem(Icons.settings_rounded, 'Settings', c.showInfoSettings),
         const _MenuSection('Career'),
         _MenuItem(Icons.business_center_rounded, 'Job Applications', c.showInfoJobs),

@@ -171,7 +171,18 @@ class _List extends StatelessWidget {
               _InfoLine(label: 'Time', value: item.timeText),
               if (item.actionLabel.isNotEmpty) ...[
                 const SizedBox(height: 12),
-                SizedBox(width: double.infinity, child: NewActionButton(text: item.actionLabel, color: _color(item), onTap: Get.back)),
+                SizedBox(
+                  width: double.infinity,
+                  child: NewActionButton(
+                    text: item.actionLabel,
+                    color: _color(item),
+                    onTap: () {
+                      Get.back();
+                      Get.back();
+                      controller.handleNotificationAction(item);
+                    },
+                  ),
+                ),
               ],
             ],
           ),

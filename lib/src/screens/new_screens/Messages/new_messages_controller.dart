@@ -37,6 +37,20 @@ class NewMessagesController extends GetxController {
     searchText.value = value.trim();
   }
 
+  void startNewChat() {
+    final id = 'new_${DateTime.now().millisecondsSinceEpoch}';
+    final thread = NewChatThread(
+      id: id,
+      name: 'New Conversation',
+      role: 'Direct',
+      lastMessage: 'Start typing to send a message.',
+      timeText: 'Now',
+      online: true,
+    );
+    threads.insert(0, thread);
+    openThread(thread);
+  }
+
   void openThread(NewChatThread thread) {
     selectedThreadId.value = thread.id;
     final index = threads.indexWhere((e) => e.id == thread.id);

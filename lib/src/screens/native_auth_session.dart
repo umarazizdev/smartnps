@@ -8,12 +8,21 @@ class NativeAuthSession {
 
   static final NativeAuthSession instance = NativeAuthSession._();
 
+  static const localSessionTokenPrefix = 'local-session:';
+  static const _localSessionFlag = 'isLocalSession';
+
   String? _accessToken;
 
   String? get accessTokenSync {
     final token = _accessToken?.trim();
     if (token == null || token.isEmpty) return null;
     return token;
+  }
+
+  bool get isLocalSessionSync {
+    if (box.read(_localSessionFlag) == true) return true;
+    final token = accessTokenSync;
+    return token != null && token.startsWith(localSessionTokenPrefix);
   }
 
   bool get hasValidSessionSync {
@@ -40,6 +49,10 @@ class NativeAuthSession {
     }
 
     box.write(isLogin, true);
+    box.write(
+      _localSessionFlag,
+      _accessToken!.startsWith(localSessionTokenPrefix),
+    );
     box.remove(appToken);
 
     if (user != null) {
@@ -73,6 +86,7 @@ class NativeAuthSession {
 
     _accessToken = token;
     box.write(isLogin, true);
+    box.write(_localSessionFlag, false);
     box.remove(appToken);
     _mirrorUserToGetStorage(user);
 
@@ -94,6 +108,29 @@ class NativeAuthSession {
     } else {
       await AuthRepository.instance.clearStoredCredentials();
     }
+  }
+
+  Future<void> saveLocalSession({
+    required String email,
+    String? displayName,
+  }) async {
+    final trimmedEmail = email.trim();
+    final name = (displayName ?? '').trim().isNotEmpty
+        ? displayName!.trim()
+        : (trimmedEmail.contains('@')
+            ? trimmedEmail.split('@').first
+            : trimmedEmail);
+    final token =
+        '$localSessionTokenPrefix${DateTime.now().millisecondsSinceEpoch}';
+    final user = <String, dynamic>{
+      'id': 'local-$trimmedEmail',
+      'email': trimmedEmail,
+      'name': name,
+      'role': 'officer',
+      'local': true,
+    };
+    await saveSession(user: user, accessToken: token);
+    box.write(_localSessionFlag, true);
   }
 
   Future<void> clearSession({bool keepNotificationPrefs = true}) async {

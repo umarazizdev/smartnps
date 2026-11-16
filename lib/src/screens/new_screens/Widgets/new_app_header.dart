@@ -14,62 +14,59 @@ class NewAppHeader extends StatelessWidget {
     return SafeArea(
       bottom: false,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(18, 10, 18, 6),
+        padding: const EdgeInsets.fromLTRB(14, 4, 14, 3),
         child: Row(
           children: [
             _HeaderButton(icon: Icons.menu_rounded, onTap: onMenuTap),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Container(
-                    width: 36,
-                    height: 36,
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(colors: [Color(0xFF4F8DFF), Color(0xFF7CC4FF)]),
-                      borderRadius: BorderRadius.circular(12),
-                      boxShadow: [BoxShadow(color: const Color(0xFF4F8DFF).withAlpha(70), blurRadius: 14)],
-                    ),
-                    child: const Icon(Icons.verified_user_rounded, color: Colors.white, size: 19),
-                  ),
-                  const SizedBox(width: 9),
-                  Flexible(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        RichText(
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          text: TextSpan(
-                            style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w900, color: Theme.of(context).textTheme.bodyLarge?.color),
-                            children: const [TextSpan(text: 'SmartNPS'), TextSpan(text: '360', style: TextStyle(color: Color(0xFF4F8DFF)))],
-                          ),
-                        ),
-                        Row(
-                          children: [
-                            Container(width: 5, height: 5, decoration: const BoxDecoration(color: Color(0xFF34D399), shape: BoxShape.circle)),
-                            const SizedBox(width: 5),
-                            Expanded(
-                              child: Text('v3.0 · System Online', maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.labelSmall?.copyWith(color: cDarkGreyclr, fontWeight: FontWeight.w700, fontSize: 9)),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
+            const SizedBox(width: 8),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Image.asset(
+                'assets/images/npslogo.png',
+                width: 40,
+                height: 40,
+                fit: BoxFit.contain,
+                filterQuality: FilterQuality.high,
               ),
             ),
-            const SizedBox(width: 12),
-            Obx(() => _HeaderButton(icon: controller.isDarkMode.value ? Icons.light_mode_rounded : Icons.dark_mode_rounded, onTap: controller.toggleTheme)),
-            const SizedBox(width: 7),
+            const SizedBox(width: 8),
+            Expanded(
+              child: RichText(
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                text: TextSpan(
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w900,
+                    color: Theme.of(context).textTheme.bodyLarge?.color,
+                  ),
+                  children: const [
+                    TextSpan(text: 'SmartNPS'),
+                    TextSpan(
+                      text: '360',
+                      style: TextStyle(color: Color(0xFF4F8DFF)),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Obx(
+              () => _HeaderButton(
+                icon: controller.isDarkMode.value
+                    ? Icons.light_mode_rounded
+                    : Icons.dark_mode_rounded,
+                onTap: controller.toggleTheme,
+              ),
+            ),
+            const SizedBox(width: 6),
             Obx(
               () => Stack(
                 clipBehavior: Clip.none,
                 children: [
-                  _HeaderButton(icon: Icons.notifications_rounded, onTap: controller.openNotifications),
+                  _HeaderButton(
+                    icon: Icons.notifications_rounded,
+                    onTap: controller.openNotifications,
+                  ),
                   if (controller.unreadNotifications > 0)
                     Positioned(
                       right: -3,
@@ -78,8 +75,24 @@ class NewAppHeader extends StatelessWidget {
                         height: 17,
                         constraints: const BoxConstraints(minWidth: 17),
                         padding: const EdgeInsets.symmetric(horizontal: 4),
-                        decoration: BoxDecoration(color: cRed, borderRadius: BorderRadius.circular(99), border: Border.all(color: Theme.of(context).scaffoldBackgroundColor, width: 2)),
-                        child: Center(child: Text('${controller.unreadNotifications}', style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w900))),
+                        decoration: BoxDecoration(
+                          color: cRed,
+                          borderRadius: BorderRadius.circular(99),
+                          border: Border.all(
+                            color: Theme.of(context).scaffoldBackgroundColor,
+                            width: 2,
+                          ),
+                        ),
+                        child: Center(
+                          child: Text(
+                            '${controller.unreadNotifications}',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 9,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
                       ),
                     ),
                 ],
@@ -104,15 +117,32 @@ class _HeaderButton extends StatelessWidget {
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(14),
+      overlayColor: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.pressed)) {
+          return const Color(0xFF4F8DFF).withAlpha(28);
+        }
+        if (states.contains(WidgetState.focused)) {
+          return const Color(0xFF4F8DFF).withAlpha(20);
+        }
+        return null;
+      }),
       child: Container(
-        width: 40,
-        height: 40,
+        width: 38,
+        height: 38,
         decoration: BoxDecoration(
           color: isDark ? Colors.white.withAlpha(12) : Colors.white,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: isDark ? Colors.white.withAlpha(20) : const Color(0xFFE5EAF1)),
+          border: Border.all(
+            color: isDark
+                ? Colors.white.withAlpha(20)
+                : const Color(0xFFE5EAF1),
+          ),
         ),
-        child: Icon(icon, size: 20, color: Theme.of(context).textTheme.bodyLarge?.color),
+        child: Icon(
+          icon,
+          size: 19,
+          color: Theme.of(context).textTheme.bodyLarge?.color,
+        ),
       ),
     );
   }

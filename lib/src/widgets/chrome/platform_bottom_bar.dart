@@ -38,6 +38,7 @@ class PlatformBottomBar extends StatelessWidget {
     this.darkSurface,
     this.isDark,
     this.heightIOS = 85,
+    this.forceEdgeAttached = false,
   });
 
   final List<PlatformBottomTab> tabs;
@@ -49,6 +50,7 @@ class PlatformBottomBar extends StatelessWidget {
   final Color? darkSurface;
   final bool? isDark;
   final double heightIOS;
+  final bool forceEdgeAttached;
 
   @override
   Widget build(BuildContext context) {
@@ -58,6 +60,19 @@ class PlatformBottomBar extends StatelessWidget {
             defaultTargetPlatform == TargetPlatform.macOS);
 
     final activeTint = tint ?? const Color(AppConfig.cBottomBarActive);
+
+    if (forceEdgeAttached) {
+      return _ClassicBottomBar(
+        tabs: tabs,
+        currentIndex: currentIndex,
+        onTap: onTap,
+        tint: activeTint,
+        surface: surface,
+        darkSurface: darkSurface,
+        isDark: isDark,
+        forceEdgeAttached: true,
+      );
+    }
 
     return isApplePlatform
         ? _CupertinoNativeBottomBar(
@@ -130,6 +145,7 @@ class _ClassicBottomBar extends StatelessWidget {
     this.surface,
     this.darkSurface,
     this.isDark,
+    this.forceEdgeAttached = false,
   });
 
   final List<PlatformBottomTab> tabs;
@@ -139,6 +155,7 @@ class _ClassicBottomBar extends StatelessWidget {
   final Color? surface;
   final Color? darkSurface;
   final bool? isDark;
+  final bool forceEdgeAttached;
 
   @override
   Widget build(BuildContext context) {
@@ -147,7 +164,7 @@ class _ClassicBottomBar extends StatelessWidget {
     final isAndroid =
         !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
-    if (isAndroid) {
+    if (forceEdgeAttached || isAndroid) {
       return _buildAndroidBar(context, effectiveIsDark: effectiveIsDark);
     }
 

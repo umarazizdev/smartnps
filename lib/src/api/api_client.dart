@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import '../auth/auth_repository.dart';
 import '../debug/api_response_debug_logger.dart';
 import '../debug/session_debug_logger.dart';
+import '../screens/native_auth_session.dart';
 
 class ApiClient {
   ApiClient._();
@@ -25,9 +26,11 @@ class ApiClient {
             return;
           }
 
-          final token = await AuthRepository.instance.getAccessToken();
-          if (token != null && token.isNotEmpty) {
-            options.headers['Authorization'] = 'Bearer $token';
+          if (!NativeAuthSession.instance.isLocalSessionSync) {
+            final token = await AuthRepository.instance.getAccessToken();
+            if (token != null && token.isNotEmpty) {
+              options.headers['Authorization'] = 'Bearer $token';
+            }
           }
           handler.next(options);
         },

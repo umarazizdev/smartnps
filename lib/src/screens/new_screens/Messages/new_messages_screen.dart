@@ -30,11 +30,14 @@ class _ThreadList extends StatelessWidget {
         Row(
           children: [
             Expanded(child: Text('Messages', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900, letterSpacing: -0.7))),
-            Container(
-              width: 38,
-              height: 38,
-              decoration: BoxDecoration(gradient: NewUi.accentGradient(NewUi.accent), borderRadius: BorderRadius.circular(12), boxShadow: [BoxShadow(color: NewUi.accent.withAlpha(60), blurRadius: 14)]),
-              child: const Icon(Icons.edit_square, color: Colors.white, size: 18),
+            GestureDetector(
+              onTap: controller.startNewChat,
+              child: Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(gradient: NewUi.accentGradient(NewUi.accent), borderRadius: BorderRadius.circular(12), boxShadow: [BoxShadow(color: NewUi.accent.withAlpha(60), blurRadius: 14)]),
+                child: const Icon(Icons.edit_square, color: Colors.white, size: 18),
+              ),
             ),
           ],
         ),

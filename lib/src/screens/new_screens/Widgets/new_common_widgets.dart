@@ -1,5 +1,4 @@
 import 'dart:math' as math;
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:smartnps360/src/screens/utilities/const.dart';
 
@@ -37,19 +36,29 @@ class NewUi {
 
   static LinearGradient accentGradient(Color color) {
     if (color == success || color == cGreen) {
-      return const LinearGradient(colors: [Color(0xFF10B981), Color(0xFF34D399)]);
+      return const LinearGradient(
+        colors: [Color(0xFF10B981), Color(0xFF34D399)],
+      );
     }
     if (color == warning || color == cOrange) {
-      return const LinearGradient(colors: [Color(0xFFF59E0B), Color(0xFFFBBF24)]);
+      return const LinearGradient(
+        colors: [Color(0xFFF59E0B), Color(0xFFFBBF24)],
+      );
     }
     if (color == danger || color == cRed) {
-      return const LinearGradient(colors: [Color(0xFFDC2626), Color(0xFFF87171)]);
+      return const LinearGradient(
+        colors: [Color(0xFFDC2626), Color(0xFFF87171)],
+      );
     }
     if (color == purple) {
-      return const LinearGradient(colors: [Color(0xFF8B5CF6), Color(0xFFA78BFA)]);
+      return const LinearGradient(
+        colors: [Color(0xFF8B5CF6), Color(0xFFA78BFA)],
+      );
     }
     if (color == teal) {
-      return const LinearGradient(colors: [Color(0xFF0D9488), Color(0xFF14B8A6)]);
+      return const LinearGradient(
+        colors: [Color(0xFF0D9488), Color(0xFF14B8A6)],
+      );
     }
     return const LinearGradient(colors: [accent, accent2]);
   }
@@ -65,16 +74,26 @@ class NewAnimatedShell extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return Stack(
       children: [
-        Positioned.fill(child: DecoratedBox(decoration: BoxDecoration(gradient: NewUi.appBackground(isDark)))),
+        Positioned.fill(
+          child: DecoratedBox(
+            decoration: BoxDecoration(gradient: NewUi.appBackground(isDark)),
+          ),
+        ),
         Positioned(
           top: -120,
           left: -70,
-          child: _GlowBlob(color: NewUi.accent.withAlpha(isDark ? 45 : 22), size: 260),
+          child: _GlowBlob(
+            color: NewUi.accent.withAlpha(isDark ? 45 : 22),
+            size: 260,
+          ),
         ),
         Positioned(
           right: -90,
           bottom: 80,
-          child: _GlowBlob(color: NewUi.accent2.withAlpha(isDark ? 30 : 18), size: 240),
+          child: _GlowBlob(
+            color: NewUi.accent2.withAlpha(isDark ? 30 : 18),
+            size: 240,
+          ),
         ),
         child,
       ],
@@ -91,16 +110,29 @@ class _GlowBlob extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return IgnorePointer(
-      child: ImageFiltered(
-        imageFilter: ImageFilter.blur(sigmaX: 35, sigmaY: 35),
-        child: Container(width: size, height: size, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: RadialGradient(colors: [color, color.withAlpha(0)]),
+          ),
+        ),
       ),
     );
   }
 }
 
 class NewGlassCard extends StatefulWidget {
-  const NewGlassCard({super.key, required this.child, this.padding, this.margin, this.onTap, this.highlightColor});
+  const NewGlassCard({
+    super.key,
+    required this.child,
+    this.padding,
+    this.margin,
+    this.onTap,
+    this.highlightColor,
+  });
 
   final Widget child;
   final EdgeInsetsGeometry? padding;
@@ -120,33 +152,49 @@ class _NewGlassCardState extends State<NewGlassCard> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final color = widget.highlightColor ?? NewUi.accent;
     final card = GestureDetector(
-      onTapDown: widget.onTap == null ? null : (_) => setState(() => _pressed = true),
-      onTapCancel: widget.onTap == null ? null : () => setState(() => _pressed = false),
-      onTapUp: widget.onTap == null ? null : (_) => setState(() => _pressed = false),
+      onTapDown: widget.onTap == null
+          ? null
+          : (_) => setState(() => _pressed = true),
+      onTapCancel: widget.onTap == null
+          ? null
+          : () => setState(() => _pressed = false),
+      onTapUp: widget.onTap == null
+          ? null
+          : (_) => setState(() => _pressed = false),
       onTap: widget.onTap,
       child: AnimatedScale(
         scale: _pressed ? 0.985 : 1,
         duration: const Duration(milliseconds: 120),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(22),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-            child: Container(
-              width: double.infinity,
-              margin: widget.margin,
-              padding: widget.padding ?? const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: isDark ? Colors.white.withAlpha(10) : Colors.white.withAlpha(238),
-                borderRadius: BorderRadius.circular(22),
-                border: Border.all(color: widget.highlightColor != null ? color.withAlpha(80) : isDark ? Colors.white.withAlpha(18) : const Color(0xFFE5EAF1)),
-                boxShadow: [
-                  BoxShadow(color: Colors.black.withAlpha(isDark ? 70 : 20), blurRadius: 26, offset: const Offset(0, 12)),
-                  if (widget.highlightColor != null) BoxShadow(color: color.withAlpha(isDark ? 24 : 14), blurRadius: 24),
-                ],
-              ),
-              child: widget.child,
+        child: Container(
+          width: double.infinity,
+          margin: widget.margin,
+          padding: widget.padding ?? const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: isDark
+                ? const Color(0xFF11162A).withAlpha(230)
+                : Colors.white.withAlpha(246),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(
+              color: widget.highlightColor != null
+                  ? color.withAlpha(80)
+                  : isDark
+                  ? Colors.white.withAlpha(18)
+                  : const Color(0xFFE5EAF1),
             ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withAlpha(isDark ? 70 : 20),
+                blurRadius: 26,
+                offset: const Offset(0, 12),
+              ),
+              if (widget.highlightColor != null)
+                BoxShadow(
+                  color: color.withAlpha(isDark ? 24 : 14),
+                  blurRadius: 24,
+                ),
+            ],
           ),
+          child: widget.child,
         ),
       ),
     );
@@ -155,7 +203,12 @@ class _NewGlassCardState extends State<NewGlassCard> {
 }
 
 class NewSectionTitle extends StatelessWidget {
-  const NewSectionTitle({super.key, required this.title, required this.icon, this.action});
+  const NewSectionTitle({
+    super.key,
+    required this.title,
+    required this.icon,
+    this.action,
+  });
 
   final String title;
   final IconData icon;
@@ -169,7 +222,15 @@ class NewSectionTitle extends StatelessWidget {
         children: [
           Icon(icon, size: 18, color: NewUi.accent2),
           const SizedBox(width: 8),
-          Expanded(child: Text(title, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900, letterSpacing: -0.4))),
+          Expanded(
+            child: Text(
+              title,
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w900,
+                letterSpacing: -0.4,
+              ),
+            ),
+          ),
           ?action,
         ],
       ),
@@ -187,13 +248,17 @@ class NewPulseDot extends StatefulWidget {
   State<NewPulseDot> createState() => _NewPulseDotState();
 }
 
-class _NewPulseDotState extends State<NewPulseDot> with SingleTickerProviderStateMixin {
+class _NewPulseDotState extends State<NewPulseDot>
+    with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
 
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500))..repeat();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    )..repeat();
   }
 
   @override
@@ -204,24 +269,57 @@ class _NewPulseDotState extends State<NewPulseDot> with SingleTickerProviderStat
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, child) {
-        final t = _controller.value;
-        return Container(
-          width: widget.size + (t * 7),
-          height: widget.size + (t * 7),
-          alignment: Alignment.center,
-          decoration: BoxDecoration(shape: BoxShape.circle, color: widget.color.withAlpha(((1 - t) * 70).round())),
-          child: Container(width: widget.size, height: widget.size, decoration: BoxDecoration(color: widget.color, shape: BoxShape.circle)),
-        );
-      },
+    final box = widget.size;
+    return SizedBox(
+      width: box,
+      height: box,
+      child: AnimatedBuilder(
+        animation: _controller,
+        builder: (context, child) {
+          final t = Curves.easeOut.transform(_controller.value);
+          return Stack(
+            alignment: Alignment.center,
+            clipBehavior: Clip.none,
+            children: [
+              Transform.scale(
+                scale: 1 + (t * 1.85),
+                child: Container(
+                  width: box,
+                  height: box,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: widget.color.withAlpha(((1 - t) * 90).round()),
+                  ),
+                ),
+              ),
+              child!,
+            ],
+          );
+        },
+        child: Container(
+          width: box,
+          height: box,
+          decoration: BoxDecoration(
+            color: widget.color,
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(color: widget.color.withAlpha(90), blurRadius: 4),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
 
 class NewPill extends StatelessWidget {
-  const NewPill({super.key, required this.text, this.icon, this.color, this.pulse = false});
+  const NewPill({
+    super.key,
+    required this.text,
+    this.icon,
+    this.color,
+    this.pulse = false,
+  });
 
   final String text;
   final IconData? icon;
@@ -233,7 +331,11 @@ class NewPill extends StatelessWidget {
     final c = color ?? NewUi.accent;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(color: c.withAlpha(24), borderRadius: BorderRadius.circular(99), border: Border.all(color: c.withAlpha(65))),
+      decoration: BoxDecoration(
+        color: c.withAlpha(24),
+        borderRadius: BorderRadius.circular(99),
+        border: Border.all(color: c.withAlpha(65)),
+      ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -244,7 +346,15 @@ class NewPill extends StatelessWidget {
             Icon(icon, size: 13, color: c),
             const SizedBox(width: 5),
           ],
-          Text(text, style: TextStyle(color: c, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: 0.1)),
+          Text(
+            text,
+            style: TextStyle(
+              color: c,
+              fontSize: 11,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 0.1,
+            ),
+          ),
         ],
       ),
     );
@@ -252,7 +362,15 @@ class NewPill extends StatelessWidget {
 }
 
 class NewActionButton extends StatelessWidget {
-  const NewActionButton({super.key, required this.text, required this.onTap, this.icon, this.primary = true, this.enabled = true, this.color});
+  const NewActionButton({
+    super.key,
+    required this.text,
+    required this.onTap,
+    this.icon,
+    this.primary = true,
+    this.enabled = true,
+    this.color,
+  });
 
   final String text;
   final VoidCallback onTap;
@@ -264,6 +382,13 @@ class NewActionButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = color ?? NewUi.accent;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final background = primary
+        ? c.withAlpha(dark ? 34 : 18)
+        : (dark ? Colors.white.withAlpha(8) : const Color(0xFFF8FAFC));
+    final border = primary
+        ? c.withAlpha(dark ? 88 : 62)
+        : c.withAlpha(dark ? 50 : 38);
     return Opacity(
       opacity: enabled ? 1 : 0.42,
       child: GestureDetector(
@@ -274,21 +399,31 @@ class NewActionButton extends StatelessWidget {
           height: 46,
           padding: const EdgeInsets.symmetric(horizontal: 14),
           decoration: BoxDecoration(
-            gradient: primary ? NewUi.accentGradient(c) : null,
-            color: primary ? null : Theme.of(context).brightness == Brightness.dark ? Colors.white.withAlpha(12) : Colors.white,
-            borderRadius: BorderRadius.circular(15),
-            border: Border.all(color: primary ? Colors.transparent : c.withAlpha(55)),
-            boxShadow: primary ? [BoxShadow(color: c.withAlpha(70), blurRadius: 16, offset: const Offset(0, 7))] : null,
+            color: background,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: border),
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             mainAxisSize: MainAxisSize.min,
             children: [
               if (icon != null) ...[
-                Icon(icon, size: 17, color: primary ? Colors.white : c),
+                Icon(icon, size: 17, color: c),
                 const SizedBox(width: 8),
               ],
-              Text(text, style: TextStyle(color: primary ? Colors.white : c, fontSize: 13, fontWeight: FontWeight.w900, letterSpacing: -0.1)),
+              Flexible(
+                child: Text(
+                  text,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: c,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.1,
+                  ),
+                ),
+              ),
             ],
           ),
         ),
@@ -298,7 +433,13 @@ class NewActionButton extends StatelessWidget {
 }
 
 class NewRingPainter extends CustomPainter {
-  NewRingPainter({required this.progress, required this.breakProgress, required this.statusColor, required this.dark, required this.pulse});
+  NewRingPainter({
+    required this.progress,
+    required this.breakProgress,
+    required this.statusColor,
+    required this.dark,
+    required this.pulse,
+  });
 
   final double progress;
   final double breakProgress;
@@ -321,12 +462,16 @@ class NewRingPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 14
       ..strokeCap = StrokeCap.round
-      ..shader = const LinearGradient(colors: [Color(0xFF10B981), Color(0xFF34D399)]).createShader(Rect.fromCircle(center: center, radius: radius));
+      ..shader = const LinearGradient(
+        colors: [Color(0xFF10B981), Color(0xFF34D399)],
+      ).createShader(Rect.fromCircle(center: center, radius: radius));
     final breakPaint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 14
       ..strokeCap = StrokeCap.round
-      ..shader = const LinearGradient(colors: [Color(0xFFF59E0B), Color(0xFFFBBF24)]).createShader(Rect.fromCircle(center: center, radius: radius));
+      ..shader = const LinearGradient(
+        colors: [Color(0xFFF59E0B), Color(0xFFFBBF24)],
+      ).createShader(Rect.fromCircle(center: center, radius: radius));
     final pulsePaint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 14 + pulse * 4
@@ -334,27 +479,54 @@ class NewRingPainter extends CustomPainter {
       ..color = statusColor.withAlpha((40 + pulse * 70).round());
     final rect = Rect.fromCircle(center: center, radius: radius);
     canvas.drawArc(rect, start, sweep, false, track);
-    canvas.drawArc(rect, start, sweep * progress.clamp(0, 1), false, pulsePaint);
+    canvas.drawArc(
+      rect,
+      start,
+      sweep * progress.clamp(0, 1),
+      false,
+      pulsePaint,
+    );
     canvas.drawArc(rect, start, sweep * progress.clamp(0, 1), false, work);
-    if (breakProgress > 0) canvas.drawArc(rect, start + (sweep * 0.46), sweep * breakProgress.clamp(0, 0.26), false, breakPaint);
+    if (breakProgress > 0) {
+      canvas.drawArc(
+        rect,
+        start + (sweep * 0.46),
+        sweep * breakProgress.clamp(0, 0.26),
+        false,
+        breakPaint,
+      );
+    }
 
-    final dotPaint = Paint()..color = dark ? Colors.white.withAlpha(22) : const Color(0xFFCBD5E1);
+    final dotPaint = Paint()
+      ..color = dark ? Colors.white.withAlpha(22) : const Color(0xFFCBD5E1);
     final activePaint = Paint()..color = NewUi.accent2;
     for (int i = 0; i < 60; i++) {
       final a = start + (sweep / 59) * i;
-      final p = Offset(center.dx + math.cos(a) * (radius - 24), center.dy + math.sin(a) * (radius - 24));
+      final p = Offset(
+        center.dx + math.cos(a) * (radius - 24),
+        center.dy + math.sin(a) * (radius - 24),
+      );
       canvas.drawCircle(p, 2, i / 59 <= progress ? activePaint : dotPaint);
     }
   }
 
   @override
   bool shouldRepaint(covariant NewRingPainter oldDelegate) {
-    return oldDelegate.progress != progress || oldDelegate.breakProgress != breakProgress || oldDelegate.statusColor != statusColor || oldDelegate.pulse != pulse || oldDelegate.dark != dark;
+    return oldDelegate.progress != progress ||
+        oldDelegate.breakProgress != breakProgress ||
+        oldDelegate.statusColor != statusColor ||
+        oldDelegate.pulse != pulse ||
+        oldDelegate.dark != dark;
   }
 }
 
 class NewEmptyState extends StatelessWidget {
-  const NewEmptyState({super.key, required this.title, required this.subtitle, required this.icon});
+  const NewEmptyState({
+    super.key,
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+  });
 
   final String title;
   final String subtitle;
@@ -367,9 +539,20 @@ class NewEmptyState extends StatelessWidget {
         children: [
           Icon(icon, size: 34, color: NewUi.accent2),
           const SizedBox(height: 8),
-          Text(title, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900)),
+          Text(
+            title,
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900),
+          ),
           const SizedBox(height: 4),
-          Text(subtitle, textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: NewUi.textMutedLight)),
+          Text(
+            subtitle,
+            textAlign: TextAlign.center,
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: NewUi.textMutedLight),
+          ),
         ],
       ),
     );
@@ -410,6 +593,22 @@ IconData newIcon(String key) {
       return Icons.calendar_month_rounded;
     case 'check':
       return Icons.verified_rounded;
+    case 'walkthrough':
+      return Icons.directions_walk_rounded;
+    case 'fleet':
+      return Icons.directions_car_filled_rounded;
+    case 'payroll':
+      return Icons.account_balance_wallet_rounded;
+    case 'assist':
+      return Icons.auto_awesome_rounded;
+    case 'log':
+      return Icons.description_rounded;
+    case 'shift':
+      return Icons.schedule_rounded;
+    case 'reminder':
+      return Icons.notifications_active_rounded;
+    case 'task':
+      return Icons.assignment_turned_in_rounded;
     default:
       return Icons.apps_rounded;
   }

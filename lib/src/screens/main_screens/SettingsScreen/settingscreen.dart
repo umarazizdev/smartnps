@@ -7,6 +7,7 @@ import 'package:get/get.dart';
 import 'package:smartnps360/src/screens/controllers/memory_storage_controller.dart';
 import 'package:smartnps360/src/screens/main_screens/main_controller.dart';
 import 'package:smartnps360/src/screens/main_screens/SettingsScreen/settingscontroller.dart';
+import 'package:smartnps360/src/screens/new_screens/new_main_controller.dart';
 import 'package:smartnps360/src/screens/utilities/const.dart';
 import 'package:smartnps360/src/screens/widgets/bottomsheet.dart';
 
@@ -284,7 +285,11 @@ void showSettingsBottomSheet(BuildContext context) {
   final mainController = Get.isRegistered<MainController>()
       ? Get.find<MainController>()
       : null;
+  final newMainController = Get.isRegistered<NewMainController>()
+      ? Get.find<NewMainController>()
+      : null;
   mainController?.hideBottomBar();
+  newMainController?.hideBottomBar();
 
   final isApplePlatform =
       !kIsWeb &&
@@ -314,6 +319,7 @@ void showSettingsBottomSheet(BuildContext context) {
       },
     ).whenComplete(() {
       mainController?.showBottomBar();
+      newMainController?.showBottomBar();
     });
 
     return;
@@ -329,6 +335,7 @@ void showSettingsBottomSheet(BuildContext context) {
         SettingsBottomSheet(parentContext: context, isAppleStyle: false),
   ).whenComplete(() {
     mainController?.showBottomBar();
+    newMainController?.showBottomBar();
   });
 }
 

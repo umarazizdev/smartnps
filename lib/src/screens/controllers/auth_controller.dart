@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:smartnps360/src/screens/models/application_models.dart';
+import 'package:smartnps360/src/screens/native_auth_session.dart';
 import 'package:smartnps360/src/screens/services/storage_service.dart';
 import 'package:smartnps360/src/screens/main_screens/application_wizard_screen.dart';
 import 'package:smartnps360/src/screens/new_screens/new_main_screen.dart';
@@ -282,6 +283,8 @@ class AuthController extends GetxController {
     try {
       isLoading.value = true;
       await _saveCredentials();
+      final email = loginEmailController.text.trim();
+      await NativeAuthSession.instance.saveLocalSession(email: email);
       Get.offAll(
         () => const NewMainScreen(),
         transition: Transition.fadeIn,

@@ -154,17 +154,9 @@ class SettingsController extends GetxController {
   }
 
   void toggleDarkMode(bool value) {
-    // Close and route first so the tap feels instant.
-
-    // Keep local reactive state in sync immediately.
     isDarkMode.value = value;
-
-    // Defer expensive app-wide theme rebuild until after route transition starts.
-    Future.microtask(() {
-      Get.changeThemeMode(value ? ThemeMode.dark : ThemeMode.light);
-      _box.write('isDarkMode', value);
-    });
-    // _closeSettingsAndGoDashboard();
+    _box.write('isDarkMode', value);
+    Get.changeThemeMode(value ? ThemeMode.dark : ThemeMode.light);
   }
 
   void toggle2HourReminder(bool value) {

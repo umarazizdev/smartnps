@@ -10,29 +10,43 @@ class NewShiftLogScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final controller = Get.put(NewShiftLogController());
-    return NewAnimatedShell(
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(18, 18, 18, 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
+    final canPop = Navigator.of(context).canPop();
+    return Scaffold(
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      body: SafeArea(
+        child: NewAnimatedShell(
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 18, 18, 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(child: Text('Shift Log', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900, letterSpacing: -0.7))),
-                    const NewPill(text: 'BayCrest', pulse: true, color: NewUi.success),
+                    Row(
+                      children: [
+                        if (canPop) ...[
+                          IconButton(
+                            onPressed: Get.back,
+                            visualDensity: VisualDensity.compact,
+                            icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 18),
+                          ),
+                          const SizedBox(width: 4),
+                        ],
+                        Expanded(child: Text('Shift Log', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900, letterSpacing: -0.7))),
+                        const NewPill(text: 'BayCrest', pulse: true, color: NewUi.success),
+                      ],
+                    ),
+                    const SizedBox(height: 7),
+                    Text('Active Site · 4 officers', style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).brightness == Brightness.dark ? NewUi.textMutedDark : NewUi.textMutedLight, fontWeight: FontWeight.w800)),
                   ],
                 ),
-                const SizedBox(height: 7),
-                Text('Active Site · 4 officers', style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).brightness == Brightness.dark ? NewUi.textMutedDark : NewUi.textMutedLight, fontWeight: FontWeight.w800)),
-              ],
-            ),
+              ),
+              _Controls(controller: controller),
+              Expanded(child: _LogList(controller: controller)),
+              _Composer(controller: controller),
+            ],
           ),
-          _Controls(controller: controller),
-          Expanded(child: _LogList(controller: controller)),
-          _Composer(controller: controller),
-        ],
+        ),
       ),
     );
   }

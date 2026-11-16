@@ -46,7 +46,8 @@ class ApiService {
           // Usually 401 won't reach onResponse unless validateStatus allows it.
           if (response.statusCode == 401) {
             _log('401 Unauthorized (onResponse)', tag: 'API');
-            if (_hasValidSession) {
+            if (_hasValidSession &&
+                !NativeAuthSession.instance.isLocalSessionSync) {
               _performLogout();
             } else {
               box.remove('sessionExpired');
@@ -58,7 +59,8 @@ class ApiService {
           if (error.response?.statusCode == 401) {
             _log('401 Unauthorized (onError)', tag: 'API', error: error);
 
-            if (_hasValidSession) {
+            if (_hasValidSession &&
+                !NativeAuthSession.instance.isLocalSessionSync) {
               _performLogout();
             } else {
               box.remove('sessionExpired');
@@ -79,7 +81,7 @@ class ApiService {
   }
 
   Map<String, dynamic> _jsonHeaders({required bool requiresAuth}) {
-    final token = _tokenOrNull;
+    final token = _authBearerToken;
     return {
       'Accept': 'application/json',
       'Content-Type': 'application/json; charset=utf-8',
@@ -90,13 +92,18 @@ class ApiService {
   }
 
   Map<String, dynamic> _multipartHeaders({required bool requiresAuth}) {
-    final token = _tokenOrNull;
+    final token = _authBearerToken;
     return {
       'Accept': 'application/json',
       'User-Agent': 'SmartNPS360-Android/1.0',
       'X-Requested-With': 'XMLHttpRequest',
       if (requiresAuth && token != null) 'Authorization': 'Bearer $token',
     };
+  }
+
+  String? get _authBearerToken {
+    if (NativeAuthSession.instance.isLocalSessionSync) return null;
+    return _tokenOrNull;
   }
 
   /// If requiresAuth=true but there is no valid session, fail with a clear message.
