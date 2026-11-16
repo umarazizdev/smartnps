@@ -84,4 +84,36 @@ class TimesheetController extends GetxController {
       _fetchFuture = null;
     }
   }
+
+  void applySampleMonth(DateTime month) {
+    final lastDay = DateTime(month.year, month.month + 1, 0).day;
+    final today = sfNow();
+    final todayDate = DateTime(today.year, today.month, today.day);
+    const patterns = ['08:00', '08:30', '07:45', '09:15', '08:15', '10:00', '07:30'];
+    const workedDays = [1, 2, 4, 5, 6, 8, 9, 11, 12, 13, 15, 16, 18, 19, 20, 22, 23, 25, 26, 27];
+    final rows = <Map<String, dynamic>>[];
+    var minutes = 0;
+
+    for (final day in workedDays) {
+      if (day > lastDay) continue;
+      final date = DateTime(month.year, month.month, day);
+      if (date.isAfter(todayDate)) continue;
+      final worked = patterns[day % patterns.length];
+      final parts = worked.split(':');
+      minutes += int.parse(parts[0]) * 60 + int.parse(parts[1]);
+      rows.add({
+        'date': DateFormat('MMM d').format(date),
+        'day': DateFormat('EEEE').format(date),
+        'worked': worked,
+        'status': 'worked',
+      });
+    }
+
+    timesheet.assignAll(rows);
+    totalHours.value = minutes / 60;
+    errorMessage.value = '';
+    isLoading.value = false;
+    _hasFetched = true;
+    _lastFetchedMonth = DateTime(month.year, month.month);
+  }
 }

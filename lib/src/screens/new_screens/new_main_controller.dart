@@ -11,6 +11,7 @@ import 'Widgets/new_quick_actions_overlay.dart';
 class NewMainController extends GetxController {
   final pageIndex = 0.obs;
   final isBottomBarVisible = true.obs;
+  final isAppHeaderVisible = true.obs;
   final quickActionsOpen = false.obs;
 
   final pages = const <Widget>[
@@ -57,6 +58,16 @@ class NewMainController extends GetxController {
   }
 
   void showBottomBar() {
+    isBottomBarVisible.value = true;
+  }
+
+  void enterFocusedView() {
+    isAppHeaderVisible.value = false;
+    isBottomBarVisible.value = false;
+  }
+
+  void leaveFocusedView() {
+    isAppHeaderVisible.value = true;
     isBottomBarVisible.value = true;
   }
 }

@@ -1,7 +1,9 @@
+import 'dart:math' as math;
+import 'dart:ui';
+
 import 'package:cupertino_native/cupertino_native.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'dart:ui';
 
 import '../../utilities/app_config.dart';
 
@@ -14,6 +16,9 @@ class PlatformBottomTab {
     this.activeAssetIcon,
     this.inactiveAssetIcon,
     this.materialIcon,
+    this.useThinChatIcon = false,
+    this.useCalendarClockIcon = false,
+    this.useTimesheetIcon = false,
   });
 
   final String label;
@@ -25,6 +30,9 @@ class PlatformBottomTab {
   final String? inactiveAssetIcon;
 
   final IconData? materialIcon;
+  final bool useThinChatIcon;
+  final bool useCalendarClockIcon;
+  final bool useTimesheetIcon;
 }
 
 class PlatformBottomBar extends StatelessWidget {
@@ -388,20 +396,172 @@ class _TabIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final asset = isActive ? tab.activeAssetIcon : tab.inactiveAssetIcon;
+    final color = isActive ? activeColor : inactiveColor;
+
+    if (tab.useTimesheetIcon) {
+      return SizedBox.square(
+        dimension: size,
+        child: CustomPaint(painter: _TimesheetIconPainter(color)),
+      );
+    }
+
+    if (tab.useCalendarClockIcon) {
+      return SizedBox.square(
+        dimension: size,
+        child: CustomPaint(painter: _CalendarClockPainter(color)),
+      );
+    }
+
+    if (tab.useThinChatIcon) {
+      return SizedBox.square(
+        dimension: size,
+        child: CustomPaint(painter: _ThinChatIconPainter(color: color)),
+      );
+    }
 
     if (asset == null || asset.isEmpty) {
       return Icon(
         tab.materialIcon ?? (isActive ? Icons.circle : Icons.circle_outlined),
-        color: isActive ? activeColor : inactiveColor,
+        color: color,
         size: size,
       );
     }
 
-    return Image.asset(
-      asset,
-      color: isActive ? activeColor : inactiveColor,
-      height: size,
-      width: size,
+    return Image.asset(asset, color: color, height: size, width: size);
+  }
+}
+
+class _ThinChatIconPainter extends CustomPainter {
+  const _ThinChatIconPainter({required this.color});
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final sx = size.width / 24;
+    final sy = size.height / 24;
+    final path = Path()
+      ..moveTo(6 * sx, 3.25 * sy)
+      ..lineTo(18 * sx, 3.25 * sy)
+      ..quadraticBezierTo(21 * sx, 3.25 * sy, 21 * sx, 6.25 * sy)
+      ..lineTo(21 * sx, 13.9 * sy)
+      ..quadraticBezierTo(21 * sx, 17 * sy, 17.9 * sx, 17 * sy)
+      ..lineTo(10.2 * sx, 17 * sy)
+      ..lineTo(5.15 * sx, 20.75 * sy)
+      ..lineTo(6.15 * sx, 16.85 * sy)
+      ..quadraticBezierTo(3 * sx, 16.5 * sy, 3 * sx, 13.5 * sy)
+      ..lineTo(3 * sx, 6.25 * sy)
+      ..quadraticBezierTo(3 * sx, 3.25 * sy, 6 * sx, 3.25 * sy)
+      ..close();
+
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.25 * math.min(sx, sy)
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..isAntiAlias = true,
     );
   }
+
+  @override
+  bool shouldRepaint(covariant _ThinChatIconPainter oldDelegate) =>
+      oldDelegate.color != color;
+}
+
+class _TimesheetIconPainter extends CustomPainter {
+  const _TimesheetIconPainter(this.color);
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.scale(size.width / 24, size.height / 24);
+    final pen = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.25
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..isAntiAlias = true;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTWH(2.5, 3.5, 18, 17),
+        const Radius.circular(2),
+      ),
+      pen,
+    );
+    canvas.drawLine(const Offset(2.5, 7.5), const Offset(20.5, 7.5), pen);
+    for (final x in [7.0, 16.0]) {
+      canvas.drawLine(Offset(x, 1.8), Offset(x, 5.2), pen);
+    }
+    // Six open date cells keep the grid legible at the 24 px tab size.
+    for (final y in [11.5, 16.5]) {
+      for (final x in [6.5, 11.5, 16.5]) {
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromCenter(center: Offset(x, y), width: 2, height: 2),
+            const Radius.circular(.35),
+          ),
+          pen,
+        );
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _TimesheetIconPainter oldDelegate) =>
+      oldDelegate.color != color;
+}
+
+class _CalendarClockPainter extends CustomPainter {
+  const _CalendarClockPainter(this.color);
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.scale(size.width / 24, size.height / 24);
+    final pen = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.25
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    // Leave the lower right open for the clock, avoiding overlapping strokes.
+    final frame = Path()
+      ..moveTo(10.5, 20.5)
+      ..lineTo(4.5, 20.5)
+      ..quadraticBezierTo(2.5, 20.5, 2.5, 18.5)
+      ..lineTo(2.5, 5)
+      ..quadraticBezierTo(2.5, 3.5, 4, 3.5)
+      ..lineTo(18, 3.5)
+      ..quadraticBezierTo(20, 3.5, 20, 5.5)
+      ..lineTo(20, 10);
+    canvas.drawPath(frame, pen);
+    canvas.drawLine(const Offset(2.5, 7.5), const Offset(20, 7.5), pen);
+    for (final x in [7.0, 15.5]) {
+      canvas.drawLine(Offset(x, 1.8), Offset(x, 5.2), pen);
+    }
+    final datePaint = Paint()
+      ..color = color
+      ..isAntiAlias = true;
+    for (final y in [11.0, 15.0]) {
+      for (final x in [6.5, 10.0]) {
+        canvas.drawCircle(Offset(x, y), .7, datePaint);
+      }
+    }
+    canvas.drawCircle(const Offset(17.5, 17.3), 4.8, pen);
+    canvas.drawPath(
+      Path()
+        ..moveTo(17.5, 14.6)
+        ..lineTo(17.5, 17.3)
+        ..lineTo(19.5, 18.4),
+      pen,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _CalendarClockPainter oldDelegate) =>
+      oldDelegate.color != color;
 }

@@ -4,21 +4,33 @@ import '../Dashboard/new_dashboard_controller.dart';
 import 'package:smartnps360/src/screens/new_screens/Widgets/new_common_widgets.dart';
 import '../new_models.dart';
 
-class NewNotificationsScreen extends StatelessWidget {
+class NewNotificationsScreen extends StatefulWidget {
   const NewNotificationsScreen({super.key});
+
+  @override
+  State<NewNotificationsScreen> createState() => _NotificationsState();
+}
+
+class _NotificationsState extends State<NewNotificationsScreen> {
+  final filter = 'All'.obs;
 
   @override
   Widget build(BuildContext context) {
     final controller = Get.find<NewDashboardController>();
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      body: NewAnimatedShell(
+      body: ColoredBox(
+        color: Theme.of(context).brightness == Brightness.dark
+            ? const Color(0xFF101827)
+            : const Color(0xFFF5F7FA),
         child: SafeArea(
           child: Column(
             children: [
               _Header(controller: controller),
-              _Summary(controller: controller),
-              Expanded(child: _List(controller: controller)),
+              _Summary(controller: controller, filter: filter),
+              Expanded(
+                child: _List(controller: controller, filter: filter),
+              ),
             ],
           ),
         ),
@@ -38,18 +50,48 @@ class _Header extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
       child: Row(
         children: [
-          IconButton(onPressed: Get.back, icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 18)),
+          NewBackButton(onPressed: () => Get.back()),
+          const SizedBox(width: 10),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Notifications', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900, letterSpacing: -0.7)),
-                const SizedBox(height: 2),
-                Obx(() => Text('${controller.unreadNotifications} unread alerts', style: Theme.of(context).textTheme.labelSmall?.copyWith(color: Theme.of(context).brightness == Brightness.dark ? NewUi.textMutedDark : NewUi.textMutedLight, fontWeight: FontWeight.w800))),
-              ],
+            child: Text(
+              'Notifications',
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                fontSize: 21,
+                fontWeight: FontWeight.w800,
+                letterSpacing: -0.5,
+              ),
             ),
           ),
-          TextButton(onPressed: controller.markAllNotificationsRead, child: const Text('Mark read')),
+          Obx(
+            () => TextButton.icon(
+              style: TextButton.styleFrom(
+                backgroundColor: NewUi.accent.withAlpha(20),
+                disabledBackgroundColor: Theme.of(
+                  context,
+                ).dividerColor.withAlpha(15),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 9,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              onPressed: controller.unreadNotifications > 0
+                  ? controller.markAllNotificationsRead
+                  : null,
+              icon: const Icon(Icons.done_all_rounded, size: 18),
+              label: const Text(
+                'Mark all\nas read',
+                textAlign: TextAlign.left,
+                style: TextStyle(
+                  fontSize: 11,
+                  height: 1.2,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -57,7 +99,8 @@ class _Header extends StatelessWidget {
 }
 
 class _Summary extends StatelessWidget {
-  const _Summary({required this.controller});
+  const _Summary({required this.controller, required this.filter});
+  final RxString filter;
 
   final NewDashboardController controller;
 
@@ -65,18 +108,35 @@ class _Summary extends StatelessWidget {
   Widget build(BuildContext context) {
     return Obx(() {
       final unread = controller.notifications.where((e) => e.unread).length;
-      final critical = controller.notifications.where((e) => e.critical).length;
-      final management = controller.notifications.where((e) => e.source == 'Management').length;
       return Padding(
         padding: const EdgeInsets.fromLTRB(18, 6, 18, 10),
-        child: Row(
-          children: [
-            _SummaryCard(title: 'Unread', value: '$unread', icon: Icons.mark_email_unread_rounded, color: NewUi.warning),
-            const SizedBox(width: 8),
-            _SummaryCard(title: 'Critical', value: '$critical', icon: Icons.priority_high_rounded, color: NewUi.danger),
-            const SizedBox(width: 8),
-            _SummaryCard(title: 'Mgmt', value: '$management', icon: Icons.admin_panel_settings_rounded, color: NewUi.purple),
-          ],
+        child: Container(
+          padding: const EdgeInsets.all(4),
+          decoration: BoxDecoration(
+            color: Theme.of(context).dividerColor.withAlpha(15),
+            borderRadius: BorderRadius.circular(15),
+          ),
+          child: Row(
+            children: [
+              _SummaryCard(
+                title: 'All',
+                value: '${controller.notifications.length}',
+                icon: Icons.notifications_none_rounded,
+                color: NewUi.accent,
+                selected: filter.value == 'All',
+                onTap: () => filter.value = 'All',
+              ),
+              const SizedBox(width: 8),
+              _SummaryCard(
+                title: 'Unread',
+                selected: filter.value == 'Unread',
+                onTap: () => filter.value = 'Unread',
+                value: '$unread',
+                icon: Icons.mark_email_unread_rounded,
+                color: NewUi.warning,
+              ),
+            ],
+          ),
         ),
       );
     });
@@ -84,31 +144,51 @@ class _Summary extends StatelessWidget {
 }
 
 class _SummaryCard extends StatelessWidget {
-  const _SummaryCard({required this.title, required this.value, required this.icon, required this.color});
+  const _SummaryCard({
+    required this.title,
+    required this.value,
+    required this.icon,
+    required this.color,
+    required this.selected,
+    required this.onTap,
+  });
 
   final String title;
   final String value;
   final IconData icon;
   final Color color;
+  final bool selected;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     return Expanded(
-      child: NewGlassCard(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-        highlightColor: color,
-        child: Row(
-          children: [
-            Container(width: 30, height: 30, decoration: BoxDecoration(color: color.withAlpha(22), borderRadius: BorderRadius.circular(10)), child: Icon(icon, size: 15, color: color)),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(value, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900, height: 1)),
-                const SizedBox(height: 2),
-                Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: Theme.of(context).brightness == Brightness.dark ? NewUi.textMutedDark : NewUi.textMutedLight, fontSize: 10, fontWeight: FontWeight.w800)),
-              ]),
+      child: Material(
+        color: selected
+            ? Theme.of(context).colorScheme.primary
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(11),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(11),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  '$title  ($value)',
+                  style: TextStyle(
+                    color: selected
+                        ? Theme.of(context).colorScheme.onPrimary
+                        : Theme.of(context).colorScheme.onSurface,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -116,30 +196,57 @@ class _SummaryCard extends StatelessWidget {
 }
 
 class _List extends StatelessWidget {
-  const _List({required this.controller});
+  const _List({required this.controller, required this.filter});
+  final RxString filter;
 
   final NewDashboardController controller;
 
   @override
   Widget build(BuildContext context) {
     return Obx(() {
-      if (controller.notifications.isEmpty) {
+      final items = controller.notifications
+          .where(
+            (item) => switch (filter.value) {
+              'Unread' => item.unread,
+              'Critical' => item.critical,
+              'Management' => item.source == 'Management',
+              _ => true,
+            },
+          )
+          .toList();
+      if (items.isEmpty) {
         return const Padding(
           padding: EdgeInsets.all(18),
-          child: NewEmptyState(title: 'No notifications', subtitle: 'New alerts and reminders will appear here.', icon: Icons.notifications_none_rounded),
+          child: NewEmptyState(
+            title: 'No notifications',
+            subtitle: 'New alerts and reminders will appear here.',
+            icon: Icons.notifications_none_rounded,
+          ),
         );
       }
       return ListView.builder(
-        padding: const EdgeInsets.fromLTRB(18, 4, 18, 130),
-        itemCount: controller.notifications.length,
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        itemCount: items.length,
         itemBuilder: (context, index) {
-          final item = controller.notifications[index];
+          final item = items[index];
           return TweenAnimationBuilder<double>(
             tween: Tween(begin: 0, end: 1),
             duration: Duration(milliseconds: 220 + (index * 35).clamp(0, 220)),
             curve: Curves.easeOutCubic,
-            builder: (context, value, child) => Opacity(opacity: value, child: Transform.translate(offset: Offset(0, 16 * (1 - value)), child: child)),
-            child: Padding(padding: const EdgeInsets.only(bottom: 10), child: _NotificationTile(item: item, onTap: () => _openDetails(context, item))),
+            builder: (context, value, child) => Opacity(
+              opacity: value,
+              child: Transform.translate(
+                offset: Offset(0, 16 * (1 - value)),
+                child: child,
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _NotificationTile(
+                item: item,
+                onTap: () => _openDetails(context, item),
+              ),
+            ),
           );
         },
       );
@@ -147,49 +254,81 @@ class _List extends StatelessWidget {
   }
 
   void _openDetails(BuildContext context, NewNotificationItem item) {
-    Get.bottomSheet(
-      SafeArea(
-        child: NewGlassCard(
-          margin: const EdgeInsets.all(14),
-          highlightColor: _color(item),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(children: [Expanded(child: Text(item.title, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900))), IconButton(onPressed: Get.back, icon: const Icon(Icons.close_rounded))]),
-              const SizedBox(height: 8),
-              Wrap(spacing: 6, runSpacing: 6, children: [
-                NewPill(text: item.type, color: _color(item)),
-                if (item.site.isNotEmpty) NewPill(text: item.site, icon: Icons.location_on_rounded, color: NewUi.accent),
-                if (item.shiftText.isNotEmpty) NewPill(text: item.shiftText, icon: Icons.schedule_rounded, color: NewUi.purple),
-              ]),
-              const SizedBox(height: 12),
-              Text(item.body, style: const TextStyle(fontWeight: FontWeight.w600, height: 1.45)),
-              const SizedBox(height: 12),
-              _InfoLine(label: 'Source', value: item.source),
-              _InfoLine(label: 'Date', value: item.dateText),
-              _InfoLine(label: 'Time', value: item.timeText),
-              if (item.actionLabel.isNotEmpty) ...[
+    Get.to(
+      () => Scaffold(
+        appBar: AppBar(
+          title: const Text('Notification details'),
+          leading: Padding(
+            padding: const EdgeInsets.all(6),
+            child: NewBackButton(onPressed: () => Get.back()),
+          ),
+          centerTitle: false,
+        ),
+        body: SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  item.title,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    NewPill(text: item.type, color: _color(item)),
+                    if (item.site.isNotEmpty)
+                      NewPill(
+                        text: item.site,
+                        icon: Icons.location_on_rounded,
+                        color: NewUi.accent,
+                      ),
+                    if (item.shiftText.isNotEmpty)
+                      NewPill(
+                        text: item.shiftText,
+                        icon: Icons.schedule_rounded,
+                        color: NewUi.purple,
+                      ),
+                  ],
+                ),
                 const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: NewActionButton(
-                    text: item.actionLabel,
-                    color: _color(item),
-                    onTap: () {
-                      Get.back();
-                      Get.back();
-                      controller.handleNotificationAction(item);
-                    },
+                Text(
+                  item.body,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    height: 1.45,
                   ),
                 ),
+                const SizedBox(height: 12),
+                _InfoLine(label: 'Source', value: item.source),
+                _InfoLine(label: 'Date', value: item.dateText),
+                _InfoLine(label: 'Time', value: item.timeText),
+                if (item.actionLabel.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: NewActionButton(
+                      text: item.actionLabel,
+                      color: _color(item),
+                      onTap: () {
+                        Get.back();
+                        Get.back();
+                        controller.handleNotificationAction(item);
+                      },
+                    ),
+                  ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
     );
   }
 
@@ -216,12 +355,27 @@ class _NotificationTile extends StatelessWidget {
             clipBehavior: Clip.none,
             children: [
               Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(gradient: NewUi.accentGradient(color), borderRadius: BorderRadius.circular(14), boxShadow: [BoxShadow(color: color.withAlpha(55), blurRadius: 12)]),
-                child: Icon(_icon(item.iconKey), color: Colors.white, size: 20),
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: color.withAlpha(22),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: item.iconKey == 'message'
+                    ? Padding(
+                        padding: const EdgeInsets.all(9),
+                        child: CustomPaint(
+                          painter: _NotificationMessagePainter(color),
+                        ),
+                      )
+                    : Icon(_icon(item.iconKey), color: color, size: 19),
               ),
-              if (item.unread) const Positioned(right: -2, top: -2, child: NewPulseDot(color: NewUi.warning, size: 6)),
+              if (item.unread)
+                const Positioned(
+                  right: -2,
+                  top: -2,
+                  child: NewPulseDot(color: NewUi.warning, size: 6),
+                ),
             ],
           ),
           const SizedBox(width: 12),
@@ -229,16 +383,33 @@ class _NotificationTile extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(children: [Expanded(child: Text(item.title, style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w900, letterSpacing: -0.1))), Text(item.timeText, style: Theme.of(context).textTheme.labelSmall?.copyWith(color: Theme.of(context).brightness == Brightness.dark ? NewUi.textMutedDark : NewUi.textMutedLight, fontWeight: FontWeight.w800))]),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        item.title,
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: -0.1,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 4),
-                Text(item.body, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600, height: 1.35)),
-                const SizedBox(height: 8),
-                Wrap(spacing: 6, runSpacing: 6, children: [
-                  NewPill(text: item.type, color: color),
-                  if (item.source.isNotEmpty) NewPill(text: item.source, icon: Icons.person_rounded, color: NewUi.purple),
-                  if (item.site.isNotEmpty) NewPill(text: item.site, icon: Icons.location_on_rounded, color: NewUi.accent),
-                  if (item.critical) const NewPill(text: 'Critical', icon: Icons.priority_high_rounded, color: NewUi.danger),
-                ]),
+                Text(
+                  item.body,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Theme.of(context).brightness == Brightness.dark
+                        ? NewUi.textMutedDark
+                        : NewUi.textMutedLight,
+                    fontWeight: FontWeight.w500,
+                    height: 1.4,
+                  ),
+                ),
               ],
             ),
           ),
@@ -265,6 +436,41 @@ class _NotificationTile extends StatelessWidget {
   }
 }
 
+class _NotificationMessagePainter extends CustomPainter {
+  const _NotificationMessagePainter(this.color);
+  final Color color;
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.scale(size.width / 24, size.height / 24);
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.8
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    final path = Path()
+      ..moveTo(6, 3)
+      ..lineTo(18, 3)
+      ..quadraticBezierTo(21, 3, 21, 6)
+      ..lineTo(21, 14)
+      ..quadraticBezierTo(21, 17, 18, 17)
+      ..lineTo(10, 17)
+      ..lineTo(5, 21)
+      ..lineTo(6, 17)
+      ..quadraticBezierTo(3, 17, 3, 14)
+      ..lineTo(3, 6)
+      ..quadraticBezierTo(3, 3, 6, 3)
+      ..close();
+    canvas.drawPath(path, paint);
+    canvas.drawLine(const Offset(7, 8), const Offset(17, 8), paint);
+    canvas.drawLine(const Offset(7, 12), const Offset(14, 12), paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _NotificationMessagePainter oldDelegate) =>
+      oldDelegate.color != color;
+}
+
 class _InfoLine extends StatelessWidget {
   const _InfoLine({required this.label, required this.value});
 
@@ -275,7 +481,24 @@ class _InfoLine extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 5),
-      child: Row(children: [Text(label, style: const TextStyle(fontWeight: FontWeight.w900)), const Spacer(), Flexible(child: Text(value, textAlign: TextAlign.right, style: TextStyle(color: Theme.of(context).brightness == Brightness.dark ? NewUi.textMutedDark : NewUi.textMutedLight, fontWeight: FontWeight.w700)))]),
+      child: Row(
+        children: [
+          Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
+          const Spacer(),
+          Flexible(
+            child: Text(
+              value,
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                color: Theme.of(context).brightness == Brightness.dark
+                    ? NewUi.textMutedDark
+                    : NewUi.textMutedLight,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

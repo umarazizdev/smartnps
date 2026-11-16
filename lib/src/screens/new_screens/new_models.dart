@@ -205,20 +205,28 @@ class NewCalendarShift {
   const NewCalendarShift({
     required this.id,
     required this.dateText,
+    required this.fullDateText,
+    required this.shiftName,
     required this.site,
     required this.timeRange,
     required this.role,
     required this.status,
+    required this.breakMinutes,
+    required this.breakPaid,
     this.firewatch = false,
     this.paidLunch = false,
   });
 
   final String id;
   final String dateText;
+  final String fullDateText;
+  final String shiftName;
   final String site;
   final String timeRange;
   final String role;
   final String status;
+  final int breakMinutes;
+  final bool breakPaid;
   final bool firewatch;
   final bool paidLunch;
 }

@@ -37,10 +37,30 @@ class NewSideMenu extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(18, 18, 18, 18),
               decoration: BoxDecoration(
                 gradient: isDark
-                    ? const LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0xFF0C1020), Color(0xFF070912)])
-                    : const LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.white, Color(0xFFF5F7FB)]),
-                border: Border(right: BorderSide(color: isDark ? Colors.white.withAlpha(18) : const Color(0xFFE2E8F0))),
-                boxShadow: [BoxShadow(color: Colors.black.withAlpha(isDark ? 130 : 45), blurRadius: 60, offset: const Offset(30, 0))],
+                    ? const LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Color(0xFF0C1020), Color(0xFF070912)],
+                      )
+                    : const LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Colors.white, Color(0xFFF5F7FB)],
+                      ),
+                border: Border(
+                  right: BorderSide(
+                    color: isDark
+                        ? Colors.white.withAlpha(18)
+                        : const Color(0xFFE2E8F0),
+                  ),
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withAlpha(isDark ? 130 : 45),
+                    blurRadius: 60,
+                    offset: const Offset(30, 0),
+                  ),
+                ],
               ),
               child: const _SideContent(),
             ),
@@ -70,13 +90,25 @@ class _SideContent extends StatelessWidget {
         ),
         const _MenuSection('Quick Access'),
         _MenuItem(Icons.home_work_rounded, 'On-Site SCH', c.showInfoOnsite),
-        _MenuItem(Icons.location_on_rounded, 'Patrol Officer SCH', c.showInfoPatrol),
+        _MenuItem(
+          Icons.location_on_rounded,
+          'Patrol Officer SCH',
+          c.showInfoPatrol,
+        ),
         const _MenuSection('Account'),
         _MenuItem(Icons.person_rounded, 'Profile', c.openProfileScreen),
         _MenuItem(Icons.settings_rounded, 'Settings', c.showInfoSettings),
         const _MenuSection('Career'),
-        _MenuItem(Icons.business_center_rounded, 'Job Applications', c.showInfoJobs),
-        _MenuItem(Icons.school_rounded, 'Training & Onboarding', c.showInfoTraining),
+        _MenuItem(
+          Icons.business_center_rounded,
+          'Job Applications',
+          c.showInfoJobs,
+        ),
+        _MenuItem(
+          Icons.school_rounded,
+          'Training & Onboarding',
+          c.showInfoTraining,
+        ),
         Obx(
           () => Column(
             children: [
@@ -87,32 +119,68 @@ class _SideContent extends StatelessWidget {
                 trailing: AnimatedRotation(
                   turns: c.complianceExpanded.value ? .5 : 0,
                   duration: const Duration(milliseconds: 220),
-                  child: const Icon(Icons.keyboard_arrow_down_rounded, size: 20),
+                  child: const Icon(
+                    Icons.keyboard_arrow_down_rounded,
+                    size: 20,
+                  ),
                 ),
               ),
               AnimatedCrossFade(
                 firstChild: const SizedBox.shrink(),
                 secondChild: Padding(
                   padding: const EdgeInsets.only(left: 16, top: 2, bottom: 6),
-                  child: Column(children: c.complianceItems.map((e) => _SubItem(e, () => c.showInfoText(e, 'Compliance document preview.'))).toList()),
+                  child: Column(
+                    children: c.complianceItems
+                        .map(
+                          (e) => _SubItem(
+                            e,
+                            () => c.showInfoText(
+                              e,
+                              'Compliance document preview.',
+                            ),
+                          ),
+                        )
+                        .toList(),
+                  ),
                 ),
-                crossFadeState: c.complianceExpanded.value ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+                crossFadeState: c.complianceExpanded.value
+                    ? CrossFadeState.showSecond
+                    : CrossFadeState.showFirst,
                 duration: const Duration(milliseconds: 220),
               ),
             ],
           ),
         ),
         const _MenuSection('Support'),
+        Obx(
+          () => _MenuItem(
+            c.isDarkMode.value
+                ? Icons.light_mode_outlined
+                : Icons.dark_mode_outlined,
+            c.isDarkMode.value ? 'Switch to light mode' : 'Switch to dark mode',
+            c.toggleTheme,
+          ),
+        ),
         _MenuItem(Icons.phone_rounded, 'Contact Dispatch', c.showInfoDispatch),
         const SizedBox(height: 8),
-        _MenuItem(Icons.logout_rounded, 'Logout', c.showLogoutConfirm, color: NewUi.danger),
+        _MenuItem(
+          Icons.logout_rounded,
+          'Logout',
+          c.showLogoutConfirm,
+          color: NewUi.danger,
+        ),
       ],
     );
   }
 }
 
 class _ProfileButton extends StatelessWidget {
-  const _ProfileButton({required this.initials, required this.name, required this.role, required this.onTap});
+  const _ProfileButton({
+    required this.initials,
+    required this.name,
+    required this.role,
+    required this.onTap,
+  });
 
   final String initials;
   final String name;
@@ -130,7 +198,11 @@ class _ProfileButton extends StatelessWidget {
         decoration: BoxDecoration(
           color: isDark ? Colors.white.withAlpha(10) : const Color(0xFFF8FAFC),
           borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: isDark ? Colors.white.withAlpha(18) : const Color(0xFFE5EAF1)),
+          border: Border.all(
+            color: isDark
+                ? Colors.white.withAlpha(18)
+                : const Color(0xFFE5EAF1),
+          ),
         ),
         child: Row(
           children: [
@@ -140,33 +212,82 @@ class _ProfileButton extends StatelessWidget {
               decoration: BoxDecoration(
                 gradient: NewUi.accentGradient(NewUi.accent),
                 borderRadius: BorderRadius.circular(14),
-                boxShadow: [BoxShadow(color: NewUi.accent.withAlpha(65), blurRadius: 14, offset: const Offset(0, 5))],
+                boxShadow: [
+                  BoxShadow(
+                    color: NewUi.accent.withAlpha(65),
+                    blurRadius: 14,
+                    offset: const Offset(0, 5),
+                  ),
+                ],
               ),
-              child: Center(child: Text(initials, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 16))),
+              child: Center(
+                child: Text(
+                  initials,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 16,
+                  ),
+                ),
+              ),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w900, letterSpacing: -0.1)),
+                  Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: -0.1,
+                    ),
+                  ),
                   const SizedBox(height: 5),
                   Wrap(
                     crossAxisAlignment: WrapCrossAlignment.center,
                     spacing: 5,
                     children: [
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(color: NewUi.success.withAlpha(26), borderRadius: BorderRadius.circular(99)),
-                        child: const Text('ACTIVE', style: TextStyle(color: NewUi.success, fontSize: 8.5, fontWeight: FontWeight.w900, letterSpacing: .5)),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: NewUi.success.withAlpha(26),
+                          borderRadius: BorderRadius.circular(99),
+                        ),
+                        child: const Text(
+                          'ACTIVE',
+                          style: TextStyle(
+                            color: NewUi.success,
+                            fontSize: 8.5,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: .5,
+                          ),
+                        ),
                       ),
-                      Text(role, style: Theme.of(context).textTheme.labelSmall?.copyWith(color: isDark ? NewUi.textMutedDark : NewUi.textMutedLight, fontWeight: FontWeight.w700)),
+                      Text(
+                        role,
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: isDark
+                              ? NewUi.textMutedDark
+                              : NewUi.textMutedLight,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
                     ],
                   ),
                 ],
               ),
             ),
-            Icon(Icons.chevron_right_rounded, size: 20, color: isDark ? NewUi.textMutedDark : NewUi.textMutedLight),
+            Icon(
+              Icons.chevron_right_rounded,
+              size: 20,
+              color: isDark ? NewUi.textMutedDark : NewUi.textMutedLight,
+            ),
           ],
         ),
       ),
@@ -182,13 +303,28 @@ class _MenuSection extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(6, 18, 6, 6),
-      child: Text(text, style: Theme.of(context).textTheme.labelSmall?.copyWith(color: Theme.of(context).brightness == Brightness.dark ? NewUi.textMutedDark : NewUi.textMutedLight, fontWeight: FontWeight.w900, letterSpacing: 1.2)),
+      child: Text(
+        text,
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: Theme.of(context).brightness == Brightness.dark
+              ? NewUi.textMutedDark
+              : NewUi.textMutedLight,
+          fontWeight: FontWeight.w900,
+          letterSpacing: 1.2,
+        ),
+      ),
     );
   }
 }
 
 class _MenuItem extends StatefulWidget {
-  const _MenuItem(this.icon, this.text, this.onTap, {this.trailing, this.color});
+  const _MenuItem(
+    this.icon,
+    this.text,
+    this.onTap, {
+    this.trailing,
+    this.color,
+  });
 
   final IconData icon;
   final String text;
@@ -205,7 +341,11 @@ class _MenuItemState extends State<_MenuItem> {
 
   @override
   Widget build(BuildContext context) {
-    final c = widget.color ?? (Theme.of(context).brightness == Brightness.dark ? NewUi.textDark : NewUi.textLight);
+    final c =
+        widget.color ??
+        (Theme.of(context).brightness == Brightness.dark
+            ? NewUi.textDark
+            : NewUi.textLight);
     final activeColor = widget.color ?? NewUi.accent2;
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
@@ -217,12 +357,28 @@ class _MenuItemState extends State<_MenuItem> {
           duration: const Duration(milliseconds: 160),
           margin: const EdgeInsets.symmetric(vertical: 1),
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
-          decoration: BoxDecoration(color: _hover ? activeColor.withAlpha(18) : Colors.transparent, borderRadius: BorderRadius.circular(12)),
+          decoration: BoxDecoration(
+            color: _hover ? activeColor.withAlpha(18) : Colors.transparent,
+            borderRadius: BorderRadius.circular(12),
+          ),
           child: Row(
             children: [
-              Icon(widget.icon, size: 18, color: _hover ? activeColor : c.withAlpha(205)),
+              Icon(
+                widget.icon,
+                size: 18,
+                color: _hover ? activeColor : c.withAlpha(205),
+              ),
               const SizedBox(width: 11),
-              Expanded(child: Text(widget.text, style: TextStyle(color: _hover ? activeColor : c, fontSize: 13.5, fontWeight: FontWeight.w800))),
+              Expanded(
+                child: Text(
+                  widget.text,
+                  style: TextStyle(
+                    color: _hover ? activeColor : c,
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
               if (widget.trailing != null) widget.trailing!,
             ],
           ),
@@ -240,7 +396,9 @@ class _SubItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final muted = Theme.of(context).brightness == Brightness.dark ? NewUi.textMutedDark : NewUi.textMutedLight;
+    final muted = Theme.of(context).brightness == Brightness.dark
+        ? NewUi.textMutedDark
+        : NewUi.textMutedLight;
     return InkWell(
       borderRadius: BorderRadius.circular(9),
       onTap: onTap,
@@ -248,9 +406,22 @@ class _SubItem extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
         child: Row(
           children: [
-            Container(width: 4, height: 4, decoration: BoxDecoration(color: muted, shape: BoxShape.circle)),
+            Container(
+              width: 4,
+              height: 4,
+              decoration: BoxDecoration(color: muted, shape: BoxShape.circle),
+            ),
             const SizedBox(width: 8),
-            Expanded(child: Text(text, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: muted))),
+            Expanded(
+              child: Text(
+                text,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: muted,
+                ),
+              ),
+            ),
           ],
         ),
       ),

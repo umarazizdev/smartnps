@@ -749,7 +749,7 @@ class _DialPainter extends CustomPainter {
     final dotTrack = Paint()
       ..color = dark ? Colors.white.withAlpha(22) : const Color(0xFFCBD5E1);
     final dotActive = Paint()..color = NewUi.accent2.withAlpha(180);
-    final dotRadius = radius - 25;
+    final dotRadius = radius - 18;
     final lit = activeDots.clamp(0, 60);
     for (int i = 0; i < 60; i++) {
       final point = i / 59;

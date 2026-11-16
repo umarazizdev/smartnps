@@ -1,7 +1,5 @@
 // ignore_for_file: use_super_parameters
 
-import 'dart:io';
-
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -12,7 +10,14 @@ import 'package:shimmer/shimmer.dart';
 import 'timesheetcontroller.dart';
 
 class TimesheetScreen extends StatefulWidget {
-  const TimesheetScreen({Key? key}) : super(key: key);
+  const TimesheetScreen({
+    Key? key,
+    this.sampleData = false,
+    this.scrollBottomPadding = 0,
+  }) : super(key: key);
+
+  final bool sampleData;
+  final double scrollBottomPadding;
 
   @override
   State<TimesheetScreen> createState() => _TimesheetScreenState();
@@ -20,6 +25,7 @@ class TimesheetScreen extends StatefulWidget {
 
 class _TimesheetScreenState extends State<TimesheetScreen> {
   DateTime selectedMonth = sfNow();
+  DateTime? selectedDay;
   final TimesheetController _ctrl = Get.put(TimesheetController());
 
   @override
@@ -29,6 +35,11 @@ class _TimesheetScreenState extends State<TimesheetScreen> {
   }
 
   Future<void> _load({bool forceRefresh = false}) async {
+    if (widget.sampleData) {
+      _ctrl.applySampleMonth(selectedMonth);
+      return;
+    }
+
     if (_ctrl.isLoading.value) return;
 
     final success = await _ctrl.fetchMonthly(
@@ -50,121 +61,43 @@ class _TimesheetScreenState extends State<TimesheetScreen> {
 
   Future<void> _selectMonth(BuildContext context) async {
     final DateTime now = sfNow();
+    final DateTime minimum = DateTime(2020, 1, 1);
+    DateTime initialMonth = selectedMonth.isAfter(now) ? now : selectedMonth;
+    if (initialMonth.isBefore(minimum)) initialMonth = minimum;
+    final initialDay = selectedDay == null
+        ? DateTime(initialMonth.year, initialMonth.month, 1)
+        : selectedDay!.isAfter(now)
+        ? now
+        : selectedDay!.isBefore(minimum)
+        ? minimum
+        : selectedDay!;
 
-    if (Platform.isIOS) {
-      DateTime tempPicked = selectedMonth;
-
-      final DateTime? picked = await showCupertinoModalPopup<DateTime>(
-        context: context,
-        builder: (context) {
-          final isDark = Theme.of(context).brightness == Brightness.dark;
-
-          return Container(
-            height: 320,
-            decoration: BoxDecoration(
-              color: isDark ? cDarkCardColor : Colors.white,
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(24),
-              ),
-            ),
-            child: SafeArea(
-              top: false,
-              child: Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 10,
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        CupertinoButton(
-                          padding: EdgeInsets.zero,
-                          onPressed: () => Navigator.pop(context),
-                          child: const Text(
-                            'Cancel',
-                            style: TextStyle(
-                              color: Color(0xFF6B7280),
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ),
-                        Text(
-                          'Select Month',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
-                            color: isDark ? cDarkTextPrimary : cDarkText,
-                          ),
-                        ),
-                        CupertinoButton(
-                          padding: EdgeInsets.zero,
-                          onPressed: () => Navigator.pop(context, tempPicked),
-                          child: const Text(
-                            'Done',
-                            style: TextStyle(
-                              color: cPrimary,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Divider(
-                    height: 1,
-                    color: isDark ? cDarkBorderColor : const Color(0xFFE5EAF1),
-                  ),
-                  Expanded(
-                    child: CupertinoDatePicker(
-                      mode: CupertinoDatePickerMode.monthYear,
-                      initialDateTime: selectedMonth.isAfter(now)
-                          ? now
-                          : selectedMonth,
-                      minimumDate: DateTime(2020),
-                      maximumDate: now,
-                      onDateTimeChanged: (DateTime value) {
-                        tempPicked = value;
-                      },
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      );
-
-      if (picked != null) {
-        setState(() {
-          selectedMonth = DateTime(picked.year, picked.month, 1);
-        });
-        _load();
-      }
-
-      return;
-    }
-
-    final DateTime? picked = await showDatePicker(
+    final result = await showCupertinoModalPopup<_TimesheetPickerResult>(
       context: context,
-      initialDate: selectedMonth.isAfter(now) ? now : selectedMonth,
-      firstDate: DateTime(2020),
-      lastDate: now,
-      helpText: 'Select Month',
+      builder: (context) => _TimesheetDatePickerSheet(
+        initialMonth: DateTime(initialMonth.year, initialMonth.month, 1),
+        initialDay: initialDay,
+        minimumDate: minimum,
+        maximumDate: now,
+        startInDayMode: selectedDay != null,
+      ),
     );
 
-    if (picked != null) {
-      setState(() {
-        selectedMonth = DateTime(picked.year, picked.month, 1);
-      });
-      _load();
-    }
+    if (result == null) return;
+
+    setState(() {
+      selectedMonth = DateTime(result.date.year, result.date.month, 1);
+      selectedDay = result.dayMode
+          ? DateTime(result.date.year, result.date.month, result.date.day)
+          : null;
+    });
+    _load();
   }
 
   void _goToPreviousMonth() {
     setState(() {
       selectedMonth = DateTime(selectedMonth.year, selectedMonth.month - 1, 1);
+      selectedDay = null;
     });
     _load();
   }
@@ -172,14 +105,22 @@ class _TimesheetScreenState extends State<TimesheetScreen> {
   void _goToNextMonth() {
     setState(() {
       selectedMonth = DateTime(selectedMonth.year, selectedMonth.month + 1, 1);
+      selectedDay = null;
     });
     _load();
+  }
+
+  void _clearSelectedDay() {
+    setState(() => selectedDay = null);
   }
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final formattedMonth = DateFormat('MMMM yyyy').format(selectedMonth);
+    final selectorLabel = selectedDay == null
+        ? formattedMonth
+        : DateFormat('MMM d, yyyy').format(selectedDay!);
     final textTheme = Theme.of(context).textTheme;
     final DateTime now = sfNow();
     final bool isOnCurrentMonth =
@@ -189,19 +130,26 @@ class _TimesheetScreenState extends State<TimesheetScreen> {
     return Scaffold(
       backgroundColor: isDark ? cDarkBackground : const Color(0xFFF4F7FB),
       body: SafeArea(
+        top: false,
+        bottom: widget.scrollBottomPadding == 0,
         child: RefreshIndicator(
           onRefresh: () => _load(forceRefresh: true),
           color: cPrimary,
           child: SingleChildScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            padding: EdgeInsets.fromLTRB(
+              16,
+              10,
+              16,
+              widget.scrollBottomPadding,
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Monthly TimeSheet',
+                  'Monthly Timesheet',
                   style: textTheme.headlineMedium?.copyWith(
-                    fontSize: 24,
+                    fontSize: 22,
                     color: isDark ? cDarkTextPrimary : const Color(0xff030B17),
                     fontWeight: FontWeight.w700,
                     height: 1.08,
@@ -210,9 +158,11 @@ class _TimesheetScreenState extends State<TimesheetScreen> {
                 ),
                 const SizedBox(height: 5),
                 Text(
-                  'Track and review your monthly work hours.',
+                  selectedDay == null
+                      ? 'Track and review your monthly work hours.'
+                      : 'Showing hours for ${DateFormat('MMMM d, yyyy').format(selectedDay!)}.',
                   style: textTheme.bodyMedium?.copyWith(
-                    fontSize: 14,
+                    fontSize: 13,
                     color: isDark
                         ? cDarkTextSecondary
                         : const Color(0xFF6B7280),
@@ -220,17 +170,17 @@ class _TimesheetScreenState extends State<TimesheetScreen> {
                     height: 1.25,
                   ),
                 ),
-                const SizedBox(height: 18),
+                const SizedBox(height: 14),
 
                 _MonthSelectorCard(
-                  formattedMonth: formattedMonth,
+                  formattedMonth: selectorLabel,
                   nextEnabled: nextEnabled,
                   onPrevious: _goToPreviousMonth,
                   onNext: nextEnabled ? _goToNextMonth : null,
                   onMonthTap: () => _selectMonth(context),
                 ),
 
-                const SizedBox(height: 14),
+                const SizedBox(height: 10),
 
                 Obx(() {
                   if (_ctrl.isLoading.value) {
@@ -243,11 +193,246 @@ class _TimesheetScreenState extends State<TimesheetScreen> {
                   );
                 }),
 
-                const SizedBox(height: 16),
+                const SizedBox(height: 12),
 
-                _DailyDetailsCard(ctrl: _ctrl, selectedMonth: selectedMonth),
+                _DailyDetailsCard(
+                  ctrl: _ctrl,
+                  selectedMonth: selectedMonth,
+                  selectedDay: selectedDay,
+                  onClearDay: _clearSelectedDay,
+                ),
               ],
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TimesheetPickerResult {
+  const _TimesheetPickerResult({required this.date, required this.dayMode});
+
+  final DateTime date;
+  final bool dayMode;
+}
+
+class _TimesheetDatePickerSheet extends StatefulWidget {
+  const _TimesheetDatePickerSheet({
+    required this.initialMonth,
+    required this.initialDay,
+    required this.minimumDate,
+    required this.maximumDate,
+    required this.startInDayMode,
+  });
+
+  final DateTime initialMonth;
+  final DateTime initialDay;
+  final DateTime minimumDate;
+  final DateTime maximumDate;
+  final bool startInDayMode;
+
+  @override
+  State<_TimesheetDatePickerSheet> createState() =>
+      _TimesheetDatePickerSheetState();
+}
+
+class _TimesheetDatePickerSheetState extends State<_TimesheetDatePickerSheet> {
+  late bool _dayMode;
+  late DateTime _picked;
+
+  @override
+  void initState() {
+    super.initState();
+    _dayMode = widget.startInDayMode;
+    _picked = _dayMode ? widget.initialDay : widget.initialMonth;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final muted = isDark ? cDarkTextSecondary : const Color(0xFF6B7280);
+    final text = isDark ? cDarkTextPrimary : const Color(0xFF111827);
+    final line = isDark ? cDarkBorderColor : const Color(0xFFE5EAF1);
+    final accent = isDark ? const Color(0xFF93C5FD) : cPrimary;
+    final scale = (MediaQuery.sizeOf(context).width / 390).clamp(0.9, 1.15);
+    final bottomInset = MediaQuery.paddingOf(context).bottom;
+
+    return Container(
+      height: 360 * scale + bottomInset,
+      decoration: BoxDecoration(
+        color: isDark ? cDarkCardColor : Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
+          child: Column(
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: muted.withAlpha(70),
+                  borderRadius: BorderRadius.circular(99),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  SizedBox(
+                    height: 40,
+                    child: TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: TextButton.styleFrom(
+                        foregroundColor: muted,
+                        backgroundColor: isDark
+                            ? Colors.white.withAlpha(8)
+                            : const Color(0xFFF3F5F8),
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
+                        minimumSize: const Size(84, 40),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          side: BorderSide(color: line),
+                        ),
+                      ),
+                      child: const Text(
+                        'Cancel',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      _dayMode ? 'Select date' : 'Select month',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: text,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  SizedBox(
+                    height: 40,
+                    child: FilledButton(
+                      onPressed: () => Navigator.pop(
+                        context,
+                        _TimesheetPickerResult(
+                          date: _picked,
+                          dayMode: _dayMode,
+                        ),
+                      ),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: cPrimary,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        minimumSize: const Size(84, 40),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: const Text(
+                        'Done',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: CupertinoSlidingSegmentedControl<bool>(
+                  groupValue: _dayMode,
+                  backgroundColor: isDark
+                      ? Colors.white.withAlpha(10)
+                      : const Color(0xFFF1F5F9),
+                  thumbColor: isDark ? const Color(0xFF243247) : Colors.white,
+                  children: {
+                    false: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Text(
+                        'Month',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 13,
+                          color: !_dayMode
+                              ? (isDark ? cDarkTextPrimary : accent)
+                              : muted,
+                        ),
+                      ),
+                    ),
+                    true: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Text(
+                        'Date',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 13,
+                          color: _dayMode
+                              ? (isDark ? cDarkTextPrimary : accent)
+                              : muted,
+                        ),
+                      ),
+                    ),
+                  },
+                  onValueChanged: (value) {
+                    if (value == null) return;
+                    setState(() {
+                      _dayMode = value;
+                      if (_dayMode) {
+                        final day = _picked.day.clamp(1, 28);
+                        _picked = DateTime(_picked.year, _picked.month, day);
+                        if (_picked.isAfter(widget.maximumDate)) {
+                          _picked = widget.maximumDate;
+                        }
+                        if (_picked.isBefore(widget.minimumDate)) {
+                          _picked = widget.minimumDate;
+                        }
+                      } else {
+                        _picked = DateTime(_picked.year, _picked.month, 1);
+                      }
+                    });
+                  },
+                ),
+              ),
+              const SizedBox(height: 4),
+              Expanded(
+                child: CupertinoTheme(
+                  data: CupertinoThemeData(
+                    brightness: isDark ? Brightness.dark : Brightness.light,
+                    primaryColor: cPrimary,
+                    textTheme: CupertinoTextThemeData(
+                      dateTimePickerTextStyle: TextStyle(
+                        fontSize: 20 * scale,
+                        fontWeight: FontWeight.w500,
+                        color: text,
+                      ),
+                    ),
+                  ),
+                  child: CupertinoDatePicker(
+                    key: ValueKey(_dayMode),
+                    mode: _dayMode
+                        ? CupertinoDatePickerMode.date
+                        : CupertinoDatePickerMode.monthYear,
+                    initialDateTime: _picked,
+                    minimumDate: widget.minimumDate,
+                    maximumDate: widget.maximumDate,
+                    onDateTimeChanged: (value) {
+                      _picked = value;
+                    },
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -280,9 +465,9 @@ class _MonthSelectorCard extends StatelessWidget {
 
     return Container(
       width: double.infinity,
-      height: 62,
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-      decoration: _premiumCardDecoration(context, radius: 22),
+      height: 56,
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 5),
+      decoration: _premiumCardDecoration(context, radius: 18),
       child: Row(
         children: [
           Expanded(
@@ -312,17 +497,17 @@ class _MonthSelectorCard extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                         textAlign: TextAlign.center,
                         style: theme.textTheme.titleSmall?.copyWith(
-                          fontSize: 15.5,
+                          fontSize: 14.5,
                           color: isDark ? cDarkTextPrimary : cPrimary,
                           fontWeight: FontWeight.w800,
                           height: 1,
                         ),
                       ),
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: 6),
                     Icon(
-                      Icons.calendar_today_rounded,
-                      size: 18,
+                      Icons.calendar_month_rounded,
+                      size: 17,
                       color: isDark ? cDarkIconColor : cPrimary,
                     ),
                   ],
@@ -372,11 +557,11 @@ class _MonthActionButton extends StatelessWidget {
         ? (isDark ? cDarkTextPrimary : const Color(0xFF0F172A))
         : (disabledColor ?? Colors.grey.shade400);
 
-    final iconWidget = Icon(icon, size: 22, color: color);
+    final iconWidget = Icon(icon, size: 20, color: color);
     final textWidget = Text(
       label,
       style: theme.textTheme.labelLarge?.copyWith(
-        fontSize: 14,
+        fontSize: 13,
         color: color,
         fontWeight: FontWeight.w800,
       ),
@@ -407,7 +592,7 @@ class _VerticalDivider extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: 1,
-      height: 34,
+      height: 30,
       color: isDark ? cDarkBorderColor : const Color(0xFFE9EDF3),
     );
   }
@@ -429,25 +614,25 @@ class _TotalWorkedCard extends StatelessWidget {
 
     return Container(
       width: double.infinity,
-      constraints: const BoxConstraints(minHeight: 80),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      decoration: _premiumCardDecoration(context, radius: 22),
+      constraints: const BoxConstraints(minHeight: 72),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+      decoration: _premiumCardDecoration(context, radius: 18),
       child: Row(
         children: [
           Container(
-            width: 48,
-            height: 48,
+            width: 42,
+            height: 42,
             decoration: BoxDecoration(
               color: isDark ? cDarkInputFillColor : cPrimary.withAlpha(16),
-              borderRadius: BorderRadius.circular(17),
+              borderRadius: BorderRadius.circular(14),
             ),
             child: Icon(
               Icons.timer_outlined,
               color: isDark ? const Color(0xFF93C5FD) : cPrimary,
-              size: 25,
+              size: 22,
             ),
           ),
-          const SizedBox(width: 13),
+          const SizedBox(width: 11),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -456,7 +641,7 @@ class _TotalWorkedCard extends StatelessWidget {
                 Text(
                   'Total Worked Time',
                   style: theme.textTheme.titleSmall?.copyWith(
-                    fontSize: 14.5,
+                    fontSize: 14,
                     color: isDark ? cDarkTextPrimary : const Color(0xFF111827),
                     fontWeight: FontWeight.w700,
                     height: 1.15,
@@ -466,7 +651,7 @@ class _TotalWorkedCard extends StatelessWidget {
                 Text(
                   formattedMonth,
                   style: theme.textTheme.bodySmall?.copyWith(
-                    fontSize: 12.5,
+                    fontSize: 12,
                     color: isDark
                         ? cDarkTextSecondary
                         : const Color(0xFF64748B),
@@ -485,7 +670,7 @@ class _TotalWorkedCard extends StatelessWidget {
               Text(
                 totalHours,
                 style: theme.textTheme.titleLarge?.copyWith(
-                  fontSize: 20,
+                  fontSize: 19,
                   color: isDark ? cDarkTextPrimary : cPrimary,
                   fontWeight: FontWeight.w800,
                   height: 1,
@@ -496,7 +681,7 @@ class _TotalWorkedCard extends StatelessWidget {
               Text(
                 'hrs',
                 style: theme.textTheme.labelLarge?.copyWith(
-                  fontSize: 13,
+                  fontSize: 12,
                   color: isDark ? const Color(0xFF93C5FD) : cPrimary,
                   fontWeight: FontWeight.w800,
                   height: 1,
@@ -516,22 +701,22 @@ class _TotalWorkedSkeleton extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       width: double.infinity,
-      constraints: const BoxConstraints(minHeight: 80),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      decoration: _premiumCardDecoration(context, radius: 22),
+      constraints: const BoxConstraints(minHeight: 72),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+      decoration: _premiumCardDecoration(context, radius: 18),
       child: _shimmerWrap(
         context: context,
         child: Row(
           children: [
             Container(
-              width: 48,
-              height: 48,
+              width: 42,
+              height: 42,
               decoration: BoxDecoration(
                 color: isDark ? cDarkBorderColor : Colors.grey.shade300,
-                borderRadius: BorderRadius.circular(17),
+                borderRadius: BorderRadius.circular(14),
               ),
             ),
-            const SizedBox(width: 13),
+            const SizedBox(width: 11),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -554,18 +739,28 @@ class _TotalWorkedSkeleton extends StatelessWidget {
 class _DailyDetailsCard extends StatelessWidget {
   final TimesheetController ctrl;
   final DateTime selectedMonth;
+  final DateTime? selectedDay;
+  final VoidCallback onClearDay;
 
-  const _DailyDetailsCard({required this.ctrl, required this.selectedMonth});
+  const _DailyDetailsCard({
+    required this.ctrl,
+    required this.selectedMonth,
+    required this.selectedDay,
+    required this.onClearDay,
+  });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    final dayLabel = selectedDay == null
+        ? null
+        : DateFormat('MMM d').format(selectedDay!);
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
-      decoration: _premiumCardDecoration(context, radius: 24),
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+      decoration: _premiumCardDecoration(context, radius: 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -574,21 +769,42 @@ class _DailyDetailsCard extends StatelessWidget {
               Icon(
                 Icons.calendar_month_rounded,
                 color: isDark ? const Color(0xFF93C5FD) : cPrimary,
-                size: 22,
+                size: 20,
               ),
-              const SizedBox(width: 9),
-              Text(
-                'Daily Details',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontSize: 18,
-                  color: isDark ? cDarkTextPrimary : const Color(0xff030B17),
-                  fontWeight: FontWeight.w800,
-                  height: 1.1,
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Daily Details',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontSize: 17,
+                    color: isDark ? cDarkTextPrimary : const Color(0xff030B17),
+                    fontWeight: FontWeight.w800,
+                    height: 1.1,
+                  ),
                 ),
               ),
+              if (dayLabel != null)
+                TextButton(
+                  onPressed: onClearDay,
+                  style: TextButton.styleFrom(
+                    foregroundColor: isDark
+                        ? const Color(0xFF93C5FD)
+                        : cPrimary,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: Text(
+                    '$dayLabel · Clear',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
             ],
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 12),
           Obx(() {
             if (ctrl.isLoading.value) {
               return _DailyDetailsSkeleton();
@@ -602,17 +818,21 @@ class _DailyDetailsCard extends StatelessWidget {
               );
             }
 
-            final list = ctrl.timesheet;
+            final list = dayLabel == null
+                ? ctrl.timesheet.toList()
+                : ctrl.timesheet
+                      .where((row) => (row['date'] ?? '') == dayLabel)
+                      .toList();
 
             if (list.isEmpty) {
               return _EmptyState(isDark: isDark);
             }
 
             return ClipRRect(
-              borderRadius: BorderRadius.circular(18),
+              borderRadius: BorderRadius.circular(14),
               child: Container(
                 decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(18),
+                  borderRadius: BorderRadius.circular(14),
                   border: Border.all(
                     color: isDark ? cDarkBorderColor : const Color(0xFFE7ECF3),
                     width: 1,
@@ -620,9 +840,9 @@ class _DailyDetailsCard extends StatelessWidget {
                 ),
                 child: Table(
                   columnWidths: const {
-                    0: FlexColumnWidth(2.55),
-                    1: FlexColumnWidth(2.25),
-                    2: FlexColumnWidth(1.45),
+                    0: FlexColumnWidth(1.65),
+                    1: FlexColumnWidth(2.2),
+                    2: FlexColumnWidth(1.55),
                   },
                   children: [
                     TableRow(
@@ -634,7 +854,7 @@ class _DailyDetailsCard extends StatelessWidget {
                       children: const [
                         _TableHeaderCell('DATE'),
                         _TableHeaderCell('DAY'),
-                        _TableHeaderCell('WORKED\nHH:MM', alignRight: true),
+                        _TableHeaderCell('WORKED', alignRight: true),
                       ],
                     ),
                     for (int i = 0; i < list.length; i++)
@@ -685,14 +905,14 @@ class _TableHeaderCell extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
       child: Text(
         text,
         textAlign: alignRight ? TextAlign.right : TextAlign.left,
-        maxLines: 2,
+        maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: Theme.of(context).textTheme.labelMedium?.copyWith(
-          fontSize: 12,
+          fontSize: 10.5,
           color: isDark ? const Color(0xFFBFDBFE) : cPrimary,
           fontWeight: FontWeight.w800,
           height: 1.12,
@@ -714,14 +934,14 @@ class _TableDataCell extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 11),
       child: Text(
         text,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         textAlign: alignRight ? TextAlign.right : TextAlign.left,
         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-          fontSize: 14,
+          fontSize: 13,
           color: isDark ? cDarkTextPrimary : const Color(0xFF111827),
           fontWeight: bold ? FontWeight.w800 : FontWeight.w500,
           height: 1.2,

@@ -24,268 +24,258 @@ class NewFeatureFlows {
   }
 
   static void openReportIssue() => open(
-        title: 'Report Issue',
-        subtitle: 'Log a site issue with photo, note, and severity.',
-        icon: Icons.flag_rounded,
-        color: NewUi.warning,
-        stages: const [
-          NewFeatureStage(
-            title: 'Issue details',
-            fields: ['Category', 'Severity', 'Location', 'Description'],
-            primaryLabel: 'Continue',
-          ),
-          NewFeatureStage(
-            title: 'Evidence',
-            fields: ['Add photo', 'Add note', 'Mark urgent'],
-            primaryLabel: 'Submit issue',
-          ),
-        ],
-      );
+    title: 'Report Issue',
+    subtitle: 'Log a site issue with photo, note, and severity.',
+    icon: Icons.flag_rounded,
+    color: NewUi.warning,
+    stages: const [
+      NewFeatureStage(
+        title: 'Issue details',
+        fields: ['Category', 'Severity', 'Location', 'Description'],
+        primaryLabel: 'Continue',
+      ),
+      NewFeatureStage(
+        title: 'Evidence',
+        fields: ['Add photo', 'Add note', 'Mark urgent'],
+        primaryLabel: 'Submit issue',
+      ),
+    ],
+  );
 
   static void openWalkthrough() => open(
-        title: 'Site Walkthrough',
-        subtitle: 'Setup, directives, and checkpoint capture.',
-        icon: Icons.home_work_rounded,
-        color: NewUi.teal,
-        stages: const [
-          NewFeatureStage(
-            title: 'Setup',
-            fields: ['Site', 'Walkthrough type', 'Start time'],
-            primaryLabel: 'Start walkthrough',
-          ),
-          NewFeatureStage(
-            title: 'Directive',
-            fields: ['Areas to cover', 'Special instructions'],
-            primaryLabel: 'Begin checkpoints',
-          ),
-          NewFeatureStage(
-            title: 'Checkpoint',
-            fields: ['Photo', 'GPS pin', 'Notes', 'Complete area'],
-            primaryLabel: 'Finish walkthrough',
-          ),
-        ],
-      );
+    title: 'Site Walkthrough',
+    subtitle: 'Setup, directives, and checkpoint capture.',
+    icon: Icons.home_work_rounded,
+    color: NewUi.teal,
+    stages: const [
+      NewFeatureStage(
+        title: 'Setup',
+        fields: ['Site', 'Walkthrough type', 'Start time'],
+        primaryLabel: 'Start walkthrough',
+      ),
+      NewFeatureStage(
+        title: 'Directive',
+        fields: ['Areas to cover', 'Special instructions'],
+        primaryLabel: 'Begin checkpoints',
+      ),
+      NewFeatureStage(
+        title: 'Checkpoint',
+        fields: ['Photo', 'GPS pin', 'Notes', 'Complete area'],
+        primaryLabel: 'Finish walkthrough',
+      ),
+    ],
+  );
 
   static void openPatrol() => open(
-        title: 'Patrol',
-        subtitle: 'Choose patrol method and complete route visits.',
-        icon: Icons.location_on_rounded,
-        color: NewUi.purple,
-        stages: const [
-          NewFeatureStage(
-            title: 'Patrol method',
-            fields: ['Round timer', 'QR patrol', 'Tour checklist', 'Route map'],
-            primaryLabel: 'Continue',
-          ),
-          NewFeatureStage(
-            title: 'Active patrol',
-            fields: ['Next checkpoint', 'Mark visit', 'Capture photo'],
-            primaryLabel: 'Complete patrol',
-          ),
-        ],
-      );
+    title: 'Patrol',
+    subtitle: 'Choose patrol method and complete route visits.',
+    icon: Icons.location_on_rounded,
+    color: NewUi.purple,
+    stages: const [
+      NewFeatureStage(
+        title: 'Patrol method',
+        fields: ['Round timer', 'QR patrol', 'Tour checklist', 'Route map'],
+        primaryLabel: 'Continue',
+      ),
+      NewFeatureStage(
+        title: 'Active patrol',
+        fields: ['Next checkpoint', 'Mark visit', 'Capture photo'],
+        primaryLabel: 'Complete patrol',
+      ),
+    ],
+  );
 
   static void openPatrolPlan() => open(
-        title: 'Patrol Plan',
-        subtitle: 'Track remaining visits across the patrol route.',
-        icon: Icons.checklist_rounded,
-        color: NewUi.purple,
-        stages: const [
-          NewFeatureStage(
-            title: 'Route progress',
-            fields: [
-              'Lobby ×2',
-              'Parking B1 ×1',
-              'Roof access ×1',
-              'Loading dock ×1',
-            ],
-            primaryLabel: 'Open map',
-          ),
+    title: 'Patrol Plan',
+    subtitle: 'Track remaining visits across the patrol route.',
+    icon: Icons.checklist_rounded,
+    color: NewUi.purple,
+    stages: const [
+      NewFeatureStage(
+        title: 'Route progress',
+        fields: [
+          'Lobby ×2',
+          'Parking B1 ×1',
+          'Roof access ×1',
+          'Loading dock ×1',
         ],
-      );
+        primaryLabel: 'Open map',
+      ),
+    ],
+  );
 
   static void openIncident() => open(
-        title: 'Incident Report',
-        subtitle: 'Create or review incident reports for dispatch.',
-        icon: Icons.report_rounded,
-        color: NewUi.danger,
-        stages: const [
-          NewFeatureStage(
-            title: 'Incident list',
-            fields: ['Open incidents', 'Drafts', 'Submitted'],
-            primaryLabel: 'New incident',
-          ),
-          NewFeatureStage(
-            title: 'Incident form',
-            fields: [
-              'Type',
-              'Severity',
-              'People involved',
-              'Narrative',
-              'Photos',
-            ],
-            primaryLabel: 'Submit report',
-          ),
-        ],
-      );
+    title: 'Incident Report',
+    subtitle: 'Create or review incident reports for dispatch.',
+    icon: Icons.report_rounded,
+    color: NewUi.danger,
+    stages: const [
+      NewFeatureStage(
+        title: 'Incident list',
+        fields: ['Open incidents', 'Drafts', 'Submitted'],
+        primaryLabel: 'New incident',
+      ),
+      NewFeatureStage(
+        title: 'Incident form',
+        fields: ['Type', 'Severity', 'People involved', 'Narrative', 'Photos'],
+        primaryLabel: 'Submit report',
+      ),
+    ],
+  );
 
   static void openParking() => open(
-        title: 'Parking Management',
-        subtitle: 'Violations, visitor parking, lookup, and tow requests.',
-        icon: Icons.local_parking_rounded,
-        color: NewUi.textMutedLight,
-        stages: const [
-          NewFeatureStage(
-            title: 'Parking menu',
-            fields: [
-              'Log violation',
-              'Visitor parking',
-              'Plate lookup',
-              'Tow request',
-            ],
-            primaryLabel: 'Continue',
-          ),
-          NewFeatureStage(
-            title: 'Plate capture',
-            fields: ['Scan plate', 'Vehicle make', 'Location', 'Notes'],
-            primaryLabel: 'Save entry',
-          ),
+    title: 'Parking Management',
+    subtitle: 'Violations, visitor parking, lookup, and tow requests.',
+    icon: Icons.local_parking_rounded,
+    color: NewUi.textMutedLight,
+    stages: const [
+      NewFeatureStage(
+        title: 'Parking menu',
+        fields: [
+          'Log violation',
+          'Visitor parking',
+          'Plate lookup',
+          'Tow request',
         ],
-      );
+        primaryLabel: 'Continue',
+      ),
+      NewFeatureStage(
+        title: 'Plate capture',
+        fields: ['Scan plate', 'Vehicle make', 'Location', 'Notes'],
+        primaryLabel: 'Save entry',
+      ),
+    ],
+  );
 
   static void openFleet() => open(
-        title: 'Fleet',
-        subtitle: 'Vehicle lookup, fuel, maintenance, and location history.',
-        icon: Icons.directions_car_filled_rounded,
-        color: const Color(0xFFEC4899),
-        stages: const [
-          NewFeatureStage(
-            title: 'Fleet browse',
-            fields: ['Lookup plate', 'Assigned vehicles', 'Available units'],
-            primaryLabel: 'Open vehicle',
-          ),
-          NewFeatureStage(
-            title: 'Vehicle detail',
-            fields: ['Fuel log', 'Maintenance', 'Location', 'History'],
-            primaryLabel: 'Save update',
-          ),
-        ],
-      );
+    title: 'Fleet',
+    subtitle: 'Vehicle lookup, fuel, maintenance, and location history.',
+    icon: Icons.directions_car_filled_rounded,
+    color: const Color(0xFFEC4899),
+    stages: const [
+      NewFeatureStage(
+        title: 'Fleet browse',
+        fields: ['Lookup plate', 'Assigned vehicles', 'Available units'],
+        primaryLabel: 'Open vehicle',
+      ),
+      NewFeatureStage(
+        title: 'Vehicle detail',
+        fields: ['Fuel log', 'Maintenance', 'Location', 'History'],
+        primaryLabel: 'Save update',
+      ),
+    ],
+  );
 
   static void openMoveInspection() => open(
-        title: 'Pre/Post Inspection',
-        subtitle: 'Unit move inspection with photos and signatures.',
-        icon: Icons.home_work_rounded,
-        color: NewUi.success,
-        stages: const [
-          NewFeatureStage(
-            title: 'Inspection type',
-            fields: ['Pre-move', 'Post-move', 'Unit number'],
-            primaryLabel: 'Continue',
-          ),
-          NewFeatureStage(
-            title: 'Areas',
-            fields: ['Kitchen', 'Bathrooms', 'Living areas', 'Exterior'],
-            primaryLabel: 'Capture area',
-          ),
-          NewFeatureStage(
-            title: 'Complete',
-            fields: ['Photos', 'Damage notes', 'Signature'],
-            primaryLabel: 'Submit inspection',
-          ),
-        ],
-      );
+    title: 'Pre/Post Inspection',
+    subtitle: 'Unit move inspection with photos and signatures.',
+    icon: Icons.home_work_rounded,
+    color: NewUi.success,
+    stages: const [
+      NewFeatureStage(
+        title: 'Inspection type',
+        fields: ['Pre-move', 'Post-move', 'Unit number'],
+        primaryLabel: 'Continue',
+      ),
+      NewFeatureStage(
+        title: 'Areas',
+        fields: ['Kitchen', 'Bathrooms', 'Living areas', 'Exterior'],
+        primaryLabel: 'Capture area',
+      ),
+      NewFeatureStage(
+        title: 'Complete',
+        fields: ['Photos', 'Damage notes', 'Signature'],
+        primaryLabel: 'Submit inspection',
+      ),
+    ],
+  );
 
   static void openSiteManual() => open(
-        title: 'Site Manual',
-        subtitle: 'Post orders, emergency procedures, and site policies.',
-        icon: Icons.menu_book_rounded,
-        color: NewUi.purple,
-        stages: const [
-          NewFeatureStage(
-            title: 'Manual sections',
-            fields: [
-              'Post orders',
-              'Emergency procedures',
-              'Access control',
-              'Visitor policy',
-              'Fire safety',
-            ],
-            primaryLabel: 'Close',
-          ),
+    title: 'Site Manual',
+    subtitle: 'Post orders, emergency procedures, and site policies.',
+    icon: Icons.menu_book_rounded,
+    color: NewUi.purple,
+    stages: const [
+      NewFeatureStage(
+        title: 'Manual sections',
+        fields: [
+          'Post orders',
+          'Emergency procedures',
+          'Access control',
+          'Visitor policy',
+          'Fire safety',
         ],
-      );
+        primaryLabel: 'Close',
+      ),
+    ],
+  );
 
   static void openFirewatch() => open(
-        title: 'Firewatch',
-        subtitle: 'Round history, signature capture, and status tracking.',
-        icon: Icons.local_fire_department_rounded,
-        color: NewUi.danger,
-        stages: const [
-          NewFeatureStage(
-            title: 'Firewatch status',
-            fields: ['Current round', 'Last check', 'Sign log'],
-            primaryLabel: 'Start round',
-          ),
-          NewFeatureStage(
-            title: 'Firewatch patrol',
-            fields: ['Checkpoint list', 'Photo', 'Signature'],
-            primaryLabel: 'Complete round',
-          ),
-        ],
-      );
+    title: 'Firewatch',
+    subtitle: 'Round history, signature capture, and status tracking.',
+    icon: Icons.local_fire_department_rounded,
+    color: NewUi.danger,
+    stages: const [
+      NewFeatureStage(
+        title: 'Firewatch status',
+        fields: ['Current round', 'Last check', 'Sign log'],
+        primaryLabel: 'Start round',
+      ),
+      NewFeatureStage(
+        title: 'Firewatch patrol',
+        fields: ['Checkpoint list', 'Photo', 'Signature'],
+        primaryLabel: 'Complete round',
+      ),
+    ],
+  );
 
   static void openPayroll() => open(
-        title: 'Payroll',
-        subtitle: 'Timesheet, payments, and weekly summary.',
-        icon: Icons.account_balance_wallet_rounded,
-        color: NewUi.success,
-        stages: const [
-          NewFeatureStage(
-            title: 'Timesheet',
-            fields: [
-              'This week hours',
-              'Approved shifts',
-              'Pending corrections',
-            ],
-            primaryLabel: 'View payments',
-          ),
-          NewFeatureStage(
-            title: 'Payments',
-            fields: ['Last deposit', 'YTD earnings', 'Tax docs'],
-            primaryLabel: 'Weekly summary',
-          ),
-          NewFeatureStage(
-            title: 'Weekly summary',
-            fields: ['Regular hours', 'OT hours', 'Breaks', 'Net pay estimate'],
-            primaryLabel: 'Done',
-          ),
-        ],
-      );
+    title: 'Payroll',
+    subtitle: 'Timesheet, payments, and weekly summary.',
+    icon: Icons.account_balance_wallet_rounded,
+    color: NewUi.success,
+    stages: const [
+      NewFeatureStage(
+        title: 'Timesheet',
+        fields: ['This week hours', 'Approved shifts', 'Pending corrections'],
+        primaryLabel: 'View payments',
+      ),
+      NewFeatureStage(
+        title: 'Payments',
+        fields: ['Last deposit', 'YTD earnings', 'Tax docs'],
+        primaryLabel: 'Weekly summary',
+      ),
+      NewFeatureStage(
+        title: 'Weekly summary',
+        fields: ['Regular hours', 'OT hours', 'Breaks', 'Net pay estimate'],
+        primaryLabel: 'Done',
+      ),
+    ],
+  );
 
   static void openReportAssist() => open(
-        title: 'Report Assist',
-        subtitle: 'Dictate or type notes and generate a polished report draft.',
-        icon: Icons.auto_awesome_rounded,
-        color: NewUi.accent,
-        stages: const [
-          NewFeatureStage(
-            title: 'Input',
-            fields: ['Voice note', 'Typed notes', 'Language'],
-            primaryLabel: 'Generate draft',
-          ),
-          NewFeatureStage(
-            title: 'Thinking',
-            fields: ['Structuring narrative', 'Checking severity cues'],
-            primaryLabel: 'Show output',
-          ),
-          NewFeatureStage(
-            title: 'Output',
-            fields: ['Draft report', 'Copy', 'Send to incident form'],
-            primaryLabel: 'Use draft',
-          ),
-        ],
-      );
+    title: 'Report Assist',
+    subtitle: 'Dictate or type notes and generate a polished report draft.',
+    icon: Icons.auto_awesome_rounded,
+    color: NewUi.accent,
+    stages: const [
+      NewFeatureStage(
+        title: 'Input',
+        fields: ['Voice note', 'Typed notes', 'Language'],
+        primaryLabel: 'Generate draft',
+      ),
+      NewFeatureStage(
+        title: 'Thinking',
+        fields: ['Structuring narrative', 'Checking severity cues'],
+        primaryLabel: 'Show output',
+      ),
+      NewFeatureStage(
+        title: 'Output',
+        fields: ['Draft report', 'Copy', 'Send to incident form'],
+        primaryLabel: 'Use draft',
+      ),
+    ],
+  );
 }
 
 class NewFeatureStage {
@@ -339,7 +329,7 @@ class _NewFeatureFlowScreenState extends State<NewFeatureFlowScreen> {
                 padding: const EdgeInsets.fromLTRB(8, 4, 16, 8),
                 child: Row(
                   children: [
-                    IconButton(
+                    NewBackButton(
                       onPressed: () {
                         if (_index == 0) {
                           Get.back();
@@ -347,7 +337,6 @@ class _NewFeatureFlowScreenState extends State<NewFeatureFlowScreen> {
                           setState(() => _index -= 1);
                         }
                       },
-                      icon: const Icon(Icons.arrow_back_rounded),
                     ),
                     Expanded(
                       child: Column(

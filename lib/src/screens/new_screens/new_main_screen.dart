@@ -15,9 +15,14 @@ class NewMainScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final controller = Get.put(NewMainController());
-    final dashboardController = Get.put(NewDashboardController(), permanent: true);
+    final dashboardController = Get.put(
+      NewDashboardController(),
+      permanent: true,
+    );
     Future.microtask(dashboardController.healShortcuts);
-    final connectivityController = Get.isRegistered<ConnectivityController>() ? Get.find<ConnectivityController>() : null;
+    final connectivityController = Get.isRegistered<ConnectivityController>()
+        ? Get.find<ConnectivityController>()
+        : null;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final overlay = SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
@@ -25,8 +30,9 @@ class NewMainScreen extends StatelessWidget {
       statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
       systemNavigationBarColor: Colors.transparent,
       systemNavigationBarDividerColor: Colors.transparent,
-      systemNavigationBarIconBrightness:
-          isDark ? Brightness.light : Brightness.dark,
+      systemNavigationBarIconBrightness: isDark
+          ? Brightness.light
+          : Brightness.dark,
       systemNavigationBarContrastEnforced: false,
       systemStatusBarContrastEnforced: false,
     );
@@ -49,7 +55,8 @@ class NewMainScreen extends StatelessWidget {
               Positioned.fill(
                 child: Column(
                   children: [
-                    NewAppHeader(onMenuTap: dashboardController.openSideMenu),
+                    if (controller.isAppHeaderVisible.value)
+                      NewAppHeader(onMenuTap: dashboardController.openSideMenu),
                     Expanded(
                       child: controller.pages[controller.pageIndex.value],
                     ),

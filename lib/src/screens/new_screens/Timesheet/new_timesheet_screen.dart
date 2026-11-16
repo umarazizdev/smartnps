@@ -6,9 +6,7 @@ class NewTimesheetScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Padding(
-      padding: EdgeInsets.only(bottom: 96),
-      child: TimesheetScreen(),
-    );
+    final bottom = MediaQuery.paddingOf(context).bottom + 108;
+    return TimesheetScreen(sampleData: true, scrollBottomPadding: bottom);
   }
 }

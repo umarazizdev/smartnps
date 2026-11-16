@@ -2,6 +2,34 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:smartnps360/src/screens/utilities/const.dart';
 
+class NewBackButton extends StatelessWidget {
+  const NewBackButton({super.key, required this.onPressed});
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return IconButton(
+      onPressed: onPressed,
+      tooltip: 'Back',
+      style: IconButton.styleFrom(
+        fixedSize: const Size(44, 44),
+        backgroundColor: dark ? Colors.white.withAlpha(10) : Colors.white,
+        side: BorderSide(
+          color: dark ? Colors.white.withAlpha(22) : const Color(0xFFE3E8F0),
+        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(13)),
+      ),
+      icon: Icon(
+        Theme.of(context).platform == TargetPlatform.iOS
+            ? Icons.arrow_back_ios_new_rounded
+            : Icons.arrow_back_rounded,
+        size: 21,
+      ),
+    );
+  }
+}
+
 class NewUi {
   static const bgDark = Color(0xFF070912);
   static const bgDark2 = Color(0xFF0C1020);
