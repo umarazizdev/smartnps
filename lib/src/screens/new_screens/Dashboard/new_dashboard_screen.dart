@@ -7,6 +7,7 @@ import '../new_main_controller.dart';
 import '../new_models.dart';
 import 'new_dashboard_controller.dart';
 import 'new_dashboard_hero.dart';
+import 'theme/dashboard_design_tokens.dart';
 
 class NewDashboardScreen extends StatelessWidget {
   const NewDashboardScreen({super.key});
@@ -16,7 +17,12 @@ class NewDashboardScreen extends StatelessWidget {
     final controller = Get.put(NewDashboardController(), permanent: true);
     return _DashboardBackground(
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 112),
+        padding: const EdgeInsets.fromLTRB(
+          DashboardMetrics.pagePadding,
+          8,
+          DashboardMetrics.pagePadding,
+          112,
+        ),
         children: [
           Center(
             child: ConstrainedBox(
@@ -58,19 +64,7 @@ class _DashboardBackground extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dark = _DashStyle.dark(context);
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: dark
-              ? const [Color(0xFF0E1726), Color(0xFF111B2B)]
-              : const [Color(0xFFF8FAFC), Color(0xFFF2F5F9)],
-        ),
-      ),
-      child: child,
-    );
+    return DecoratedBox(decoration: const BoxDecoration(), child: child);
   }
 }
 
@@ -79,21 +73,16 @@ class _DashStyle {
       Theme.of(context).brightness == Brightness.dark;
 
   static Color text(BuildContext context) =>
-      dark(context) ? const Color(0xFFF5F7FA) : const Color(0xFF172033);
+      DashboardDesign.of(context).textPrimary;
 
   static Color secondary(BuildContext context) =>
-      dark(context) ? const Color(0xFFAAB6C7) : const Color(0xFF667085);
+      DashboardDesign.of(context).textSecondary;
 
   static Color surface(BuildContext context) =>
       dark(context) ? const Color(0xFF182335) : const Color(0xFFFFFFFF);
 
   static Color line(BuildContext context) =>
       dark(context) ? const Color(0xFF2B3A4E) : const Color(0xFFE4E9F0);
-
-  // Semantic attention red: deeper on light surfaces for small-text contrast,
-  // brighter in dark mode so alerts remain immediately visible.
-  static Color attention(BuildContext context) =>
-      dark(context) ? const Color(0xFFFF7582) : const Color(0xFFC92F42);
 
   static WidgetStateProperty<Color?> interactionOverlay(Color color) {
     return WidgetStateProperty.resolveWith((states) {
@@ -107,17 +96,10 @@ class _DashStyle {
   static BoxDecoration card(BuildContext context, {double radius = 22}) =>
       BoxDecoration(
         color: surface(context),
-        borderRadius: BorderRadius.circular(radius),
-        border: Border.all(color: line(context)),
-        boxShadow: dark(context)
-            ? const []
-            : [
-                BoxShadow(
-                  color: const Color(0xFF101828).withAlpha(10),
-                  blurRadius: 18,
-                  offset: const Offset(0, 5),
-                ),
-              ],
+        gradient: DashboardDesign.of(context).shortcutGradient,
+        borderRadius: BorderRadius.circular(DashboardMetrics.cardRadius),
+        border: Border.all(color: DashboardDesign.of(context).shortcutBorder),
+        boxShadow: DashboardDesign.of(context).cardShadow,
       );
 }
 
@@ -162,15 +144,14 @@ class _Greeting extends StatelessWidget {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        NewDashboardPeriodIcon(controller: controller),
-        const SizedBox(width: 9),
         Expanded(
           child: RichText(
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             text: TextSpan(
               style: TextStyle(
-                fontSize: 18,
+                fontFamily: Theme.of(context).textTheme.bodyMedium?.fontFamily,
+                fontSize: DashboardMetrics.greetingFontSize,
                 height: 1.27,
                 fontWeight: FontWeight.w600,
                 letterSpacing: -.5,
@@ -181,7 +162,7 @@ class _Greeting extends StatelessWidget {
                 TextSpan(
                   text: controller.firstName,
                   style: TextStyle(
-                    color: NewUi.accent,
+                    color: DashboardDesign.of(context).greetingAccent,
                     fontWeight: FontWeight.w800,
                   ),
                 ),
@@ -268,7 +249,7 @@ class _Stats extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Expanded(child: warningCard),
-            const SizedBox(width: 12),
+            const SizedBox(width: DashboardMetrics.statGap),
             Expanded(child: onTimeCard),
           ],
         );
@@ -331,11 +312,13 @@ class _StatCardState extends State<_StatCard>
 
   @override
   Widget build(BuildContext context) {
+    final design = DashboardDesign.of(context);
+    final isWarning = widget.data.tag == null;
     final accent = widget.danger
-        ? _DashStyle.attention(context)
-        : widget.historyMode
-        ? NewUi.purple
-        : NewUi.accent;
+        ? design.warningAccessibleText
+        : isWarning
+        ? design.textSecondary
+        : design.onTimeValue;
     return LayoutBuilder(
       builder: (context, constraints) {
         // Keep the cards dense on compact iPhones, while allowing their
@@ -350,37 +333,27 @@ class _StatCardState extends State<_StatCard>
           animation: _pulse,
           builder: (context, _) {
             final base = _DashStyle.card(context, radius: 18);
-            final pulse = _pulse.value;
             return Container(
-              constraints: BoxConstraints(minHeight: 88 * scale),
+              constraints: const BoxConstraints(
+                minHeight: DashboardMetrics.statHeight,
+              ),
               decoration: base.copyWith(
-                gradient: RadialGradient(
-                  center: Alignment.bottomRight,
-                  radius: 1.3,
-                  colors: [
-                    Color.alphaBlend(
-                      accent.withAlpha(_DashStyle.dark(context) ? 24 : 10),
-                      _DashStyle.surface(context),
-                    ),
-                    _DashStyle.surface(context),
-                  ],
+                gradient: isWarning
+                    ? widget.danger
+                          ? design.warningGradient
+                          : design.warningNoIssueGradient
+                    : design.onTimeGradient,
+                borderRadius: BorderRadius.circular(
+                  DashboardMetrics.statRadius,
                 ),
                 border: Border.all(
-                  width: widget.pulse ? 1.35 : 1,
-                  color: widget.pulse
-                      ? accent.withAlpha((120 + pulse * 70).round())
-                      : _DashStyle.line(context),
+                  color: isWarning
+                      ? widget.danger
+                            ? design.warningBorder
+                            : design.warningNoIssueBorder
+                      : design.onTimeBorder,
                 ),
-                boxShadow: widget.pulse
-                    ? [
-                        ...?base.boxShadow,
-                        BoxShadow(
-                          color: accent.withAlpha((18 + pulse * 24).round()),
-                          blurRadius: 10 + (pulse * 5),
-                          spreadRadius: .4 + (pulse * .8),
-                        ),
-                      ]
-                    : base.boxShadow,
+                boxShadow: design.cardShadow,
               ),
               child: Material(
                 color: Colors.transparent,
@@ -391,7 +364,7 @@ class _StatCardState extends State<_StatCard>
                   onDoubleTap: widget.onDoubleTap,
                   overlayColor: _DashStyle.interactionOverlay(accent),
                   child: CustomPaint(
-                    painter: _StatAccentWave(accent, _DashStyle.dark(context)),
+                    painter: null,
                     child: Padding(
                       padding: EdgeInsets.fromLTRB(
                         horizontalPadding,
@@ -408,9 +381,9 @@ class _StatCardState extends State<_StatCard>
                                 width: iconSize,
                                 height: iconSize,
                                 decoration: BoxDecoration(
-                                  color: accent.withAlpha(
-                                    _DashStyle.dark(context) ? 36 : 19,
-                                  ),
+                                  color: isWarning
+                                      ? design.warningIconTile
+                                      : design.onTimeIconTile,
                                   borderRadius: BorderRadius.circular(
                                     7 * scale,
                                   ),
@@ -418,7 +391,9 @@ class _StatCardState extends State<_StatCard>
                                 child: Icon(
                                   widget.icon,
                                   size: 14.5 * scale,
-                                  color: accent,
+                                  color: isWarning
+                                      ? design.warningIcon
+                                      : design.onTimeIcon,
                                 ),
                               ),
                               SizedBox(width: 6 * scale),
@@ -442,13 +417,13 @@ class _StatCardState extends State<_StatCard>
                                     vertical: 3 * scale,
                                   ),
                                   decoration: BoxDecoration(
-                                    color: NewUi.purple.withAlpha(21),
+                                    gradient: design.monthGradient,
                                     borderRadius: BorderRadius.circular(6),
                                   ),
                                   child: Text(
                                     widget.data.tag!,
                                     style: TextStyle(
-                                      color: NewUi.purple,
+                                      color: design.monthText,
                                       fontSize: 10.5 * scale,
                                       fontWeight: FontWeight.w800,
                                     ),
@@ -457,19 +432,33 @@ class _StatCardState extends State<_StatCard>
                             ],
                           ),
                           SizedBox(height: 5 * scale),
-                          Text(
-                            widget.data.value,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 21 * scale,
-                              height: 1.05,
-                              letterSpacing: -.7,
-                              fontWeight: FontWeight.w800,
-                              color: widget.danger
-                                  ? accent
-                                  : _DashStyle.text(context),
-                            ),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  widget.data.value,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize:
+                                        DashboardMetrics.statValueSize * scale,
+                                    height: 1.05,
+                                    letterSpacing: -.7,
+                                    fontWeight: FontWeight.w800,
+                                    color: widget.danger
+                                        ? accent
+                                        : _DashStyle.text(context),
+                                  ),
+                                ),
+                              ),
+                              Icon(
+                                Icons.chevron_right_rounded,
+                                size: DashboardMetrics.chevronSize,
+                                color: isWarning
+                                    ? design.warningChevron
+                                    : design.onTimeChevron,
+                              ),
+                            ],
                           ),
                           SizedBox(height: 1.5 * scale),
                           Text(
@@ -497,43 +486,6 @@ class _StatCardState extends State<_StatCard>
       },
     );
   }
-}
-
-class _StatAccentWave extends CustomPainter {
-  const _StatAccentWave(this.color, this.dark);
-  final Color color;
-  final bool dark;
-  @override
-  void paint(Canvas canvas, Size size) {
-    final path = Path()
-      ..moveTo(size.width * .48, size.height)
-      ..cubicTo(
-        size.width * .76,
-        size.height * .97,
-        size.width * .79,
-        size.height * .74,
-        size.width,
-        size.height * .64,
-      )
-      ..lineTo(size.width, size.height)
-      ..close();
-    canvas.drawPath(path, Paint()..color = color.withAlpha(dark ? 42 : 21));
-    final second = Path()
-      ..moveTo(size.width * .7, size.height)
-      ..quadraticBezierTo(
-        size.width * .88,
-        size.height * .91,
-        size.width,
-        size.height * .83,
-      )
-      ..lineTo(size.width, size.height)
-      ..close();
-    canvas.drawPath(second, Paint()..color = color.withAlpha(dark ? 24 : 14));
-  }
-
-  @override
-  bool shouldRepaint(covariant _StatAccentWave oldDelegate) =>
-      oldDelegate.color != color || oldDelegate.dark != dark;
 }
 
 class _Shortcuts extends StatelessWidget {
@@ -587,7 +539,7 @@ class _Shortcuts extends StatelessWidget {
                 style: TextStyle(
                   color: _DashStyle.text(context),
                   fontWeight: FontWeight.w800,
-                  fontSize: 16,
+                  fontSize: DashboardMetrics.shortcutTitleSize,
                   letterSpacing: -.25,
                   height: 1.15,
                 ),
@@ -623,7 +575,9 @@ class _Shortcuts extends StatelessWidget {
           final narrow = MediaQuery.sizeOf(context).width < 365;
           final crossSpacing = narrow ? 2.0 : 4.0;
           final mainSpacing = narrow ? 4.0 : 6.0;
-          final extent = narrow ? 90.0 : 96.0;
+          final textScale = MediaQuery.textScalerOf(context).scale(12) / 12;
+          final extent =
+              (narrow ? 100.0 : 104.0) + 32 * (textScale - 1).clamp(0, 2);
           final delegate = SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: 3,
             crossAxisSpacing: crossSpacing,
@@ -731,42 +685,41 @@ class _HeaderTextButton extends StatelessWidget {
   final bool selected;
 
   @override
-  Widget build(BuildContext context) => Material(
-    color: NewUi.accent.withAlpha(
-      selected
-          ? (_DashStyle.dark(context) ? 38 : 20)
-          : (_DashStyle.dark(context) ? 18 : 8),
-    ),
-    shape: RoundedRectangleBorder(
+  Widget build(BuildContext context) => Container(
+    decoration: BoxDecoration(
+      gradient: DashboardDesign.of(context).shortcutActionGradient,
       borderRadius: BorderRadius.circular(10),
-      side: BorderSide(
-        color: NewUi.accent.withAlpha(
-          selected
-              ? (_DashStyle.dark(context) ? 75 : 55)
-              : (_DashStyle.dark(context) ? 38 : 28),
-        ),
+      border: Border.all(
+        color: DashboardDesign.of(context).shortcutActionBorder,
       ),
     ),
-    child: InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(10),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 14, color: NewUi.accent),
-            const SizedBox(width: 5),
-            Text(
-              text,
-              style: TextStyle(
-                fontSize: 12.5,
-                fontWeight: FontWeight.w700,
-                letterSpacing: -.1,
-                color: NewUi.accent,
+    child: Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 14,
+                color: DashboardDesign.of(context).shortcutActionText,
               ),
-            ),
-          ],
+              const SizedBox(width: 5),
+              Text(
+                text,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -.1,
+                  color: DashboardDesign.of(context).shortcutActionText,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     ),
@@ -785,10 +738,44 @@ class _ShortcutTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = newColor(item.colorKey);
+    final design = DashboardDesign.of(context);
+    final category = item.iconKey.toLowerCase();
+    final color = category.contains('patrol')
+        ? design.patrolIcon
+        : category.contains('incident')
+        ? design.incidentIcon
+        : category.contains('remind')
+        ? design.reminderIcon
+        : category.contains('message')
+        ? design.messageIcon
+        : category.contains('log')
+        ? design.logIcon
+        : newColor(item.colorKey);
+    final tileBorder = category.contains('patrol')
+        ? design.patrolBorder
+        : category.contains('incident')
+        ? design.incidentBorder
+        : category.contains('remind')
+        ? design.reminderBorder
+        : category.contains('message')
+        ? design.messageBorder
+        : category.contains('log')
+        ? design.logBorder
+        : color.withAlpha(70);
+    final gradient = category.contains('patrol')
+        ? design.patrolGradient
+        : category.contains('incident')
+        ? design.incidentGradient
+        : category.contains('remind')
+        ? design.reminderGradient
+        : category.contains('message')
+        ? design.messageGradient
+        : category.contains('log')
+        ? design.logGradient
+        : null;
     final dark = _DashStyle.dark(context);
     final hasBadge = item.badge != null && item.badge!.isNotEmpty;
-    const iconBox = 44.0;
+    const iconBox = DashboardMetrics.shortcutTileSize;
     return Opacity(
       opacity: item.enabled ? 1 : .47,
       child: GestureDetector(
@@ -807,16 +794,13 @@ class _ShortcutTile extends StatelessWidget {
                     child: DecoratedBox(
                       decoration: BoxDecoration(
                         color: color.withAlpha(dark ? 35 : 18),
+                        gradient: gradient,
                         borderRadius: BorderRadius.circular(13),
-                        border: Border.all(
-                          color: color.withAlpha(dark ? 95 : 70),
-                        ),
+                        border: Border.all(color: tileBorder),
                       ),
                       child: Icon(
                         newIcon(item.iconKey),
-                        color: dark
-                            ? Color.lerp(color, Colors.white, .18)
-                            : color,
+                        color: color,
                         size: 22,
                       ),
                     ),
@@ -923,7 +907,7 @@ class _ShiftActions extends StatelessWidget {
     return Row(
       children: [
         Expanded(child: shiftButton),
-        const SizedBox(width: 8),
+        const SizedBox(width: DashboardMetrics.actionGap),
         Expanded(child: breakButton),
       ],
     );
@@ -944,15 +928,17 @@ class _NativeShiftButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-    height: 54,
+    height: DashboardMetrics.actionHeight,
     decoration: BoxDecoration(
-      gradient: LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [color, Color.lerp(color, Colors.black, .10)!],
-      ),
+      gradient: color == NewUi.danger
+          ? DashboardDesign.of(context).clockOutGradient
+          : DashboardDesign.of(context).clockInGradient,
       borderRadius: BorderRadius.circular(14),
-      border: Border.all(color: Colors.white.withAlpha(24)),
+      border: Border.all(
+        color: color == NewUi.danger
+            ? DashboardDesign.of(context).clockOutBorder
+            : DashboardDesign.of(context).clockInBorder,
+      ),
       boxShadow: [
         BoxShadow(
           color: color.withAlpha(18),
@@ -1018,24 +1004,25 @@ class _NativeBreakButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = NewUi.warning;
+    final design = DashboardDesign.of(context);
+    final color = design.breakButtonIcon;
     final dark = _DashStyle.dark(context);
     final foreground = enabled
-        ? (dark ? const Color(0xFFFFD07F) : const Color(0xFF95620B))
-        : _DashStyle.secondary(context);
+        ? design.breakButtonText
+        : design.disabledButtonText;
     return Opacity(
-      opacity: enabled ? 1 : .76,
+      opacity: 1,
       child: Container(
-        height: 54,
+        height: DashboardMetrics.actionHeight,
         decoration: _DashStyle.card(context, radius: 14).copyWith(
-          color: onBreak
-              ? (dark ? const Color(0xFF3A3021) : const Color(0xFFFFF6E5))
-              : _DashStyle.surface(context),
+          gradient: enabled
+              ? DashboardDesign.of(context).breakButtonGradient
+              : DashboardDesign.of(context).disabledButtonGradient,
           boxShadow: const [],
           border: Border.all(
-            color: enabled && onBreak
-                ? foreground.withAlpha(80)
-                : _DashStyle.line(context),
+            color: enabled
+                ? design.breakButtonBorder
+                : design.disabledButtonBorder,
           ),
         ),
         child: Material(

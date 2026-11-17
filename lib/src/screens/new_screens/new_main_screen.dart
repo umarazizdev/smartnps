@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+import 'Dashboard/theme/dashboard_design_tokens.dart';
 import 'package:get/get.dart';
 import 'package:smartnps360/src/screens/controllers/connectivitycontroller.dart';
 import 'package:smartnps360/src/screens/widgets/nointernetscreen.dart';
@@ -52,6 +54,29 @@ class NewMainScreen extends StatelessWidget {
           backgroundColor: Theme.of(context).scaffoldBackgroundColor,
           body: Stack(
             children: [
+              Positioned.fill(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: DashboardDesign.of(context).pageGradient,
+                  ),
+                ),
+              ),
+              if (controller.pageIndex.value == 0 &&
+                  controller.isAppHeaderVisible.value)
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  height:
+                      DashboardMetrics.headerArtworkHeight +
+                      MediaQuery.paddingOf(context).top,
+                  child: ClipRect(
+                    child: SvgPicture.asset(
+                      DashboardDesign.of(context).headerAsset,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                ),
               Positioned.fill(
                 child: Column(
                   children: [

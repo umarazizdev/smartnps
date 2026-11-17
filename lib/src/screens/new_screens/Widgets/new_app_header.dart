@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-import 'package:smartnps360/src/screens/utilities/const.dart';
 import '../Dashboard/new_dashboard_controller.dart';
+import '../Dashboard/theme/dashboard_design_tokens.dart';
 
 class NewAppHeader extends StatelessWidget {
   const NewAppHeader({super.key, required this.onMenuTap});
@@ -55,13 +55,15 @@ class NewAppHeader extends StatelessWidget {
                       letterSpacing: -.4,
                       fontWeight: FontWeight.w700,
                       height: 1.1,
-                      color: Theme.of(context).textTheme.bodyLarge?.color,
+                      color: DashboardDesign.of(context).textPrimary,
                     ),
-                    children: const [
+                    children: [
                       TextSpan(text: 'SmartNPS'),
                       TextSpan(
                         text: ' 360',
-                        style: TextStyle(color: Color(0xFF4F8DFF)),
+                        style: TextStyle(
+                          color: DashboardDesign.of(context).brandAccent,
+                        ),
                       ),
                     ],
                   ),
@@ -90,7 +92,7 @@ class NewAppHeader extends StatelessWidget {
                   clipBehavior: Clip.none,
                   children: [
                     _HeaderButton(
-                    asset: 'assets/images/header_bell_outline_v6.png',
+                      asset: 'assets/images/header_bell_outline_v6.png',
                       onTap: controller.openNotifications,
                       metrics: metrics,
                     ),
@@ -107,7 +109,7 @@ class NewAppHeader extends StatelessWidget {
                             horizontal: metrics.badgePad,
                           ),
                           decoration: BoxDecoration(
-                            color: cRed,
+                            color: DashboardDesign.of(context).badgeRed,
                             borderRadius: BorderRadius.circular(99),
                             border: Border.all(
                               color: Theme.of(context).scaffoldBackgroundColor,
@@ -118,7 +120,7 @@ class NewAppHeader extends StatelessWidget {
                             child: Text(
                               '${controller.unreadNotifications}',
                               style: TextStyle(
-                                color: Colors.white,
+                                color: DashboardDesign.of(context).badgeText,
                                 fontSize: metrics.badgeFont,
                                 fontWeight: FontWeight.w700,
                                 height: 1,
@@ -178,6 +180,7 @@ class _HeaderButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
+    final design = DashboardDesign(dark);
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -196,30 +199,17 @@ class _HeaderButton extends StatelessWidget {
           width: metrics.buttonSize,
           height: metrics.buttonSize,
           decoration: BoxDecoration(
-            color: dark
-                ? const Color(0xFF182335)
-                : tinted
-                ? Theme.of(context).colorScheme.primary.withAlpha(22)
-                : Theme.of(context).colorScheme.primary.withAlpha(10),
+            gradient: design.headerButtonGradient,
             borderRadius: BorderRadius.circular(metrics.buttonRadius),
-            border: dark
-                ? Border.all(color: const Color(0xFF2B3A4E))
-                : tinted
-                ? null
-                : Border.all(
-                    color: Theme.of(context).dividerColor.withAlpha(35),
-                  ),
+            border: Border.all(color: design.headerButtonBorder),
+            boxShadow: design.raisedShadow,
           ),
           child: Center(
             child: Image.asset(
               asset,
               width: metrics.iconSize,
               height: metrics.iconSize,
-              color: tinted
-                  ? const Color(0xFF4F8DFF)
-                  : dark
-                  ? const Color(0xFFE6EDF7)
-                  : Theme.of(context).textTheme.bodyLarge?.color,
+              color: design.headerIcon,
               filterQuality: FilterQuality.high,
             ),
           ),

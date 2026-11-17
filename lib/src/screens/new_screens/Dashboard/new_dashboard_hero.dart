@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:smartnps360/src/utilities/app_config.dart';
 import '../new_models.dart';
 import 'new_dashboard_controller.dart';
+import 'theme/dashboard_design_tokens.dart';
 
 /// SmartNPS360 shift hero (no raster assets required).
 ///
@@ -84,16 +85,17 @@ class _NewDashboardHeroState extends State<NewDashboardHero>
   }
 
   Color _accent(_DialCase mode, bool dark) {
+    final design = DashboardDesign(dark);
     switch (mode) {
       case _DialCase.upcoming:
-        return dark ? const Color(0xFF82B4FF) : const Color(0xFF2866D5);
+        return design.upcomingLabel;
       case _DialCase.overdue:
-        return dark ? const Color(0xFFFF858C) : const Color(0xFFD43F50);
+        return design.lateLabel;
       case _DialCase.working:
       case _DialCase.workingLate:
-        return dark ? const Color(0xFF5ED6AE) : const Color(0xFF128A69);
+        return design.activeLabelAccessible;
       case _DialCase.breakTime:
-        return dark ? const Color(0xFFFFCE77) : const Color(0xFFAA710F);
+        return design.breakLabel;
     }
   }
 
@@ -129,10 +131,18 @@ class _NewDashboardHeroState extends State<NewDashboardHero>
     final c = widget.controller;
     final mode = _resolveCase(c);
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final accent = _accent(mode, dark);
-    final primary = dark ? const Color(0xFFF3F7FF) : const Color(0xFF15223A);
-    final secondary = dark ? const Color(0xFFABBAD0) : const Color(0xFF69778D);
-    final border = dark ? const Color(0xFF2B3A50) : const Color(0xFFE1E8F1);
+    final design = DashboardDesign(dark);
+    final accent = mode == _DialCase.upcoming
+        ? switch (c.blinkTier.value) {
+            NewTimerBlinkTier.yellow => design.urgencyYellow,
+            NewTimerBlinkTier.orange => design.urgencyOrange,
+            NewTimerBlinkTier.red => design.urgencyRed,
+            _ => _accent(mode, dark),
+          }
+        : _accent(mode, dark);
+    final primary = design.textPrimary;
+    final secondary = design.textSecondary;
+    final border = design.dialBorder;
     final label = c.timerLabel.value;
     final timer = _timer(c.timerText.value);
     final arrival = c.arrivalStatus.value;
@@ -145,273 +155,313 @@ class _NewDashboardHeroState extends State<NewDashboardHero>
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
-        color: dark ? const Color(0xFF182536) : Colors.white,
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(DashboardMetrics.cardRadius),
         border: Border.all(color: border),
-        boxShadow: dark
-            ? const []
-            : [
-                BoxShadow(
-                  color: const Color(0xFF182D51).withAlpha(12),
-                  blurRadius: 22,
-                  offset: const Offset(0, 7),
-                ),
-              ],
+        boxShadow: design.cardShadow,
       ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-        child: Column(
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(DashboardMetrics.cardRadius),
+        child: Stack(
           children: [
-            Row(
-              children: [
-                Container(
-                  width: 5,
-                  height: 17,
-                  decoration: BoxDecoration(
-                    color: noShift ? secondary : accent,
-                    borderRadius: BorderRadius.circular(9),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'SHIFT OVERVIEW',
-                    style: TextStyle(
-                      color: secondary,
-                      fontSize: 10.5,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 1.05,
-                    ),
-                  ),
-                ),
-                if (!noShift)
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 9,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: accent.withAlpha(20),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: accent.withAlpha(50)),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 5,
-                          height: 5,
-                          decoration: BoxDecoration(
-                            color: accent,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          c.liveStatusText.value,
-                          style: TextStyle(
-                            color: accent,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-              ],
+            Positioned.fill(
+              child: SvgPicture.asset(design.dialAsset, fit: BoxFit.cover),
             ),
-            if (noShift)
-              _NoShiftContent(
-                primary: primary,
-                secondary: secondary,
-                dark: dark,
-              )
-            else ...[
-              const SizedBox(height: 2),
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  final diameter = math.min(208.0, constraints.maxWidth - 6.0);
-                  return Center(
-                    child: SizedBox(
-                      height: diameter,
-                      width: diameter,
-                      child: Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          RepaintBoundary(
-                            child: AnimatedBuilder(
-                              animation: _pulse,
-                              builder: (context, child) => CustomPaint(
-                                size: Size.square(diameter),
-                                painter: _ShiftDialPainter(
-                                  accent: accent,
-                                  dark: dark,
-                                  mode: mode,
-                                  progressLate: c.dialLateEnd.value,
-                                  progressWork: c.dialWork1End.value,
-                                  progressBreak: c.dialBreakEnd.value,
-                                  progressLive: c.dialLiveEnd.value,
-                                  activeDots: c.dialActiveDots.value,
-                                  pulse: _pulse.value,
-                                  urgency: urgency,
-                                ),
-                              ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: DashboardMetrics.sectionMarkerWidth,
+                        height: DashboardMetrics.sectionMarkerHeight,
+                        decoration: BoxDecoration(
+                          color: design.brandAccent,
+                          borderRadius: BorderRadius.circular(9),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'SHIFT OVERVIEW',
+                          style: TextStyle(
+                            color: secondary,
+                            fontSize: DashboardMetrics.sectionLabelFontSize,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 1.05,
+                          ),
+                        ),
+                      ),
+                      if (!noShift)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 9,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            gradient: mode == _DialCase.breakTime
+                                ? design.breakPillGradient
+                                : mode == _DialCase.overdue
+                                ? design.latePillGradient
+                                : mode == _DialCase.upcoming
+                                ? design.upcomingPillGradient
+                                : design.activePillGradient,
+                            borderRadius: BorderRadius.circular(
+                              DashboardMetrics.statusRadius,
+                            ),
+                            border: Border.all(
+                              color: mode == _DialCase.breakTime
+                                  ? design.breakPillBorder
+                                  : mode == _DialCase.overdue
+                                  ? design.latePillBorder
+                                  : mode == _DialCase.upcoming
+                                  ? design.upcomingPillBorder
+                                  : design.activePillBorder,
                             ),
                           ),
-                          MediaQuery.withClampedTextScaling(
-                            maxScaleFactor: 1.20,
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 26,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: 5,
+                                height: 5,
+                                decoration: BoxDecoration(
+                                  color: accent,
+                                  shape: BoxShape.circle,
+                                ),
                               ),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(
-                                        _caseIcon(mode),
-                                        size: 13,
-                                        color: accent,
-                                      ),
-                                      const SizedBox(width: 4),
-                                      Flexible(
-                                        child: Text(
-                                          label.toUpperCase(),
-                                          textAlign: TextAlign.center,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                            color: accent,
-                                            fontSize: 10.5,
-                                            letterSpacing: .6,
-                                            height: 1.15,
-                                            fontWeight: FontWeight.w800,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 5),
-                                  FittedBox(
-                                    fit: BoxFit.scaleDown,
-                                    child: Text(
-                                      timer,
-                                      maxLines: 1,
-                                      style: TextStyle(
-                                        color: mode == _DialCase.overdue
-                                            ? accent
-                                            : primary,
-                                        fontFamily: 'monospace',
-                                        fontSize: timer.contains(' ') ? 17 : 27,
-                                        fontWeight: FontWeight.w800,
-                                        height: 1.02,
-                                        letterSpacing: -1,
-                                        fontFeatures: const [
-                                          FontFeature.tabularFigures(),
-                                        ],
+                              const SizedBox(width: 6),
+                              Text(
+                                c.liveStatusText.value,
+                                style: TextStyle(
+                                  color: accent,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                  if (noShift)
+                    _NoShiftContent(
+                      primary: primary,
+                      secondary: secondary,
+                      dark: dark,
+                    )
+                  else ...[
+                    const SizedBox(height: 2),
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final diameter = math.min(
+                          208.0,
+                          constraints.maxWidth - 6.0,
+                        );
+                        return Center(
+                          child: SizedBox(
+                            height: diameter,
+                            width: diameter,
+                            child: Stack(
+                              alignment: Alignment.center,
+                              children: [
+                                RepaintBoundary(
+                                  child: AnimatedBuilder(
+                                    animation: _pulse,
+                                    builder: (context, child) => CustomPaint(
+                                      size: Size.square(diameter),
+                                      painter: _ShiftDialPainter(
+                                        accent: accent,
+                                        dark: dark,
+                                        mode: mode,
+                                        progressLate: c.dialLateEnd.value,
+                                        progressWork: c.dialWork1End.value,
+                                        progressBreak: c.dialBreakEnd.value,
+                                        progressLive: c.dialLiveEnd.value,
+                                        activeDots: c.dialActiveDots.value,
+                                        pulse: _pulse.value,
+                                        urgency: urgency,
                                       ),
                                     ),
                                   ),
-                                  const SizedBox(height: 6),
-                                  // Only unique, actionable secondary information
-                                  // belongs inside the dial. The current duty status
-                                  // already appears in the greeting above.
-                                  if (lateOnDuty) ...[
-                                    const SizedBox(height: 9),
-                                    Row(
+                                ),
+                                MediaQuery.withClampedTextScaling(
+                                  maxScaleFactor: 1.20,
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 26,
+                                    ),
+                                    child: Column(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
-                                        Icon(
-                                          Icons.error_outline_rounded,
-                                          size: 12,
-                                          color: _arrivalAccent(arrival, dark),
-                                        ),
-                                        const SizedBox(width: 4),
-                                        Flexible(
-                                          child: Text(
-                                            c.arrivalText.value,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: TextStyle(
-                                              color: _arrivalAccent(
-                                                arrival,
-                                                dark,
+                                        Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              _caseIcon(mode),
+                                              size: 13,
+                                              color: accent,
+                                            ),
+                                            const SizedBox(width: 4),
+                                            Flexible(
+                                              child: Text(
+                                                label.toUpperCase(),
+                                                textAlign: TextAlign.center,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: TextStyle(
+                                                  color: accent,
+                                                  fontSize: DashboardMetrics
+                                                      .dialLabelFontSize,
+                                                  letterSpacing: .6,
+                                                  height: 1.15,
+                                                  fontWeight: FontWeight.w800,
+                                                ),
                                               ),
-                                              fontSize: 10.5,
-                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 5),
+                                        FittedBox(
+                                          fit: BoxFit.scaleDown,
+                                          child: Text(
+                                            timer,
+                                            maxLines: 1,
+                                            style: TextStyle(
+                                              color:
+                                                  mode == _DialCase.overdue ||
+                                                      mode ==
+                                                          _DialCase.breakTime ||
+                                                      urgency
+                                                  ? accent
+                                                  : primary,
+                                              fontSize: timer.contains(' ')
+                                                  ? 17
+                                                  : DashboardMetrics
+                                                        .timerFontSize,
+                                              fontWeight: FontWeight.w800,
+                                              height: 1.02,
+                                              letterSpacing: DashboardMetrics
+                                                  .timerLetterSpacing,
+                                              fontFeatures: const [
+                                                FontFeature.tabularFigures(),
+                                              ],
                                             ),
                                           ),
                                         ),
+                                        const SizedBox(height: 6),
+                                        // Only unique, actionable secondary information
+                                        // belongs inside the dial. The current duty status
+                                        // already appears in the greeting above.
+                                        if (lateOnDuty) ...[
+                                          const SizedBox(height: 9),
+                                          Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(
+                                                Icons.error_outline_rounded,
+                                                size: 12,
+                                                color: _arrivalAccent(
+                                                  arrival,
+                                                  dark,
+                                                ),
+                                              ),
+                                              const SizedBox(width: 4),
+                                              Flexible(
+                                                child: Text(
+                                                  c.arrivalText.value,
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: TextStyle(
+                                                    color: _arrivalAccent(
+                                                      arrival,
+                                                      dark,
+                                                    ),
+                                                    fontSize: DashboardMetrics
+                                                        .dialLabelFontSize,
+                                                    fontWeight: FontWeight.w700,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ],
                                       ],
                                     ),
-                                  ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    Container(height: 1, color: design.dialDivider),
+                    const SizedBox(height: 10),
+                    // The location appears only in this footer, never in the greeting.
+                    Row(
+                      children: [
+                        Icon(Icons.event_outlined, size: 16, color: secondary),
+                        const SizedBox(width: 7),
+                        Expanded(
+                          flex: 3,
+                          child: Text(
+                            c.selectedShift.value,
+                            style: TextStyle(
+                              color: primary,
+                              fontSize: DashboardMetrics.footerFontSize,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        if (c.selectedSite.value.trim().isNotEmpty) ...[
+                          Container(
+                            width: 1,
+                            height: 18,
+                            color: design.dialDivider,
+                          ),
+                          const SizedBox(width: 10),
+                          Flexible(
+                            flex: 2,
+                            child: Tooltip(
+                              message: c.selectedSite.value,
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.end,
+                                children: [
+                                  Icon(
+                                    Icons.location_on_outlined,
+                                    size: 16,
+                                    color: secondary,
+                                  ),
+                                  const SizedBox(width: 7),
+                                  Flexible(
+                                    child: Text(
+                                      c.selectedSite.value,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      textAlign: TextAlign.right,
+                                      style: TextStyle(
+                                        color: primary,
+                                        fontSize:
+                                            DashboardMetrics.footerFontSize,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
                                 ],
                               ),
                             ),
                           ),
                         ],
-                      ),
-                    ),
-                  );
-                },
-              ),
-              Container(height: 1, color: border.withAlpha(dark ? 190 : 170)),
-              const SizedBox(height: 10),
-              // The location appears only in this footer, never in the greeting.
-              Row(
-                children: [
-                  Icon(Icons.event_outlined, size: 16, color: secondary),
-                  const SizedBox(width: 7),
-                  Expanded(
-                    flex: 3,
-                    child: Text(
-                      c.selectedShift.value,
-                      style: TextStyle(
-                        color: primary,
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  if (c.selectedSite.value.trim().isNotEmpty) ...[
-                    const SizedBox(width: 10),
-                    Flexible(
-                      flex: 2,
-                      child: Tooltip(
-                        message: c.selectedSite.value,
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          children: [
-                            Icon(
-                              Icons.location_on_outlined,
-                              size: 16,
-                              color: secondary,
-                            ),
-                            const SizedBox(width: 7),
-                            Flexible(
-                              child: Text(
-                                c.selectedSite.value,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                textAlign: TextAlign.right,
-                                style: TextStyle(
-                                  color: primary,
-                                  fontSize: 11.5,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+                      ],
                     ),
                   ],
                 ],
               ),
-            ],
+            ),
           ],
         ),
       ),
@@ -455,82 +505,84 @@ class _NoShiftContent extends StatelessWidget {
   }
 
   Widget _contactButton(BuildContext context, {required bool whatsapp}) {
-    final color = whatsapp
-        ? (dark ? const Color(0xFF6DDBA8) : const Color(0xFF087B4F))
-        : (dark ? const Color(0xFF9CBFFF) : const Color(0xFF2866D5));
-    final surface = whatsapp
-        ? (dark ? const Color(0xFF203B35) : const Color(0xFFEDF9F2))
-        : (dark ? const Color(0xFF202F45) : const Color(0xFFF3F7FD));
-    final border = whatsapp
-        ? (dark ? const Color(0xFF355D4D) : const Color(0xFFCFEBDD))
-        : (dark ? const Color(0xFF344864) : const Color(0xFFDFE8F5));
+    final design = DashboardDesign.of(context);
+    final color = whatsapp ? design.whatsappText : design.callText;
+    final border = whatsapp ? design.whatsappBorder : design.callBorder;
     return Semantics(
       hint: whatsapp
           ? 'Opens WhatsApp to contact Dispatch'
           : 'Opens the phone dialer to call Dispatch',
-      child: OutlinedButton(
-        onPressed: () => _contactDispatch(context, whatsapp: whatsapp),
-        style: OutlinedButton.styleFrom(
-          foregroundColor: color,
-          backgroundColor: surface,
-          side: BorderSide(color: border),
-          minimumSize: const Size(0, 56),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-          tapTargetSize: MaterialTapTargetSize.padded,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(13),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: whatsapp ? design.whatsappGradient : design.callGradient,
+          borderRadius: BorderRadius.circular(
+            DashboardMetrics.emptyButtonRadius,
           ),
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            ExcludeSemantics(
-              child: whatsapp
-                  ? Image.asset(
-                      'assets/Icons/whatsapp.png',
-                      color: color,
-                      width: 21,
-                      height: 21,
-                      fit: BoxFit.contain,
-                      errorBuilder: (_, _, _) => Icon(
-                        whatsapp
-                            ? Icons.chat_bubble_outline_rounded
-                            : Icons.call_outlined,
-                        size: 18,
+        child: OutlinedButton(
+          onPressed: () => _contactDispatch(context, whatsapp: whatsapp),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: color,
+            backgroundColor: Colors.transparent,
+            side: BorderSide(color: border),
+            minimumSize: const Size(0, DashboardMetrics.emptyButtonHeight),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            tapTargetSize: MaterialTapTargetSize.padded,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(13),
+            ),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              ExcludeSemantics(
+                child: whatsapp
+                    ? Image.asset(
+                        'assets/Icons/whatsapp.png',
                         color: color,
-                      ),
-                    )
-                  : Icon(Icons.call_outlined, size: 21, color: color),
-            ),
-            const SizedBox(width: 9),
-            Flexible(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    whatsapp ? 'WhatsApp' : 'Call Dispatch',
-                    style: TextStyle(
-                      color: color,
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w800,
-                      height: 1.2,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    whatsapp ? 'Message Dispatch' : 'Open phone dialer',
-                    style: TextStyle(
-                      color: color.withAlpha(190),
-                      fontSize: 9.5,
-                      fontWeight: FontWeight.w500,
-                      height: 1.2,
-                    ),
-                  ),
-                ],
+                        width: 21,
+                        height: 21,
+                        fit: BoxFit.contain,
+                        errorBuilder: (_, _, _) => Icon(
+                          whatsapp
+                              ? Icons.chat_bubble_outline_rounded
+                              : Icons.call_outlined,
+                          size: 18,
+                          color: color,
+                        ),
+                      )
+                    : Icon(Icons.call_outlined, size: 21, color: color),
               ),
-            ),
-          ],
+              const SizedBox(width: 9),
+              Flexible(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      whatsapp ? 'Open WhatsApp' : 'Call',
+                      style: TextStyle(
+                        color: color,
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w800,
+                        height: 1.2,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      whatsapp ? 'Message Dispatch' : 'Open phone dialer',
+                      style: TextStyle(
+                        color: color.withAlpha(190),
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w500,
+                        height: 1.2,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -547,15 +599,13 @@ class _NoShiftContent extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               ExcludeSemantics(
-                child: SvgPicture.asset(
-                  dark
-                      ? 'assets/images/no_shift_dark.svg'
-                      : 'assets/images/no_shift_light.svg',
-                  width: 160,
-                  height: 128,
+                child: Image.asset(
+                  DashboardDesign(dark).emptyAsset,
+                  width: DashboardMetrics.emptyImageWidth,
+                  height: DashboardMetrics.emptyImageHeight,
                   fit: BoxFit.contain,
                   excludeFromSemantics: true,
-                  placeholderBuilder: (context) => SizedBox(
+                  errorBuilder: (context, error, stack) => SizedBox(
                     width: 160,
                     height: 128,
                     child: Icon(
@@ -574,7 +624,7 @@ class _NoShiftContent extends StatelessWidget {
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: primary,
-                  fontSize: 20,
+                  fontSize: DashboardMetrics.emptyTitleSize,
                   fontWeight: FontWeight.w700,
                   height: 1.2,
                   letterSpacing: -.55,
@@ -715,12 +765,15 @@ class _ShiftDialPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final center = size.center(Offset.zero);
-    final radius = size.shortestSide / 2 - 12;
+    final radius = size.shortestSide / 2 - DashboardMetrics.dialStroke / 2;
     final arc = Rect.fromCircle(center: center, radius: radius);
     // Open bottom, intentionally less dominant than the original thick gauge.
-    final start = math.pi * .76;
-    final sweep = math.pi * 1.48;
-    final neutral = dark ? const Color(0xFF3A4A60) : const Color(0xFFE4EBF3);
+    final design = DashboardDesign(dark);
+    final start = math.pi * DashboardMetrics.dialStartDegrees / 180;
+    final sweep = math.pi * DashboardMetrics.dialSweepDegrees / 180;
+    final neutral = mode == _DialCase.overdue
+        ? design.lateTrack
+        : design.dialTrack;
 
     canvas.drawArc(
       arc,
@@ -728,21 +781,27 @@ class _ShiftDialPainter extends CustomPainter {
       sweep,
       false,
       Paint()
-        ..color = Color.lerp(neutral, accent, dark ? .12 : .09)!
+        ..color = neutral
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 10
+        ..strokeWidth = DashboardMetrics.dialStroke
         ..strokeCap = StrokeCap.round,
     );
 
     // Subtle clock ticks; no heavy 60-dot rim or decorative wave assets.
-    for (var i = 0; i <= 36; i++) {
-      final a = start + sweep * (i / 36);
+    for (var i = 0; i < DashboardMetrics.dialTickCount; i++) {
+      final a = start + sweep * (i / (DashboardMetrics.dialTickCount - 1));
       final outer = radius - 12;
-      final inner = outer - (i % 6 == 0 ? 5 : 3);
+      final major = i % DashboardMetrics.dialMajorTickEvery == 0;
+      final inner =
+          outer -
+          (major
+              ? DashboardMetrics.dialMajorTickLength
+              : DashboardMetrics.dialTickLength);
       final paint = Paint()
-        ..color = (dark ? const Color(0xFF51657E) : const Color(0xFFC9D4E3))
-            .withAlpha(i % 6 == 0 ? 160 : 108)
-        ..strokeWidth = i % 6 == 0 ? 1.5 : 1.1
+        ..color = major ? design.dialMajorTick : design.dialTick
+        ..strokeWidth = major
+            ? DashboardMetrics.dialMajorTickStroke
+            : DashboardMetrics.dialTickStroke
         ..strokeCap = StrokeCap.round;
       canvas.drawLine(
         center + Offset(math.cos(a) * inner, math.sin(a) * inner),
@@ -763,14 +822,14 @@ class _ShiftDialPainter extends CustomPainter {
         Paint()
           ..color = color
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 10
+          ..strokeWidth = DashboardMetrics.dialStroke
           ..strokeCap = StrokeCap.round,
       );
     }
 
-    final success = dark ? const Color(0xFF46CAA0) : const Color(0xFF1AA783);
-    final danger = dark ? const Color(0xFFFF777E) : const Color(0xFFDF5463);
-    final warning = dark ? const Color(0xFFFFCC74) : const Color(0xFFD99A36);
+    final success = design.activeArcEnd;
+    final danger = design.lateArc;
+    final warning = design.breakArc;
     segment(0, progressLate, danger);
     segment(progressLate, progressWork, success);
     segment(progressWork, progressBreak, warning);
@@ -780,8 +839,7 @@ class _ShiftDialPainter extends CustomPainter {
         mode == _DialCase.working ||
         mode == _DialCase.workingLate ||
         mode == _DialCase.breakTime;
-    final fraction = progressLive.clamp(0.0, 1.0);
-    final markerAngle = start + sweep * (isActive ? fraction : 0);
+    const markerAngle = -math.pi / 2;
     final markerColor =
         mode == _DialCase.workingLate && progressLive <= progressLate + .001
         ? danger
@@ -802,14 +860,6 @@ class _ShiftDialPainter extends CustomPainter {
         7.5 + pulse * 2.5,
         Paint()..color = markerColor.withAlpha((36 * (1 - pulse)).round()),
       );
-    }
-    // Preserve the controller's second-hand signal in a discreet little mark.
-    if (isActive && activeDots > 0) {
-      final a = start + sweep * (activeDots.clamp(0, 60) / 60);
-      final small =
-          center +
-          Offset(math.cos(a) * (radius - 19), math.sin(a) * (radius - 19));
-      canvas.drawCircle(small, 1.8, Paint()..color = accent.withAlpha(165));
     }
   }
 
