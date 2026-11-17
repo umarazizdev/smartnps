@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app/native_theme_controller.dart';
+import '../push/notifications/push_notification_service.dart';
 import '../utilities/app_config.dart';
 import 'debug_env_api_responses_screen.dart';
 import 'debug_env_logs_screen.dart';
@@ -12,6 +13,21 @@ class DebugEnvHubScreen extends StatelessWidget {
 
   void _open(BuildContext context, Widget screen) {
     Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => screen));
+  }
+
+  Future<void> _runTestAlert(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final result = await PushNotificationService.instance.showTestAlert();
+    final ok = result['ok'] == true;
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          ok
+              ? 'Urgent tone + 30s vibration started (debug only).'
+              : 'Test alert failed: ${result['error'] ?? 'unknown'}',
+        ),
+      ),
+    );
   }
 
   @override
@@ -44,6 +60,13 @@ class DebugEnvHubScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(20, 24, 20, 32),
         children: [
+          _HubCard(
+            colors: colors,
+            icon: Icons.notifications_active_rounded,
+            title: 'Test push alert + vibration',
+            onTap: () => _runTestAlert(context),
+          ),
+          const SizedBox(height: 14),
           _HubCard(
             colors: colors,
             icon: Icons.terminal_rounded,

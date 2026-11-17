@@ -1,4 +1,5 @@
 import Flutter
+import AudioToolbox
 import CoreLocation
 import UIKit
 import UserNotifications
@@ -29,6 +30,8 @@ import flutter_background_service_ios
   private var nativeCameraChannelRegistered = false
   private var settingsMethodChannel: FlutterMethodChannel?
   private var slcMethodChannel: FlutterMethodChannel?
+  private var pushVibrationTimer: Timer?
+  private var pushVibrationRemainingPulses = 0
   private var launchedForLocation = false
   private var awaitingFlutterDutyConfirm = false
 
@@ -444,6 +447,22 @@ import flutter_background_service_ios
             )
           )
         }
+      case "vibrateLong":
+        var durationMs = 30000
+        if let number = call.arguments as? NSNumber {
+          durationMs = number.intValue
+        } else if let map = call.arguments as? [String: Any] {
+          if let number = map["durationMs"] as? NSNumber {
+            durationMs = number.intValue
+          } else if let number = map["durationMs"] as? Int {
+            durationMs = number
+          }
+        }
+        self?.vibrateLong(durationMs: max(500, min(durationMs, 30000)))
+        result(true)
+      case "stopVibrate":
+        self?.stopVibrate()
+        result(true)
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -494,6 +513,63 @@ import flutter_background_service_ios
 
   private func lowPowerModeStatus() -> String {
     return ProcessInfo.processInfo.isLowPowerModeEnabled ? "enabled" : "disabled"
+  }
+
+  private func vibrateLong(durationMs: Int) {
+    let run = { [weak self] in
+      guard let self else { return }
+      self.stopVibrate()
+
+      let pulseIntervalMs = 700
+      let pulses = max(1, durationMs / pulseIntervalMs)
+      self.pushVibrationRemainingPulses = pulses
+
+      AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
+      let generator = UIImpactFeedbackGenerator(style: .heavy)
+      generator.prepare()
+      generator.impactOccurred()
+
+      let timer = Timer(
+        timeInterval: Double(pulseIntervalMs) / 1000.0,
+        repeats: true
+      ) { [weak self] timer in
+        guard let self else {
+          timer.invalidate()
+          return
+        }
+        self.pushVibrationRemainingPulses -= 1
+        if self.pushVibrationRemainingPulses <= 0 {
+          timer.invalidate()
+          self.pushVibrationTimer = nil
+          return
+        }
+        AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
+        let pulse = UIImpactFeedbackGenerator(style: .heavy)
+        pulse.impactOccurred()
+      }
+      RunLoop.main.add(timer, forMode: .common)
+      self.pushVibrationTimer = timer
+    }
+
+    if Thread.isMainThread {
+      run()
+    } else {
+      DispatchQueue.main.async(execute: run)
+    }
+  }
+
+  private func stopVibrate() {
+    let run = { [weak self] in
+      guard let self else { return }
+      self.pushVibrationTimer?.invalidate()
+      self.pushVibrationTimer = nil
+      self.pushVibrationRemainingPulses = 0
+    }
+    if Thread.isMainThread {
+      run()
+    } else {
+      DispatchQueue.main.async(execute: run)
+    }
   }
 
   private func observeBackgroundAppRefreshChanges() {
@@ -1444,14 +1520,23 @@ import flutter_background_service_ios
     withCompletionHandler completionHandler:
       @escaping (UNNotificationPresentationOptions) -> Void
   ) {
-    let userInfo = notification.request.content.userInfo
-    let hasFlutterLocalFlags =
-      userInfo["presentList"] != nil
-      || userInfo["presentBanner"] != nil
-      || userInfo["presentAlert"] != nil
-      || userInfo["notificationId"] != nil
+    let identifier = notification.request.identifier
+    let isLocationStatusNotification =
+      identifier == "9911"
+      || identifier == "9912"
+      || identifier == "9913"
+      || identifier == "9914"
 
-    if hasFlutterLocalFlags {
+    var options: UNNotificationPresentationOptions = [.sound, .badge]
+    if #available(iOS 14.0, *) {
+      options.insert(.banner)
+      options.insert(.list)
+    } else {
+      options.insert(.alert)
+    }
+
+    if isLocationStatusNotification {
+      let userInfo = notification.request.content.userInfo
       func flag(_ key: String) -> Bool {
         if let number = userInfo[key] as? NSNumber {
           return number.boolValue
@@ -1462,53 +1547,37 @@ import flutter_background_service_ios
         return false
       }
 
-      var options: UNNotificationPresentationOptions = []
-      let presentBanner = flag("presentBanner")
-      let presentList = flag("presentList")
-      let presentAlert = flag("presentAlert")
-      let presentSound = flag("presentSound")
-      let presentBadge = flag("presentBadge")
-
+      var locationOptions: UNNotificationPresentationOptions = []
       if #available(iOS 14.0, *) {
-        if presentBanner {
-          options.insert(.banner)
+        if flag("presentBanner") {
+          locationOptions.insert(.banner)
         }
-        if presentList {
-          options.insert(.list)
+        if flag("presentList") {
+          locationOptions.insert(.list)
         }
-        if options.isEmpty && presentAlert {
-          options.insert(.list)
+        if locationOptions.isEmpty && flag("presentAlert") {
+          locationOptions.insert(.list)
         }
-      } else if presentAlert || presentList {
-        options.insert(.alert)
+      } else if flag("presentAlert") || flag("presentList") {
+        locationOptions.insert(.alert)
       }
-
-      let identifier = notification.request.identifier
-      if options.isEmpty
-        && (identifier == "9911" || identifier == "9912" || identifier == "9914")
-      {
+      if flag("presentSound") {
+        locationOptions.insert(.sound)
+      }
+      if flag("presentBadge") {
+        locationOptions.insert(.badge)
+      }
+      if locationOptions.isEmpty {
         if #available(iOS 14.0, *) {
-          options.insert(.list)
+          locationOptions.insert(.list)
         } else {
-          options.insert(.alert)
+          locationOptions.insert(.alert)
         }
       }
-
-      if presentSound {
-        options.insert(.sound)
-      }
-      if presentBadge {
-        options.insert(.badge)
-      }
-
-      completionHandler(options)
+      completionHandler(locationOptions)
       return
     }
 
-    super.userNotificationCenter(
-      center,
-      willPresent: notification,
-      withCompletionHandler: completionHandler
-    )
+    completionHandler(options)
   }
 }

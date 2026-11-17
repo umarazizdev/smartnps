@@ -33,6 +33,7 @@ class PlatformBottomBar extends StatelessWidget {
     required this.tabs,
     required this.currentIndex,
     required this.onTap,
+    this.onLongPress,
     this.tint,
     this.surface,
     this.darkSurface,
@@ -43,6 +44,7 @@ class PlatformBottomBar extends StatelessWidget {
   final List<PlatformBottomTab> tabs;
   final int currentIndex;
   final ValueChanged<int> onTap;
+  final ValueChanged<int>? onLongPress;
 
   final Color? tint;
   final Color? surface;
@@ -64,6 +66,7 @@ class PlatformBottomBar extends StatelessWidget {
             tabs: tabs,
             currentIndex: currentIndex,
             onTap: onTap,
+            onLongPress: onLongPress,
             tint: activeTint,
             height: heightIOS,
           )
@@ -71,6 +74,7 @@ class PlatformBottomBar extends StatelessWidget {
             tabs: tabs,
             currentIndex: currentIndex,
             onTap: onTap,
+            onLongPress: onLongPress,
             tint: activeTint,
             surface: surface,
             darkSurface: darkSurface,
@@ -86,36 +90,65 @@ class _CupertinoNativeBottomBar extends StatelessWidget {
     required this.onTap,
     required this.tint,
     required this.height,
+    this.onLongPress,
   });
 
   final List<PlatformBottomTab> tabs;
   final int currentIndex;
   final ValueChanged<int> onTap;
+  final ValueChanged<int>? onLongPress;
   final Color tint;
   final double height;
 
   @override
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.paddingOf(context).bottom;
+    final longPress = onLongPress;
 
     return Padding(
       padding: EdgeInsets.fromLTRB(12, 0, 12, bottomInset > 0 ? 6 : 10),
-      child: CNTabBar(
-        items: tabs
-            .map(
-              (tab) => CNTabBarItem(
-                label: tab.label,
-                icon: CNSymbol(
-                  tab.iosSymbolName ?? 'circle',
-                  size: tab.iosSymbolPointSize ?? 24,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final tabBar = CNTabBar(
+            items: tabs
+                .map(
+                  (tab) => CNTabBarItem(
+                    label: tab.label,
+                    icon: CNSymbol(
+                      tab.iosSymbolName ?? 'circle',
+                      size: tab.iosSymbolPointSize ?? 24,
+                    ),
+                  ),
+                )
+                .toList(),
+            currentIndex: currentIndex,
+            tint: tint,
+            height: height,
+            onTap: onTap,
+          );
+
+          if (longPress == null || tabs.isEmpty) {
+            return tabBar;
+          }
+
+          final tabWidth = constraints.maxWidth / tabs.length;
+          return Stack(
+            children: [
+              tabBar,
+              Positioned(
+                left: 0,
+                top: 0,
+                bottom: 0,
+                width: tabWidth,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTap: () => onTap(tabs.first.index),
+                  onLongPress: () => longPress(tabs.first.index),
                 ),
               ),
-            )
-            .toList(),
-        currentIndex: currentIndex,
-        tint: tint,
-        height: height,
-        onTap: onTap,
+            ],
+          );
+        },
       ),
     );
   }
@@ -127,6 +160,7 @@ class _ClassicBottomBar extends StatelessWidget {
     required this.currentIndex,
     required this.onTap,
     required this.tint,
+    this.onLongPress,
     this.surface,
     this.darkSurface,
     this.isDark,
@@ -135,6 +169,7 @@ class _ClassicBottomBar extends StatelessWidget {
   final List<PlatformBottomTab> tabs;
   final int currentIndex;
   final ValueChanged<int> onTap;
+  final ValueChanged<int>? onLongPress;
   final Color tint;
   final Color? surface;
   final Color? darkSurface;
@@ -202,6 +237,9 @@ class _ClassicBottomBar extends StatelessWidget {
                 return Expanded(
                   child: InkWell(
                     onTap: () => onTap(tab.index),
+                    onLongPress: onLongPress == null
+                        ? null
+                        : () => onLongPress!(tab.index),
                     splashColor: activeColor.withValues(alpha: 0.08),
                     highlightColor: activeColor.withValues(alpha: 0.04),
                     child: Column(
@@ -291,6 +329,9 @@ class _ClassicBottomBar extends StatelessWidget {
                     child: InkWell(
                       borderRadius: BorderRadius.circular(24),
                       onTap: () => onTap(tab.index),
+                      onLongPress: onLongPress == null
+                          ? null
+                          : () => onLongPress!(tab.index),
                       child: Center(
                         child: AnimatedContainer(
                           duration: const Duration(milliseconds: 180),

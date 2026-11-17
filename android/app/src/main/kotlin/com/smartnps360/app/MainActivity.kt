@@ -13,6 +13,9 @@ import android.media.AudioAttributes
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.provider.Settings
 import com.smartnps360.app.camera.NativeCameraPlugin
 import com.smartnps360.app.duty.AndroidDutyKillPlugin
@@ -58,6 +61,21 @@ class MainActivity : FlutterActivity() {
           .build(),
       )
       manager?.createNotificationChannel(pushChannel)
+
+      val urgentChannel = NotificationChannel(
+        "smartnps360_urgent_alert",
+        "SmartNPS360 Urgent Alerts",
+        NotificationManager.IMPORTANCE_HIGH
+      )
+      urgentChannel.description = "High-priority officer alerts"
+      urgentChannel.setSound(
+        Uri.parse("android.resource://$packageName/${R.raw.alert_urgent}"),
+        AudioAttributes.Builder()
+          .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+          .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+          .build(),
+      )
+      manager?.createNotificationChannel(urgentChannel)
 
       val locationChannel = NotificationChannel(
         "smartnps360_location",
@@ -198,9 +216,83 @@ class MainActivity : FlutterActivity() {
             result.success(true)
           }
         }
+        "vibrateLong" -> {
+          try {
+            val durationMs = when (val args = call.arguments) {
+              is Number -> args.toInt()
+              is Map<*, *> -> (args["durationMs"] as? Number)?.toInt() ?: 30000
+              else -> 30000
+            }
+            vibrateLong(durationMs.coerceIn(500, 30000))
+            result.success(true)
+          } catch (error: Exception) {
+            result.error("vibrate_long_failed", error.message, null)
+          }
+        }
+        "stopVibrate" -> {
+          try {
+            stopVibrate()
+            result.success(true)
+          } catch (error: Exception) {
+            result.error("stop_vibrate_failed", error.message, null)
+          }
+        }
         else -> result.notImplemented()
       }
     }
+  }
+
+  private var alertVibrateStopRunnable: Runnable? = null
+
+  private fun resolveVibrator(): Vibrator? {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      getSystemService(VibratorManager::class.java)?.defaultVibrator
+    } else {
+      @Suppress("DEPRECATION")
+      getSystemService(Vibrator::class.java)
+    }
+  }
+
+  private fun buildAlertVibrationPattern(durationMs: Long): LongArray {
+    val pattern = mutableListOf(0L)
+    var remaining = durationMs
+    while (remaining > 0L) {
+      val on = minOf(800L, remaining)
+      pattern.add(on)
+      remaining -= on
+      if (remaining <= 0L) break
+      val off = minOf(300L, remaining)
+      pattern.add(off)
+      remaining -= off
+    }
+    return pattern.toLongArray()
+  }
+
+  private fun vibrateLong(durationMs: Int) {
+    val vibrator = resolveVibrator() ?: return
+    stopVibrate()
+
+    val pattern = buildAlertVibrationPattern(durationMs.toLong())
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      vibrator.vibrate(
+        VibrationEffect.createWaveform(pattern, -1),
+      )
+    } else {
+      @Suppress("DEPRECATION")
+      vibrator.vibrate(pattern, -1)
+    }
+
+    val stopRunnable = Runnable { stopVibrate() }
+    alertVibrateStopRunnable = stopRunnable
+    window.decorView.postDelayed(stopRunnable, durationMs.toLong())
+  }
+
+  private fun stopVibrate() {
+    alertVibrateStopRunnable?.let { runnable ->
+      window.decorView.removeCallbacks(runnable)
+    }
+    alertVibrateStopRunnable = null
+    resolveVibrator()?.cancel()
   }
 
   override fun onResume() {

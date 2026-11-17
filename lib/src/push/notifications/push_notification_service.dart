@@ -22,6 +22,7 @@ import '../../permissions/os_notification_permission.dart';
 import '../../permissions/required_permissions_gate.dart';
 import '../announcements/officer_announcement_coordinator.dart';
 import '../announcements/officer_announcement_push.dart';
+import 'push_alert_vibration.dart';
 import 'push_notification_preferences.dart';
 import '../../utilities/app_config.dart';
 import '../../utilities/app_version_info.dart';
@@ -31,14 +32,35 @@ import '../../utilities/permission_settings_helper.dart';
 const String kPushAndroidChannelId = 'smartnps360_default';
 const String kPushAndroidChannelName = 'SmartNPS360';
 const String kPushAndroidChannelDescription = 'SmartNPS360 notifications';
+const String kPushAndroidUrgentChannelId = 'smartnps360_urgent_alert';
+const String kPushAndroidUrgentChannelName = 'SmartNPS360 Urgent Alerts';
+const String kPushAndroidUrgentChannelDescription =
+    'High-priority officer alerts';
 const String kPushIosSoundFile = 'alert_sound.caf';
+const String kPushIosUrgentSoundFile = 'alert_urgent.caf';
+const String kPushAndroidSoundName = 'alert_sound';
+const String kPushAndroidUrgentSoundName = 'alert_urgent';
 
 const DarwinNotificationDetails kPushIosNotificationDetails =
     DarwinNotificationDetails(
+      presentAlert: true,
       presentSound: true,
       presentBanner: true,
       presentList: true,
+      presentBadge: true,
       sound: kPushIosSoundFile,
+      interruptionLevel: InterruptionLevel.timeSensitive,
+    );
+
+const DarwinNotificationDetails kPushIosUrgentNotificationDetails =
+    DarwinNotificationDetails(
+      presentAlert: true,
+      presentSound: true,
+      presentBanner: true,
+      presentList: true,
+      presentBadge: true,
+      sound: kPushIosUrgentSoundFile,
+      interruptionLevel: InterruptionLevel.timeSensitive,
     );
 
 const DarwinInitializationSettings kPushIosInitializationSettings =
@@ -46,9 +68,11 @@ const DarwinInitializationSettings kPushIosInitializationSettings =
       requestAlertPermission: false,
       requestBadgePermission: false,
       requestSoundPermission: false,
+      defaultPresentAlert: true,
       defaultPresentSound: true,
       defaultPresentBanner: true,
       defaultPresentList: true,
+      defaultPresentBadge: true,
     );
 
 Future<void> ensurePushLocalNotificationsReady(
@@ -73,10 +97,54 @@ Future<void> ensurePushLocalNotificationsReady(
         kPushAndroidChannelName,
         description: kPushAndroidChannelDescription,
         importance: Importance.high,
-        sound: RawResourceAndroidNotificationSound('alert_sound'),
+        playSound: true,
+        sound: RawResourceAndroidNotificationSound(kPushAndroidSoundName),
+      ),
+    );
+    await android.createNotificationChannel(
+      const AndroidNotificationChannel(
+        kPushAndroidUrgentChannelId,
+        kPushAndroidUrgentChannelName,
+        description: kPushAndroidUrgentChannelDescription,
+        importance: Importance.high,
+        playSound: true,
+        sound: RawResourceAndroidNotificationSound(kPushAndroidUrgentSoundName),
       ),
     );
   }
+}
+
+bool isUrgentPushData(Map<String, dynamic> data) {
+  return false;
+}
+
+void logPushRemoteMessage(
+  RemoteMessage message, {
+  required String source,
+}) {
+  if (!AppConfig.enablePushNotificationDebugLog) return;
+  if (!kDebugMode) return;
+
+  final notification = message.notification;
+  final data = Map<String, dynamic>.from(message.data);
+  String dataJson;
+  try {
+    dataJson = jsonEncode(data);
+  } catch (_) {
+    dataJson = data.toString();
+  }
+
+  debugPrint(
+    '[PushNotification][$source] '
+    'messageId=${message.messageId} '
+    'from=${message.from} '
+    'sentTime=${message.sentTime?.toIso8601String()} '
+    'collapseKey=${message.collapseKey} '
+    'notificationTitle=${notification?.title} '
+    'notificationBody=${notification?.body} '
+    'dataKeys=${data.keys.toList()} '
+    'data=$dataJson',
+  );
 }
 
 bool isUnauthorizedLocalNotificationError(Object error) {
@@ -107,6 +175,7 @@ Future<void> showPushLocalNotification({
   required String body,
   required Map<String, dynamic> data,
   String? messageId,
+  bool urgent = false,
 }) async {
   if (!await OsNotificationPermission.isGranted()) {
     if (kDebugMode) {
@@ -117,23 +186,32 @@ Future<void> showPushLocalNotification({
     return;
   }
 
+  final safeTitle = title.trim().isEmpty ? 'SmartNPS360' : title.trim();
+  final safeBody = body.trim().isEmpty ? 'New notification' : body.trim();
   final payload = jsonEncode({'messageId': messageId, 'data': data});
 
   final androidDetails = AndroidNotificationDetails(
-    kPushAndroidChannelId,
-    kPushAndroidChannelName,
-    channelDescription: kPushAndroidChannelDescription,
+    urgent ? kPushAndroidUrgentChannelId : kPushAndroidChannelId,
+    urgent ? kPushAndroidUrgentChannelName : kPushAndroidChannelName,
+    channelDescription: urgent
+        ? kPushAndroidUrgentChannelDescription
+        : kPushAndroidChannelDescription,
     importance: Importance.high,
     priority: Priority.high,
-    sound: RawResourceAndroidNotificationSound('alert_sound'),
+    playSound: true,
+    sound: RawResourceAndroidNotificationSound(
+      urgent ? kPushAndroidUrgentSoundName : kPushAndroidSoundName,
+    ),
   );
-  const iosDetails = kPushIosNotificationDetails;
+  final iosDetails = urgent
+      ? kPushIosUrgentNotificationDetails
+      : kPushIosNotificationDetails;
 
   try {
     await plugin.show(
       id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      title: title,
-      body: body,
+      title: safeTitle,
+      body: safeBody,
       notificationDetails: NotificationDetails(
         android: androidDetails,
         iOS: iosDetails,
@@ -149,6 +227,37 @@ Future<void> showPushLocalNotification({
       }
       return;
     }
+    if (kDebugMode) {
+      debugPrint('[PushNotification] local notification show failed: $error');
+    }
+    if (Platform.isIOS) {
+      try {
+        await plugin.show(
+          id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          title: safeTitle,
+          body: safeBody,
+          notificationDetails: const NotificationDetails(
+            iOS: DarwinNotificationDetails(
+              presentAlert: true,
+              presentSound: true,
+              presentBanner: true,
+              presentList: true,
+              presentBadge: true,
+              sound: 'default',
+              interruptionLevel: InterruptionLevel.timeSensitive,
+            ),
+          ),
+          payload: payload,
+        );
+        return;
+      } catch (fallbackError) {
+        if (kDebugMode) {
+          debugPrint(
+            '[PushNotification] iOS default-sound fallback failed: $fallbackError',
+          );
+        }
+      }
+    }
     rethrow;
   }
 }
@@ -157,12 +266,18 @@ Future<void> showPushLocalNotification({
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  logPushRemoteMessage(message, source: 'background');
+
+  final data = Map<String, dynamic>.from(message.data);
+  final urgent = isUrgentPushData(data);
+  if (urgent) {
+    unawaited(PushAlertVibration.playLong());
+  }
 
   if (message.notification != null) {
     return;
   }
 
-  final data = message.data;
   final title = (data['title'] ?? data['notification_title'] ?? 'SmartNPS360')
       .toString();
   final body =
@@ -182,8 +297,9 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     plugin: plugin,
     title: title,
     body: body,
-    data: Map<String, dynamic>.from(data),
+    data: data,
     messageId: message.messageId,
+    urgent: urgent,
   );
 }
 
@@ -464,7 +580,20 @@ class PushNotificationService {
           kPushAndroidChannelName,
           description: kPushAndroidChannelDescription,
           importance: Importance.high,
-          sound: RawResourceAndroidNotificationSound('alert_sound'),
+          playSound: true,
+          sound: RawResourceAndroidNotificationSound(kPushAndroidSoundName),
+        ),
+      );
+      await android.createNotificationChannel(
+        const AndroidNotificationChannel(
+          kPushAndroidUrgentChannelId,
+          kPushAndroidUrgentChannelName,
+          description: kPushAndroidUrgentChannelDescription,
+          importance: Importance.high,
+          playSound: true,
+          sound: RawResourceAndroidNotificationSound(
+            kPushAndroidUrgentSoundName,
+          ),
         ),
       );
     }
@@ -476,19 +605,11 @@ class PushNotificationService {
 
     final messaging = FirebaseMessaging.instance;
 
-    if (Platform.isIOS) {
-      await messaging.setForegroundNotificationPresentationOptions(
-        alert: false,
-        badge: true,
-        sound: false,
-      );
-    } else {
-      await messaging.setForegroundNotificationPresentationOptions(
-        alert: true,
-        badge: true,
-        sound: true,
-      );
-    }
+    await messaging.setForegroundNotificationPresentationOptions(
+      alert: true,
+      badge: true,
+      sound: true,
+    );
 
     FirebaseMessaging.instance.onTokenRefresh.listen((t) {
       if (!pushNotificationsEnabled) {
@@ -499,12 +620,14 @@ class PushNotificationService {
     });
 
     FirebaseMessaging.onMessage.listen((message) async {
+      logPushRemoteMessage(message, source: 'foreground');
       if (!pushNotificationsEnabled) return;
       await _showLocalFromRemoteMessage(message);
       _handleForegroundAnnouncement(message);
     });
 
     FirebaseMessaging.onMessageOpenedApp.listen((message) {
+      logPushRemoteMessage(message, source: 'opened-app');
       _handleRemoteMessageOpened(message, source: 'opened-app');
     });
 
@@ -512,6 +635,7 @@ class PushNotificationService {
       _initialMessageHandled = true;
       final initial = await messaging.getInitialMessage();
       if (initial != null) {
+        logPushRemoteMessage(initial, source: 'cold-launch');
         _handleRemoteMessageOpened(initial, source: 'cold-launch');
       }
     }
@@ -899,6 +1023,7 @@ class PushNotificationService {
   }
 
   void _handleLocalNotificationTap(String? payload) {
+    unawaited(PushAlertVibration.acknowledge());
     if (payload == null || payload.trim().isEmpty) {
       _dispatchNotificationTap(AppRoutes.defaultPushUrl);
       return;
@@ -926,6 +1051,7 @@ class PushNotificationService {
     RemoteMessage message, {
     required String source,
   }) {
+    unawaited(PushAlertVibration.acknowledge());
     final data = Map<String, dynamic>.from(message.data);
     if (_consumeAnnouncementOpen(data, source: source)) {
       return;
@@ -998,7 +1124,17 @@ class PushNotificationService {
 
   Future<void> _showLocalFromRemoteMessage(RemoteMessage message) async {
     final n = message.notification;
-    final data = message.data;
+    final data = Map<String, dynamic>.from(message.data);
+    final urgent = isUrgentPushData(data);
+
+    if (urgent) {
+      unawaited(PushAlertVibration.playLong());
+    }
+
+    if (Platform.isIOS && n != null) {
+      return;
+    }
+
     final title =
         n?.title ??
         data['title']?.toString() ??
@@ -1015,8 +1151,38 @@ class PushNotificationService {
       plugin: _local,
       title: title,
       body: body,
-      data: Map<String, dynamic>.from(data),
+      data: data,
       messageId: message.messageId,
+      urgent: urgent,
     );
+  }
+
+  Future<Map<String, dynamic>> showTestAlert() async {
+    final permissionGranted = await _hasNotificationPermission();
+    if (!permissionGranted) {
+      final granted = await _ensureNotificationPermission();
+      if (!granted) {
+        return {
+          'ok': false,
+          'error': 'notification_permission_denied',
+          ...(await getNotificationStatus()),
+        };
+      }
+    }
+
+    await showPushLocalNotification(
+      plugin: _local,
+      title: 'SmartNPS360 urgent test alert',
+      body: 'Urgent tone + vibration test (debug only).',
+      data: const <String, dynamic>{'type': 'test_alert'},
+      messageId: 'test-${DateTime.now().millisecondsSinceEpoch}',
+      urgent: true,
+    );
+    unawaited(PushAlertVibration.playLong());
+
+    return {
+      'ok': true,
+      ...(await getNotificationStatus()),
+    };
   }
 }

@@ -30,6 +30,7 @@
 		A1B2C3DE2EC4000B00F1A201 /* IosAppKillCycleReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3DE2EC4000B00F1A200 /* IosAppKillCycleReporter.swift */; };
 		B7E1A0022FECBCEE00227624 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = B7E1A0012FECBCEE00227624 /* PrivacyInfo.xcprivacy */; };
 		FAD29EC62FECBCEE00227623 /* alert_sound.caf in Resources */ = {isa = PBXBuildFile; fileRef = FAD29EC52FECBCEE00227623 /* alert_sound.caf */; };
+		FAD29EC82FECBCEE00227625 /* alert_urgent.caf in Resources */ = {isa = PBXBuildFile; fileRef = FAD29EC72FECBCEE00227625 /* alert_urgent.caf */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -95,6 +96,7 @@
 		FA17B41DFFE5D6F35CC6A6AD /* GoogleService-Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; name = "GoogleService-Info.plist"; path = "Runner/GoogleService-Info.plist"; sourceTree = "<group>"; };
 		FA75A6412FD5072100E3580D /* Runner.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Runner.entitlements; sourceTree = "<group>"; };
 		FAD29EC52FECBCEE00227623 /* alert_sound.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = alert_sound.caf; sourceTree = "<group>"; };
+		FAD29EC72FECBCEE00227625 /* alert_urgent.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = alert_urgent.caf; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -163,6 +165,7 @@
 			isa = PBXGroup;
 			children = (
 				FAD29EC52FECBCEE00227623 /* alert_sound.caf */,
+				FAD29EC72FECBCEE00227625 /* alert_urgent.caf */,
 				9740EEB11CF90186004384FC /* Flutter */,
 				97C146F01CF9000F007C117D /* Runner */,
 				97C146EF1CF9000F007C117D /* Products */,
@@ -317,6 +320,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				FAD29EC62FECBCEE00227623 /* alert_sound.caf in Resources */,
+				FAD29EC82FECBCEE00227625 /* alert_urgent.caf in Resources */,
 				97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */,
 				3B3967161E833CAA004F5970 /* AppFrameworkInfo.plist in Resources */,
 				97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */,

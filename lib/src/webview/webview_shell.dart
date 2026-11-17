@@ -44,6 +44,7 @@ import '../background/location/background_location_controller.dart';
 import '../background/location/background_location_permissions.dart';
 import '../background/duty/location_disclosure_consent.dart';
 import '../background/ios/ios_duty_location_pinger.dart';
+import '../debug/debug_env_pin_dialog.dart';
 import '../utilities/app_lifecycle_resume_gate.dart';
 import '../utilities/overlay_prompt_guard.dart';
 import '../utilities/permission_settings_helper.dart';
@@ -6123,6 +6124,9 @@ class _WebViewShellState extends State<WebViewShell>
                                       _ui.selectedBottomTabIndex.value,
                                   isDark: _ui.webPrefersDark.value,
                                   onTap: _onBottomTap,
+                                  onDashboardLongPress: () {
+                                    unawaited(openDebugEnvFromLogo(context));
+                                  },
                                 ),
                               );
                             }),
@@ -6420,11 +6424,13 @@ class _BottomBar extends StatelessWidget {
     required this.selectedTabIndex,
     required this.isDark,
     required this.onTap,
+    this.onDashboardLongPress,
   });
 
   final int selectedTabIndex;
   final bool isDark;
   final ValueChanged<_BottomItem> onTap;
+  final VoidCallback? onDashboardLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -6462,6 +6468,7 @@ class _BottomBar extends StatelessWidget {
     final visibleSelectedIndex = visibleItems.indexWhere(
       (item) => item.index == selectedTabIndex,
     );
+    final dashboardLongPress = onDashboardLongPress;
 
     return PlatformBottomBar(
       tabs: tabs,
@@ -6471,6 +6478,12 @@ class _BottomBar extends StatelessWidget {
       darkSurface: const Color(AppConfig.cDarkCardColor),
       isDark: isDark,
       onTap: (index) => onTap(visibleItems[index]),
+      onLongPress: dashboardLongPress == null
+          ? null
+          : (index) {
+              if (visibleItems[index] != _BottomItem.dashboard) return;
+              dashboardLongPress();
+            },
     );
   }
 }
