@@ -17,7 +17,6 @@ import '../capture/onboarding/capture_onboarding_store.dart';
 import '../flow/cam_perf.dart';
 import '../flow/capture_work_coordinator.dart';
 import '../flow/visit_flow_copy.dart';
-import '../flow/visit_flow_kind.dart';
 import '../flow/visit_media_draft_store.dart';
 import '../flow/visit_media_orientation.dart';
 import '../flow/visit_orientation.dart';
@@ -48,8 +47,8 @@ class VisitNativeCaptureLauncher {
     if (Get.isRegistered<VisitVideoFlowController>()) {
       final flow = Get.find<VisitVideoFlowController>();
       if (!flow.canAddMoreMedia) {
-        final maxCount =
-            flow.maxAllowedMediaItems ?? VisitFlowKind.maxReportMediaItems;
+        final maxCount = flow.maxAllowedMediaItems;
+        if (maxCount == null) return;
         final copy = VisitFlowCopy.fromContext(flow.patrolContext.value);
         await _showErrorDialog(copy.mediaLimitReachedMessage(maxCount));
         return;

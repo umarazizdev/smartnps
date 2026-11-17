@@ -261,10 +261,9 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
 
   Future<void> _showMediaLimitDialog(BuildContext context) async {
     if (!context.mounted) return;
+    final maxCount = controller.maxAllowedMediaItems;
+    if (maxCount == null) return;
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final maxCount =
-        controller.maxAllowedMediaItems ??
-        VisitVideoFlowController.maxReportMediaItems;
     await GlassActionDialog.show(
       context: context,
       icon: Icons.photo_library_outlined,
@@ -290,9 +289,9 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
         ? 'incident report'
         : 'issue report';
     final remaining = controller.remainingMediaSlots;
-    final remainingHint = remaining < VisitVideoFlowController.maxReportMediaItems
-        ? ' You can add up to $remaining more.'
-        : '';
+    final remainingHint = remaining == null
+        ? ''
+        : ' You can add up to $remaining more.';
 
     final source = await GlassActionDialog.showWithActions<_StructuredMediaSource>(
       context: context,
@@ -381,7 +380,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
     if (!context.mounted) return;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final remainingSlots = controller.remainingMediaSlots;
-    if (remainingSlots <= 0) {
+    if (remainingSlots != null && remainingSlots <= 0) {
       await _showMediaLimitDialog(context);
       return;
     }
@@ -414,24 +413,19 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
       }
 
       if (!context.mounted) return;
+      final maxCount = controller.maxAllowedMediaItems;
       if (imported == 0) {
         _showTopSnack(
-          title: skippedForLimit > 0
+          title: skippedForLimit > 0 && maxCount != null
               ? _copy.mediaLimitReachedTitle
               : 'No media added',
-          message: skippedForLimit > 0
-              ? _copy.mediaLimitReachedMessage(
-                  controller.maxAllowedMediaItems ??
-                      VisitVideoFlowController.maxReportMediaItems,
-                )
+          message: skippedForLimit > 0 && maxCount != null
+              ? _copy.mediaLimitReachedMessage(maxCount)
               : 'Could not import the selected photos or videos. Please try again.',
           isDark: isDark,
           isError: true,
         );
-      } else if (skippedForLimit > 0) {
-        final maxCount =
-            controller.maxAllowedMediaItems ??
-            VisitVideoFlowController.maxReportMediaItems;
+      } else if (skippedForLimit > 0 && maxCount != null) {
         _showTopSnack(
           title: 'Media limit reached',
           message:
@@ -1323,8 +1317,7 @@ class VisitVideoPreviewScreen extends GetView<VisitVideoFlowController> {
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           Text(
-                            'Captured Media (${additionalMedia.length}/'
-                            '${VisitFlowKind.maxReportMediaItems})',
+                            'Captured Media (${additionalMedia.length})',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: Theme.of(context).textTheme.titleSmall
@@ -2296,6 +2289,7 @@ class _CheckpointListCard extends StatelessWidget {
           ),
           padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Stack(
                 clipBehavior: Clip.none,
@@ -2362,8 +2356,7 @@ class _CheckpointListCard extends StatelessWidget {
                   children: [
                     Text(
                       '${index + 1}. ${checkpoint.name}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                      softWrap: true,
                       style: TextStyle(
                         color: _visitTitleColor(isDark),
                         fontSize: 14,
@@ -2375,8 +2368,7 @@ class _CheckpointListCard extends StatelessWidget {
                       const SizedBox(height: 3),
                       Text(
                         subtitle,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                        softWrap: true,
                         style: TextStyle(
                           color: completed && !hasDescription
                               ? (isDark
@@ -2394,40 +2386,46 @@ class _CheckpointListCard extends StatelessWidget {
               ),
               const SizedBox(width: 8),
               if (completed)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 9,
-                    vertical: 5,
-                  ),
-                  decoration: BoxDecoration(
-                    color: accent.withValues(alpha: isDark ? 0.22 : 0.12),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Text(
-                    'Done',
-                    style: TextStyle(
-                      color: isDark
-                          ? const Color(0xFF6EE7B7)
-                          : const Color(0xFF047857),
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800,
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 9,
+                      vertical: 5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: accent.withValues(alpha: isDark ? 0.22 : 0.12),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      'Done',
+                      style: TextStyle(
+                        color: isDark
+                            ? const Color(0xFF6EE7B7)
+                            : const Color(0xFF047857),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
                   ),
                 )
               else
-                Container(
-                  width: 28,
-                  height: 28,
-                  decoration: BoxDecoration(
-                    color: _visitPrimaryActionColor(
-                      isDark,
-                    ).withValues(alpha: isDark ? 0.16 : 0.08),
-                    borderRadius: BorderRadius.circular(9),
-                  ),
-                  child: Icon(
-                    Icons.chevron_right_rounded,
-                    color: _visitPrimaryActionColor(isDark),
-                    size: 20,
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Container(
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      color: _visitPrimaryActionColor(
+                        isDark,
+                      ).withValues(alpha: isDark ? 0.16 : 0.08),
+                      borderRadius: BorderRadius.circular(9),
+                    ),
+                    child: Icon(
+                      Icons.chevron_right_rounded,
+                      color: _visitPrimaryActionColor(isDark),
+                      size: 20,
+                    ),
                   ),
                 ),
             ],
@@ -3054,8 +3052,7 @@ class _VisitHeader extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    'Captured Media ($totalCount/'
-                    '${VisitFlowKind.maxReportMediaItems})',
+                    'Captured Media ($totalCount)',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.titleSmall?.copyWith(

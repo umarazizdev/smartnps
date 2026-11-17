@@ -95,10 +95,10 @@ class _VisitCheckpointScreenState extends State<VisitCheckpointScreen> {
   Future<void> _openCapture() async {
     if (!flow.canAddMoreMedia) {
       if (!mounted) return;
+      final maxCount = flow.maxAllowedMediaItems;
+      if (maxCount == null) return;
       final isDark = Theme.of(context).brightness == Brightness.dark;
       final copy = VisitFlowCopy.fromContext(flow.patrolContext.value);
-      final maxCount =
-          flow.maxAllowedMediaItems ?? VisitFlowKind.maxReportMediaItems;
       await GlassActionDialog.show(
         context: context,
         icon: Icons.photo_library_outlined,
@@ -535,6 +535,7 @@ class _CheckpointPlaceHeader extends StatelessWidget {
           ),
           padding: const EdgeInsets.fromLTRB(10, 10, 12, 10),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Stack(
                 clipBehavior: Clip.none,
@@ -577,8 +578,7 @@ class _CheckpointPlaceHeader extends StatelessWidget {
                   children: [
                     Text(
                       checkpoint.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                      softWrap: true,
                       style: TextStyle(
                         color: _cpTitleColor(isDark),
                         fontSize: 15.5,
@@ -589,8 +589,7 @@ class _CheckpointPlaceHeader extends StatelessWidget {
                     const SizedBox(height: 3),
                     Text(
                       subtitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                      softWrap: true,
                       style: TextStyle(
                         color: isDark
                             ? cDarkTextSecondary.withValues(alpha: 0.9)

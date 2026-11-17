@@ -11,7 +11,8 @@ class VisitMediaGeo {
     this.accuracyMeters,
   });
 
-  static const double maxUsableAccuracyMeters = 50;
+  static const double maxUsableAccuracyMeters =
+      VisitGpsSession.maxUsableAccuracyMeters;
 
   final DateTime capturedAt;
   final double? latitude;
@@ -23,7 +24,7 @@ class VisitMediaGeo {
   bool get hasUsableGps {
     if (!hasCoordinates) return false;
     final accuracy = accuracyMeters;
-    if (accuracy == null || !accuracy.isFinite || accuracy < 0) return true;
+    if (accuracy == null || !accuracy.isFinite || accuracy < 0) return false;
     return accuracy <= maxUsableAccuracyMeters;
   }
 
@@ -98,12 +99,16 @@ class VisitMediaGeo {
         return VisitMediaGeo(capturedAt: capturedAt);
       }
 
-      return VisitMediaGeo(
+      final geo = VisitMediaGeo(
         capturedAt: capturedAt,
         latitude: position.latitude,
         longitude: position.longitude,
         accuracyMeters: position.accuracy,
       );
+      if (!geo.hasUsableGps) {
+        return VisitMediaGeo(capturedAt: capturedAt);
+      }
+      return geo;
     } catch (_) {
       return VisitMediaGeo(capturedAt: capturedAt);
     }

@@ -13,6 +13,7 @@ class VisitGpsSession {
 
   static const Duration maxFreshAge = Duration(seconds: 15);
   static const Duration maxAcceptAge = Duration(seconds: 30);
+  static const double maxUsableAccuracyMeters = 15;
 
   static final Duration oneShotTimeout = Duration(
     seconds: Platform.isIOS ? 15 : 10,
@@ -54,6 +55,7 @@ class VisitGpsSession {
     Duration maxAge = maxAcceptAge,
   }) {
     if (!_hasValidCoords(position)) return false;
+    if (!_hasAcceptableAccuracy(position)) return false;
     final age = captureTime.difference(position.timestamp).abs();
     return age <= maxAge;
   }
@@ -91,7 +93,7 @@ class VisitGpsSession {
     if (!position.latitude.isFinite || !position.longitude.isFinite) {
       return false;
     }
-    if (!position.accuracy.isFinite || position.accuracy < 0) {
+    if (!_hasAcceptableAccuracy(position)) {
       return false;
     }
     final age = DateTime.now().difference(position.timestamp);
@@ -149,6 +151,7 @@ class VisitGpsSession {
           ).listen(
             (position) {
               if (!_hasValidCoords(position)) return;
+              if (!_hasAcceptableAccuracy(position)) return;
               _latest = position;
             },
             onError: (Object error) {
@@ -251,6 +254,12 @@ class VisitGpsSession {
         position.longitude.isFinite &&
         position.accuracy.isFinite &&
         position.accuracy >= 0;
+  }
+
+  static bool _hasAcceptableAccuracy(Position position) {
+    return position.accuracy.isFinite &&
+        position.accuracy >= 0 &&
+        position.accuracy <= maxUsableAccuracyMeters;
   }
 
   static LocationSettings _streamSettings() {

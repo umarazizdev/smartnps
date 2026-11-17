@@ -113,13 +113,13 @@ class VisitFlowCopy {
   String get emptyCaptureHint {
     switch (kind) {
       case VisitFlowKind.siteCheck:
-        return 'Capture up to ${VisitFlowKind.maxReportMediaItems} photos or videos for this site check.';
+        return 'Capture photos or videos for this site check.';
       case VisitFlowKind.issueReport:
-        return 'Add up to ${VisitFlowKind.maxReportMediaItems} photos or videos from the camera or gallery, then fill in the report fields above.';
+        return 'Add photos or videos from the camera or gallery, then fill in the report fields above.';
       case VisitFlowKind.incidentReport:
-        return 'Add up to ${VisitFlowKind.maxReportMediaItems} photos or videos from the camera or gallery, then fill in the report fields above.';
+        return 'Add photos or videos from the camera or gallery, then fill in the report fields above.';
       case VisitFlowKind.patrol:
-        return 'Capture up to ${VisitFlowKind.maxReportMediaItems} photos or videos for this patrol round.';
+        return 'Capture photos or videos for this patrol round.';
     }
   }
 
@@ -168,13 +168,13 @@ class VisitFlowCopy {
   String get additionalMediaSubtitle {
     switch (kind) {
       case VisitFlowKind.siteCheck:
-        return 'Up to ${VisitFlowKind.maxReportMediaItems} photos or videos for this site check';
+        return 'Photos or videos for this site check';
       case VisitFlowKind.issueReport:
-        return 'Up to ${VisitFlowKind.maxReportMediaItems} photos or videos for this issue report';
+        return 'Photos or videos for this issue report';
       case VisitFlowKind.incidentReport:
-        return 'Up to ${VisitFlowKind.maxReportMediaItems} photos or videos for this incident report';
+        return 'Photos or videos for this incident report';
       case VisitFlowKind.patrol:
-        return 'Up to ${VisitFlowKind.maxReportMediaItems} photos or videos for this patrol';
+        return 'Photos or videos for this patrol';
     }
   }
 

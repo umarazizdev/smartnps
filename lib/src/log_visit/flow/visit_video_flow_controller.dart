@@ -272,18 +272,19 @@ class VisitVideoFlowController extends GetxController {
   int get capturedPhotoCount =>
       visibleMediaItems.where((e) => e.isPhoto).length;
 
-  static const int maxReportMediaItems = VisitFlowKind.maxReportMediaItems;
+  int? get maxAllowedMediaItems => null;
 
-  int? get maxAllowedMediaItems => maxReportMediaItems;
-
-  int get remainingMediaSlots {
+  int? get remainingMediaSlots {
     final max = maxAllowedMediaItems;
-    if (max == null) return 1 << 20;
+    if (max == null) return null;
     final remaining = max - mediaItems.length;
     return remaining < 0 ? 0 : remaining;
   }
 
-  bool get hasReachedMediaLimit => remainingMediaSlots <= 0;
+  bool get hasReachedMediaLimit {
+    final remaining = remainingMediaSlots;
+    return remaining != null && remaining <= 0;
+  }
 
   bool get canAddMoreMedia => !hasReachedMediaLimit;
 
@@ -1808,17 +1809,18 @@ class VisitUploadMeta {
     for (var i = 0; i < mediaItems.length; i++) {
       final item = mediaItems[i];
       final textNote = item.textNote.trim();
+      final hasUsableGps = item.hasUsableGps;
       items.add(<String, dynamic>{
         'client_index': i,
         'type': item.type.name,
         if (textNote.isNotEmpty) 'text_note': textNote,
         if (item.capturedAt != null)
           'captured_at': item.capturedAt!.toUtc().toIso8601String(),
-        if (item.latitude != null) 'latitude': item.latitude,
-        if (item.longitude != null) 'longitude': item.longitude,
-        if (item.accuracyMeters != null)
+        if (hasUsableGps && item.latitude != null) 'latitude': item.latitude,
+        if (hasUsableGps && item.longitude != null) 'longitude': item.longitude,
+        if (hasUsableGps && item.accuracyMeters != null)
           'accuracy_meters': item.accuracyMeters,
-        if (item.isGpsMissed) 'gps_missed': 'yes',
+        if (!hasUsableGps) 'gps_missed': 'yes',
         'has_voice_note': item.hasVoiceNote,
         if (!structured)
           'attention_needed': item.attentionNeeded ? 'yes' : 'no',
@@ -1854,8 +1856,10 @@ class VisitUploadMeta {
           (e) => e.hasTextNote,
           orElse: () => primary,
         );
+        final primaryHasUsableGps = primary.hasUsableGps;
         double? distanceMeters;
-        if (checkpoint.hasCoordinates &&
+        if (primaryHasUsableGps &&
+            checkpoint.hasCoordinates &&
             primary.latitude != null &&
             primary.longitude != null) {
           distanceMeters = Geolocator.distanceBetween(
@@ -1872,9 +1876,9 @@ class VisitUploadMeta {
           'checked_at': (primary.capturedAt ?? submitted)
               .toUtc()
               .toIso8601String(),
-          'latitude': primary.latitude,
-          'longitude': primary.longitude,
-          'accuracy_meters': primary.accuracyMeters,
+          if (primaryHasUsableGps) 'latitude': primary.latitude,
+          if (primaryHasUsableGps) 'longitude': primary.longitude,
+          if (primaryHasUsableGps) 'accuracy_meters': primary.accuracyMeters,
           if (distanceMeters != null)
             'distance_meters': double.parse(distanceMeters.toStringAsFixed(1)),
           'notes': notesItem.textNote.trim(),

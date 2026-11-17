@@ -277,11 +277,8 @@ class CaptureWorkCoordinator {
         );
         return _latestGeo!;
       }
-
-      _latestGeo = shutterGeo;
-    } else {
-      _latestGeo = VisitMediaGeo(capturedAt: capturedAt);
     }
+    _latestGeo = VisitMediaGeo(capturedAt: capturedAt);
 
     CamPerf.stage(captureId, 'GPS_CONTINUE_AFTER_SHUTTER', useGpsClock: true);
     gpsContinueFuture = _continueGps(capturedAt, _generation);
@@ -307,8 +304,7 @@ class CaptureWorkCoordinator {
         accuracyMeters: position.accuracy,
       );
       if (!geo.hasUsableGps) {
-
-        _latestGeo ??= geo;
+        _latestGeo ??= VisitMediaGeo(capturedAt: capturedAt);
         _completeGpsReady(_latestGeo);
         return _latestGeo;
       }
@@ -462,20 +458,14 @@ class CaptureWorkCoordinator {
         ? currentGeo
         : (_latestGeo?.hasUsableGps == true
               ? _latestGeo!
-              : (currentGeo.hasCoordinates
-                    ? currentGeo
-                    : (_latestGeo ?? currentGeo)));
+              : VisitMediaGeo(capturedAt: currentGeo.capturedAt));
 
     if (gpsRequired && !geo.hasUsableGps) {
       final cont = gpsContinueFuture;
       if (cont != null) {
         final resolved = await cont;
-        if (resolved != null) {
-          if (resolved.hasUsableGps) {
-            geo = resolved;
-          } else if (!geo.hasCoordinates && resolved.hasCoordinates) {
-            geo = resolved;
-          }
+        if (resolved != null && resolved.hasUsableGps) {
+          geo = resolved;
         }
       }
       if (!geo.hasUsableGps) {
@@ -485,12 +475,8 @@ class CaptureWorkCoordinator {
             VisitGpsSession.oneShotTimeout,
             onTimeout: () => null,
           );
-          if (resolved != null) {
-            if (resolved.hasUsableGps) {
-              geo = resolved;
-            } else if (!geo.hasCoordinates && resolved.hasCoordinates) {
-              geo = resolved;
-            }
+          if (resolved != null && resolved.hasUsableGps) {
+            geo = resolved;
           }
         }
       }
