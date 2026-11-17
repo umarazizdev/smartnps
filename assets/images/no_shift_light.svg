@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1536" height="1024" viewBox="0 0 1536 1024" fill="none">
+  <defs>
+    <linearGradient id="bgCircle" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#F5F9FF"/>
+      <stop offset="100%" stop-color="#D9E8FF"/>
+    </linearGradient>
+    <linearGradient id="blueHeader" x1="458" y1="305" x2="1040" y2="475" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#59B7FF"/>
+      <stop offset="55%" stop-color="#3E89FF"/>
+      <stop offset="100%" stop-color="#2C63E8"/>
+    </linearGradient>
+    <linearGradient id="calendarFrontGrad" x1="478" y1="410" x2="996" y2="806" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FDFEFF"/>
+      <stop offset="100%" stop-color="#EAF1FD"/>
+    </linearGradient>
+    <linearGradient id="calendarBodyGrad" x1="478" y1="408" x2="928" y2="772" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#EEF4FF"/>
+    </linearGradient>
+    <linearGradient id="calendarSideGrad" x1="944" y1="428" x2="1110" y2="770" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#C6DBFF"/>
+      <stop offset="100%" stop-color="#7EA8F9"/>
+    </linearGradient>
+    <linearGradient id="ringGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#D8E2F6"/>
+    </linearGradient>
+    <linearGradient id="cellGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#D9E4F6"/>
+      <stop offset="100%" stop-color="#C7D6EE"/>
+    </linearGradient>
+    <linearGradient id="clockOuter" x1="780" y1="515" x2="1025" y2="760" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#76D8FF"/>
+      <stop offset="50%" stop-color="#388BFF"/>
+      <stop offset="100%" stop-color="#2967EA"/>
+    </linearGradient>
+    <linearGradient id="clockInner" x1="824" y1="567" x2="978" y2="712" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FDFEFF"/>
+      <stop offset="100%" stop-color="#E9F1FF"/>
+    </linearGradient>
+    <linearGradient id="leafGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#7CC7FF"/>
+      <stop offset="100%" stop-color="#4C8EFF"/>
+    </linearGradient>
+    <linearGradient id="groundGrad" x1="370" y1="760" x2="1168" y2="760" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#E7F0FF"/>
+      <stop offset="50%" stop-color="#CCDDFC"/>
+      <stop offset="100%" stop-color="#E7F0FF"/>
+    </linearGradient>
+    <filter id="softShadow" x="0" y="0" width="1536" height="1024" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="12" stdDeviation="20" flood-color="#8CAEEB" flood-opacity="0.28"/>
+    </filter>
+    <filter id="smallShadow" x="0" y="0" width="1536" height="1024" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#7B99D9" flood-opacity="0.22"/>
+    </filter>
+  </defs>
+
+  <!-- background decorative shapes -->
+  <ellipse cx="707" cy="460" rx="286" ry="252" fill="url(#bgCircle)"/>
+  <ellipse cx="1013" cy="560" rx="161" ry="183" fill="url(#bgCircle)"/>
+
+  <!-- decorative leaves -->
+  <g opacity="0.98" transform="translate(340 520)">
+    <path d="M32 66C-6 42-3-7 43 0C87 7 96 76 78 110C63 138 38 135 16 122C-11 106-18 84 32 66Z" fill="url(#leafGrad)" opacity="0.9"/>
+    <path d="M50 154C5 150-17 111 12 83C39 56 96 73 118 111C136 141 124 175 89 183C60 188 39 178 50 154Z" fill="url(#leafGrad)" opacity="0.88"/>
+    <path d="M92 57C113 103 126 156 131 212" stroke="#5A87D8" stroke-width="6" stroke-linecap="round" opacity="0.45"/>
+    <path d="M71 120C96 137 115 165 126 187" stroke="#5A87D8" stroke-width="5" stroke-linecap="round" opacity="0.35"/>
+    <path d="M92 57C77 80 66 112 62 144" stroke="#5A87D8" stroke-width="5" stroke-linecap="round" opacity="0.22"/>
+  </g>
+
+  <!-- floor shadow -->
+  <ellipse cx="769" cy="769" rx="391" ry="35" fill="url(#groundGrad)" opacity="0.95"/>
+
+  <!-- back side of calendar -->
+  <g filter="url(#softShadow)">
+    <path d="M865 325C892 318 1008 317 1027 320C1060 325 1075 342 1078 368L1116 711C1121 757 1091 786 1043 786H928C900 786 879 771 873 746L826 385C819 356 834 332 865 325Z" fill="url(#calendarSideGrad)"/>
+  </g>
+
+  <!-- front calendar -->
+  <g filter="url(#softShadow)">
+    <path d="M531 294H984C1026 294 1051 319 1048 361L1010 722C1007 761 978 786 939 786H500C452 786 421 751 426 705L466 367C471 323 493 294 531 294Z" fill="url(#calendarFrontGrad)"/>
+    <path d="M531 294H984C1026 294 1051 319 1048 361L1040 412H458L466 367C471 323 493 294 531 294Z" fill="url(#blueHeader)"/>
+    <path d="M458 412H1040L1010 722C1007 761 978 786 939 786H500C452 786 421 751 426 705L458 412Z" fill="url(#calendarBodyGrad)"/>
+    <path d="M458 412H1040" stroke="#F7FBFF" stroke-width="3" opacity="0.9"/>
+    <path d="M532 295H981" stroke="#88CFFF" stroke-width="2" opacity="0.5"/>
+  </g>
+
+  <!-- binder rings -->
+  <g filter="url(#smallShadow)">
+    <path d="M599 267C599 223 621 205 646 205C671 205 694 224 694 267V312C694 338 678 352 658 352C638 352 622 338 622 312V267C622 252 633 241 646 241C659 241 671 252 671 267V308" fill="url(#ringGrad)"/>
+    <path d="M853 267C853 223 875 205 900 205C925 205 948 224 948 267V312C948 338 932 352 912 352C892 352 876 338 876 312V267C876 252 887 241 900 241C913 241 925 252 925 267V308" fill="url(#ringGrad)"/>
+  </g>
+
+  <!-- date cells -->
+  <g opacity="0.97">
+    <rect x="547" y="477" width="78" height="74" rx="18" fill="url(#cellGrad)"/>
+    <rect x="652" y="468" width="78" height="74" rx="18" fill="url(#cellGrad)"/>
+    <rect x="757" y="458" width="78" height="74" rx="18" fill="url(#cellGrad)"/>
+    <rect x="865" y="452" width="78" height="74" rx="18" fill="url(#cellGrad)"/>
+
+    <rect x="533" y="587" width="86" height="74" rx="18" fill="url(#cellGrad)"/>
+    <rect x="644" y="580" width="83" height="76" rx="18" fill="none" stroke="#7EB1F7" stroke-width="5" stroke-dasharray="18 14" stroke-linecap="round"/>
+    <rect x="757" y="575" width="79" height="74" rx="18" fill="url(#cellGrad)"/>
+    <rect x="865" y="574" width="78" height="74" rx="18" fill="url(#cellGrad)"/>
+
+    <rect x="519" y="680" width="86" height="74" rx="18" fill="url(#cellGrad)"/>
+    <rect x="633" y="678" width="84" height="74" rx="18" fill="url(#cellGrad)"/>
+    <rect x="747" y="676" width="84" height="74" rx="18" fill="url(#cellGrad)"/>
+  </g>
+
+  <!-- notification accent strokes -->
+  <g fill="#72B7FF">
+    <rect x="1007" y="201" width="30" height="83" rx="15" transform="rotate(22 1007 201)"/>
+    <rect x="1081" y="242" width="30" height="83" rx="15" transform="rotate(46 1081 242)"/>
+    <rect x="1100" y="343" width="30" height="73" rx="15" transform="rotate(84 1100 343)"/>
+  </g>
+
+  <!-- clock -->
+  <g filter="url(#softShadow)">
+    <circle cx="904" cy="652" r="118" fill="url(#clockOuter)"/>
+    <circle cx="904" cy="652" r="96" fill="url(#clockInner)"/>
+    <circle cx="904" cy="652" r="16" fill="#3B7EF4"/>
+    <path d="M904 602V652" stroke="#3B7EF4" stroke-width="20" stroke-linecap="round"/>
+    <path d="M904 652L947 680" stroke="#3B7EF4" stroke-width="20" stroke-linecap="round"/>
+    <circle cx="904" cy="652" r="120" stroke="#F8FBFF" stroke-width="12" opacity="0.95"/>
+  </g>
+</svg>

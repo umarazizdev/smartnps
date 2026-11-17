@@ -25,6 +25,7 @@ class AppConfig {
   static const bool enableDutyHeartbeatDebugLog = false;
   static const bool enablePermissionStatusDebugLog = false;
   static const bool enablePatrolLogDebugLog = false;
+  static const bool enableDialVisualStateDemo = true;
 
   static const bool enableBgLocationStartTestAlert = false;
 

@@ -8,7 +8,7 @@ import 'package:smartnps360/src/screens/new_screens/new_main_screen.dart';
 import 'package:smartnps360/src/screens/widgets/nointernetscreen.dart';
 
 class SplashScreen extends StatefulWidget {
-  const SplashScreen({super.key, this.splashThemeMode = ThemeMode.dark});
+  const SplashScreen({super.key, this.splashThemeMode = ThemeMode.system});
 
   final ThemeMode splashThemeMode;
 
@@ -18,7 +18,7 @@ class SplashScreen extends StatefulWidget {
 
 class _SplashScreenState extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
-  static const _logoAsset = 'assets/images/npslogo.png';
+  static const _logoAsset = 'assets/images/npslogo_navy_exact.png';
 
   late final AnimationController _entranceController;
   late final Animation<double> _logoOpacity;
@@ -31,16 +31,19 @@ class _SplashScreenState extends State<SplashScreen>
     super.initState();
     _entranceController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 800),
+      duration: const Duration(milliseconds: 700),
     );
     _logoOpacity = Tween<double>(begin: 0, end: 1).animate(
       CurvedAnimation(
         parent: _entranceController,
-        curve: const Interval(0.0, 0.85, curve: Curves.easeOut),
+        curve: Curves.easeOutCubic,
       ),
     );
-    _logoScale = Tween<double>(begin: 0.95, end: 1.0).animate(
-      CurvedAnimation(parent: _entranceController, curve: Curves.easeOutCubic),
+    _logoScale = Tween<double>(begin: 0.92, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _entranceController,
+        curve: Curves.easeOutCubic,
+      ),
     );
     _entranceController.addStatusListener((status) {
       if (status != AnimationStatus.completed || !mounted) return;
@@ -69,7 +72,6 @@ class _SplashScreenState extends State<SplashScreen>
           onRetry: () async {
             await connectivityController.checkConnection();
           },
-
           onConnected: _navigateToNextScreen,
         ),
       );
@@ -105,10 +107,18 @@ class _SplashScreenState extends State<SplashScreen>
     }
   }
 
+  double _screenScale(Size size) {
+    final widthScale = size.width / 390;
+    final heightScale = size.height / 844;
+    return ((widthScale * 0.65) + (heightScale * 0.35)).clamp(0.78, 1.28);
+  }
+
   @override
   Widget build(BuildContext context) {
     final dark = _isDarkTheme(context);
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final mediaSize = MediaQuery.sizeOf(context);
+    final scale = _screenScale(mediaSize);
 
     final overlayStyle = SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
@@ -116,9 +126,8 @@ class _SplashScreenState extends State<SplashScreen>
       statusBarBrightness: dark ? Brightness.dark : Brightness.light,
       systemNavigationBarColor: Colors.transparent,
       systemNavigationBarDividerColor: Colors.transparent,
-      systemNavigationBarIconBrightness: dark
-          ? Brightness.light
-          : Brightness.dark,
+      systemNavigationBarIconBrightness:
+          dark ? Brightness.light : Brightness.dark,
       systemNavigationBarContrastEnforced: false,
       systemStatusBarContrastEnforced: false,
     );
@@ -126,9 +135,8 @@ class _SplashScreenState extends State<SplashScreen>
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: overlayStyle,
       child: Scaffold(
-        backgroundColor: dark
-            ? const Color(0xFF0B192D)
-            : const Color(0xFFF4F8FD),
+        backgroundColor:
+            dark ? const Color(0xFF0B1B2F) : const Color(0xFFF8FAFC),
         extendBody: true,
         extendBodyBehindAppBar: true,
         body: Stack(
@@ -145,30 +153,82 @@ class _SplashScreenState extends State<SplashScreen>
             SafeArea(
               child: LayoutBuilder(
                 builder: (context, constraints) {
-                  final logoSize = constraints.maxWidth * 0.7;
+                  final widthScale = constraints.maxWidth / 390;
+                  final heightScale = constraints.maxHeight / 844;
+                  final layoutScale =
+                      ((widthScale * 0.65) + (heightScale * 0.35))
+                          .clamp(0.78, 1.28);
+                  final s = (scale + layoutScale) / 2;
+                  final logoSize = (164 * s)
+                      .clamp(128.0, constraints.maxWidth * 0.46)
+                      .toDouble();
 
-                  final logo = Semantics(
-                    label: 'National Protective Service',
-                    image: true,
-                    child: Image.asset(
-                      _logoAsset,
-                      width: logoSize,
-                      fit: BoxFit.contain,
-                      filterQuality: FilterQuality.high,
-                    ),
-                  );
-
-                  return Center(
-                    child: reduceMotion || _logoSettled
-                        ? logo
-                        : FadeTransition(
-                            opacity: _logoOpacity,
-                            child: ScaleTransition(
-                              scale: _logoScale,
-                              child: logo,
-                            ),
+                  final content = Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Semantics(
+                        label: 'National Protective Service',
+                        image: true,
+                        child: Image.asset(
+                          _logoAsset,
+                          width: logoSize,
+                          height: logoSize,
+                          fit: BoxFit.contain,
+                          filterQuality: FilterQuality.high,
+                        ),
+                      ),
+                      SizedBox(height: 20 * s),
+                      RichText(
+                        textAlign: TextAlign.center,
+                        text: TextSpan(
+                          style: TextStyle(
+                            fontSize: 30 * s,
+                            letterSpacing: -0.8 * s,
+                            fontWeight: FontWeight.w800,
+                            color: dark
+                                ? const Color(0xFFF1F5FC)
+                                : const Color(0xFF102541),
                           ),
+                          children: [
+                            const TextSpan(text: 'SmartNPS'),
+                            TextSpan(
+                              text: '360',
+                              style: TextStyle(
+                                color: dark
+                                    ? const Color(0xFF4B8BFF)
+                                    : const Color(0xFF0866FF),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      SizedBox(height: 8 * s),
+                        Text(
+                        'Your Duty Companion',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 14 * s,
+                          fontWeight: FontWeight.w400,
+                          letterSpacing: 0.2 * s,
+                          color: dark
+                              ? const Color(0xFF94A3B8)
+                              : const Color(0xFF778397),
+                        ),
+                      ),
+                    ],
                   );
+
+                  final child = reduceMotion || _logoSettled
+                      ? content
+                      : FadeTransition(
+                          opacity: _logoOpacity,
+                          child: ScaleTransition(
+                            scale: _logoScale,
+                            child: content,
+                          ),
+                        );
+
+                  return Center(child: child);
                 },
               ),
             ),
@@ -193,26 +253,11 @@ class _SplashBackgroundPainter extends CustomPainter {
         begin: Alignment.topCenter,
         end: Alignment.bottomCenter,
         colors: dark
-            ? const [Color(0xFF10233C), Color(0xFF0B192D), Color(0xFF071222)]
-            : const [Color(0xFFF9FBFF), Color(0xFFF4F8FD), Color(0xFFEBF2FB)],
-        stops: const [0.0, 0.40, 1.0],
+            ? const [Color(0xFF14253D), Color(0xFF0B1B2F), Color(0xFF041221)]
+            : const [Color(0xFFF8FAFC), Color(0xFFF1F5FC), Color(0xFFE3EDFC)],
+        stops: const [0.0, 0.45, 1.0],
       ).createShader(rect);
     canvas.drawRect(rect, base);
-
-    if (dark) {
-      final subtleTopTint = Paint()
-        ..shader = RadialGradient(
-          center: const Alignment(-0.55, -1.15),
-          radius: 1.35,
-          colors: [
-            const Color(0xFF315478).withValues(alpha: 0.25),
-            const Color(0xFF315478).withValues(alpha: 0.07),
-            Colors.transparent,
-          ],
-          stops: const [0.0, 0.28, 0.62],
-        ).createShader(rect);
-      canvas.drawRect(rect, subtleTopTint);
-    }
   }
 
   @override

@@ -4,6 +4,8 @@ enum NewLiveStatusMode { idle, active, breakMode, standby }
 
 enum NewTimerBlinkTier { none, yellow, orange, red }
 
+enum NewDialVisualState { upcoming, late, onDuty, onBreak }
+
 enum NewArrivalStatus { pending, early, onTime, slight, late }
 
 enum NewWarningTab { late, complaints, writeUps }

@@ -301,7 +301,8 @@ class _AuthScreenState extends State<AuthScreen>
       math.max(safe.top, 12.0) + (16.0 * scale) + topGap - 20.0,
     );
     final tallScreen = height >= 780;
-    final bottomSafe = math.max(safe.bottom, tallScreen ? 8.0 : 12.0);
+    final bottomInset = math.max(safe.bottom, media.viewPadding.bottom);
+    final bottomSafe = math.max(bottomInset, 12.0);
     final logoSize = (102.0 * scale).clamp(90.0, 124.0);
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
@@ -309,7 +310,7 @@ class _AuthScreenState extends State<AuthScreen>
       child: Scaffold(
         resizeToAvoidBottomInset: false,
         backgroundColor: _bgMid,
-        extendBody: true,
+        extendBody: false,
         extendBodyBehindAppBar: true,
         body: Stack(
           fit: StackFit.expand,
@@ -359,7 +360,7 @@ class _AuthScreenState extends State<AuthScreen>
                   final keyboardOpen = imeOpen;
                   final bottomPad = imeOpen
                       ? systemKeyboard + (8.0 * scale)
-                      : bottomSafe + ((tallScreen ? 8.0 : 16.0) * scale);
+                      : bottomSafe + ((tallScreen ? 10.0 : 16.0) * scale);
                   final contentTopPad = keyboardOpen
                       ? math.max(safe.top + 8.0, 16.0 * scale)
                       : topPad;
@@ -424,7 +425,7 @@ class _AuthScreenState extends State<AuthScreen>
                                 SizedBox(
                                   height: keyboardOpen
                                       ? 16 * scale
-                                      : (tallScreen ? 4.0 : 12.0) * scale,
+                                      : (tallScreen ? 8.0 : 14.0) * scale,
                                 ),
                               ],
                             ),
@@ -1294,23 +1295,42 @@ class _OfficerAuthFieldState extends State<_OfficerAuthField> {
           ),
           SizedBox(width: 12 * scale),
           Expanded(
-            child: TextField(
-              focusNode: _focusNode,
-              controller: widget.controller,
-              keyboardType: widget.keyboardType,
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 17 * scale,
-                fontWeight: FontWeight.w500,
+            child: Theme(
+              data: Theme.of(context).copyWith(
+                inputDecorationTheme: const InputDecorationTheme(
+                  filled: true,
+                  fillColor: _NpsAuthPalette.surface,
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  disabledBorder: InputBorder.none,
+                  errorBorder: InputBorder.none,
+                  focusedErrorBorder: InputBorder.none,
+                ),
               ),
-              cursorColor: _NpsAuthPalette.focusedBorder,
-              decoration: InputDecoration(
-                border: InputBorder.none,
-                hintText: widget.hintText,
-                hintStyle: TextStyle(
-                  color: _NpsAuthPalette.hint,
+              child: TextField(
+                focusNode: _focusNode,
+                controller: widget.controller,
+                keyboardType: widget.keyboardType,
+                style: TextStyle(
+                  color: Colors.white,
                   fontSize: 17 * scale,
                   fontWeight: FontWeight.w500,
+                ),
+                cursorColor: _NpsAuthPalette.focusedBorder,
+                decoration: InputDecoration(
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  disabledBorder: InputBorder.none,
+                  filled: true,
+                  fillColor: _NpsAuthPalette.surface,
+                  hintText: widget.hintText,
+                  hintStyle: TextStyle(
+                    color: _NpsAuthPalette.hint,
+                    fontSize: 17 * scale,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ),
             ),
@@ -1427,23 +1447,42 @@ class _OfficerAuthPasswordFieldState extends State<_OfficerAuthPasswordField> {
             ),
             SizedBox(width: 12 * scale),
             Expanded(
-              child: TextField(
-                focusNode: _focusNode,
-                controller: widget.controller,
-                obscureText: !_visibility.isVisible.value,
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 17 * scale,
-                  fontWeight: FontWeight.w500,
+              child: Theme(
+                data: Theme.of(context).copyWith(
+                  inputDecorationTheme: const InputDecorationTheme(
+                    filled: true,
+                    fillColor: _NpsAuthPalette.surface,
+                    border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
+                    disabledBorder: InputBorder.none,
+                    errorBorder: InputBorder.none,
+                    focusedErrorBorder: InputBorder.none,
+                  ),
                 ),
-                cursorColor: _NpsAuthPalette.focusedBorder,
-                decoration: InputDecoration(
-                  border: InputBorder.none,
-                  hintText: widget.hintText,
-                  hintStyle: TextStyle(
-                    color: _NpsAuthPalette.hint,
+                child: TextField(
+                  focusNode: _focusNode,
+                  controller: widget.controller,
+                  obscureText: !_visibility.isVisible.value,
+                  style: TextStyle(
+                    color: Colors.white,
                     fontSize: 17 * scale,
                     fontWeight: FontWeight.w500,
+                  ),
+                  cursorColor: _NpsAuthPalette.focusedBorder,
+                  decoration: InputDecoration(
+                    border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
+                    disabledBorder: InputBorder.none,
+                    filled: true,
+                    fillColor: _NpsAuthPalette.surface,
+                    hintText: widget.hintText,
+                    hintStyle: TextStyle(
+                      color: _NpsAuthPalette.hint,
+                      fontSize: 17 * scale,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
                 ),
               ),

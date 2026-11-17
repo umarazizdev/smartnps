@@ -52,7 +52,9 @@ class NativeNpsApp extends StatelessWidget {
             page: () => const VisitVideoPreviewScreen(),
           ),
         ],
-        home: const SplashScreen(),
+        home: SplashScreen(
+          splashThemeMode: savedDark ? ThemeMode.dark : ThemeMode.light,
+        ),
         builder: (context, child) {
           return AnnotatedRegion<SystemUiOverlayStyle>(
             value: _edgeToEdgeOverlay,

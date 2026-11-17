@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:smartnps360/src/widgets/dialogs/location_notice_dialog.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:smartnps360/src/screens/models/application_models.dart';
 import 'package:smartnps360/src/screens/native_auth_session.dart';
@@ -82,10 +83,7 @@ class AuthController extends GetxController {
         _rememberEmailKey,
         loginEmailController.text.trim(),
       );
-      await prefs.setString(
-        _rememberPasswordKey,
-        loginPasswordController.text,
-      );
+      await prefs.setString(_rememberPasswordKey, loginPasswordController.text);
     } else {
       await prefs.remove(_rememberMeKey);
       await prefs.remove(_rememberEmailKey);
@@ -290,11 +288,13 @@ class AuthController extends GetxController {
         transition: Transition.fadeIn,
         duration: const Duration(milliseconds: 300),
       );
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+      final noticeContext = Get.context;
+      if (noticeContext != null && noticeContext.mounted) {
+        await LocationNoticeDialog.show(noticeContext);
+      }
     } catch (e) {
-      showMessagePopup(
-        'Login failed: ${e.toString()}',
-        title: 'Login Failed',
-      );
+      showMessagePopup('Login failed: ${e.toString()}', title: 'Login Failed');
       debugPrint('Login error: $e');
     } finally {
       isLoading.value = false;

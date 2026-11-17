@@ -1,4 +1,3 @@
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:smartnps360/src/screens/utilities/const.dart';
@@ -7,7 +6,7 @@ import 'package:smartnps360/src/screens/new_screens/Widgets/new_quick_actions_ov
 import '../new_main_controller.dart';
 import '../new_models.dart';
 import 'new_dashboard_controller.dart';
-import 'new_dashboard_dial_controller.dart';
+import 'new_dashboard_hero.dart';
 
 class NewDashboardScreen extends StatelessWidget {
   const NewDashboardScreen({super.key});
@@ -27,9 +26,17 @@ class NewDashboardScreen extends StatelessWidget {
                 children: [
                   _Greeting(controller: controller),
                   const SizedBox(height: 12),
-                  _HeroClock(controller: controller),
-                  const SizedBox(height: 10),
-                  _ShiftActions(controller: controller),
+                  NewDashboardHero(controller: controller),
+                  Obx(
+                    () => controller.showNoAssignedShift
+                        ? const SizedBox.shrink()
+                        : Column(
+                            children: [
+                              const SizedBox(height: 10),
+                              _ShiftActions(controller: controller),
+                            ],
+                          ),
+                  ),
                   const SizedBox(height: 12),
                   _Stats(controller: controller),
                   const SizedBox(height: 14),
@@ -123,8 +130,13 @@ class _DashboardPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     decoration: _DashStyle.card(context),
-    padding: padding,
-    child: child,
+    child: ClipRRect(
+      borderRadius: BorderRadius.circular(22),
+      child: SizedBox(
+        width: double.infinity,
+        child: Padding(padding: padding, child: child),
+      ),
+    ),
   );
 }
 
@@ -132,7 +144,7 @@ class _Greeting extends StatelessWidget {
   const _Greeting({required this.controller});
   final NewDashboardController controller;
 
-  Color _statusColor(NewLiveStatusMode mode) {
+  Color statusColor(NewLiveStatusMode mode) {
     switch (mode) {
       case NewLiveStatusMode.active:
         return NewUi.accent;
@@ -147,69 +159,34 @@ class _Greeting extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Obx(() {
-    final color = _statusColor(controller.liveStatusMode.value);
     return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
+        NewDashboardPeriodIcon(controller: controller),
+        const SizedBox(width: 9),
         Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              RichText(
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                text: TextSpan(
-                  style: TextStyle(
-                    fontSize: 18,
-                    height: 1.27,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: -.5,
-                    color: _DashStyle.secondary(context),
-                  ),
-                  children: [
-                    TextSpan(text: '${controller.greetingPrefix} '),
-                    TextSpan(
-                      text: controller.firstName,
-                      style: TextStyle(
-                        color: NewUi.accent,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ],
-                ),
+          child: RichText(
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            text: TextSpan(
+              style: TextStyle(
+                fontSize: 18,
+                height: 1.27,
+                fontWeight: FontWeight.w600,
+                letterSpacing: -.5,
+                color: _DashStyle.secondary(context),
               ),
-              const SizedBox(height: 6),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 4,
-                ),
-                decoration: BoxDecoration(
-                  color: _DashStyle.dark(context)
-                      ? Colors.white.withAlpha(9)
-                      : const Color(0xFFF1F4F8),
-                  borderRadius: BorderRadius.circular(99),
-                  border: Border.all(color: _DashStyle.line(context)),
-                ),
-                child: Text(
-                  controller.officerRole.value.toUpperCase(),
+              children: [
+                TextSpan(text: '${controller.greetingPrefix.value} '),
+                TextSpan(
+                  text: controller.firstName,
                   style: TextStyle(
-                    fontSize: 11,
+                    color: NewUi.accent,
                     fontWeight: FontWeight.w800,
-                    letterSpacing: .7,
-                    color: _DashStyle.secondary(context),
                   ),
                 ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(width: 10),
-        Padding(
-          padding: const EdgeInsets.only(top: 5),
-          child: _LiveStatusPill(
-            text: controller.liveStatusText.value,
-            color: color,
+              ],
+            ),
           ),
         ),
       ],
@@ -217,8 +194,8 @@ class _Greeting extends StatelessWidget {
   });
 }
 
-class _LiveStatusPill extends StatelessWidget {
-  const _LiveStatusPill({required this.text, required this.color});
+class NewLiveStatusPill extends StatelessWidget {
+  const NewLiveStatusPill({super.key, required this.text, required this.color});
   final String text;
   final Color color;
 
@@ -254,545 +231,6 @@ class _LiveStatusPill extends StatelessWidget {
       ],
     ),
   );
-}
-
-class _HeroClock extends StatefulWidget {
-  const _HeroClock({required this.controller});
-  final NewDashboardController controller;
-
-  @override
-  State<_HeroClock> createState() => _HeroClockState();
-}
-
-class _HeroClockState extends State<_HeroClock> with TickerProviderStateMixin {
-  late final AnimationController _ringPulse;
-  late final AnimationController _blinkPulse;
-  late final NewDashboardDialController dialController;
-  Worker? _blinkWorker;
-  NewTimerBlinkTier _lastTier = NewTimerBlinkTier.none;
-
-  @override
-  void initState() {
-    super.initState();
-    dialController = Get.isRegistered<NewDashboardDialController>()
-        ? Get.find<NewDashboardDialController>()
-        : Get.put(NewDashboardDialController());
-    _ringPulse = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 2300),
-    )..repeat(reverse: true);
-    _blinkPulse = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1100),
-    );
-    _blinkWorker = ever<NewTimerBlinkTier>(
-      widget.controller.blinkTier,
-      _syncBlink,
-    );
-    _syncBlink(widget.controller.blinkTier.value);
-  }
-
-  @override
-  void dispose() {
-    _blinkWorker?.dispose();
-    _ringPulse.dispose();
-    _blinkPulse.dispose();
-    super.dispose();
-  }
-
-  void _syncBlink(NewTimerBlinkTier tier) {
-    if (tier == _lastTier) return;
-    _lastTier = tier;
-    if (tier == NewTimerBlinkTier.none) {
-      _blinkPulse.stop();
-      _blinkPulse.value = 0;
-      return;
-    }
-    _blinkPulse.duration = Duration(
-      milliseconds: tier == NewTimerBlinkTier.red
-          ? 700
-          : tier == NewTimerBlinkTier.orange
-          ? 900
-          : 1100,
-    );
-    if (!_blinkPulse.isAnimating) _blinkPulse.repeat(reverse: true);
-  }
-
-  Color _arrivalColor(NewArrivalStatus status, BuildContext context) {
-    switch (status) {
-      case NewArrivalStatus.pending:
-        return _DashStyle.secondary(context);
-      case NewArrivalStatus.early:
-        return NewUi.accent;
-      case NewArrivalStatus.onTime:
-        return NewUi.success;
-      case NewArrivalStatus.slight:
-        return NewUi.warning;
-      case NewArrivalStatus.late:
-        return NewUi.danger;
-    }
-  }
-
-  Color _blinkColor(NewTimerBlinkTier tier, double t, bool dark) {
-    switch (tier) {
-      case NewTimerBlinkTier.yellow:
-        return Color.lerp(
-          dark ? const Color(0xFFFBBF24) : const Color(0xFF985A00),
-          dark ? const Color(0xFFFFE08A) : const Color(0xFFA76200),
-          t,
-        )!;
-      case NewTimerBlinkTier.orange:
-        return Color.lerp(
-          dark ? const Color(0xFFFF964F) : const Color(0xFFA94708),
-          dark ? const Color(0xFFFFC07C) : const Color(0xFFB84A08),
-          t,
-        )!;
-      case NewTimerBlinkTier.red:
-        return Color.lerp(
-          dark ? const Color(0xFFFF7582) : const Color(0xFFC92F42),
-          dark ? const Color(0xFFFFA5AD) : const Color(0xFFD63849),
-          t,
-        )!;
-      case NewTimerBlinkTier.none:
-        return Colors.transparent;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final controller = widget.controller;
-    return Obx(() {
-      final isBreak = controller.isOnBreak;
-      final hasDuty = controller.hasActiveDuty;
-      final tier = controller.blinkTier.value;
-      final timerLabel = controller.timerLabel.value;
-      final timerText = controller.timerText.value;
-      final compact =
-          controller.timerCompact.value || controller.lateStartedStyle.value;
-      final isDark = _DashStyle.dark(context);
-
-      return _DashboardPanel(
-        padding: const EdgeInsets.fromLTRB(10, 9, 10, 10),
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final available = constraints.maxWidth - 8;
-            final size = math.min(252.0, available).toDouble();
-            return SizedBox(
-              height: size + 2,
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  RepaintBoundary(
-                    child: AnimatedBuilder(
-                      animation: Listenable.merge([_ringPulse, _blinkPulse]),
-                      builder: (_, _) => CustomPaint(
-                        size: Size.square(size),
-                        painter: _DialPainter(
-                          lateEnd: controller.dialLateEnd.value,
-                          work1End: controller.dialWork1End.value,
-                          breakEnd: controller.dialBreakEnd.value,
-                          liveEnd: controller.dialLiveEnd.value,
-                          activeDots: controller.dialActiveDots.value,
-                          dark: isDark,
-                          pulse: _ringPulse.value,
-                          blink: tier == NewTimerBlinkTier.none
-                              ? 0
-                              : _blinkPulse.value,
-                          blinkTier: tier,
-                        ),
-                      ),
-                    ),
-                  ),
-                  MediaQuery.withClampedTextScaling(
-                    // A circular dial has a fixed safe text area. Keep system
-                    // scaling useful without allowing labels to cross the ring.
-                    maxScaleFactor: 1.15,
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(maxWidth: size * .68),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          AnimatedBuilder(
-                            animation: _blinkPulse,
-                            builder: (_, _) {
-                              final t = tier == NewTimerBlinkTier.none
-                                  ? 0.0
-                                  : _blinkPulse.value;
-                              return Text(
-                                timerLabel.toUpperCase(),
-                                key: ValueKey(timerLabel),
-                                textAlign: TextAlign.center,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: tier == NewTimerBlinkTier.none
-                                      ? _DashStyle.secondary(context)
-                                      : _blinkColor(tier, t, isDark),
-                                  fontSize: 10.5,
-                                  fontWeight: FontWeight.w800,
-                                  letterSpacing: 1.35,
-                                  height: 1.15,
-                                ),
-                              );
-                            },
-                          ),
-                          const SizedBox(height: 6),
-                          AnimatedBuilder(
-                            animation: _blinkPulse,
-                            builder: (_, _) {
-                              final t = tier == NewTimerBlinkTier.none
-                                  ? 0.0
-                                  : _blinkPulse.value;
-                              return FittedBox(
-                                fit: BoxFit.scaleDown,
-                                child: Text(
-                                  timerText,
-                                  key: ValueKey(timerText),
-                                  maxLines: 1,
-                                  style: TextStyle(
-                                    fontFamily: 'monospace',
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: compact ? 18 : 27,
-                                    height: 1.05,
-                                    letterSpacing: -.8,
-                                    color: tier == NewTimerBlinkTier.none
-                                        ? (isBreak
-                                              ? NewUi.warning
-                                              : _DashStyle.text(context))
-                                        : _blinkColor(tier, t, isDark),
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                          const SizedBox(height: 9),
-                          if (!isBreak)
-                            _RotatingRingFields(dialController: dialController),
-                          if (isBreak) ...[
-                            Text(
-                              'BREAK ACTIVE',
-                              style: TextStyle(
-                                color: _DashStyle.secondary(context),
-                                fontSize: 12,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: .9,
-                              ),
-                            ),
-                            const SizedBox(height: 5),
-                            Text(
-                              controller.selectedSite.value,
-                              textAlign: TextAlign.center,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: _DashStyle.text(context),
-                                fontSize: 14,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ],
-                          const SizedBox(height: 8),
-                          if (!isBreak)
-                            _DialPill(
-                              text: controller.arrivalText.value,
-                              icon: Icons.schedule_rounded,
-                              color: _arrivalColor(
-                                controller.arrivalStatus.value,
-                                context,
-                              ),
-                            ),
-                          if (isBreak)
-                            _DialPill(
-                              text: 'Break Active',
-                              icon: Icons.hourglass_bottom_rounded,
-                              color: NewUi.warning,
-                            ),
-                          if (hasDuty &&
-                              controller.status.value !=
-                                  NewOfficerStatus.standby) ...[
-                            const SizedBox(height: 5),
-                            _DialPill(
-                              text: controller.breakBadgeText.value,
-                              icon: Icons.coffee_rounded,
-                              color: NewUi.warning,
-                              strike:
-                                  controller.breakBadgeText.value == 'Taken',
-                              onTap: controller.toggleBreak,
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        ),
-      );
-    });
-  }
-}
-
-class _RotatingRingFields extends StatelessWidget {
-  const _RotatingRingFields({required this.dialController});
-  final NewDashboardDialController dialController;
-
-  @override
-  Widget build(BuildContext context) => Obx(
-    () => AnimatedOpacity(
-      opacity: dialController.fading.value ? 0 : 1,
-      duration: const Duration(milliseconds: 600),
-      child: AnimatedSlide(
-        offset: dialController.fading.value
-            ? const Offset(0, .08)
-            : Offset.zero,
-        duration: const Duration(milliseconds: 600),
-        child: Column(
-          children: [
-            Text(
-              dialController.title.value.toUpperCase(),
-              textAlign: TextAlign.center,
-              maxLines: 2,
-              style: TextStyle(
-                color: _DashStyle.secondary(context),
-                fontSize: 11,
-                fontWeight: FontWeight.w800,
-                letterSpacing: .85,
-              ),
-            ),
-            const SizedBox(height: 5),
-            Text(
-              dialController.subtitle.value,
-              textAlign: TextAlign.center,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: _DashStyle.text(context),
-                fontSize: 13,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ],
-        ),
-      ),
-    ),
-  );
-}
-
-class _DialPill extends StatelessWidget {
-  const _DialPill({
-    required this.text,
-    required this.icon,
-    required this.color,
-    this.strike = false,
-    this.onTap,
-  });
-  final String text;
-  final IconData icon;
-  final Color color;
-  final bool strike;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) => Material(
-    color: Colors.transparent,
-    child: InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(99),
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 180),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-        decoration: BoxDecoration(
-          color: color.withAlpha(_DashStyle.dark(context) ? 31 : 17),
-          borderRadius: BorderRadius.circular(99),
-          border: Border.all(color: color.withAlpha(60)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 12.5, color: color),
-            const SizedBox(width: 5),
-            Flexible(
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 250),
-                child: Text(
-                  text,
-                  key: ValueKey(text),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: color,
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w800,
-                    decoration: strike ? TextDecoration.lineThrough : null,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    ),
-  );
-}
-
-class _DialPainter extends CustomPainter {
-  const _DialPainter({
-    required this.lateEnd,
-    required this.work1End,
-    required this.breakEnd,
-    required this.liveEnd,
-    required this.activeDots,
-    required this.dark,
-    required this.pulse,
-    required this.blink,
-    required this.blinkTier,
-  });
-
-  final double lateEnd;
-  final double work1End;
-  final double breakEnd;
-  final double liveEnd;
-  final int activeDots;
-  final bool dark;
-  final double pulse;
-  final double blink;
-  final NewTimerBlinkTier blinkTier;
-
-  Color get _urgencyBase {
-    switch (blinkTier) {
-      case NewTimerBlinkTier.red:
-        return dark ? const Color(0xFFFF5261) : const Color(0xFFD92535);
-      case NewTimerBlinkTier.orange:
-        return const Color(0xFFEA580C);
-      case NewTimerBlinkTier.yellow:
-        return const Color(0xFF10B981);
-      case NewTimerBlinkTier.none:
-        return Colors.transparent;
-    }
-  }
-
-  Color get _urgencyBright {
-    switch (blinkTier) {
-      case NewTimerBlinkTier.red:
-        return dark ? const Color(0xFFFFA3AB) : const Color(0xFFFF8A94);
-      case NewTimerBlinkTier.orange:
-        return const Color(0xFFFDBA74);
-      case NewTimerBlinkTier.yellow:
-        return const Color(0xFF6EE7B7);
-      case NewTimerBlinkTier.none:
-        return Colors.transparent;
-    }
-  }
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = size.center(Offset.zero);
-    final radius = math.min(size.width, size.height) / 2 - 15;
-    final start = math.pi * .74;
-    final sweep = math.pi * 1.52;
-    final rect = Rect.fromCircle(center: center, radius: radius);
-    final blinking = blinkTier != NewTimerBlinkTier.none;
-    final idleTrack = dark
-        ? Colors.white.withAlpha(17)
-        : const Color(0xFFE8EDF5);
-
-    if (blinking) {
-      final trackColor = Color.lerp(_urgencyBase, _urgencyBright, blink)!;
-      final trackGlow = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 18 + blink * 6
-        ..strokeCap = StrokeCap.round
-        ..color = trackColor.withAlpha(
-          (55 + (blink * 120).round()).clamp(0, 175),
-        );
-      final track = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 14
-        ..strokeCap = StrokeCap.round
-        ..color = trackColor;
-      canvas.drawArc(rect, start, sweep, false, trackGlow);
-      canvas.drawArc(rect, start, sweep, false, track);
-    } else {
-      final track = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 14
-        ..strokeCap = StrokeCap.round
-        ..color = idleTrack;
-      canvas.drawArc(rect, start, sweep, false, track);
-    }
-
-    void drawSeg(double from, double to, Color color) {
-      final a0 = from.clamp(0.0, 1.0);
-      final a1 = to.clamp(0.0, 1.0);
-      if (a1 <= a0) return;
-      final paint = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 14
-        ..strokeCap = StrokeCap.round
-        ..shader = NewUi.accentGradient(color).createShader(rect);
-      final glow = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 17 + pulse * 2
-        ..strokeCap = StrokeCap.round
-        ..color = color.withAlpha(28 + (pulse * 24).round());
-      canvas.drawArc(rect, start + sweep * a0, sweep * (a1 - a0), false, glow);
-      canvas.drawArc(rect, start + sweep * a0, sweep * (a1 - a0), false, paint);
-    }
-
-    drawSeg(0, lateEnd, NewUi.danger);
-    drawSeg(lateEnd, work1End, NewUi.success);
-    drawSeg(work1End, breakEnd, NewUi.warning);
-    drawSeg(breakEnd, liveEnd, NewUi.success);
-
-    final dotTrack = Paint()
-      ..color = dark ? Colors.white.withAlpha(22) : const Color(0xFFCBD5E1);
-    final dotActive = Paint()..color = NewUi.accent2.withAlpha(180);
-    final dotRadius = radius - 18;
-    final lit = activeDots.clamp(0, 60);
-    for (int i = 0; i < 60; i++) {
-      final point = i / 59;
-      final a = start + sweep * point;
-      final p = Offset(
-        center.dx + math.cos(a) * dotRadius,
-        center.dy + math.sin(a) * dotRadius,
-      );
-      final on = i < lit;
-      canvas.drawCircle(p, on ? 2.05 : 1.65, on ? dotActive : dotTrack);
-    }
-
-    final headFrac = liveEnd > 0 ? liveEnd : (lateEnd > 0 ? lateEnd : 0.0);
-    if (headFrac > 0) {
-      final headColor = lateEnd >= liveEnd && lateEnd > 0
-          ? NewUi.danger
-          : (breakEnd > work1End && liveEnd <= breakEnd + 0.001
-                ? NewUi.warning
-                : NewUi.success);
-      final head = Offset(
-        center.dx + math.cos(start + sweep * headFrac) * radius,
-        center.dy + math.sin(start + sweep * headFrac) * radius,
-      );
-      canvas.drawCircle(
-        head,
-        7 + pulse * 4,
-        Paint()..color = headColor.withAlpha(((1 - pulse) * 68).round()),
-      );
-      canvas.drawCircle(head, 5.1, Paint()..color = headColor);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _DialPainter oldDelegate) =>
-      oldDelegate.lateEnd != lateEnd ||
-      oldDelegate.work1End != work1End ||
-      oldDelegate.breakEnd != breakEnd ||
-      oldDelegate.liveEnd != liveEnd ||
-      oldDelegate.activeDots != activeDots ||
-      oldDelegate.dark != dark ||
-      oldDelegate.pulse != pulse ||
-      oldDelegate.blink != blink ||
-      oldDelegate.blinkTier != blinkTier;
 }
 
 class _Stats extends StatelessWidget {
@@ -916,6 +354,17 @@ class _StatCardState extends State<_StatCard>
             return Container(
               constraints: BoxConstraints(minHeight: 88 * scale),
               decoration: base.copyWith(
+                gradient: RadialGradient(
+                  center: Alignment.bottomRight,
+                  radius: 1.3,
+                  colors: [
+                    Color.alphaBlend(
+                      accent.withAlpha(_DashStyle.dark(context) ? 24 : 10),
+                      _DashStyle.surface(context),
+                    ),
+                    _DashStyle.surface(context),
+                  ],
+                ),
                 border: Border.all(
                   width: widget.pulse ? 1.35 : 1,
                   color: widget.pulse
@@ -941,98 +390,103 @@ class _StatCardState extends State<_StatCard>
                   onTap: widget.onTap,
                   onDoubleTap: widget.onDoubleTap,
                   overlayColor: _DashStyle.interactionOverlay(accent),
-                  child: Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      horizontalPadding,
-                      8 * scale,
-                      horizontalPadding,
-                      7 * scale,
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Container(
-                              width: iconSize,
-                              height: iconSize,
-                              decoration: BoxDecoration(
-                                color: accent.withAlpha(
-                                  _DashStyle.dark(context) ? 36 : 19,
-                                ),
-                                borderRadius: BorderRadius.circular(7 * scale),
-                              ),
-                              child: Icon(
-                                widget.icon,
-                                size: 14.5 * scale,
-                                color: accent,
-                              ),
-                            ),
-                            SizedBox(width: 6 * scale),
-                            Expanded(
-                              child: Text(
-                                widget.data.title.toUpperCase(),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 11.5 * scale,
-                                  fontWeight: FontWeight.w800,
-                                  letterSpacing: .45,
-                                  color: _DashStyle.secondary(context),
-                                ),
-                              ),
-                            ),
-                            if (widget.data.tag != null)
+                  child: CustomPaint(
+                    painter: _StatAccentWave(accent, _DashStyle.dark(context)),
+                    child: Padding(
+                      padding: EdgeInsets.fromLTRB(
+                        horizontalPadding,
+                        8 * scale,
+                        horizontalPadding,
+                        7 * scale,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
                               Container(
-                                padding: EdgeInsets.symmetric(
-                                  horizontal: 5.5 * scale,
-                                  vertical: 3 * scale,
-                                ),
+                                width: iconSize,
+                                height: iconSize,
                                 decoration: BoxDecoration(
-                                  color: NewUi.purple.withAlpha(21),
-                                  borderRadius: BorderRadius.circular(6),
+                                  color: accent.withAlpha(
+                                    _DashStyle.dark(context) ? 36 : 19,
+                                  ),
+                                  borderRadius: BorderRadius.circular(
+                                    7 * scale,
+                                  ),
                                 ),
+                                child: Icon(
+                                  widget.icon,
+                                  size: 14.5 * scale,
+                                  color: accent,
+                                ),
+                              ),
+                              SizedBox(width: 6 * scale),
+                              Expanded(
                                 child: Text(
-                                  widget.data.tag!,
+                                  widget.data.title.toUpperCase(),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
                                   style: TextStyle(
-                                    color: NewUi.purple,
-                                    fontSize: 10.5 * scale,
+                                    fontSize: 11.5 * scale,
                                     fontWeight: FontWeight.w800,
+                                    letterSpacing: .45,
+                                    color: _DashStyle.secondary(context),
                                   ),
                                 ),
                               ),
-                          ],
-                        ),
-                        SizedBox(height: 5 * scale),
-                        Text(
-                          widget.data.value,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 21 * scale,
-                            height: 1.05,
-                            letterSpacing: -.7,
-                            fontWeight: FontWeight.w800,
-                            color: widget.danger
-                                ? accent
-                                : _DashStyle.text(context),
+                              if (widget.data.tag != null)
+                                Container(
+                                  padding: EdgeInsets.symmetric(
+                                    horizontal: 5.5 * scale,
+                                    vertical: 3 * scale,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: NewUi.purple.withAlpha(21),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Text(
+                                    widget.data.tag!,
+                                    style: TextStyle(
+                                      color: NewUi.purple,
+                                      fontSize: 10.5 * scale,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                ),
+                            ],
                           ),
-                        ),
-                        SizedBox(height: 1.5 * scale),
-                        Text(
-                          widget.data.meta,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 11.5 * scale,
-                            height: 1.15,
-                            fontWeight: FontWeight.w500,
-                            color: widget.danger
-                                ? accent
-                                : _DashStyle.secondary(context),
+                          SizedBox(height: 5 * scale),
+                          Text(
+                            widget.data.value,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 21 * scale,
+                              height: 1.05,
+                              letterSpacing: -.7,
+                              fontWeight: FontWeight.w800,
+                              color: widget.danger
+                                  ? accent
+                                  : _DashStyle.text(context),
+                            ),
                           ),
-                        ),
-                      ],
+                          SizedBox(height: 1.5 * scale),
+                          Text(
+                            widget.data.meta,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 11.5 * scale,
+                              height: 1.15,
+                              fontWeight: FontWeight.w500,
+                              color: widget.danger
+                                  ? accent
+                                  : _DashStyle.secondary(context),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -1043,6 +497,43 @@ class _StatCardState extends State<_StatCard>
       },
     );
   }
+}
+
+class _StatAccentWave extends CustomPainter {
+  const _StatAccentWave(this.color, this.dark);
+  final Color color;
+  final bool dark;
+  @override
+  void paint(Canvas canvas, Size size) {
+    final path = Path()
+      ..moveTo(size.width * .48, size.height)
+      ..cubicTo(
+        size.width * .76,
+        size.height * .97,
+        size.width * .79,
+        size.height * .74,
+        size.width,
+        size.height * .64,
+      )
+      ..lineTo(size.width, size.height)
+      ..close();
+    canvas.drawPath(path, Paint()..color = color.withAlpha(dark ? 42 : 21));
+    final second = Path()
+      ..moveTo(size.width * .7, size.height)
+      ..quadraticBezierTo(
+        size.width * .88,
+        size.height * .91,
+        size.width,
+        size.height * .83,
+      )
+      ..lineTo(size.width, size.height)
+      ..close();
+    canvas.drawPath(second, Paint()..color = color.withAlpha(dark ? 24 : 14));
+  }
+
+  @override
+  bool shouldRepaint(covariant _StatAccentWave oldDelegate) =>
+      oldDelegate.color != color || oldDelegate.dark != dark;
 }
 
 class _Shortcuts extends StatelessWidget {
@@ -1500,7 +991,7 @@ class _NativeShiftButton extends StatelessWidget {
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 14,
-                    fontWeight: FontWeight.w700,
+                    fontWeight: FontWeight.w800,
                     height: 1.1,
                   ),
                 ),
@@ -1529,22 +1020,22 @@ class _NativeBreakButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final color = NewUi.warning;
     final dark = _DashStyle.dark(context);
-    final foreground = onBreak
-        ? (dark ? const Color(0xFFFFD66B) : const Color(0xFF9A6500))
-        : (dark ? const Color(0xFFD4BD83) : const Color(0xFF735B22));
+    final foreground = enabled
+        ? (dark ? const Color(0xFFFFD07F) : const Color(0xFF95620B))
+        : _DashStyle.secondary(context);
     return Opacity(
       opacity: enabled ? 1 : .76,
       child: Container(
         height: 54,
         decoration: _DashStyle.card(context, radius: 14).copyWith(
           color: onBreak
-              ? color.withAlpha(dark ? 30 : 17)
-              : color.withAlpha(dark ? 12 : 7),
+              ? (dark ? const Color(0xFF3A3021) : const Color(0xFFFFF6E5))
+              : _DashStyle.surface(context),
           boxShadow: const [],
           border: Border.all(
-            color: onBreak
-                ? color.withAlpha(90)
-                : color.withAlpha(dark ? 55 : 45),
+            color: enabled && onBreak
+                ? foreground.withAlpha(80)
+                : _DashStyle.line(context),
           ),
         ),
         child: Material(
@@ -1565,13 +1056,13 @@ class _NativeBreakButton extends StatelessWidget {
                     height: 29,
                     width: 29,
                     decoration: BoxDecoration(
-                      color: color.withAlpha(dark ? 35 : 18),
+                      color: foreground.withAlpha(dark ? 35 : 18),
                       borderRadius: BorderRadius.circular(9),
                     ),
                     child: Icon(
                       Icons.coffee_rounded,
                       size: 17,
-                      color: onBreak ? foreground : color,
+                      color: foreground,
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -1583,7 +1074,7 @@ class _NativeBreakButton extends StatelessWidget {
                       style: TextStyle(
                         color: foreground,
                         fontSize: 14,
-                        fontWeight: FontWeight.w700,
+                        fontWeight: FontWeight.w800,
                         height: 1.1,
                       ),
                     ),

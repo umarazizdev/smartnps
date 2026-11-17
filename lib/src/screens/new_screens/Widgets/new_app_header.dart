@@ -76,7 +76,9 @@ class NewAppHeader extends StatelessWidget {
                       ? 'Switch to light mode'
                       : 'Switch to dark mode',
                   child: _HeaderButton(
-                    asset: 'assets/images/header_moon_outline_v4.png',
+                    asset: controller.isDarkMode.value
+                        ? 'assets/images/header_sun_outline.png'
+                        : 'assets/images/header_moon_outline_v5.png',
                     onTap: controller.toggleTheme,
                     metrics: metrics,
                   ),
@@ -88,7 +90,7 @@ class NewAppHeader extends StatelessWidget {
                   clipBehavior: Clip.none,
                   children: [
                     _HeaderButton(
-                      asset: 'assets/images/header_bell_outline_v4.png',
+                    asset: 'assets/images/header_bell_outline_v6.png',
                       onTap: controller.openNotifications,
                       metrics: metrics,
                     ),
@@ -157,7 +159,7 @@ class _HeaderMetrics {
   double get badgePad => (4 * scale).clamp(3.0, 5.0);
   double get badgeFont => (9 * scale).clamp(8.0, 10.0);
   double get badgeBorder => (2 * scale).clamp(1.5, 2.5);
-  double get badgeOffset => (1 * scale).clamp(1.0, 2.0);
+  double get badgeOffset => (-2 * scale).clamp(-3.0, -1.0);
 }
 
 class _HeaderButton extends StatelessWidget {
@@ -175,6 +177,7 @@ class _HeaderButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -193,11 +196,15 @@ class _HeaderButton extends StatelessWidget {
           width: metrics.buttonSize,
           height: metrics.buttonSize,
           decoration: BoxDecoration(
-            color: tinted
+            color: dark
+                ? const Color(0xFF182335)
+                : tinted
                 ? Theme.of(context).colorScheme.primary.withAlpha(22)
                 : Theme.of(context).colorScheme.primary.withAlpha(10),
             borderRadius: BorderRadius.circular(metrics.buttonRadius),
-            border: tinted
+            border: dark
+                ? Border.all(color: const Color(0xFF2B3A4E))
+                : tinted
                 ? null
                 : Border.all(
                     color: Theme.of(context).dividerColor.withAlpha(35),
@@ -209,7 +216,9 @@ class _HeaderButton extends StatelessWidget {
               width: metrics.iconSize,
               height: metrics.iconSize,
               color: tinted
-                  ? Theme.of(context).colorScheme.primary
+                  ? const Color(0xFF4F8DFF)
+                  : dark
+                  ? const Color(0xFFE6EDF7)
                   : Theme.of(context).textTheme.bodyLarge?.color,
               filterQuality: FilterQuality.high,
             ),

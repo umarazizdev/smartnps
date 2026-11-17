@@ -6,6 +6,7 @@ import '../Notifications/new_notifications_screen.dart';
 import 'package:smartnps360/src/screens/app_storage.dart';
 import 'package:smartnps360/src/screens/controllers/memory_storage_controller.dart';
 import 'package:smartnps360/src/screens/main_screens/SettingsScreen/settingscontroller.dart';
+import 'package:smartnps360/src/utilities/app_config.dart';
 import '../Features/new_feature_flows.dart';
 import '../Profile/new_profile_screen.dart';
 import '../new_main_controller.dart';
@@ -15,8 +16,14 @@ import 'new_dashboard_dialogs.dart';
 class NewDashboardController extends GetxController {
   final officerName = 'Hamid Khan'.obs;
   final officerRole = 'On-Site'.obs;
+  final roleBadgeText = 'On-Site'.obs;
+  final greetingPrefix = 'Good morning,'.obs;
+  final demoDialPeriod = 'morning'.obs;
   final selectedSite = 'BayCrest'.obs;
   final selectedShift = '9 PM – 5 AM · 8hr'.obs;
+  // The supplied controller bootstraps a sample schedule. The real schedule
+  // integration must explicitly publish availability after a successful load.
+  final hasAssignedShift = true.obs;
   final selectedDate = 'Tuesday, May 5'.obs;
   final status = NewOfficerStatus.standby.obs;
   final timerText = '0:00:00'.obs;
@@ -69,12 +76,14 @@ class NewDashboardController extends GetxController {
   );
 
   Timer? _timer;
+  Timer? _dialDemoTimer;
+  int _dialDemoIndex = 0;
   DateTime? _clockInAt;
   DateTime? _breakStartAt;
   DateTime? _breakEndAt;
   int _workedBeforeBreak = 0;
   final int _breakDurationMs = 30 * 60 * 1000;
-  bool _shiftClockedInLock = false;
+  final _shiftClockedInLock = false.obs;
   late DateTime scheduledShiftStart;
   late DateTime scheduledShiftEnd;
 
@@ -82,9 +91,30 @@ class NewDashboardController extends GetxController {
   bool get isRunning => status.value != NewOfficerStatus.standby;
   bool get isOnBreak => status.value == NewOfficerStatus.onBreak;
   bool get hasActiveDuty =>
-      _shiftClockedInLock || status.value != NewOfficerStatus.standby;
+      _shiftClockedInLock.value || status.value != NewOfficerStatus.standby;
+  // Never hide a running duty/standby session even if a refresh finds no shift.
+  bool get showNoAssignedShift {
+    final assigned = hasAssignedShift.value;
+    final activeStatus = status.value;
+    return !assigned &&
+        !_shiftClockedInLock.value &&
+        activeStatus == NewOfficerStatus.standby;
+  }
+
+  /// Call only after the assigned-shift request has resolved successfully.
+  /// Populate the real shift start/end/site/label before passing true.
+  /// Do not use false for network errors or loading states.
+  void setShiftAvailability(bool available) {
+    hasAssignedShift.value = available;
+    if (showNoAssignedShift) {
+      blinkTier.value = NewTimerBlinkTier.none;
+      return;
+    }
+    _syncRing();
+  }
+
   bool get isStandbyMode =>
-      _shiftClockedInLock && status.value == NewOfficerStatus.standby;
+      _shiftClockedInLock.value && status.value == NewOfficerStatus.standby;
   bool get isOnActiveShift =>
       status.value == NewOfficerStatus.onShift ||
       status.value == NewOfficerStatus.onBreak;
@@ -112,11 +142,14 @@ class NewDashboardController extends GetxController {
     return 'Start Break';
   }
 
-  String get greetingPrefix {
+  void _syncGreeting() {
     final h = DateTime.now().hour;
-    if (h < 12) return 'Good morning,';
-    if (h < 18) return 'Good afternoon,';
-    return 'Good evening,';
+    final next = h < 12
+        ? 'Good morning,'
+        : h < 17
+        ? 'Good afternoon,'
+        : 'Good evening,';
+    if (greetingPrefix.value != next) greetingPrefix.value = next;
   }
 
   void _syncLiveStatus() {
@@ -131,7 +164,7 @@ class NewDashboardController extends GetxController {
       return;
     }
     if (status.value == NewOfficerStatus.onShift) {
-      liveStatusText.value = 'On-Duty · ${selectedSite.value}';
+      liveStatusText.value = 'On Duty';
       liveStatusMode.value = NewLiveStatusMode.active;
       return;
     }
@@ -223,14 +256,17 @@ class NewDashboardController extends GetxController {
     _syncStats();
     refreshWarningStat();
     refreshOnTimeStat();
+    _syncGreeting();
     _syncLiveStatus();
     _startTicker();
     _syncRing();
+    _startDialVisualStateDemo();
   }
 
   @override
   void onClose() {
     _timer?.cancel();
+    _dialDemoTimer?.cancel();
     reminderTitleCtrl.dispose();
     reminderNoteCtrl.dispose();
     complaintNoteCtrl.dispose();
@@ -238,6 +274,127 @@ class NewDashboardController extends GetxController {
     profilePhoneCtrl.dispose();
     profileEmailCtrl.dispose();
     super.onClose();
+  }
+
+  static const _demoDialPeriods = ['morning', 'afternoon', 'evening', 'night'];
+
+  void _startDialVisualStateDemo() {
+    if (!AppConfig.enableDialVisualStateDemo) return;
+    _dialDemoIndex = 0;
+    _applyDialVisualStateDemo();
+    _dialDemoTimer?.cancel();
+    _dialDemoTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      _dialDemoIndex++;
+      _applyDialVisualStateDemo();
+    });
+  }
+
+  /// Preview all dial states including empty assignment.
+  /// Day-period loops independently (6 states x 4 periods).
+  void _applyDialVisualStateDemo() {
+    blinkTier.value = NewTimerBlinkTier.none;
+    timerCompact.value = false;
+    ringInfoSubtitle.value = selectedSite.value;
+    _breakStartAt = null;
+    _breakEndAt = null;
+    _workedBeforeBreak = 0;
+    _shiftClockedInLock.value = false;
+    _clockInAt = null;
+    lateStartedStyle.value = false;
+    breakBadgeText.value = 'Break';
+    dialLateEnd.value = 0;
+    dialWork1End.value = 0;
+    dialBreakEnd.value = 0;
+    dialLiveEnd.value = 0;
+    dialActiveDots.value = 0;
+    demoDialPeriod.value = _demoDialPeriods[_dialDemoIndex % 4];
+
+    switch (_dialDemoIndex % 6) {
+      case 0: // Not started yet
+        hasAssignedShift.value = true;
+        status.value = NewOfficerStatus.standby;
+        timerLabel.value = 'Starts In';
+        timerText.value = '0:45:00';
+        arrivalText.value = 'Upcoming';
+        arrivalStatus.value = NewArrivalStatus.pending;
+        ringInfoTitle.value = 'Upcoming Shift';
+        break;
+      case 1: // Start passed, still not clocked in
+        hasAssignedShift.value = true;
+        status.value = NewOfficerStatus.standby;
+        lateStartedStyle.value = true;
+        timerLabel.value = 'Late By';
+        timerText.value = '0:15:07';
+        arrivalText.value = 'Late';
+        arrivalStatus.value = NewArrivalStatus.late;
+        ringInfoTitle.value = 'Upcoming Shift';
+        break;
+      case 2: // Working, arrived on time
+        hasAssignedShift.value = true;
+        status.value = NewOfficerStatus.onShift;
+        _shiftClockedInLock.value = true;
+        _clockInAt = DateTime.now().subtract(
+          const Duration(hours: 2, minutes: 15),
+        );
+        timerLabel.value = 'Current Shift';
+        timerText.value = '2:15:30';
+        arrivalText.value = 'On Time';
+        arrivalStatus.value = NewArrivalStatus.onTime;
+        ringInfoTitle.value = 'Current Shift';
+        dialWork1End.value = .28;
+        dialBreakEnd.value = .28;
+        dialLiveEnd.value = .28;
+        dialActiveDots.value = 30;
+        break;
+      case 3: // Working, but checked in late (green + red warning)
+        hasAssignedShift.value = true;
+        status.value = NewOfficerStatus.onShift;
+        _shiftClockedInLock.value = true;
+        _clockInAt = DateTime.now().subtract(
+          const Duration(hours: 2, minutes: 15),
+        );
+        timerLabel.value = 'Current Shift';
+        timerText.value = '2:15:30';
+        arrivalText.value = 'Late 15m';
+        arrivalStatus.value = NewArrivalStatus.late;
+        ringInfoTitle.value = 'Current Shift';
+        dialLateEnd.value = .03125;
+        dialWork1End.value = .31;
+        dialBreakEnd.value = .31;
+        dialLiveEnd.value = .31;
+        dialActiveDots.value = 30;
+        break;
+      case 4: // On break during an active shift
+        hasAssignedShift.value = true;
+        status.value = NewOfficerStatus.onBreak;
+        _shiftClockedInLock.value = true;
+        _clockInAt = DateTime.now().subtract(const Duration(hours: 2));
+        _breakStartAt = DateTime.now().subtract(
+          const Duration(minutes: 15, seconds: 30),
+        );
+        _workedBeforeBreak = 2 * 60 * 60;
+        timerLabel.value = 'Break Remaining';
+        timerText.value = '0:14:30';
+        arrivalText.value = 'On Time';
+        arrivalStatus.value = NewArrivalStatus.onTime;
+        ringInfoTitle.value = 'Current Shift';
+        breakBadgeText.value = 'On Break';
+        dialWork1End.value = .25;
+        dialBreakEnd.value = .283;
+        dialLiveEnd.value = .283;
+        dialActiveDots.value = 30;
+        break;
+      default: // No assigned shift
+        hasAssignedShift.value = false;
+        status.value = NewOfficerStatus.standby;
+        timerLabel.value = 'No Shift';
+        timerText.value = '—';
+        arrivalText.value = 'Pending';
+        arrivalStatus.value = NewArrivalStatus.pending;
+        ringInfoTitle.value = 'No Shift Scheduled';
+        break;
+    }
+    _syncLiveStatus();
   }
 
   void _loadDummyData() {
@@ -674,9 +831,7 @@ class NewDashboardController extends GetxController {
     allQuickActions.assignAll([
       ...nextPinned.map((e) => byId[e.id] ?? e),
       ...nextExtras.map((e) => byId[e.id] ?? e),
-      ...allQuickActions.where(
-        (e) => !list.any((x) => x.id == e.id),
-      ),
+      ...allQuickActions.where((e) => !list.any((x) => x.id == e.id)),
     ]);
     refreshActionBadges();
   }
@@ -959,6 +1114,13 @@ class NewDashboardController extends GetxController {
   }
 
   void startShiftFlow() {
+    if (showNoAssignedShift) {
+      showInfoText(
+        'No Shift Scheduled',
+        'If you believe a shift is missing, please contact the Dispatch team.',
+      );
+      return;
+    }
     if (!hasActiveDuty) {
       final minsToStart = scheduledShiftStart
           .difference(DateTime.now())
@@ -971,9 +1133,10 @@ class NewDashboardController extends GetxController {
         return;
       }
       _confirm('Start Shift', 'Clock in for $selectedSite now?', () {
+        if (showNoAssignedShift) return;
         final now = DateTime.now();
         _applyArrival(now);
-        _shiftClockedInLock = true;
+        _shiftClockedInLock.value = true;
         if (now.isBefore(scheduledShiftStart)) {
           status.value = NewOfficerStatus.standby;
           _clockInAt = null;
@@ -1006,7 +1169,7 @@ class NewDashboardController extends GetxController {
         _breakStartAt = null;
         _breakEndAt = null;
         _workedBeforeBreak = 0;
-        _shiftClockedInLock = false;
+        _shiftClockedInLock.value = false;
         breakBadgeText.value = 'Break';
         arrivalText.value = 'Pending';
         arrivalStatus.value = NewArrivalStatus.pending;
@@ -1024,7 +1187,11 @@ class NewDashboardController extends GetxController {
   }
 
   void toggleBreak() {
-    if (!isRunning && !_shiftClockedInLock) {
+    if (showNoAssignedShift) {
+      showInfoText('Break Unavailable', 'No shift is scheduled.');
+      return;
+    }
+    if (!isRunning && !_shiftClockedInLock.value) {
       showInfoText('Break Unavailable', 'Start shift before taking a break.');
       return;
     }
@@ -1057,7 +1224,13 @@ class NewDashboardController extends GetxController {
   void _startTicker() {
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (_shiftClockedInLock &&
+      _syncGreeting();
+      if (AppConfig.enableDialVisualStateDemo) {
+        _applyDialVisualStateDemo();
+        return;
+      }
+      if (showNoAssignedShift) return;
+      if (_shiftClockedInLock.value &&
           _clockInAt == null &&
           !DateTime.now().isBefore(scheduledShiftStart)) {
         _clockInAt = scheduledShiftStart;
@@ -1166,11 +1339,16 @@ class NewDashboardController extends GetxController {
   }
 
   void _syncRing() {
+    if (AppConfig.enableDialVisualStateDemo) {
+      _applyDialVisualStateDemo();
+      return;
+    }
+    if (showNoAssignedShift) return;
     final now = DateTime.now();
     ringInfoSubtitle.value = selectedSite.value;
 
     if (_clockInAt != null ||
-        (_shiftClockedInLock && !now.isBefore(scheduledShiftStart))) {
+        (_shiftClockedInLock.value && !now.isBefore(scheduledShiftStart))) {
       blinkTier.value = NewTimerBlinkTier.none;
       lateStartedStyle.value = false;
       timerCompact.value = false;
@@ -1204,20 +1382,24 @@ class NewDashboardController extends GetxController {
 
     if (msToStart <= 0) {
       final elapsedLate = now.difference(scheduledShiftStart).inSeconds;
-      timerLabel.value = 'Shift Started';
-      timerText.value = 'LATE +${_fmtCountdown(elapsedLate)}';
+      timerLabel.value = 'Late By';
+      timerText.value = _fmtCountdown(elapsedLate);
       lateStartedStyle.value = true;
       timerCompact.value = false;
-      if (!_shiftClockedInLock) tier = NewTimerBlinkTier.red;
+      if (!_shiftClockedInLock.value) tier = NewTimerBlinkTier.red;
+      arrivalText.value = 'Late';
+      arrivalStatus.value = NewArrivalStatus.late;
       ringInfoTitle.value = 'Upcoming Shift';
     } else {
       final seconds = msToStart ~/ 1000;
       lateStartedStyle.value = false;
       if (seconds <= 86400) {
-        timerLabel.value = _shiftClockedInLock ? 'Stand By' : 'Starts In';
+        timerLabel.value = _shiftClockedInLock.value ? 'Stand By' : 'Starts In';
         timerText.value = _fmtCountdown(seconds);
         timerCompact.value = false;
-        if (!_shiftClockedInLock) {
+        if (!_shiftClockedInLock.value) {
+          arrivalText.value = 'Upcoming';
+          arrivalStatus.value = NewArrivalStatus.pending;
           if (seconds <= 30 * 60) {
             tier = NewTimerBlinkTier.red;
           } else if (seconds <= 45 * 60) {
@@ -1230,6 +1412,10 @@ class NewDashboardController extends GetxController {
         timerLabel.value = 'Upcoming Shift';
         timerText.value = 'No coverage 24h';
         timerCompact.value = true;
+        if (!_shiftClockedInLock.value) {
+          arrivalText.value = 'Upcoming';
+          arrivalStatus.value = NewArrivalStatus.pending;
+        }
       }
       ringInfoTitle.value = 'Upcoming Shift';
     }
