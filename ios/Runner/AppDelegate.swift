@@ -1,6 +1,7 @@
 import Flutter
 import AudioToolbox
 import CoreLocation
+import GoogleMaps
 import UIKit
 import UserNotifications
 import flutter_background_service_ios
@@ -61,6 +62,8 @@ import flutter_background_service_ios
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    GMSServices.provideAPIKey("AIzaSyBCTdGkwEs55CXkYQL_VNh_mTjeCOR4b-A")
+
     if #available(iOS 10.0, *) {
       UNUserNotificationCenter.current().delegate = self
     }
@@ -449,6 +452,9 @@ import flutter_background_service_ios
         }
       case "vibrateLong":
         var durationMs = 30000
+        var untilStopped = false
+        var vibrateOnMs = 500
+        var vibrateOffMs = 1000
         if let number = call.arguments as? NSNumber {
           durationMs = number.intValue
         } else if let map = call.arguments as? [String: Any] {
@@ -457,8 +463,26 @@ import flutter_background_service_ios
           } else if let number = map["durationMs"] as? Int {
             durationMs = number
           }
+          if let flag = map["untilStopped"] as? Bool {
+            untilStopped = flag
+          }
+          if let number = map["vibrateOnMs"] as? NSNumber {
+            vibrateOnMs = number.intValue
+          } else if let number = map["vibrateOnMs"] as? Int {
+            vibrateOnMs = number
+          }
+          if let number = map["vibrateOffMs"] as? NSNumber {
+            vibrateOffMs = number.intValue
+          } else if let number = map["vibrateOffMs"] as? Int {
+            vibrateOffMs = number
+          }
         }
-        self?.vibrateLong(durationMs: max(500, min(durationMs, 30000)))
+        self?.vibrateLong(
+          durationMs: max(500, min(durationMs, 30000)),
+          untilStopped: untilStopped,
+          vibrateOnMs: max(50, vibrateOnMs),
+          vibrateOffMs: max(50, vibrateOffMs)
+        )
         result(true)
       case "stopVibrate":
         self?.stopVibrate()
@@ -515,14 +539,22 @@ import flutter_background_service_ios
     return ProcessInfo.processInfo.isLowPowerModeEnabled ? "enabled" : "disabled"
   }
 
-  private func vibrateLong(durationMs: Int) {
+  private func vibrateLong(
+    durationMs: Int,
+    untilStopped: Bool = false,
+    vibrateOnMs: Int = 500,
+    vibrateOffMs: Int = 1000
+  ) {
     let run = { [weak self] in
       guard let self else { return }
       self.stopVibrate()
 
-      let pulseIntervalMs = 700
-      let pulses = max(1, durationMs / pulseIntervalMs)
-      self.pushVibrationRemainingPulses = pulses
+      let pulseIntervalMs = max(100, vibrateOnMs + vibrateOffMs)
+      if untilStopped {
+        self.pushVibrationRemainingPulses = Int.max
+      } else {
+        self.pushVibrationRemainingPulses = max(1, durationMs / pulseIntervalMs)
+      }
 
       AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
       let generator = UIImpactFeedbackGenerator(style: .heavy)
@@ -537,11 +569,13 @@ import flutter_background_service_ios
           timer.invalidate()
           return
         }
-        self.pushVibrationRemainingPulses -= 1
-        if self.pushVibrationRemainingPulses <= 0 {
-          timer.invalidate()
-          self.pushVibrationTimer = nil
-          return
+        if self.pushVibrationRemainingPulses != Int.max {
+          self.pushVibrationRemainingPulses -= 1
+          if self.pushVibrationRemainingPulses <= 0 {
+            timer.invalidate()
+            self.pushVibrationTimer = nil
+            return
+          }
         }
         AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
         let pulse = UIImpactFeedbackGenerator(style: .heavy)

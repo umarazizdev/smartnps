@@ -6,7 +6,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IOS_DIR="$(dirname "$SCRIPT_DIR")"
 PACKAGES_DIR="$IOS_DIR/Flutter/ephemeral/Packages"
-DEPLOYMENT_TARGET="${IOS_SWIFT_PACKAGE_DEPLOYMENT_TARGET:-15.0}"
+DEPLOYMENT_TARGET="${IOS_SWIFT_PACKAGE_DEPLOYMENT_TARGET:-17.0}"
 
 materialize_symlinked_packages() {
   local linked_packages_dir="$PACKAGES_DIR/.packages"

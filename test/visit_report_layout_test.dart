@@ -52,12 +52,10 @@ void main() {
         await tester.enterText(find.byType(TextField).first, 'Gate inspection');
         await tester.pump();
         expect(flow.reportDetails.value.title, 'Gate inspection');
-        final propertySwitch = find.byType(Switch).at(1);
-        await tester.ensureVisible(propertySwitch);
-        await tester.pumpAndSettle();
-        await tester.tap(propertySwitch);
-        await tester.pump();
-        expect(flow.reportDetails.value.attentionToPropertyManagement, isTrue);
+        expect(find.text('Follow-up'), findsNothing);
+        expect(find.text('NPS team'), findsNothing);
+        expect(find.text('Property management'), findsNothing);
+        expect(find.byType(Switch), findsNothing);
         expect(tester.takeException(), isNull);
       });
     }

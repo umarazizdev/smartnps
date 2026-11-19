@@ -24,7 +24,7 @@ fun requireKeystoreProperty(name: String): String {
 
 android {
     namespace = "com.smartnps360.app"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -34,11 +34,8 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.smartnps360.app"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        minSdk = maxOf(24, flutter.minSdkVersion)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -70,8 +67,12 @@ flutter {
     source = "../.."
 }
 
+configurations.configureEach {
+    exclude(group = "com.google.android.gms", module = "play-services-maps")
+}
+
 dependencies {
-    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.5")
     implementation("com.google.android.gms:play-services-location:21.3.0")
 
     val cameraX = "1.4.1"

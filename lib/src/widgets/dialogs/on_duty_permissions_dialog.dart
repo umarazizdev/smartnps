@@ -196,8 +196,9 @@ class _OnDutyPermissionsDialogPanelState
               'can be recorded accurately for attendance verification.';
     }
     if (_onlyLocationMissing) {
-      return 'Location access is needed to verify attendance and continue '
-          'live tracking during your shift. Tracking stops when you clock out.';
+      return 'Location access is needed to verify attendance, continue live '
+          'tracking, and support map routing to dispatch sites during your '
+          'shift. Tracking stops when you clock out.';
     }
     if (_onlyTrackingMissing) {
       return 'Location and related tracking permissions are needed to verify '

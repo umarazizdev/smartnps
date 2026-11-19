@@ -72,8 +72,14 @@ dependencies:
   crypto: ^3.0.7
   flutter_image_compress: ^2.5.1
   video_compress: ^3.1.4
-
+  flutter_svg: ^2.4.0
+  google_maps_flutter: ^2.19.0
+  google_navigation_flutter: ^0.13.0
+  google_maps_flutter_ios_sdk11:
+    path: packages/google_maps_flutter_ios_sdk11
 dev_dependencies:
+  integration_test:
+    sdk: flutter
   flutter_test:
     sdk: flutter
 
@@ -108,7 +114,7 @@ dependency_overrides:
 # The following section is specific to Flutter packages.
 flutter:
   config:
-    enable-swift-package-manager: false
+    enable-swift-package-manager: true
 
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in
@@ -119,6 +125,7 @@ flutter:
   assets:
     - assets/
     - assets/images/
+    - assets/markers/
 
 flutter_icons:
   android: true

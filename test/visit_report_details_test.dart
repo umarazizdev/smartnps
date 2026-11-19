@@ -124,16 +124,14 @@ void main() {
         title: 'Broken gate',
         category: 'Maintenance Issue',
         details: 'Needs repair',
-        attentionToPropertyManagement: true,
-        attentionToNps: false,
       );
       final issueMeta = issue.toUploadMeta(VisitFlowKind.issueReport);
       expect(issueMeta.containsKey('issue_report'), isFalse);
       expect(issueMeta['title'], 'Broken gate');
       expect(issueMeta['category'], 'Maintenance Issue');
       expect(issueMeta['details'], 'Needs repair');
-      expect(issueMeta['attention_to_property_management'], 'yes');
-      expect(issueMeta['attention_to_nps'], 'no');
+      expect(issueMeta.containsKey('attention_to_property_management'), isFalse);
+      expect(issueMeta.containsKey('attention_to_nps'), isFalse);
 
       final occurred = DateTime.utc(2026, 10, 10, 1, 40);
       final incident = VisitReportDetails(
@@ -143,15 +141,17 @@ void main() {
         occurredAt: occurred,
         location: 'North gate',
         peopleInvolved: 'Two unknown males',
-        attentionToNps: true,
       );
       final incidentMeta = incident.toUploadMeta(VisitFlowKind.incidentReport);
       expect(incidentMeta.containsKey('incident_report'), isFalse);
       expect(incidentMeta['title'], 'Break-in');
       expect(incidentMeta['location'], 'North gate');
       expect(incidentMeta['occurred_at'], occurred.toIso8601String());
-      expect(incidentMeta['attention_to_property_management'], 'no');
-      expect(incidentMeta['attention_to_nps'], 'yes');
+      expect(
+        incidentMeta.containsKey('attention_to_property_management'),
+        isFalse,
+      );
+      expect(incidentMeta.containsKey('attention_to_nps'), isFalse);
     });
   });
 
@@ -200,7 +200,6 @@ void main() {
         title: 'Damaged entrance lock',
         category: 'Door / Gate / Lock Issue',
         details: 'East entrance lock damaged.',
-        attentionToPropertyManagement: true,
       );
       final started = DateTime.utc(2026, 10, 10, 8);
       final submitted = DateTime.utc(2026, 10, 10, 8, 12);
@@ -226,7 +225,8 @@ void main() {
       expect(meta['title'], 'Damaged entrance lock');
       expect(meta['category'], 'Door / Gate / Lock Issue');
       expect(meta['details'], 'East entrance lock damaged.');
-      expect(meta['attention_to_property_management'], 'yes');
+      expect(meta.containsKey('attention_to_property_management'), isFalse);
+      expect(meta.containsKey('attention_to_nps'), isFalse);
       expect(meta['items'], isEmpty);
       expect(meta.containsKey('issue_report'), isFalse);
       expect(meta.containsKey('attention_needed'), isFalse);

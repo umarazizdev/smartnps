@@ -45,6 +45,11 @@ import '../background/location/background_location_permissions.dart';
 import '../background/duty/location_disclosure_consent.dart';
 import '../background/ios/ios_duty_location_pinger.dart';
 import '../debug/debug_env_pin_dialog.dart';
+import '../dispatch/dispatch_active_session.dart';
+import '../dispatch/dispatch_fullscreen_map_screen.dart';
+import '../dispatch/dispatch_google_navigation_screen.dart';
+import '../dispatch/dispatch_live_marker_style_store.dart';
+import '../dispatch/dispatch_scale.dart';
 import '../utilities/app_lifecycle_resume_gate.dart';
 import '../utilities/overlay_prompt_guard.dart';
 import '../utilities/permission_settings_helper.dart';
@@ -2046,6 +2051,8 @@ class _WebViewShellState extends State<WebViewShell>
     WidgetsBinding.instance.addObserver(this);
 
     AuthRepository.instance.onRefreshSessionExpired = _onRefreshSessionExpired;
+    unawaited(DispatchActiveSessionStore.ensureLoaded());
+    unawaited(DispatchLiveMarkerStyleStore.ensureLoaded());
 
     unawaited(AppUpgradeReconciler.reconcileOsAfterEngineReady());
     RequiredPermissionsGate.privacyNoticeVisibleChecker = () =>
@@ -6130,6 +6137,44 @@ class _WebViewShellState extends State<WebViewShell>
                                 ),
                               );
                             }),
+                            ValueListenableBuilder<DispatchActiveSession?>(
+                              valueListenable: DispatchActiveSessionStore.active,
+                              builder: (context, session, _) {
+                                if (session == null) {
+                                  return const SizedBox.shrink();
+                                }
+                                return Obx(() {
+                                  final showFab =
+                                      !showPermissionBlocker &&
+                                      !_ui.showOffline.value &&
+                                      _ui.firstPageLoaded.value &&
+                                      _ui.officerLoggedIn.value &&
+                                      !_ui.isKeyboardOpen &&
+                                      !_isAuthRoute(_ui.currentUri.value) &&
+                                      !_ui.showingLogVisit.value;
+                                  if (!showFab) {
+                                    return const SizedBox.shrink();
+                                  }
+                                  final scale = DispatchScale.of(context);
+                                  final isAndroid = Platform.isAndroid;
+                                  final fabRight = scale.s(isAndroid ? 12 : 16);
+                                  final fabBottom = MediaQuery.paddingOf(
+                                        context,
+                                      ).bottom +
+                                      scale.s(isAndroid ? 86 : 112);
+                                  return Positioned(
+                                    right: fabRight,
+                                    bottom: fabBottom,
+                                    child: _DispatchDirectionsFab(
+                                      isDark: _ui.webPrefersDark.value,
+                                      onTap: () => unawaited(
+                                        _openActiveDispatchMap(),
+                                      ),
+                                    ),
+                                  );
+                                });
+                              },
+                            ),
                             Obx(() {
                               if (!_ui.showLocationNotice.value) {
                                 return const SizedBox.shrink();
@@ -6158,6 +6203,37 @@ class _WebViewShellState extends State<WebViewShell>
           ),
         );
       }),
+    );
+  }
+
+  Future<void> _openActiveDispatchMap() async {
+    if (!mounted) return;
+    await DispatchActiveSessionStore.ensureLoaded();
+    final session = DispatchActiveSessionStore.active.value;
+    if (session == null || !mounted) return;
+    final isDark = _ui.webPrefersDark.value ||
+        Theme.of(context).brightness == Brightness.dark;
+    if (session.navigationStarted) {
+      await DispatchGoogleNavigationScreen.open(
+        context,
+        site: session.request.site,
+        siteName: session.request.address,
+        siteSubtitle: session.request.city,
+        initialOrigin: session.origin,
+        isDark: isDark,
+      );
+      return;
+    }
+    await DispatchFullscreenMapScreen.open(
+      context,
+      site: session.request.site,
+      isDark: isDark,
+      siteName: session.request.address,
+      siteSubtitle: session.request.city,
+      initialOrigin: session.origin,
+      initialRoutePoints: session.routePoints,
+      accepted: true,
+      showResponseActions: false,
     );
   }
 
@@ -6417,6 +6493,42 @@ enum _BottomItem {
   }
 
   String get normalizedPath => path;
+}
+
+class _DispatchDirectionsFab extends StatelessWidget {
+  const _DispatchDirectionsFab({
+    required this.isDark,
+    required this.onTap,
+  });
+
+  final bool isDark;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scale = DispatchScale.of(context);
+    final side = scale.s(56);
+    final iconSize = scale.s(28);
+    return Material(
+      color: isDark ? const Color(0xFF1A4A6E) : const Color(0xFF2856D9),
+      elevation: 6,
+      shadowColor: Colors.black38,
+      shape: const CircleBorder(),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onTap,
+        child: SizedBox(
+          width: side,
+          height: side,
+          child: Icon(
+            Icons.directions_rounded,
+            color: Colors.white,
+            size: iconSize,
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _BottomBar extends StatelessWidget {

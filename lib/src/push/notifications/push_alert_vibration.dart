@@ -13,6 +13,8 @@ class PushAlertVibration {
 
   static const int defaultDurationMs = 30000;
   static const int maxDurationMs = 30000;
+  static const int vibrateOnMs = 500;
+  static const int vibrateOffMs = 1000;
 
   static bool _playing = false;
   static Timer? _autoStopTimer;
@@ -29,6 +31,9 @@ class PushAlertVibration {
       await _settingsChannel.invokeMethod<void>('vibrateLong', {
         'durationMs': clamped,
         'repeat': true,
+        'untilStopped': false,
+        'vibrateOnMs': vibrateOnMs,
+        'vibrateOffMs': vibrateOffMs,
       });
       _autoStopTimer = Timer(Duration(milliseconds: clamped), () {
         _playing = false;
@@ -38,6 +43,28 @@ class PushAlertVibration {
       _playing = false;
       if (kDebugMode) {
         debugPrint('[PushAlertVibration] vibrateLong failed: $error');
+      }
+    }
+  }
+
+  static Future<void> playUntilStopped() async {
+    if (kIsWeb) return;
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+    _autoStopTimer?.cancel();
+    _autoStopTimer = null;
+    _playing = true;
+    try {
+      await _settingsChannel.invokeMethod<void>('vibrateLong', {
+        'durationMs': maxDurationMs,
+        'repeat': true,
+        'untilStopped': true,
+        'vibrateOnMs': vibrateOnMs,
+        'vibrateOffMs': vibrateOffMs,
+      });
+    } catch (error) {
+      _playing = false;
+      if (kDebugMode) {
+        debugPrint('[PushAlertVibration] playUntilStopped failed: $error');
       }
     }
   }

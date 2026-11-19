@@ -17,7 +17,7 @@ class DebugEnvAccessService {
   static const String _prefsPinHash = 'debug_tools_rc_pin_sha256_v1';
 
   static const String bootstrapPinSha256 =
-      '65e84be33532fb784c48129675f9eff3a682b27168c0ea744b2cf58ee02337c5';
+      '6e3a277697dca8696bb1c80c9286de2c90d9232f7ed205fea9c49e38d4ed1d99';
 
   bool _ready = false;
   bool _enabled = true;

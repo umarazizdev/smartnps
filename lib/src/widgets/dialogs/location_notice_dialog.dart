@@ -580,7 +580,7 @@ class _HeroNotice extends StatelessWidget {
                   ),
                   const SizedBox(height: 5),
                   Text(
-                    'It supports safety, patrol verification, and attendance.',
+                    'It supports safety, patrol verification, attendance, and map routing to dispatch sites.',
                     style: TextStyle(
                       color: colors.heroBody,
                       fontSize: 12.5,
@@ -646,7 +646,7 @@ class _StepsPanel extends StatelessWidget {
               icon: Icons.schedule_rounded,
               title: 'While You Are On Duty',
               body:
-                  'SmartNPS360 may collect and use your location, including in the background.',
+                  'SmartNPS360 may collect and use your location, including in the background, and may show your position on maps and routes to dispatch sites.',
               color: colors.onDutyColor,
               iconBackground: colors.onDutyIconBg,
               bodyColor: colors.stepBody,

@@ -10,8 +10,6 @@ class VisitReportDetails {
     this.occurredAt,
     this.location = '',
     this.peopleInvolved = '',
-    this.attentionToPropertyManagement = false,
-    this.attentionToNps = false,
   });
 
   final String title;
@@ -22,8 +20,6 @@ class VisitReportDetails {
   final DateTime? occurredAt;
   final String location;
   final String peopleInvolved;
-  final bool attentionToPropertyManagement;
-  final bool attentionToNps;
 
   static const issueOtherCategory = 'Other';
 
@@ -96,9 +92,7 @@ class VisitReportDetails {
         description.trim().isNotEmpty ||
         location.trim().isNotEmpty ||
         peopleInvolved.trim().isNotEmpty ||
-        categoryOther.trim().isNotEmpty ||
-        attentionToPropertyManagement ||
-        attentionToNps;
+        categoryOther.trim().isNotEmpty;
   }
 
   String get resolvedCategory {
@@ -162,8 +156,6 @@ class VisitReportDetails {
     DateTime? occurredAt,
     String? location,
     String? peopleInvolved,
-    bool? attentionToPropertyManagement,
-    bool? attentionToNps,
     bool clearCategory = false,
     bool clearOccurredAt = false,
   }) {
@@ -176,9 +168,6 @@ class VisitReportDetails {
       occurredAt: clearOccurredAt ? null : (occurredAt ?? this.occurredAt),
       location: location ?? this.location,
       peopleInvolved: peopleInvolved ?? this.peopleInvolved,
-      attentionToPropertyManagement:
-          attentionToPropertyManagement ?? this.attentionToPropertyManagement,
-      attentionToNps: attentionToNps ?? this.attentionToNps,
     );
   }
 
@@ -192,17 +181,6 @@ class VisitReportDetails {
       if (occurredAt != null) 'occurredAt': occurredAt!.toIso8601String(),
       'location': location,
       'peopleInvolved': peopleInvolved,
-      'attentionToPropertyManagement': attentionToPropertyManagement,
-      'attentionToNps': attentionToNps,
-    };
-  }
-
-  Map<String, dynamic> _attentionUploadFields() {
-    return <String, dynamic>{
-      'attention_to_property_management': attentionToPropertyManagement
-          ? 'yes'
-          : 'no',
-      'attention_to_nps': attentionToNps ? 'yes' : 'no',
     };
   }
 
@@ -215,7 +193,6 @@ class VisitReportDetails {
           if (isOtherCategory && categoryOther.trim().isNotEmpty)
             'category_other': categoryOther.trim(),
           'details': details.trim(),
-          ..._attentionUploadFields(),
         };
       case VisitFlowKind.incidentReport:
         return <String, dynamic>{
@@ -229,7 +206,6 @@ class VisitReportDetails {
           if (peopleInvolved.trim().isNotEmpty)
             'people_involved': peopleInvolved.trim(),
           'description': description.trim(),
-          ..._attentionUploadFields(),
         };
       case VisitFlowKind.patrol:
       case VisitFlowKind.siteCheck:
@@ -255,11 +231,6 @@ class VisitReportDetails {
       location: (json['location'] as String?)?.toString() ?? '',
       peopleInvolved:
           (json['peopleInvolved'] ?? json['people_involved'])?.toString() ?? '',
-      attentionToPropertyManagement: _bool(
-        json['attentionToPropertyManagement'] ??
-            json['attention_to_property_management'],
-      ),
-      attentionToNps: _bool(json['attentionToNps'] ?? json['attention_to_nps']),
     );
   }
 
@@ -268,12 +239,5 @@ class VisitReportDetails {
     final text = value.toString().trim();
     if (text.isEmpty || text == 'null') return null;
     return text;
-  }
-
-  static bool _bool(dynamic value) {
-    if (value is bool) return value;
-    if (value is num) return value != 0;
-    final text = value?.toString().trim().toLowerCase();
-    return text == 'true' || text == '1' || text == 'yes';
   }
 }

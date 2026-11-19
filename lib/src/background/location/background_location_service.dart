@@ -158,7 +158,7 @@ class BackgroundLocationService {
         foregroundServiceTypes: const [AndroidForegroundType.location],
         initialNotificationTitle: 'On Duty • Location Active',
         initialNotificationContent:
-            'Your live location is being shared while you are on duty.',
+            'Your live location is shared while on duty for attendance and map routing.',
       ),
       iosConfiguration: IosConfiguration(
         autoStart: false,
@@ -485,6 +485,13 @@ class BackgroundLocationService {
         return;
       }
       lastAcceptedFixAt = DateTime.now();
+      service.invoke('duty_live_location', {
+        'lat': pos.latitude,
+        'lng': pos.longitude,
+        'accuracy': pos.accuracy,
+        'speed': pos.speed,
+        'at': pos.timestamp.toIso8601String(),
+      });
 
       final token = await AuthRepository.instance.ensureValidAccessToken();
       if (stopping) return;
