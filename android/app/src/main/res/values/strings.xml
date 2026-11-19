@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="location_usage_description">SmartNPS360 uses location only while you are clocked in on an active shift to verify attendance and site presence, and to support map routing and navigation to dispatch sites. Tracking pauses during unpaid meal breaks and stops when you clock out. Location is not collected while you are off duty, logged out, or not clocked in.</string>
+    <string name="location_foreground_service_description">Keeps on-duty location tracking active in the background for attendance and map routing to dispatch sites</string>
     <string name="native_camera_close">Close camera</string>
     <string name="native_camera_flash">Flash</string>
     <string name="native_camera_flash_off">Flash off</string>

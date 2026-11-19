@@ -82,7 +82,8 @@ class MainActivity : FlutterActivity() {
         "Background location",
         NotificationManager.IMPORTANCE_LOW
       )
-      locationChannel.description = "Keeps location tracking active in background"
+      locationChannel.description =
+        getString(R.string.location_foreground_service_description)
       manager?.createNotificationChannel(locationChannel)
     }
   }
@@ -218,12 +219,23 @@ class MainActivity : FlutterActivity() {
         }
         "vibrateLong" -> {
           try {
+            val argsMap = call.arguments as? Map<*, *>
             val durationMs = when (val args = call.arguments) {
               is Number -> args.toInt()
               is Map<*, *> -> (args["durationMs"] as? Number)?.toInt() ?: 30000
               else -> 30000
             }
-            vibrateLong(durationMs.coerceIn(500, 30000))
+            val untilStopped = (argsMap?.get("untilStopped") as? Boolean) ?: false
+            val vibrateOnMs =
+              (argsMap?.get("vibrateOnMs") as? Number)?.toInt() ?: 500
+            val vibrateOffMs =
+              (argsMap?.get("vibrateOffMs") as? Number)?.toInt() ?: 1000
+            vibrateLong(
+              durationMs = durationMs.coerceIn(500, 30000),
+              untilStopped = untilStopped,
+              vibrateOnMs = vibrateOnMs.coerceAtLeast(50),
+              vibrateOffMs = vibrateOffMs.coerceAtLeast(50),
+            )
             result.success(true)
           } catch (error: Exception) {
             result.error("vibrate_long_failed", error.message, null)
@@ -253,38 +265,59 @@ class MainActivity : FlutterActivity() {
     }
   }
 
-  private fun buildAlertVibrationPattern(durationMs: Long): LongArray {
+  private fun buildAlertVibrationPattern(
+    durationMs: Long,
+    vibrateOnMs: Long,
+    vibrateOffMs: Long,
+    untilStopped: Boolean,
+  ): LongArray {
+    if (untilStopped) {
+      return longArrayOf(0L, vibrateOnMs, vibrateOffMs)
+    }
     val pattern = mutableListOf(0L)
     var remaining = durationMs
     while (remaining > 0L) {
-      val on = minOf(800L, remaining)
+      val on = minOf(vibrateOnMs, remaining)
       pattern.add(on)
       remaining -= on
       if (remaining <= 0L) break
-      val off = minOf(300L, remaining)
+      val off = minOf(vibrateOffMs, remaining)
       pattern.add(off)
       remaining -= off
     }
     return pattern.toLongArray()
   }
 
-  private fun vibrateLong(durationMs: Int) {
+  private fun vibrateLong(
+    durationMs: Int,
+    untilStopped: Boolean = false,
+    vibrateOnMs: Int = 500,
+    vibrateOffMs: Int = 1000,
+  ) {
     val vibrator = resolveVibrator() ?: return
     stopVibrate()
 
-    val pattern = buildAlertVibrationPattern(durationMs.toLong())
+    val pattern = buildAlertVibrationPattern(
+      durationMs = durationMs.toLong(),
+      vibrateOnMs = vibrateOnMs.toLong(),
+      vibrateOffMs = vibrateOffMs.toLong(),
+      untilStopped = untilStopped,
+    )
+    val repeatIndex = if (untilStopped) 0 else -1
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       vibrator.vibrate(
-        VibrationEffect.createWaveform(pattern, -1),
+        VibrationEffect.createWaveform(pattern, repeatIndex),
       )
     } else {
       @Suppress("DEPRECATION")
-      vibrator.vibrate(pattern, -1)
+      vibrator.vibrate(pattern, repeatIndex)
     }
 
-    val stopRunnable = Runnable { stopVibrate() }
-    alertVibrateStopRunnable = stopRunnable
-    window.decorView.postDelayed(stopRunnable, durationMs.toLong())
+    if (!untilStopped) {
+      val stopRunnable = Runnable { stopVibrate() }
+      alertVibrateStopRunnable = stopRunnable
+      window.decorView.postDelayed(stopRunnable, durationMs.toLong())
+    }
   }
 
   private fun stopVibrate() {

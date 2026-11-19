@@ -8,6 +8,7 @@ import 'package:geolocator/geolocator.dart';
 import '../../auth/auth_repository.dart';
 import '../../debug/session_debug_logger.dart';
 import '../../location/adaptive_gps_stream_controller.dart';
+import '../../location/duty_live_location_hub.dart';
 import '../../location/duty_location_upload_gate.dart';
 import '../../location/mock_location_detection.dart';
 import '../../location/mock_location_guard.dart';
@@ -509,6 +510,7 @@ class IosDutyLocationPinger {
       return;
     }
     _latestAcceptedPosition = pos;
+    DutyLiveLocationHub.publishPosition(pos, source: 'duty_ios');
     unawaited(DutyStatusSnapshot.renewIfStillOnDuty());
 
     final token = await AuthRepository.instance.ensureValidAccessToken();

@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../location/duty_live_location_hub.dart';
 import '../../utilities/app_debug_log.dart';
 
 class AndroidDutyLocationHealth {
@@ -38,6 +39,7 @@ class AndroidDutyLocationHealth {
 
   static void ensureListenerInstalled() {
     if (!Platform.isAndroid) return;
+    DutyLiveLocationHub.ensureAndroidBridge();
 
     _startedSub ??= FlutterBackgroundService().on(startedEvent).listen((event) {
       final at = _parseAt(event) ?? DateTime.now();

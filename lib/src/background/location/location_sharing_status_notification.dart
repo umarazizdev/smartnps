@@ -41,7 +41,7 @@ class LocationSharingStatusNotification {
   static const String iosAppTitle = 'SmartNPS360';
   static const String androidSharingTitle = 'On Duty • Location Active';
   static const String androidSharingBody =
-      'Your live location is being shared while you are on duty.';
+      'Your live location is shared while on duty for attendance and map routing.';
   static const String androidStoppedTitle = 'Off Duty • Location Stopped';
   static const String androidSignedOutTitle =
       'Session Expired • Location Stopped';
@@ -51,7 +51,7 @@ class LocationSharingStatusNotification {
       'Your session has expired, and live location sharing has stopped.';
 
   static const String sharingBody =
-      'You are on duty. Your live location is being shared.';
+      'You are on duty. Live location is shared for attendance and map routing.';
   static const String shiftEndedBody =
       'You are off duty. Your live location is no longer being shared.';
   static const String signedOutBody =
@@ -62,7 +62,7 @@ class LocationSharingStatusNotification {
   static const String _androidStoppedChannelId = 'smartnps360_location_status';
   static const String _androidStoppedChannelName = 'Location status';
   static const String _androidStoppedChannelDescription =
-      'Quiet updates when location sharing starts or stops';
+      'Quiet updates when on-duty location sharing starts or stops';
   static const String _androidBgStartTestChannelId =
       'smartnps360_location_test';
   static const String _androidBgStartTestChannelName = 'Location test alerts';

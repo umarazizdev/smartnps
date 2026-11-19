@@ -489,8 +489,9 @@ class PermissionPrivacyBanner extends StatelessWidget {
                   ),
                   SizedBox(height: compact ? 2 : 4),
                   Text(
-                    'These permissions are used solely to verify attendance '
-                    'during an active duty period. Collection stops when duty ends.',
+                    'These permissions are used to verify attendance and support '
+                    'map routing to dispatch sites during an active duty period. '
+                    'Collection stops when duty ends.',
                     style: TextStyle(
                       color: colors.privacyBody,
                       fontSize: compact ? 11.5 : 12,

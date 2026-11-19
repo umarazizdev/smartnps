@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
+import '../../widgets/sheets/app_bottom_sheet_motion.dart';
 import '../flow/visit_flow_kind.dart';
 import '../flow/visit_report_details.dart';
 import '../flow/visit_video_flow_controller.dart';
@@ -194,14 +195,6 @@ class _IssueReportForm extends StatelessWidget {
             onChanged: (value) => onChanged(details.copyWith(details: value)),
           ),
         ),
-        SizedBox(height: gap),
-        Divider(color: isDark ? Colors.white12 : const Color(0xFFE2E8F0)),
-        SizedBox(height: gap),
-        _ReportAttentionFlags(
-          isDark: isDark,
-          details: details,
-          onChanged: onChanged,
-        ),
       ],
     );
   }
@@ -373,14 +366,6 @@ class _IncidentReportForm extends StatelessWidget {
                 onChanged(details.copyWith(description: value)),
           ),
         ),
-        SizedBox(height: gap),
-        Divider(color: isDark ? Colors.white12 : const Color(0xFFE2E8F0)),
-        SizedBox(height: gap),
-        _ReportAttentionFlags(
-          isDark: isDark,
-          details: details,
-          onChanged: onChanged,
-        ),
       ],
     );
   }
@@ -395,7 +380,7 @@ Future<void> _openCategoryPicker({
   required ValueChanged<String> onSelected,
 }) async {
   _dismissReportKeyboard();
-  final chosen = await showModalBottomSheet<String>(
+  final chosen = await showAppModalBottomSheet<String>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
@@ -519,158 +504,6 @@ Future<void> _openCategoryPicker({
     },
   );
   if (chosen != null) onSelected(chosen);
-}
-
-class _ReportAttentionFlags extends StatelessWidget {
-  const _ReportAttentionFlags({
-    required this.isDark,
-    required this.details,
-    required this.onChanged,
-  });
-
-  final bool isDark;
-  final VisitReportDetails details;
-  final ValueChanged<VisitReportDetails> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text(
-          'Follow-up',
-          style: TextStyle(
-            color: isDark ? cDarkTextSecondary : const Color(0xFF667085),
-            fontSize: 13,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.1,
-          ),
-        ),
-        const SizedBox(height: 6),
-        Text(
-          'Flag this report for review by the relevant team.',
-          style: TextStyle(
-            color: isDark ? cDarkTextSecondary : const Color(0xFF64748B),
-            fontSize: 13,
-            height: 1.4,
-          ),
-        ),
-        const SizedBox(height: 12),
-        _AttentionFlagToggle(
-          isDark: isDark,
-          icon: Icons.shield_outlined,
-          label: 'NPS team',
-          value: details.attentionToNps,
-          onChanged: (value) =>
-              onChanged(details.copyWith(attentionToNps: value)),
-        ),
-        const SizedBox(height: 8),
-        _AttentionFlagToggle(
-          isDark: isDark,
-          icon: Icons.apartment_rounded,
-          label: 'Property management',
-          value: details.attentionToPropertyManagement,
-          onChanged: (value) =>
-              onChanged(details.copyWith(attentionToPropertyManagement: value)),
-        ),
-      ],
-    );
-  }
-}
-
-class _AttentionFlagToggle extends StatelessWidget {
-  const _AttentionFlagToggle({
-    required this.isDark,
-    required this.icon,
-    required this.label,
-    required this.value,
-    required this.onChanged,
-  });
-
-  final bool isDark;
-  final IconData icon;
-  final String label;
-  final bool value;
-  final ValueChanged<bool> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final accent = isDark ? _reportDarkAccent : cPrimary;
-    return Material(
-      color: value
-          ? accent.withValues(alpha: isDark ? 0.16 : 0.07)
-          : (isDark
-                ? Colors.white.withValues(alpha: 0.04)
-                : const Color(0xFFF8FAFC)),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(
-          color: value
-              ? accent.withValues(alpha: isDark ? 0.40 : 0.24)
-              : (isDark
-                    ? Colors.white.withValues(alpha: 0.10)
-                    : const Color(0xFFE2E8F0)),
-        ),
-      ),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: () => onChanged(!value),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(10, 8, 6, 8),
-          child: Row(
-            children: [
-              Container(
-                width: 30,
-                height: 30,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: value
-                      ? accent.withValues(alpha: isDark ? 0.28 : 0.12)
-                      : (isDark
-                            ? Colors.white.withValues(alpha: 0.06)
-                            : const Color(0xFFE8EEF5)),
-                  borderRadius: BorderRadius.circular(9),
-                ),
-                child: Icon(
-                  icon,
-                  size: 16,
-                  color: value
-                      ? accent
-                      : (isDark
-                            ? Colors.white.withValues(alpha: 0.65)
-                            : const Color(0xFF64748B)),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  label,
-                  style: TextStyle(
-                    color: value
-                        ? (isDark
-                              ? const Color(0xFFDBEAFE)
-                              : const Color(0xFF1E40AF))
-                        : (isDark ? cDarkTextPrimary : const Color(0xFF1E293B)),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    height: 1.2,
-                  ),
-                ),
-              ),
-              Switch.adaptive(
-                value: value,
-                activeTrackColor: accent,
-                activeThumbColor: isDark ? _reportDarkInput : Colors.white,
-                inactiveThumbColor: isDark ? cDarkTextSecondary : null,
-                inactiveTrackColor: isDark ? const Color(0xFF334155) : null,
-                onChanged: onChanged,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 class _ReportFormHeader extends StatelessWidget {

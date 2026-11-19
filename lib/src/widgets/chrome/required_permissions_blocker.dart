@@ -104,8 +104,9 @@ class _RequiredPermissionsBlockerState extends State<RequiredPermissionsBlocker>
                                     'These permissions help with shift alerts and duty '
                                     'tracking. You can keep using the app without them; '
                                     'clock-in still needs location when you start a shift.\n\n'
-                                    'Location is used only while you are on duty, and stops '
-                                    'when your shift ends.',
+                                    'Location is used only while you are on duty for '
+                                    'attendance and map routing to dispatch sites, and '
+                                    'stops when your shift ends.',
                                     style: TextStyle(
                                       color: colors.subtitle,
                                       fontSize: 13.5,
@@ -461,8 +462,9 @@ class _PrivacyBanner extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'These permissions are used solely to verify attendance '
-                    'during an active duty period. Collection stops when duty ends.',
+                    'These permissions are used to verify attendance and support '
+                    'map routing to dispatch sites during an active duty period. '
+                    'Collection stops when duty ends.',
                     style: TextStyle(
                       color: colors.privacyBody,
                       fontSize: 12,

@@ -22,6 +22,7 @@ import '../../permissions/os_notification_permission.dart';
 import '../../permissions/required_permissions_gate.dart';
 import '../announcements/officer_announcement_coordinator.dart';
 import '../announcements/officer_announcement_push.dart';
+import 'push_alert_sound.dart';
 import 'push_alert_vibration.dart';
 import 'push_notification_preferences.dart';
 import '../../utilities/app_config.dart';
@@ -176,6 +177,7 @@ Future<void> showPushLocalNotification({
   required Map<String, dynamic> data,
   String? messageId,
   bool urgent = false,
+  bool playSound = true,
 }) async {
   if (!await OsNotificationPermission.isGranted()) {
     if (kDebugMode) {
@@ -198,14 +200,27 @@ Future<void> showPushLocalNotification({
         : kPushAndroidChannelDescription,
     importance: Importance.high,
     priority: Priority.high,
-    playSound: true,
-    sound: RawResourceAndroidNotificationSound(
-      urgent ? kPushAndroidUrgentSoundName : kPushAndroidSoundName,
-    ),
+    playSound: playSound,
+    sound: playSound
+        ? RawResourceAndroidNotificationSound(
+            urgent ? kPushAndroidUrgentSoundName : kPushAndroidSoundName,
+          )
+        : null,
   );
-  final iosDetails = urgent
-      ? kPushIosUrgentNotificationDetails
-      : kPushIosNotificationDetails;
+  final iosDetails = playSound
+      ? (urgent
+            ? kPushIosUrgentNotificationDetails
+            : kPushIosNotificationDetails)
+      : DarwinNotificationDetails(
+          presentAlert: true,
+          presentSound: false,
+          presentBanner: true,
+          presentList: true,
+          presentBadge: true,
+          interruptionLevel: urgent
+              ? InterruptionLevel.timeSensitive
+              : InterruptionLevel.active,
+        );
 
   try {
     await plugin.show(
@@ -1184,5 +1199,29 @@ class PushNotificationService {
       'ok': true,
       ...(await getNotificationStatus()),
     };
+  }
+
+  Future<void> startDispatchRequestAlert({
+    required String title,
+    required String body,
+  }) async {
+    unawaited(PushAlertVibration.playUntilStopped());
+    unawaited(PushAlertSound.playLoop());
+    await showPushLocalNotification(
+      plugin: _local,
+      title: title,
+      body: body,
+      data: const <String, dynamic>{'type': 'dispatch_request'},
+      messageId: 'dispatch-${DateTime.now().millisecondsSinceEpoch}',
+      urgent: true,
+      playSound: false,
+    );
+  }
+
+  Future<void> stopDispatchRequestAlert() async {
+    await Future.wait<void>([
+      PushAlertVibration.acknowledge(),
+      PushAlertSound.stop(),
+    ]);
   }
 }
